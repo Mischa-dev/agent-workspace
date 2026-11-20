@@ -1213,11 +1213,12 @@ impl Pins {
 }
 
 /// The views every Tasks collection starts with (`collection_views.builtin`).
-pub const BUILTIN_VIEW_KEYS: [&str; 4] = [
+pub const BUILTIN_VIEW_KEYS: [&str; 5] = [
     "my_tasks",
     "ready_for_agents",
     "blocked",
     "recently_changed",
+    "triage",
 ];
 
 /// `reader`'s pins in a collection.

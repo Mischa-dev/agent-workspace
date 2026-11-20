@@ -59,7 +59,7 @@ async fn collection(
     let caller = call.ctx.caller.clone();
     let tx = call.tx().await?;
     let row = sqlx::query_as::<_, (String, bool, bool)>(&format!(
-        "SELECT name, archived_at IS NOT NULL, acts_like_task OR builtin IS NOT NULL \
+        "SELECT name, archived_at IS NOT NULL, acts_like_task \
          FROM collections WHERE project_id = $1 AND id = $2{}",
         if lock { " FOR UPDATE" } else { "" }
     ))
@@ -283,7 +283,7 @@ pub struct ViewEntry {
     /// one of your own.
     pub shared: bool,
     /// One of the views every Tasks collection starts with: my_tasks,
-    /// ready_for_agents, blocked or recently_changed.
+    /// ready_for_agents, blocked, recently_changed or triage.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub builtin: Option<String>,
     /// In your sidebar.

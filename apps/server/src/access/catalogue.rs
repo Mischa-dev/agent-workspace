@@ -1184,6 +1184,20 @@ impl PermissionSet {
                     .fold(set, |set, lower| set.with(lower.permission))
             })
     }
+
+    /// The set with the lower writing levels a writing level implies, but
+    /// no seeing it doesn't already hold: what a delegation limit allows.
+    /// A limit naming edit on tasks allows suggesting and commenting too
+    /// (lesser writes on what it may already change), while a limit that
+    /// leaves out seeing still writes without reading.
+    #[must_use]
+    pub fn implied_writes(self) -> Self {
+        PERMISSIONS
+            .iter()
+            .filter(|info| matches!(info.level, Some((_, Level::See))))
+            .filter(|info| !self.contains(info.permission))
+            .fold(self.implied(), |set, info| set.without(info.permission))
+    }
 }
 
 #[cfg(test)]

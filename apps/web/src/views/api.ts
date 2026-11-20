@@ -2,6 +2,7 @@ import { apiUrl, requestJson } from '../api/client'
 import { callOp, type OpInput, type OpOutput } from '../api/ops'
 import { projectLocationHref } from '../projects/locations'
 import { queryKeys } from '../api/queryKeys'
+import type { ProjectStatus } from '../work-items/projectStatusModel'
 
 /**
  * Views of tasks, My work, the timeline, templates, imports and export. The
@@ -169,7 +170,9 @@ export type MyWorkTask = {
 }
 
 export type MyWorkSection = { items: MyWorkTask[]; total: number }
-export type MyWork = { assigned: MyWorkSection; claimed: MyWorkSection; review: MyWorkSection }
+/** A project's latest update, as My work lists it (T1.43). */
+export type MyWorkUpdate = ProjectStatus & { spaceName: string; spaceKey: string }
+export type MyWork = { assigned: MyWorkSection; claimed: MyWorkSection; review: MyWorkSection; updates?: MyWorkUpdate[] }
 
 export function getMyWork() {
   return requestJson<MyWork>('/api/v1/my-work')

@@ -24,15 +24,7 @@ use crate::{
 pub const MAX_STATUSES: usize = 30;
 pub const MAX_TYPES: usize = 30;
 pub const MAX_NAME_CHARACTERS: usize = 80;
-pub const SEMANTIC_CATEGORIES: [&str; 7] = [
-    "backlog",
-    "unstarted",
-    "started",
-    "review",
-    "verification",
-    "completed",
-    "canceled",
-];
+pub const SEMANTIC_CATEGORIES: [&str; 8] = crate::fields::STATUS_CATEGORIES;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

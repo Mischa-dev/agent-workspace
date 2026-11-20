@@ -19,6 +19,9 @@ export const automationKeys = {
 
 // Automation rules
 
+/** A field filter on a record rule, as record_query takes one. */
+export type RecordFilter = { field: string; op: string; values?: string[] }
+
 export type Trigger =
   | { kind: 'task_created' }
   | { kind: 'task_matches' }
@@ -32,6 +35,10 @@ export type Trigger =
   /** A collection's records (AWD-110): one collection, or any. */
   | { kind: 'record_created'; collectionId?: string | null }
   | { kind: 'record_changed'; collectionId?: string | null }
+  /** A record starts matching a view of its collection and field filters (T1.38); stored by IDs. */
+  | { kind: 'record_matches'; collectionId: string; viewId?: string | null; filters?: RecordFilter[] }
+  /** A field of a record changes, to one of `to` when given (option IDs or values as stored). */
+  | { kind: 'field_changed'; collectionId: string; field: string; to?: string[]; viewId?: string | null; filters?: RecordFilter[] }
   /** A page, sheet or board kept as a new version: one of them, or any in the project. */
   | { kind: 'page_changed'; pageId?: string | null }
   | { kind: 'sheet_changed'; sheetId?: string | null }

@@ -45,6 +45,8 @@ export type WorkItem = {
   status: WorkItemStatus
   priority: WorkItemPriority
   assignee: WorkItemAssignee | null
+  /** Who it's handed to to do, beside the assignee who owns it (T1.22). */
+  delegate?: WorkItemAssignee | null
   version: number
   archivedAt: string | null
   createdAt: string
@@ -358,6 +360,16 @@ export type Milestone = {
   progress: number
   overdue: boolean
   version: number
+  /** The initiative it is part of (T1.26), and its name. */
+  initiativeId: string | null
+  initiative: string | null
+  /** Its place among the project's milestones, 1 being first (T1.42). */
+  position: number
+  /** Its tasks' estimates, and those of its completed tasks, leaving out canceled ones. */
+  estimateTotal: number
+  estimateDone: number
+  /** The latest due date among its tasks, leaving out canceled ones. */
+  latestDueDate: string | null
 }
 
 export type BulkChanges = {
@@ -395,6 +407,8 @@ export type WorkItemPatch = {
   statusId?: string
   priority?: WorkItemPriority
   assigneeActorId?: string | null
+  /** Who it's handed to (T1.22); null takes it back. */
+  delegateActorId?: string | null
   parentWorkItemId?: string | null
   milestoneId?: string | null
   startDate?: string | null

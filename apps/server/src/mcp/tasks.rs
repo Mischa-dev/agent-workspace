@@ -54,15 +54,7 @@ const MAX_FILTER_LABELS: usize = 10;
 /// The most values any other list filter names, such as 20 statuses.
 const MAX_FILTER_VALUES: usize = 20;
 /// Status groups, in board order.
-const STATUS_GROUPS: [&str; 7] = [
-    "backlog",
-    "unstarted",
-    "started",
-    "review",
-    "verification",
-    "completed",
-    "canceled",
-];
+const STATUS_GROUPS: [&str; 8] = crate::fields::STATUS_CATEGORIES;
 const UPDATED_SINCE_MESSAGE: &str = "Use a date (YYYY-MM-DD), a timestamp such as 2026-09-30T14:00:00Z, or a span such as 24h or 7d.";
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -94,6 +86,11 @@ pub(crate) struct TaskListArguments {
     #[serde(default, deserialize_with = "one_or_many")]
     #[schemars(with = "Option<Vec<String>>")]
     pub not_assignee: Option<Vec<String>>,
+    /// "me", "none", actor IDs, or @handles: tasks handed to any of them to
+    /// do ("me" lists what was delegated to you).
+    #[serde(default, deserialize_with = "one_or_many")]
+    #[schemars(with = "Option<Vec<String>>")]
+    pub delegate: Option<Vec<String>>,
     /// Only tasks that have all of these labels, by name or ID (at most 10).
     /// Names match in each project you're looking at.
     #[serde(default, deserialize_with = "one_or_many")]
@@ -516,6 +513,7 @@ async fn list_tasks(
             listed(arguments.not_status.as_ref(), "notStatus")?,
             listed(arguments.assignee.as_ref(), "assignee")?,
             listed(arguments.not_assignee.as_ref(), "notAssignee")?,
+            listed(arguments.delegate.as_ref(), "delegate")?,
             listed(arguments.any_labels.as_ref(), "anyLabels")?,
             listed(arguments.not_labels.as_ref(), "notLabels")?,
             listed(arguments.task_type.as_ref(), "type")?,
@@ -531,6 +529,7 @@ async fn list_tasks(
         not_status,
         assignee,
         not_assignee,
+        delegate,
         any_labels,
         not_labels,
         task_type,
@@ -634,6 +633,10 @@ async fn list_tasks(
     ) {
         (Ok(any), Ok(not)) => (any, not),
         (Err(refusal), _) | (_, Err(refusal)) => return Ok(invalid(refusal)),
+    };
+    let delegates = match filter_people(state, principal, &projects, &delegate, "delegate").await? {
+        Ok(delegates) => delegates,
+        Err(refusal) => return Ok(invalid(refusal)),
     };
     let mut statuses = Vec::new();
     for (values, field) in [(&status, "status"), (&not_status, "notStatus")] {
@@ -858,6 +861,15 @@ async fn list_tasks(
         !assignee.is_empty(),
     ));
     all.extend(none_of(tasks::ASSIGNEE, &not_assignees.0, not_assignees.1));
+    if !delegate.is_empty() {
+        passed.push(tasks::DELEGATE);
+    }
+    all.extend(any_of(
+        tasks::DELEGATE,
+        &delegates.0,
+        delegates.1,
+        !delegate.is_empty(),
+    ));
     match parent {
         Some(Parent::Of(id)) => all.push(clause(tasks::PARENT, FieldOp::Is, vec![id.to_string()])),
         Some(Parent::TopLevel) => all.push(clause(tasks::PARENT, FieldOp::Empty, Vec::new())),
@@ -2409,6 +2421,9 @@ pub(crate) struct TaskUpdateArguments {
     /// Put it in this active milestone, by name or ID (see milestone_list);
     /// "none" takes it out.
     pub milestone: Option<String>,
+    /// Put it in one of the space's cycles that hasn't ended: "current",
+    /// "next", its number or name (see cycle_list); "none" takes it out.
+    pub cycle: Option<String>,
     /// When work starts: YYYY-MM-DD, or "" to clear it.
     pub start_date: Option<String>,
     /// When it's due: YYYY-MM-DD, or "" to clear it.
@@ -2421,6 +2436,9 @@ pub(crate) struct TaskUpdateArguments {
     /// Custom field values to set, by field name (see field_list); null
     /// clears one. Such as {"Risk": "High", "Due to customer": "2026-12-01"}.
     pub fields: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Hand the task to someone to do, keeping its assignee as the owner:
+    /// "me", "none" (take it back), an actor ID, or an @handle.
+    pub delegate: Option<String>,
 }
 
 impl TaskUpdateArguments {
@@ -2449,6 +2467,7 @@ impl TaskUpdateArguments {
             || self.before_task_id.is_some()
             || self.after_task_id.is_some()
             || self.milestone.is_some()
+            || self.cycle.is_some()
             || self.start_date.is_some()
             || self.due_date.is_some()
             || self.estimate.is_some()
@@ -2457,6 +2476,10 @@ impl TaskUpdateArguments {
                 .fields
                 .as_ref()
                 .is_some_and(|fields| !fields.is_empty())
+            || self
+                .delegate
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
     }
 }
 
@@ -2500,6 +2523,21 @@ pub(crate) async fn task_update(
             Ok(None) => None,
             Err(result) => return result,
         };
+    let delegate = match assignee_for(state, principal, arguments.delegate.as_deref()).await {
+        Ok(delegate) => delegate,
+        Err(WriteResult::InvalidRequest {
+            retry_category,
+            message,
+            ..
+        }) => {
+            return WriteResult::InvalidRequest {
+                field: "delegate".to_owned(),
+                retry_category,
+                message,
+            };
+        }
+        Err(result) => return result,
+    };
     // Every field must count here: a status call with nothing else goes to
     // set_status, which would drop any other change silently.
     let changes_fields = arguments.changes_more_than_status() || clear_assignee == Some(true);
@@ -2537,11 +2575,14 @@ pub(crate) async fn task_update(
         before_task_id: arguments.before_task_id,
         after_task_id: arguments.after_task_id,
         milestone: arguments.milestone,
+        cycle: arguments.cycle,
         start_date: arguments.start_date,
         due_date: arguments.due_date,
         estimate: arguments.estimate,
         clear_estimate: arguments.clear_estimate.filter(|clear| *clear),
         fields: arguments.fields.filter(|fields| !fields.is_empty()),
+        delegate_actor_id: delegate.flatten().map(|id| id.to_string()),
+        clear_delegate: matches!(delegate, Some(None)).then_some(true),
     };
     match status {
         Some(status) => writes::update_work_item_and_status(state, principal, update, status).await,

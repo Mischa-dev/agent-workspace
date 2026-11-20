@@ -82,6 +82,27 @@ pub const ENTRIES: &[Entry] = &[
         "work_item.assigned",
     ),
     entry(
+        "task.delegated",
+        "task",
+        true,
+        "A task was handed to you to do",
+        "task.delegated",
+    ),
+    entry(
+        "task.triaged",
+        "task",
+        false,
+        "A task was triaged",
+        "task.triaged",
+    ),
+    entry(
+        "task.snooze_ended",
+        "task",
+        true,
+        "A task you snoozed is back in triage",
+        "task.snooze_ended",
+    ),
+    entry(
         "comment.mentioned",
         "task",
         true,

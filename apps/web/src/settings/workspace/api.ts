@@ -40,7 +40,7 @@ export const keepWorkspace = (workspaceId: string) => callOp('workspace_delete_c
 
 export type WorkspaceMember = {
   actorId: string
-  kind: 'human' | 'external_agent'
+  kind: 'human' | 'external_agent' | 'integration'
   displayName: string
   handle: string
   loginName: string | null
@@ -55,6 +55,8 @@ export type WorkspaceMember = {
   joinedAt: string
   projectCount: number
   isYou: boolean
+  /** Whether the workspace can be handed to them (they sign in themselves). */
+  mayOwn: boolean
   capabilities: { changeRole: boolean; remove: boolean; assignRole: boolean; limitApps: boolean }
 }
 

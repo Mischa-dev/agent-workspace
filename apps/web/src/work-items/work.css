@@ -2059,7 +2059,8 @@ span.aw-taskstart__fix {
   color: var(--content-fg-muted);
 }
 
-.aw-milestone__overdue {
+.aw-milestone__overdue,
+.aw-milestone__date.is-late {
   color: var(--danger);
 }
 
@@ -2220,4 +2221,192 @@ span.aw-taskstart__fix {
 .aw-tasks__field .aw-prop__text {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The triage queue's decisions (T1.23), above the list on the Triage view. */
+.aw-triagebar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  padding: var(--space-2);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+}
+
+.aw-triagebar__hint {
+  flex: 1 1 12rem;
+  color: var(--content-fg-muted);
+}
+
+.aw-triagebar__snooze {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.aw-triagerules__rule {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.aw-triagerules__text {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.aw-triagerules__text > span {
+  color: var(--content-fg-muted);
+}
+
+.aw-triagerules__form {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 28rem;
+}
+
+.aw-triagerules__buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.aw-triagerules__note {
+  margin: 0;
+  color: var(--content-fg-muted);
+}
+
+/* Cycles (T1.24): settings, the list and the running cycle's burn-up. */
+.aw-cycles__settings {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.aw-cycles__cycle {
+  align-items: center;
+  display: flex;
+  gap: var(--space-2);
+}
+
+.aw-cycles__pick {
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--content-fg);
+  cursor: pointer;
+  display: grid;
+  flex: 1 1 auto;
+  font: var(--t-ui);
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  text-align: left;
+}
+
+.aw-cycles__pick > span {
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-cycles__pick[aria-pressed='true'] {
+  background: var(--content-hover);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.aw-cycles__pick:hover {
+  background: var(--content-hover);
+}
+
+.aw-cycles__cycle[data-state='ended'] .aw-cycles__pick > strong {
+  color: var(--content-fg-muted);
+}
+
+.aw-cycles__rename {
+  align-items: end;
+  display: flex;
+  flex: 1 1 auto;
+  gap: var(--space-2);
+}
+
+.aw-cycles__chart {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+}
+
+.aw-cycles__caption {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  font: var(--t-ui);
+  gap: var(--space-3);
+  justify-content: space-between;
+}
+
+.aw-cycles__legend {
+  color: var(--content-fg-muted);
+  display: flex;
+  font: var(--t-small);
+  gap: var(--space-3);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.aw-cycles__legend li {
+  align-items: center;
+  display: flex;
+  gap: var(--space-1);
+}
+
+.aw-cycles__key {
+  border-radius: 1px;
+  display: inline-block;
+  height: 2px;
+  width: 14px;
+}
+
+.aw-cycles__key--scope,
+.aw-cycles__line--scope {
+  background: var(--content-fg-muted);
+  stroke: var(--content-fg-muted);
+}
+
+.aw-cycles__key--done,
+.aw-cycles__line--done {
+  background: var(--accent);
+  stroke: var(--accent);
+}
+
+.aw-cycles__line {
+  background: none;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.aw-cycles__dot {
+  stroke: var(--content-bg);
+  stroke-width: 2;
+}
+
+.aw-cycles__dot--scope {
+  fill: var(--content-fg-muted);
+}
+
+.aw-cycles__dot--done {
+  fill: var(--accent);
+}
+
+.aw-cycles__hit {
+  fill: var(--content-fg);
+  opacity: 0;
+}
+
+.aw-cycles__hit:hover {
+  opacity: 0.06;
 }

@@ -91,6 +91,8 @@ export async function updateMilestone(input: {
   description?: string
   targetDate?: string | null
   archived?: boolean
+  /** The initiative it is part of; null takes it out of one. */
+  initiativeId?: string | null
   idempotencyKey: string
 }) {
   const { projectId, milestoneId, idempotencyKey, expectedVersion, ...fields } = input

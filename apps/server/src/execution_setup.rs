@@ -88,16 +88,11 @@ pub async fn ensure_default_worker(
     .fetch_optional(&mut **transaction)
     .await?;
     let worker_actor_id = existing_worker_actor.unwrap_or_else(Uuid::now_v7);
-    sqlx::query(
-        r#"
-        INSERT INTO actors (id, kind)
-        VALUES ($1, 'execution_worker')
-        ON CONFLICT DO NOTHING
-        "#,
-    )
-    .bind(worker_actor_id)
-    .execute(&mut **transaction)
-    .await?;
+    let workspace: Uuid = sqlx::query_scalar("SELECT organization_id FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_one(&mut **transaction)
+        .await?;
+    crate::accounts::ensure_worker(transaction, worker_actor_id, workspace).await?;
     sqlx::query(
         r#"
         INSERT INTO project_memberships (

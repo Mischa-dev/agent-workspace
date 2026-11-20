@@ -230,7 +230,8 @@ pub(crate) async fn field_write(
         if !role_allows(
             principal,
             project_id,
-            &StoredRole::of(&membership.role, membership.role_permissions.as_deref()),
+            &StoredRole::of(&membership.role, membership.role_permissions.as_deref())
+                .with_groups(membership.group_permissions.clone()),
             Action::WorkflowManage,
         ) {
             return Ok(ToolResult::denied(MANAGERS_MESSAGE));
@@ -305,6 +306,9 @@ pub(crate) async fn field_write(
                     position: arguments.position,
                     formula: None,
                     button: None,
+                    rollup: None,
+                    pair: None,
+                    rules: None,
                 },
             )
             .await?;
@@ -421,6 +425,8 @@ pub(crate) async fn field_write(
                 archived: arguments.archived,
                 formula: None,
                 button: None,
+                rollup: None,
+                rules: None,
                 expected_version: arguments.expected_version,
             },
         )

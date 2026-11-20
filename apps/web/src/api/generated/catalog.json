@@ -1117,6 +1117,36 @@
     "title": "Retire custom emoji"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "tasks",
+    "name": "cycle_list",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "List cycles"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "cycles.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "cycle_set",
+    "permission": "tasks.workflow",
+    "preview": false,
+    "proposable": false,
+    "title": "Set up cycles"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -1191,6 +1221,194 @@
     "preview": false,
     "proposable": false,
     "title": "Change a dashboard"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "data_connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "collections",
+    "name": "data_connection_create",
+    "permission": "data.connect",
+    "preview": false,
+    "proposable": false,
+    "title": "Connect outside data"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "data_connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "data_connection_delete",
+    "permission": "data.connect",
+    "preview": false,
+    "proposable": false,
+    "title": "Remove an outside data connection"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "collections",
+    "name": "data_connection_list",
+    "permission": "data.connect",
+    "preview": false,
+    "proposable": false,
+    "title": "List outside data connections"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [
+      "data_connection.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "data_connection_update",
+    "permission": "data.connect",
+    "preview": false,
+    "proposable": false,
+    "title": "Change an outside data connection"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "data_query.changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "collections",
+    "name": "data_query_create",
+    "permission": "data.connect",
+    "preview": false,
+    "proposable": false,
+    "title": "Save an outside data query"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "data_query.changed",
+      "dashboard.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "data_query_delete",
+    "permission": "data.connect",
+    "preview": false,
+    "proposable": false,
+    "title": "Remove a saved outside data query"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "collections",
+    "name": "data_query_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Read a saved outside data query"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "collections",
+    "name": "data_query_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List saved outside data queries"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "data_query.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "data_query_review",
+    "permission": "data.connect",
+    "preview": false,
+    "proposable": false,
+    "title": "Review a saved outside data query"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "data_query.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "data_query_run",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Run a saved outside data query"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "data_query.changed",
+      "dashboard.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "data_query_share",
+    "permission": "data.share",
+    "preview": false,
+    "proposable": false,
+    "title": "Share an outside data query's answer"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "data_query.changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "data_query_update",
+    "permission": "data.connect",
+    "preview": false,
+    "proposable": false,
+    "title": "Change a saved outside data query"
   },
   {
     "automation": false,
@@ -1541,6 +1759,82 @@
     "title": "Follow"
   },
   {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "record.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "collections",
+    "name": "form_answer_send",
+    "permission": "collections.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Answer a form"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "collections",
+    "name": "form_create",
+    "permission": "collections.build",
+    "preview": false,
+    "proposable": false,
+    "title": "Create a form"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "collections",
+    "name": "form_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Get a form"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "collections",
+    "name": "form_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List forms"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "form_update",
+    "permission": "collections.build",
+    "preview": false,
+    "proposable": false,
+    "title": "Change a form"
+  },
+  {
     "automation": false,
     "destructive": false,
     "emits": [],
@@ -1733,7 +2027,9 @@
     "emits": [
       "page.version_restored",
       "whiteboard.version_restored",
-      "sheet.version_restored"
+      "sheet.version_restored",
+      "record.version_restored",
+      "record.updated"
     ],
     "idempotent": true,
     "kind": "change",
@@ -1928,6 +2224,36 @@
     "preview": false,
     "proposable": false,
     "title": "List incoming hooks"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "record.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "initiative_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Create an initiative"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "tasks",
+    "name": "initiative_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List initiatives"
   },
   {
     "automation": true,
@@ -2250,6 +2576,22 @@
     "preview": false,
     "proposable": false,
     "title": "List milestones"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "milestone.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "milestone_reorder",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Reorder milestones"
   },
   {
     "automation": true,
@@ -2677,12 +3019,62 @@
     "title": "List spaces"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "tasks",
+    "name": "project_status_get",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "Get a project's status"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "space.status_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "project_status_set",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Set a project's status"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "space.status_changed",
+      "message.created"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "project_update_create",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Post a project update"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
       "page.discussion.updated",
       "sheet.proposals_changed",
-      "whiteboard.proposals_changed"
+      "whiteboard.proposals_changed",
+      "record.proposals_changed",
+      "task.proposals_changed",
+      "task.updated"
     ],
     "idempotent": true,
     "kind": "change",
@@ -2804,6 +3196,70 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "collections",
+    "name": "record_template_create",
+    "permission": "collections.build",
+    "preview": false,
+    "proposable": false,
+    "title": "Create a record template"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "collections",
+    "name": "record_template_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List record templates"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "record_template_update",
+    "permission": "collections.build",
+    "preview": false,
+    "proposable": false,
+    "title": "Change a record template"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "record.updated",
+      "record.proposals_changed",
+      "request.raised"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "record_update",
+    "permission": "collections.suggest",
+    "preview": false,
+    "proposable": true,
+    "title": "Update a record"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "recurring.created"
     ],
     "idempotent": true,
@@ -2815,6 +3271,68 @@
     "preview": false,
     "proposable": false,
     "title": "Schedule a template"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "collections",
+    "name": "recurring_record_create",
+    "permission": "collections.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Make records on a schedule"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "recurring_record_delete",
+    "permission": "collections.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Stop a recurring record"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "collections",
+    "name": "recurring_record_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List recurring records"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "collection.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "collections",
+    "name": "recurring_record_update",
+    "permission": "collections.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Change a recurring record"
   },
   {
     "automation": true,
@@ -3084,7 +3602,11 @@
     "automation": true,
     "destructive": false,
     "emits": [
-      "request.answered"
+      "request.answered",
+      "record.updated",
+      "record.proposals_changed",
+      "task.updated",
+      "task.proposals_changed"
     ],
     "idempotent": true,
     "kind": "change",
@@ -4017,14 +4539,16 @@
     "automation": true,
     "destructive": true,
     "emits": [
-      "task.updated"
+      "task.updated",
+      "task.proposals_changed",
+      "request.raised"
     ],
     "idempotent": true,
     "kind": "change",
     "long": false,
     "module": "tasks",
     "name": "task_update",
-    "permission": "tasks.edit",
+    "permission": "tasks.suggest",
     "preview": false,
     "proposable": true,
     "title": "Update task"
@@ -4308,6 +4832,69 @@
     "preview": false,
     "proposable": false,
     "title": "Update thread"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "task.updated",
+      "task.triaged"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "triage_decide",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Triage tasks"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "task.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "triage_enable",
+    "permission": "tasks.workflow",
+    "preview": false,
+    "proposable": false,
+    "title": "Turn on triage"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "tasks",
+    "name": "triage_rule_list",
+    "permission": "tasks.view",
+    "preview": false,
+    "proposable": false,
+    "title": "List triage rules"
+  },
+  {
+    "automation": true,
+    "destructive": true,
+    "emits": [
+      "triage.rules_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "triage_rule_set",
+    "permission": "tasks.workflow",
+    "preview": false,
+    "proposable": false,
+    "title": "Write a triage rule"
   },
   {
     "automation": true,

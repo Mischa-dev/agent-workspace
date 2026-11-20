@@ -113,6 +113,7 @@ fn run_all(definitions: &[FieldDefinition]) -> Value {
         created_by: ADA,
         updated_by: ADA,
         labels: &labels,
+        computed: &Value::Null,
     };
     compute(definitions, &record, now())
 }

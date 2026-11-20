@@ -219,10 +219,11 @@ async fn forms(
 ) -> Result<Vec<(String, Value)>, AppError> {
     let rows = sqlx::query_as::<_, (String, Uuid, Value)>(
         r#"
-        SELECT name, collection_id, form FROM bug_report_links
-        WHERE project_id = $1 AND collection_id IS NOT NULL AND form IS NOT NULL
-          AND state <> 'disabled'
-        ORDER BY created_at, id
+        SELECT link.name, link.collection_id, form.definition
+        FROM bug_report_links link
+        JOIN forms form ON form.id = link.form_id
+        WHERE link.project_id = $1 AND link.state <> 'disabled'
+        ORDER BY link.created_at, link.id
         "#,
     )
     .bind(space_id)

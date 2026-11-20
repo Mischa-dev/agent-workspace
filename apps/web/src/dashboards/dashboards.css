@@ -139,3 +139,124 @@
   .aw-dash__grid { grid-template-columns: minmax(0, 1fr); }
   .aw-dash__tile[class*='aw-dash__tile--w'] { grid-column: auto; }
 }
+
+/* Outside data (T1.34, T1.35): saved queries over databases kept elsewhere,
+   each with its editor, review and stored answer. */
+.aw-outside__chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.aw-outside__quiet {
+  margin: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+}
+
+.aw-outside__panel,
+.aw-outside__editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.aw-outside__panel {
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--content-border);
+}
+
+.aw-outside__row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  align-items: end;
+  gap: var(--space-3);
+}
+
+.aw-outside__sql textarea {
+  font: var(--t-code);
+}
+
+.aw-outside__parameters {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.aw-outside__parameters legend {
+  margin-bottom: var(--space-2);
+  padding: 0;
+  font: var(--t-ui-strong);
+}
+
+.aw-outside__parameters > button {
+  align-self: flex-start;
+}
+
+.aw-outside__actions,
+.aw-outside__review,
+.aw-outside__answerhead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.aw-outside__answer {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.aw-outside__answerhead h3 {
+  margin: 0;
+  font: var(--t-ui-strong);
+}
+
+.aw-outside__table {
+  min-width: 0;
+  max-height: 480px;
+  overflow: auto;
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+}
+
+.aw-dash__tilebody .aw-outside__table {
+  max-height: none;
+  border: 0;
+}
+
+.aw-outside__table table {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--t-small);
+}
+
+.aw-outside__table th,
+.aw-outside__table td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--content-border);
+  text-align: start;
+  white-space: nowrap;
+}
+
+.aw-outside__table th {
+  position: sticky;
+  top: 0;
+  background: var(--content-bg);
+  font: var(--t-label);
+}
+
+.aw-outside__narrow {
+  max-width: 16rem;
+}
+
+.aw-outside__table .aw-outside__num {
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
