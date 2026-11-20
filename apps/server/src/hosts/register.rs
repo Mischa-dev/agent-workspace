@@ -935,6 +935,7 @@ async fn add_assistant(
         command_id: None,
         account_id: proposal.account_id,
         page: None,
+        panel: None,
     })
 }
 

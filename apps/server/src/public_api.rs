@@ -738,7 +738,7 @@ pub(crate) fn document() -> Value {
         // under 200. The introduction says what each status means.
         refusals.entry(result.clone()).or_insert_with(|| {
             json!({
-                "description": "The result, a refusal (see `outcome`), or an `Error`.",
+                "description": "The result or an `Error`.",
                 "content": { "application/json": { "schema": {
                     "oneOf": [output, { "$ref": "#/components/schemas/Error" }],
                 } } },

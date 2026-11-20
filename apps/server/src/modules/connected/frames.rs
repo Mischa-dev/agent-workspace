@@ -8,7 +8,7 @@
 //! token appears: in the app's address it frames. The app redeems the token
 //! server to server, once, within five minutes (`http::redeem_frame`), which
 //! tells it who it is drawing for. When the frame says it's done, the web
-//! calls `module_frame_finish`, and Workspace asks the app's panel for the
+//! calls `module_frame_check`, and Workspace asks the app's panel for the
 //! result itself; nothing the frame's page says is trusted on its own.
 
 use axum::{
@@ -351,7 +351,7 @@ pub(super) async fn redeem(
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ModuleFrameFinishInput {
+pub struct ModuleFrameCheckInput {
     /// The launch the panel's frame answer gave.
     pub launch_id: IdRef,
     /// What the frame's `done` message carried, passed to the app's panel
@@ -360,16 +360,16 @@ pub struct ModuleFrameFinishInput {
     pub reference: String,
 }
 
-impl Targeted for ModuleFrameFinishInput {
+impl Targeted for ModuleFrameCheckInput {
     fn target(&self) -> Target {
         Target::thing("frame_launch", self.launch_id.id())
     }
 }
 
-pub struct ModuleFrameFinish;
+pub struct ModuleFrameCheck;
 
-impl Operation for ModuleFrameFinish {
-    const NAME: &'static str = "module_frame_finish";
+impl Operation for ModuleFrameCheck {
+    const NAME: &'static str = "module_frame_check";
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "workspace";
     // The frame is the caller's own; the app decides what finishing means.
@@ -383,12 +383,12 @@ impl Operation for ModuleFrameFinish {
         the app's panel for the result: it answers as a panel does (the panel to draw next, \
         done, or close). The frame must be yours, and the app must have redeemed its launch.";
 
-    type Input = ModuleFrameFinishInput;
+    type Input = ModuleFrameCheckInput;
     type Output = PanelView;
 
     async fn run(
         call: &mut OpCall<'_>,
-        input: ModuleFrameFinishInput,
+        input: ModuleFrameCheckInput,
     ) -> Result<PanelView, OpError> {
         let reference = input.reference.trim();
         if reference.is_empty()

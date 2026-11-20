@@ -1141,7 +1141,7 @@ async fn a_framed_panel_opens_once_for_its_viewer_and_finishes_with_the_apps_res
     let finish = |reference: &str, key: &str| {
         lena.browser.request(
             "POST",
-            &op("module_frame_finish"),
+            &op("module_frame_check"),
             Some(key),
             json!({"launchId": launch, "ref": reference}),
         )
@@ -1216,7 +1216,7 @@ async fn a_framed_panel_opens_once_for_its_viewer_and_finishes_with_the_apps_res
         &world.app,
         world.owner.browser.request(
             "POST",
-            &op("module_frame_finish"),
+            &op("module_frame_check"),
             Some("finish-owner"),
             json!({"launchId": launch, "ref": "saved-1"}),
         ),

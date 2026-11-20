@@ -36,7 +36,7 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<ModulePanelList>()
         .add::<ModulePanelOpen>()
         .add::<ModulePanelPress>()
-        .add::<super::frames::ModuleFrameFinish>();
+        .add::<super::frames::ModuleFrameCheck>();
 }
 
 /// The live installs in a workspace whose panels may be drawn: active, not

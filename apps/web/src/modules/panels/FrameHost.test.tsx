@@ -72,7 +72,7 @@ describe('FrameHost', () => {
     })
     send({ aw: 1, type: 'done', ref: 'saved-1' }, { origin, source: app })
     expect(callOp).toHaveBeenCalledWith(
-      'module_frame_finish',
+      'module_frame_check',
       { launchId: frame.launchId, ref: 'saved-1' },
       expect.objectContaining({ requestId: expect.any(String) }),
     )

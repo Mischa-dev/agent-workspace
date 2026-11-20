@@ -5,7 +5,7 @@
 // The app's page inside it talks to this window by postMessage, checked
 // both ways: a message counts only from that inner frame's window and the
 // app's origin, and replies go only to that origin. `done` is never trusted
-// on its own: Workspace asks the app for the result (`module_frame_finish`)
+// on its own: Workspace asks the app for the result (`module_frame_check`)
 // and draws what the server answers.
 
 import { useEffect, useRef, useState } from 'react'
@@ -80,7 +80,7 @@ export default function FrameHost({
           if (typeof message.ref !== 'string' || finishing.current) break
           finishing.current = true
           setFailed(null)
-          callOp('module_frame_finish', { launchId: frame.launchId, ref: message.ref }, { workspaceId, requestId: newRequestId() })
+          callOp('module_frame_check', { launchId: frame.launchId, ref: message.ref }, { workspaceId, requestId: newRequestId() })
             .then((value) => onAnswer(value.answer))
             .catch((error: unknown) => setFailed(error))
             .finally(() => {

@@ -604,7 +604,6 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "workspace_store_set",
     "workspace_store_revoke",
     "workspace_export_start",
-    "layout_preset_write",
     "label_create",
     "label_update",
     "field_create",
@@ -666,7 +665,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "connected_module_run",
     "connected_module_test",
     "module_panel_press",
-    "module_frame_finish",
+    "module_frame_check",
     "module_create",
     "module_part_link",
     "module_part_unlink",
@@ -7974,7 +7973,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         // M1.15: a framed panel's launch is finished only by the account it
         // was opened for, in its own workspace.
         mcp_case(
-            "module_frame_finish",
+            "module_frame_check",
             json!({"launchId": a.organization, "ref": "saved-1"}),
             vec![json!({"workspace": b.organization, "launchId": a.organization, "ref": "saved-1"})],
         )
