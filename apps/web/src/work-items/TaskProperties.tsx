@@ -28,6 +28,7 @@ export function TaskProperties({
   onManageLabels,
   onRaisePriority,
   save,
+  suggesting = false,
   variant,
   workflow,
 }: {
@@ -37,6 +38,8 @@ export function TaskProperties({
   /** The person moved the priority up; it may be worth raising the blockers too. */
   onRaisePriority?: (priority: WorkItemPriority) => void
   save: TaskSave
+  /** Changes become proposals, which can't hand the task on or plan it: delegate and milestone stay as they are. */
+  suggesting?: boolean
   variant: 'rail' | 'pills'
   workflow: WorkItemWorkflow
 }) {
@@ -87,7 +90,7 @@ export function TaskProperties({
     )
 
   const pickerButton = (name: PickerField, label: string, content: ReactNode, empty = false) =>
-    disabled ? (
+    disabled || (suggesting && (name === 'delegate' || name === 'milestone')) ? (
       <span className={`${control} is-static${empty ? ' is-empty' : ''}`}>{content}</span>
     ) : (
       <button
@@ -291,12 +294,13 @@ export function TaskProperties({
           }}
           field={picker.field}
           onClose={() => setPicker(null)}
-          onManageLabels={onManageLabels}
+          onManageLabels={suggesting ? undefined : onManageLabels}
           onPick={(result) => {
             if (result.field === 'priority' && priorityRank(result.priority) > priorityRank(item.priority)) onRaisePriority?.(result.priority)
             save.save(result.field, pickToPatch(result))
           }}
           projectId={item.projectId}
+          suggesting={suggesting}
           workflow={workflow}
         />
       ) : null}

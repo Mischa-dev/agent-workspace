@@ -3,10 +3,14 @@ import { useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
 import { isApiError } from '../api/errors'
+import { callOp, newRequestId } from '../api/ops'
 import { discardOutbound, useOutbound } from '../data/outbound'
+import { showToast } from '../ui'
+import { getWorkItem } from './api'
 import { useQueueWorkItemUpdate, useUpdateWorkItem } from './hooks'
 import { inOrder, remember } from '../views/saveQueue'
 import { conflictCurrent, editErrorMessage } from './taskEdits'
+import { suggestedUpdate } from './taskSuggest'
 import { undoableTaskChange } from './taskUndo'
 import type { WorkItem, WorkItemPatch } from './types'
 
@@ -179,6 +183,12 @@ type Entry = {
   state: 'waiting' | 'saving' | 'queued' | 'conflict' | 'failed'
   theirs: WorkItem | null
   message: string | null
+  /**
+   * A suggestion's request id and the version it was made against. Trying
+   * the same change again on the same version reuses the id, so a proposal
+   * whose answer was lost is answered again rather than made twice.
+   */
+  sent: { requestId: string; version: number } | null
   /** The request id it waits under, while queued. */
   outbound?: string
 }
@@ -204,7 +214,7 @@ const MAX_ATTEMPTS = 4
  * "Keep yours" or "Use theirs". A version conflict caused by a change to
  * another field is retried against the newer task on its own.
  */
-export function useTaskSave(item: WorkItem) {
+export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boolean } = {}) {
   const update = useUpdateWorkItem()
   const queueable = useQueueWorkItemUpdate()
   const queryClient = useQueryClient()
@@ -213,6 +223,10 @@ export function useTaskSave(item: WorkItem) {
   const entries = useRef(new Map<TaskField, Entry>())
   const [shown, setShown] = useState<ReadonlyMap<TaskField, Entry>>(() => new Map())
   const lastId = useRef(0)
+  // Each field's last suggestion that became a proposal: the value it
+  // proposed, what the task held then, and the task's version. A draft
+  // opened while it was on its way started from the proposed value.
+  const proposed = useRef(new Map<TaskField, { mine: string; base: string; version: number }>())
   const fallback = useRef(item)
   useLayoutEffect(() => {
     fallback.current = item
@@ -263,6 +277,10 @@ export function useTaskSave(item: WorkItem) {
       }
       change(id, { state: 'saving' })
       try {
+        if (suggest) {
+          await propose(id, entry, task)
+          return
+        }
         const input = {
           projectId: task.projectId,
           workItemId: task.id,
@@ -294,7 +312,11 @@ export function useTaskSave(item: WorkItem) {
         if (undo) remember(undo)
         return
       } catch (error) {
-        const theirs = conflictCurrent(error)
+        // A proposal's conflict carries no task; read it again, and the next
+        // try is a new request against the newer version.
+        const proposalConflict = suggest && isApiError(error) && error.code === 'conflict'
+        if (proposalConflict) change(id, { sent: null })
+        const theirs = conflictCurrent(error) ?? (proposalConflict ? await getWorkItem(task.projectId, task.id).catch(() => null) : null)
         if (!theirs) {
           change(id, { state: 'failed', message: problemFor(error, fieldName(entry.field)).message })
           return
@@ -306,6 +328,56 @@ export function useTaskSave(item: WorkItem) {
     change(id, { state: 'failed', message: 'The task kept changing while this saved. Try again.' })
   }
 
+  /**
+   * Someone who only suggests (T1.41): the change goes to `task_update`,
+   * which keeps it as a proposal for someone who edits the task. The task
+   * stays as it was, so the field shows its value again and a toast says
+   * where the change went; it is no one's to undo.
+   */
+  const propose = async (id: number, entry: Entry, task: WorkItem) => {
+    const name = fieldName(entry.field)
+    // An earlier try whose answer was lost goes again as it was, with its
+    // request id and version, so the server answers with the proposal it
+    // may already have made; only a refusal for the version moves it on.
+    const sent = find(id)?.sent ?? null
+    const version = sent?.version ?? task.version
+    const input = suggestedUpdate(task.id, version, entry.patch)
+    if (!input) {
+      change(id, { state: 'failed', message: `Only someone who edits this task can change its ${name}.` })
+      return
+    }
+    const requestId = sent?.requestId ?? newRequestId()
+    change(id, { sent: { requestId, version } })
+    const written = await callOp('task_update', input, { requestId })
+    // A suggestion leaves the task as it was, so a change to the same field
+    // queued behind this one starts from what this one started from (the
+    // task's value when it was sent), never from a live change since. A
+    // change that landed (their own task) already left the right base: it.
+    const queued = entries.current.get(entry.field)
+    if (written.proposalId && queued && queued.id !== id && entry.mine !== null && queued.base === entry.mine) {
+      entries.current.set(entry.field, { ...queued, base: entry.base })
+    }
+    if (written.proposalId && entry.mine !== null) {
+      proposed.current.set(entry.field, { mine: entry.mine, base: entry.base, version: written.version })
+    }
+    change(id, null)
+    if (written.proposalId) {
+      showToast({ tone: 'success', title: `Suggested a new ${name}`, description: 'Someone who edits this task accepts or rejects it.' })
+    } else {
+      // Their own task, which they may change: it landed. As on the direct
+      // path, a change queued behind it starts from what the server stored,
+      // which may be written its own way (a URL gains https://).
+      await queryClient.invalidateQueries({ queryKey: queryKeys.workItem(task.projectId, task.id) })
+      // Only the version this write made is known to hold its value; a newer
+      // one may be someone else's change, which must still stop it.
+      const now = current()
+      const holds = fieldValue(now, entry.field)
+      const next = entries.current.get(entry.field)
+      if (now.version === written.version && next && next.id !== id && entry.mine !== null && next.base === entry.mine && holds !== entry.mine) {
+        entries.current.set(entry.field, { ...next, base: holds })
+      }
+    }
+  }
   // A queued change is done once it's gone from the device; one the server refused comes back as a failed save.
   const waiting = useOutbound(`task:${taskId}`)
   useEffect(() => {
@@ -349,9 +421,15 @@ export function useTaskSave(item: WorkItem) {
     setProblem(null)
     const previous = entries.current.get(field)
     // A change that replaces one not sent yet starts from what the person saw before either.
-    const from = previous?.state === 'waiting' ? previous.base : (base ?? baseFor(field))
+    let from = previous?.state === 'waiting' ? previous.base : (base ?? baseFor(field))
+    // A draft opened while a suggestion was on its way started from that
+    // suggestion, which never reached the task: while the task is still the
+    // version it answered with, the draft starts from what it held then.
+    const earlier = proposed.current.get(field)
+    const now = current()
+    if (earlier && from === earlier.mine && now.version === earlier.version && fieldValue(now, field) === earlier.base) from = earlier.base
     lastId.current += 1
-    const entry: Entry = { id: lastId.current, field, patch, mine: patchValue(field, patch), base: from, state: 'waiting', theirs: null, message: null }
+    const entry: Entry = { id: lastId.current, field, patch, mine: patchValue(field, patch), base: from, state: 'waiting', theirs: null, message: null, sent: null }
     entries.current.set(field, entry)
     publish()
     enqueue(entry.id)
@@ -369,6 +447,10 @@ export function useTaskSave(item: WorkItem) {
       state: 'waiting',
       theirs: null,
       message: null,
+      // A changed patch is a new request; the same one again (a retry from
+      // the description's own button) keeps the request id.
+      // "Keep yours" is a new request against the task as it is now.
+      sent: overTheirs || (patch && JSON.stringify(patch) !== JSON.stringify(entry.patch)) ? null : entry.sent,
     })
     publish()
     enqueue(entry.id)

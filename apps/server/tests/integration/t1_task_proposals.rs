@@ -17,6 +17,24 @@ fn ok(answer: &Value) -> &Value {
     &answer["value"]
 }
 
+/// What the task panel reads: whether the caller edits the task, and
+/// whether they suggest instead.
+async fn capabilities(caller: &impl Caller, app: &axum::Router, path: &str) -> (bool, bool) {
+    let (status, opened) = caller
+        .call(
+            app,
+            Call::Http {
+                method: "GET",
+                path: path.to_owned(),
+                body: Value::Null,
+            },
+        )
+        .await;
+    assert!(status.is_success(), "{status} {opened}");
+    let flag = |name: &str| opened["capabilities"][name].as_bool().unwrap_or(false);
+    (flag("edit"), flag("suggest"))
+}
+
 #[tokio::test]
 async fn a_suggested_task_change_waits_for_someone_who_edits_tasks() {
     let Some(world) = WorldBuilder::default()
@@ -24,6 +42,8 @@ async fn a_suggested_task_change_waits_for_someone_who_edits_tasks() {
         .connected_app("Codex")
         .agent("sol", "member")
         .agent("vee", "member")
+        .person("ana", "member")
+        .person("ben", "member")
         .custom_role(
             "Member, suggests tasks",
             &[
@@ -57,9 +77,12 @@ async fn a_suggested_task_change_waits_for_someone_who_edits_tasks() {
     let as_sol = |name: &'static str, arguments: Value| async move {
         sol.call(app, Call::Tool { name, arguments }).await.1
     };
+    let (ana, ben) = (&world.people["ana"], &world.people["ben"]);
     for (who, role) in [
         (sol.actor, "Member, suggests tasks"),
         (vee.actor, "Member, reads tasks"),
+        (ana.actor, "Member, suggests tasks"),
+        (ben.actor, "Member, reads tasks"),
     ] {
         sqlx::query(
             "UPDATE project_memberships SET role_id = $1 WHERE project_id = $2 AND actor_id = $3",
@@ -252,4 +275,28 @@ async fn a_suggested_task_change_waits_for_someone_who_edits_tasks() {
     )
     .await);
     assert_eq!(read().await.1, "Fix the login page");
+
+    // The task panel asks whether to suggest, and proposes with ids, as
+    // its pickers hold them.
+    let path = format!("/api/v1/projects/{work}/work-items/{task}");
+    assert_eq!(capabilities(&world.owner, app, &path).await, (true, false));
+    assert_eq!(capabilities(ana, app, &path).await, (false, true));
+    assert_eq!(capabilities(ben, app, &path).await, (false, false));
+    let started = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM work_item_statuses WHERE project_id = $1 AND name = 'In Progress'",
+    )
+    .bind(work)
+    .fetch_one(pool)
+    .await
+    .expect("In Progress");
+    let (now, ..) = read().await;
+    let by_id = as_sol(
+        "task_update",
+        json!({"taskId": task.to_string(), "expectedVersion": now,
+               "status": started.to_string(), "clearEstimate": true,
+               "dueDate": "2026-12-01"}),
+    )
+    .await;
+    assert!(ok(&by_id)["proposalId"].is_string(), "{by_id}");
+    assert_eq!(read().await.3, "Ready", "still only a proposal");
 }

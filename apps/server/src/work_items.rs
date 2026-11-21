@@ -793,6 +793,10 @@ struct AssigneeSearchRow {
 struct WorkItemCapabilities {
     view: bool,
     edit: bool,
+    /// "Suggest on tasks" without "Edit tasks": the task panel's changes go
+    /// to `task_update`, which keeps them as proposals (T1.41).
+    #[serde(default)]
+    suggest: bool,
     archive: bool,
     /// "Manage repositories" with "See code": the task's pull request cards
     /// offer Merge (AWD-59).
@@ -2808,6 +2812,8 @@ fn capabilities(membership: &ProjectMembershipRow) -> Result<WorkItemCapabilitie
     Ok(WorkItemCapabilities {
         view: membership.membership_enabled,
         edit: membership.may(Permission::TasksEdit)?,
+        suggest: !membership.may(Permission::TasksEdit)?
+            && membership.may(Permission::TasksSuggest)?,
         archive: membership.may(Permission::TasksDelete)?,
         merge_pull_requests: membership.may(Permission::CodeManage)?
             && membership.may(Permission::CodeView)?,
