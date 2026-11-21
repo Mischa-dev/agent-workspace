@@ -84,8 +84,13 @@ pub struct PostUpdateArguments {
     #[serde(rename = "taskId", alias = "workItemId")]
     pub work_item_id: String,
     /// The comment or update. It may span several lines and use Markdown.
-    #[serde(rename = "text", alias = "update")]
-    pub update: String,
+    #[serde(
+        rename = "text",
+        alias = "update",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub update: Option<String>,
     pub client_request_id: String,
     /// Files to post with it: up to 10 fileIds from file_upload with taskId
     /// and forComment: true on this task.
@@ -95,6 +100,9 @@ pub struct PostUpdateArguments {
     /// shows quoted above yours, and its author is told.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to_comment_id: Option<String>,
+    /// Structured content instead of text, as the web composer writes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<MessageContent>,
 }
 
 // The argument structs below are also each write's idempotency request hash
@@ -1345,16 +1353,28 @@ async fn post_update_inner(
     let Some(work_item_id) = parse_id(&arguments.work_item_id) else {
         return Ok(WriteResult::invalid("workItemId", TASK_ID_MESSAGE));
     };
-    let Some(update) = normalize_comment(arguments.update.clone()) else {
-        return Ok(WriteResult::invalid("update", UPDATE_MESSAGE));
-    };
-    // `@handle` and the project's task keys become mentions and references,
-    // as the web composer writes them (P0.4).
-    let content =
-        super::common::comment_content_from_text(state, principal.project_id, &update).await?;
-    let validated = match MessageContent::from_json(content) {
-        Ok(content) => content,
-        Err(_) => return Ok(WriteResult::invalid("update", UPDATE_MESSAGE)),
+    let validated = match (arguments.update.clone(), arguments.content.clone()) {
+        (Some(update), None) => {
+            let Some(update) = normalize_comment(update) else {
+                return Ok(WriteResult::invalid("update", UPDATE_MESSAGE));
+            };
+            // `@handle` and the project's task keys become mentions and
+            // references, as the web composer writes them (P0.4).
+            let content =
+                super::common::comment_content_from_text(state, principal.project_id, &update)
+                    .await?;
+            match MessageContent::from_json(content) {
+                Ok(content) => content,
+                Err(_) => return Ok(WriteResult::invalid("update", UPDATE_MESSAGE)),
+            }
+        }
+        (None, Some(content)) => {
+            if content.validate_structure().is_err() {
+                return Ok(WriteResult::invalid("content", "The content isn't valid."));
+            }
+            content
+        }
+        _ => return Ok(WriteResult::invalid("text", "Pass either text or content.")),
     };
     let Some(key) = parse_request_id(&arguments.client_request_id) else {
         return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));

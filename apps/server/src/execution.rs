@@ -39,10 +39,6 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/v1/projects/{id}/harnesses", get(list_harnesses))
         .route(
-            "/api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
-            post(refresh_catalog),
-        )
-        .route(
             "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
             put(save_model_overrides).delete(remove_model),
         )
@@ -757,34 +753,6 @@ async fn list_workspace_catalog(
         harnesses.push(harness_view(&state, organization_id, manifest, can_edit).await?);
     }
     Ok(Json(HarnessesResponse { harnesses }))
-}
-
-/// Asks the harness for its current models, through one of the caller's
-/// signed-in accounts, and stores them. People's edits are kept.
-async fn refresh_catalog(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath((project_id, kind)): ApiPath<(Uuid, String)>,
-) -> Result<Json<HarnessView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let scope = idempotency::resource_bound_scope("project", project_id, "catalog_refresh")?;
-    // Same boundary as the other catalog edits: the project is visible and
-    // the caller may edit the workspace catalog. A refresh replaces the
-    // workspace's provider-reported models for everyone, so it is one.
-    let organization_id = require_catalog_editor(&state, &principal, project_id).await?;
-    Ok(Json(
-        refresh_in(
-            &state,
-            principal.actor_id,
-            organization_id,
-            Some(project_id),
-            &kind,
-            Some((&scope, &idempotency_key)),
-        )
-        .await?,
-    ))
 }
 
 /// The same refresh from the workspace's settings, where no project is open.

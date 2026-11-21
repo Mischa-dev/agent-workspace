@@ -506,11 +506,6 @@ mod tests {
             Person("signing in to a provider is a person's"),
         ),
         (
-            Post,
-            "/api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
-            Tool("model_catalog_set"),
-        ),
-        (
             Put,
             "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
             Tool("model_catalog_set"),
@@ -734,11 +729,6 @@ mod tests {
         (Patch, "/api/v1/later/{id}", Tool("later_update")),
         (Delete, "/api/v1/later/{id}", Tool("later_update")),
         (
-            Patch,
-            "/api/v1/scheduled-messages/{id}",
-            Tool("scheduled_message_update"),
-        ),
-        (
             Post,
             "/api/v1/push/subscriptions",
             Person("a person's own devices"),
@@ -807,11 +797,6 @@ mod tests {
             Post,
             "/api/v1/projects/{project_id}/repositories/{repository_id}/archive",
             Tool("repository_archive"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/integrations/github/sync",
-            Tool("github_installation_link"),
         ),
         (
             Post,
@@ -1105,21 +1090,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
-            Tool("task_comment_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
-            Tool("task_comment_update"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
-            Tool("task_comment_delete"),
-        ),
-        (
-            Post,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
             Tool("task_link"),
         ),
@@ -1365,7 +1335,7 @@ mod tests {
     /// Hand-written web writes whose tool is already an operation: each is a
     /// second edge for something the generated route does (K2.22). The
     /// number only goes down; when you delete one, lower it.
-    const HAND_WRITTEN_OPERATION_ROUTES: usize = 130;
+    const HAND_WRITTEN_OPERATION_ROUTES: usize = 124;
 
     #[test]
     fn hand_written_routes_for_operations_only_go_down() {

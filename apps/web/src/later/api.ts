@@ -221,21 +221,13 @@ export function useScheduled(conversationId: string | null, enabled = true) {
   })
 }
 
-function scheduledFrom(value: unknown) {
-  const item = normalizeScheduled(asRecord(value).scheduledMessage)
-  if (!item) throw new Error('The scheduled message came back unreadable.')
-  return item
-}
-
 export async function scheduleMessage(conversationId: string, content: MessageContentV1, sendAt: string) {
   const { scheduled } = await callOp('message_schedule', { conversationId, content, sendAt })
   return scheduled
 }
 
 export async function updateScheduled(id: string, change: { content?: MessageContentV1; sendAt?: string }) {
-  return scheduledFrom(
-    await requestJson<unknown>(`/api/v1/scheduled-messages/${encodeURIComponent(id)}`, { method: 'PATCH', json: change }),
-  )
+  await callOp('scheduled_message_update', { id, ...change })
 }
 
 export async function sendScheduledNow(id: string) {

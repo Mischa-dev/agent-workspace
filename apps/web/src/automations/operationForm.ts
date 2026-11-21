@@ -124,6 +124,21 @@ export function operationFields(schema: OpenApiSchema): FormField[] {
     })
 }
 
+/**
+ * The questions shown first: the ones it needs, and, when none of those is
+ * its text, its first optional text (a comment's text, which structured
+ * content can stand in for, is still what a rule writes).
+ */
+export function shownFirst(schema: OpenApiSchema, fields: FormField[]): Set<string> {
+  const ids = new Set(fields.filter((field) => field.required).map((field) => field.id))
+  const text = (field: FormField) => shapeOf(field.id, schema.properties?.[field.id] ?? {}) === 'long_text'
+  if (!fields.some((field) => field.required && text(field))) {
+    const first = fields.find((field) => !field.required && text(field))
+    if (first) ids.add(first.id)
+  }
+  return ids
+}
+
 /** A saved input as the form shows it again. */
 export function operationFormValues(schema: OpenApiSchema, input: Record<string, unknown>): FormValues {
   const values: FormValues = {}

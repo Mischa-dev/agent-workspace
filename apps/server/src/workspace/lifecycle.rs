@@ -459,22 +459,6 @@ async fn conversation_scope(
         )
     } else if let Some(rest) = template.strip_prefix("/api/v1/agent-runs/{") {
         (rest, crate::runs::SPACE_OF_RUN)
-    } else if let Some(rest) = template.strip_prefix("/api/v1/scheduled-messages/{") {
-        (
-            rest,
-            "SELECT conversation.project_id FROM scheduled_messages scheduled \
-             JOIN conversations conversation ON conversation.id = scheduled.conversation_id \
-             -- visibility: the space only, to refuse a write; the handler checks access\n \
-             WHERE scheduled.id = $1",
-        )
-    } else if let Some(rest) = template.strip_prefix("/api/v1/messages/{") {
-        (
-            rest,
-            "SELECT conversation.project_id FROM messages message \
-             JOIN conversations conversation ON conversation.id = message.conversation_id \
-             -- visibility: the space only, to refuse a write; the handler checks access\n \
-             WHERE message.id = $1",
-        )
     } else if let Some((rest, lookup)) = OTHER_ID_FAMILIES
         .iter()
         .find_map(|(prefix, lookup)| template.strip_prefix(prefix).map(|rest| (rest, *lookup)))

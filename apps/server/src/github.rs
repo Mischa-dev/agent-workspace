@@ -76,10 +76,6 @@ pub fn router() -> Router<AppState> {
             get(github_status),
         )
         .route(
-            "/api/v1/projects/{project_id}/integrations/github/sync",
-            post(sync_installation),
-        )
-        .route(
             "/api/v1/projects/{project_id}/integrations/github/automation",
             get(github_automation_settings),
         )
@@ -431,13 +427,6 @@ struct ClaimedPublishJob {
     repository_available: bool,
     workspace_available: bool,
     run_terminal: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SyncInstallationRequest {
-    installation_id: u64,
-    repository_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1363,7 +1352,6 @@ pub(crate) struct SyncedInstallation {
     pub transaction: Transaction<'static, Postgres>,
     pub installation_id: Uuid,
     pub repository_count: usize,
-    pub role: RoleGrant,
 }
 
 /// Links (or re-checks) the project's GitHub App installation and the
@@ -1393,7 +1381,7 @@ pub(crate) async fn sync_installation_as(
         .ok_or(AppError::Conflict("github_integration", "not_configured"))?;
 
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let role = require_project_access_as(
+    require_project_access_as(
         &mut transaction,
         actor_id,
         project_id,
@@ -1533,71 +1521,7 @@ pub(crate) async fn sync_installation_as(
         transaction,
         installation_id: stored_installation_id,
         repository_count: repositories.len(),
-        role,
     })
-}
-
-async fn sync_installation(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<SyncInstallationRequest>,
-) -> Result<Json<GitHubStatusResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let SyncedInstallation {
-        mut transaction,
-        installation_id,
-        repository_count,
-        role,
-    } = sync_installation_as(
-        &state,
-        principal.actor_id,
-        project_id,
-        request.installation_id,
-        &request.repository_ids,
-    )
-    .await?;
-    let request_id = headers
-        .get(crate::REQUEST_ID_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| value.len() <= 128);
-    sqlx::query(
-        r#"
-        INSERT INTO audit_events (
-            id, actor_id, project_id, session_id, authentication_class,
-            action, target_kind, target_id, outcome, request_id, metadata
-        ) VALUES (
-            $1, $2, $3, $4, 'password_session',
-            'github.installation_sync', 'github_installation', $5,
-            'succeeded', $6, jsonb_build_object('repository_count', $7::integer)
-        )
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(principal.actor_id)
-    .bind(project_id)
-    .bind(principal.session_id)
-    .bind(installation_id)
-    .bind(request_id)
-    .bind(i32::try_from(repository_count).map_err(|_| AppError::Internal("repository count"))?)
-    .execute(&mut *transaction)
-    .await?;
-    let installation_row = load_installation(&mut transaction, project_id)
-        .await?
-        .ok_or(AppError::Internal("persisted GitHub installation"))?;
-    let repository_rows =
-        load_installation_repositories(&mut transaction, project_id, installation_row.id).await?;
-    transaction.commit().await?;
-
-    Ok(Json(GitHubStatusResponse {
-        configured: true,
-        api_version: GITHUB_API_VERSION,
-        installation: Some(installation_view(installation_row, repository_rows)),
-        capabilities: GitHubCapabilities {
-            manage: role_allows_manage(role),
-        },
-    }))
 }
 
 /// What a publish, pull request or refresh request queued: a new job, or

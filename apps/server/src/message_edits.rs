@@ -334,7 +334,12 @@ pub(crate) async fn lock_message_for_change(
         return Err(AppError::ProjectArchived.into());
     }
     let is_author = message.author_actor_id == actor.actor_id;
-    let can_write = conversation.allows(actor.actor_id, Action::MessageSend)?;
+    // As sending does: in a thing's discussion, writing is that thing's
+    // "comment on" permission, not posting in channels.
+    let can_write = match crate::discussion::subject_kind_of(transaction, conversation.id).await? {
+        Some(kind) => conversation.allows_permission(actor.actor_id, kind.comment_permission())?,
+        None => conversation.allows(actor.actor_id, Action::MessageSend)?,
+    };
     let as_moderator = match change {
         Change::Edit => {
             if !is_author {

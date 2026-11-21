@@ -528,20 +528,17 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         .clone()
         .oneshot(write_request_with_idempotency(
             "POST",
-            &format!(
-                "/api/v1/projects/{}/work-items/{browser_work_item_id}/comments",
-                seed.project_id
-            ),
+            "/api/v2/ops/task_comment_create",
             &cookie,
             &csrf,
             "m9-browser-work-item-comment",
-            json!({"content":{"version":1,"nodes":[
+            json!({"taskId": browser_work_item_id, "content":{"version":1,"nodes":[
                 {"type":"text","text":"Browser-authored update fixture"}
             ]}}),
         ))
         .await
         .expect("browser Work Item comment response");
-    assert_eq!(browser_comment.status(), StatusCode::CREATED);
+    assert_eq!(browser_comment.status(), StatusCode::OK);
     // The assignee is told the task is theirs, on its own; the update and
     // the comment reach it as the task's own events (it follows the task).
     agent_workspace_server::events::catch_up(&pool)

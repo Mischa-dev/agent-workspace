@@ -952,17 +952,15 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
             .any(|thread| thread["id"] == worker_thread_id)
     );
 
-    let comment_uri = format!(
-        "{base}/{}/comments",
-        created.2["id"].as_str().expect("created ID")
-    );
+    let comment_uri = "/api/v2/ops/task_comment_create";
     let comment = post_json(
         &application,
         &cookie,
         Some(&csrf),
         Some("m4-comment-one"),
-        &comment_uri,
+        comment_uri,
         json!({
+            "taskId": created.2["id"],
             "content": {
                 "version": 1,
                 "nodes": [
@@ -975,24 +973,15 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
         }),
     )
     .await;
-    assert_eq!(comment.0, StatusCode::CREATED, "{}", comment.1);
-    // Checking and moving a criterion in one call records both changes.
-    assert_eq!(comment.2["sequence"], 18);
-    assert_eq!(
-        comment.2["comment"]["mentionedActors"][0]["id"],
-        seed.human_actor_id.to_string()
-    );
-    assert_eq!(
-        comment.2["comment"]["referencedWorkItems"][0]["id"],
-        second.2["id"]
-    );
+    assert_eq!(comment.0, StatusCode::OK, "{}", comment.1);
     let comment_replay = post_json(
         &application,
         &cookie,
         Some(&csrf),
         Some("m4-comment-one"),
-        &comment_uri,
+        comment_uri,
         json!({
+            "taskId": created.2["id"],
             "content": {
                 "version": 1,
                 "nodes": [
@@ -1006,8 +995,8 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     )
     .await;
     assert_eq!(
-        comment_replay.2["comment"]["id"],
-        comment.2["comment"]["id"]
+        comment_replay.2["value"]["resultId"],
+        comment.2["value"]["resultId"]
     );
     let conversation_message = post_json(
         &application,
@@ -1062,7 +1051,15 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .await;
     assert_eq!(timeline.0, StatusCode::OK, "{}", timeline.1);
     assert_eq!(timeline.2["entries"][0]["kind"], "comment");
+    // Checking and moving a criterion in one call records both changes.
     assert_eq!(timeline.2["entries"][0]["sequence"], 18);
+    let posted = &timeline.2["entries"][0]["comment"];
+    assert_eq!(posted["id"], comment.2["value"]["resultId"]);
+    assert_eq!(
+        posted["mentionedActors"][0]["id"],
+        seed.human_actor_id.to_string()
+    );
+    assert_eq!(posted["referencedWorkItems"][0]["id"], second.2["id"]);
     assert!(timeline.2["nextCursor"].is_string());
 
     let activity_count = sqlx::query_scalar::<_, i64>(

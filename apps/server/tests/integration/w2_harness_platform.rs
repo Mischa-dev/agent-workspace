@@ -347,8 +347,8 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
         member,
         "POST",
         &format!(
-            "/api/v1/projects/{}/harnesses/demo/catalog/refresh",
-            seed.project_id
+            "/api/v1/organizations/{}/model-catalog/demo/refresh",
+            seed.organization_id
         ),
         "member-refresh",
         json!({}),
@@ -360,8 +360,9 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
         "{}",
         member_refresh.1
     );
-    // A workspace admin who only views this project may still refresh; here
-    // it stops at needing a signed-in account, not at permissions.
+    // A workspace admin who only views this project may still refresh the
+    // workspace's catalog; here it stops at needing a signed-in account, not
+    // at permissions.
     sqlx::query("UPDATE organization_memberships SET role = 'admin' WHERE actor_id = (SELECT DISTINCT actor_id FROM project_memberships WHERE handle = 'w2-member')")
         .execute(&pool)
         .await
@@ -375,8 +376,8 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
         member,
         "POST",
         &format!(
-            "/api/v1/projects/{}/harnesses/demo/catalog/refresh",
-            seed.project_id
+            "/api/v1/organizations/{}/model-catalog/demo/refresh",
+            seed.organization_id
         ),
         "admin-viewer-refresh",
         json!({}),
@@ -398,8 +399,8 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
         .expect("restore member project role");
     // A refresh retried with the same key replays instead of listing again.
     let refresh_path = format!(
-        "/api/v1/projects/{}/harnesses/demo/catalog/refresh",
-        seed.project_id
+        "/api/v1/organizations/{}/model-catalog/demo/refresh",
+        seed.organization_id
     );
     let refreshed_at = || {
         sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(

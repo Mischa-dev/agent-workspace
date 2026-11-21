@@ -4356,40 +4356,59 @@ async fn comment_references_show_titles_only_with_see_tasks() {
             {"type": "work_item_ref", "workItemId": secret}
         ]})
     };
-    let comments = format!("/api/v1/projects/{work}/work-items/{on}/comments");
     let (status, posted) = send(
         app,
         bea_browser.request(
             "POST",
-            &comments,
+            "/api/v2/ops/task_comment_create",
             Some("bea-comment"),
-            json!({"content": content("See ")}),
+            json!({"taskId": on, "content": content("See ")}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{posted}");
-    let reference = &posted["comment"]["referencedWorkItems"][0];
-    assert_eq!(reference["title"], "Secret referenced task", "{posted}");
-    assert_ne!(reference["statusCategory"], "", "{posted}");
-    let comment_id = posted["comment"]["id"]
+    assert_eq!(status, StatusCode::OK, "{posted}");
+    let comment_id = posted["value"]["resultId"]
         .as_str()
         .expect("comment")
         .to_owned();
+    let timeline = format!("/api/v1/projects/{work}/work-items/{on}/timeline");
+    let shown = |timeline: &Value| {
+        timeline["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .find(|entry| entry["comment"]["id"] == comment_id.as_str())
+            .map(|entry| entry["comment"]["referencedWorkItems"][0].clone())
+            .unwrap_or_else(|| panic!("{timeline}"))
+    };
+    let (status, read) = send(
+        app,
+        bea_browser.request("GET", &timeline, None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    let reference = shown(&read);
+    assert_eq!(reference["title"], "Secret referenced task", "{read}");
+    assert_ne!(reference["statusCategory"], "", "{read}");
     let (status, edited) = send(
         app,
         bea_browser.request(
-            "PATCH",
-            &format!("{comments}/{comment_id}"),
-            None,
-            json!({"content": content("Also see "), "expectedRevision": 1}),
+            "POST",
+            "/api/v2/ops/task_comment_update",
+            Some("bea-comment-edit"),
+            json!({"taskId": on, "commentId": comment_id, "content": content("Also see "), "expectedRevision": 1}),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{edited}");
-    assert_eq!(
-        edited["comment"]["referencedWorkItems"][0]["title"], "Secret referenced task",
-        "{edited}"
-    );
+    let (status, read) = send(
+        app,
+        bea_browser.request("GET", &timeline, None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert!(read.to_string().contains("Also see"), "{read}");
+    assert_eq!(shown(&read)["title"], "Secret referenced task", "{read}");
 }
 
 /// AI suggestions are about tasks, so seeing one takes "see tasks" in its
@@ -6381,13 +6400,13 @@ async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
         app,
         alex_browser.request(
             "POST",
-            &format!("/api/v1/projects/{work}/work-items/{task}/comments"),
+            "/api/v2/ops/task_comment_create",
             Some("k116-alex-comment"),
-            json!({"content": text("Looks good")}),
+            json!({"taskId": task, "content": text("Looks good")}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{said}");
+    assert_eq!(status, StatusCode::OK, "{said}");
     let (status, refused) = send(
         app,
         alex_browser.request(
@@ -6399,6 +6418,18 @@ async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    // Commenting is enough to fix his own comment.
+    let (status, fixed) = send(
+        app,
+        alex_browser.request(
+            "POST",
+            "/api/v2/ops/task_comment_update",
+            Some("k116-alex-fix"),
+            json!({"taskId": task, "commentId": said["value"]["resultId"], "content": text("Looks great")}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{fixed}");
 
     // Mara comments through her tools.
     let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");
@@ -6418,9 +6449,8 @@ async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
 
     // An agent holding Admin removes someone else's comment; Mara, without
     // "moderate channels", can't remove Alex's.
-    let alex_comment = said["comment"]["id"]
+    let alex_comment = said["value"]["resultId"]
         .as_str()
-        .or_else(|| said["id"].as_str())
         .unwrap_or_else(|| panic!("comment id: {said}"))
         .to_owned();
     let denied = tool(

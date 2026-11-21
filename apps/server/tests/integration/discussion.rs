@@ -564,15 +564,15 @@ async fn comments_that_mention_agents_tell_them() {
         app,
         lena.browser.request(
             "POST",
-            &format!("/api/v1/projects/{work}/work-items/{task_id}/comments"),
+            "/api/v2/ops/task_comment_create",
             Some(&Uuid::now_v7().to_string()),
-            json!({"content": mention(rook.actor, "can you look, ")}),
+            json!({"taskId": task_id, "content": mention(rook.actor, "can you look, ")}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{posted}");
+    assert_eq!(status, StatusCode::OK, "{posted}");
     let comment_id =
-        Uuid::parse_str(posted["comment"]["id"].as_str().expect("comment")).expect("id");
+        Uuid::parse_str(posted["value"]["resultId"].as_str().expect("comment")).expect("id");
     let events = mentioned_events(app, pool, rook).await;
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0].0, "task");

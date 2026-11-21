@@ -9,26 +9,18 @@
 //! the conversation (a person), removes it. The routes and tools keep the
 //! shapes they had before comments were messages.
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::HeaderMap,
-    routing::{get, patch},
-};
-use serde::{Deserialize, Serialize};
+use axum::{Json, Router, extract::State, http::HeaderMap, routing::get};
+use serde::Serialize;
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-use super::{
-    WorkItemCommentView, authorize_task_comment, authorize_work_item, message_content_error,
-    project_membership, timeline_entry_view,
-};
+use super::{authorize_work_item, project_membership};
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
+    auth::AuthenticatedActor,
     conversations::{ActorView, MessageCommandActor, threads::ThreadCreator},
     discussion::{CommentBody, CommentPlace, SubjectKind},
-    error::{ApiJson, ApiPath, AppError},
+    error::{ApiPath, AppError},
     idempotency::IdempotencyKey,
     message_content::MessageContent,
     message_edits::{self, Change, ChangeError, Refused},
@@ -36,15 +28,10 @@ use crate::{
 };
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
-            patch(edit_comment_http).delete(remove_comment_http),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}/revisions",
-            get(comment_revisions_http),
-        )
+    Router::new().route(
+        "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}/revisions",
+        get(comment_revisions_http),
+    )
 }
 
 /// Why a change wasn't made. Each surface words these its own way.
@@ -66,10 +53,9 @@ pub(crate) struct CommentEdit {
     pub(crate) revision: i32,
 }
 
-/// The comment posted, and its place in the task's timeline.
+/// The comment posted.
 pub(crate) struct PostedTaskComment {
     pub(crate) message_id: Uuid,
-    pub(crate) sequence: i64,
     pub(crate) replayed: bool,
 }
 
@@ -114,14 +100,6 @@ pub(crate) async fn post(
         } => AppError::Validation("replyToCommentId"),
         other => other,
     })?;
-    let sequence = sqlx::query_scalar::<_, i64>(
-        "SELECT sequence FROM work_item_timeline_entries WHERE work_item_id = $1 AND message_id = $2",
-    )
-    .bind(work_item_id)
-    .bind(posted.message_id)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await?
-    .ok_or(AppError::Internal("task comment timeline entry"))?;
     if !posted.replayed {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         task_changed(&mut transaction, work_item_id).await?;
@@ -141,7 +119,6 @@ pub(crate) async fn post(
     }
     Ok(PostedTaskComment {
         message_id: posted.message_id,
-        sequence,
         replayed: posted.replayed,
     })
 }
@@ -388,67 +365,8 @@ pub(crate) async fn comment_revisions(
     }))
 }
 
-/// The comment as the task's timeline shows it now, to `viewer`: the tasks
-/// it references without their titles and statuses unless they may see
-/// tasks here (commenting takes only "edit tasks").
-pub(super) async fn comment_view(
-    pool: &PgPool,
-    viewer: Uuid,
-    project_id: Uuid,
-    work_item_id: Uuid,
-    comment_id: Uuid,
-) -> Result<WorkItemCommentView, AppError> {
-    let row = super::fetch_comment_timeline_row(pool, project_id, work_item_id, comment_id)
-        .await?
-        .ok_or(AppError::NotFound("comment"))?;
-    let mut comment = timeline_entry_view(pool, project_id, work_item_id, row)
-        .await?
-        .comment
-        .ok_or(AppError::Internal("comment view"))?;
-    if !crate::conversations::sees_tasks_in(pool, viewer, project_id).await? {
-        super::hide_reference_details(&mut comment);
-    }
-    Ok(comment)
-}
-
 // ---------------------------------------------------------------------------
 // HTTP
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct EditCommentRequest {
-    content: serde_json::Value,
-    /// The revision the editor started from; a newer one is a conflict.
-    expected_revision: Option<i32>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct EditCommentResponse {
-    comment: WorkItemCommentView,
-    /// False when the comment already said exactly this.
-    changed: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RemoveCommentResponse {
-    comment: WorkItemCommentView,
-    already_removed: bool,
-}
-
-fn http_refusal(refusal: CommentRefusal) -> AppError {
-    match refusal {
-        CommentRefusal::NotAuthor | CommentRefusal::NotModerator => AppError::Forbidden,
-        CommentRefusal::Removed => AppError::Conflict("comment", "removed"),
-        CommentRefusal::RevisionMoved(current) => AppError::VersionConflict {
-            resource: "comment",
-            current_version: i64::from(current),
-        },
-        CommentRefusal::TooManyEdits => AppError::Conflict("comment", "too_many_edits"),
-        CommentRefusal::TaskArchived => AppError::Conflict("work_item", "archived"),
-    }
-}
 
 pub(crate) fn browser_message_actor(principal: &AuthenticatedActor) -> MessageCommandActor {
     MessageCommandActor {
@@ -458,86 +376,6 @@ pub(crate) fn browser_message_actor(principal: &AuthenticatedActor) -> MessageCo
         via_grant_id: None,
         run_id: None,
     }
-}
-
-/// Checks the caller may comment on the task now ("comment on tasks",
-/// project not archived). An archived task's comments can still be removed.
-async fn check_commenter(
-    transaction: &mut Transaction<'_, Postgres>,
-    principal: &AuthenticatedActor,
-    project_id: Uuid,
-    work_item_id: Uuid,
-) -> Result<(), AppError> {
-    match authorize_task_comment(transaction, principal, project_id, work_item_id).await {
-        Ok(()) | Err(AppError::Conflict("work_item", "archived")) => Ok(()),
-        Err(error) => Err(error),
-    }
-}
-
-async fn edit_comment_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, work_item_id, comment_id)): ApiPath<(Uuid, Uuid, Uuid)>,
-    ApiJson(request): ApiJson<EditCommentRequest>,
-) -> Result<Json<EditCommentResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let content = MessageContent::from_json(request.content).map_err(message_content_error)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    check_commenter(&mut transaction, &principal, project_id, work_item_id).await?;
-    let edited = edit(
-        &mut transaction,
-        &browser_message_actor(&principal),
-        work_item_id,
-        comment_id,
-        content,
-        request.expected_revision,
-    )
-    .await?
-    .map_err(http_refusal)?;
-    transaction.commit().await?;
-    Ok(Json(EditCommentResponse {
-        comment: comment_view(
-            &state.pool,
-            principal.actor_id,
-            project_id,
-            work_item_id,
-            comment_id,
-        )
-        .await?,
-        changed: edited.changed,
-    }))
-}
-
-async fn remove_comment_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, work_item_id, comment_id)): ApiPath<(Uuid, Uuid, Uuid)>,
-) -> Result<Json<RemoveCommentResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    check_commenter(&mut transaction, &principal, project_id, work_item_id).await?;
-    let already_removed = remove(
-        &mut transaction,
-        &browser_message_actor(&principal),
-        work_item_id,
-        comment_id,
-    )
-    .await?
-    .map_err(http_refusal)?;
-    transaction.commit().await?;
-    Ok(Json(RemoveCommentResponse {
-        comment: comment_view(
-            &state.pool,
-            principal.actor_id,
-            project_id,
-            work_item_id,
-            comment_id,
-        )
-        .await?,
-        already_removed,
-    }))
 }
 
 async fn comment_revisions_http(
