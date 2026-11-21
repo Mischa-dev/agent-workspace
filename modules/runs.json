@@ -19,6 +19,7 @@
     "run_activity_report": "create",
     "run_usage_report": "create",
     "run_result_report": "create",
+    "run_changes_report": "change",
     "run_cancel": "change",
     "run_mark_not_started": "change",
     "run_stop": "change",

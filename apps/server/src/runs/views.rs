@@ -390,7 +390,7 @@ pub async fn run_diff(
     let line = super::pages::visible_line(&mut transaction, viewer, run_id)
         .await?
         .ok_or(AppError::NotFound("agent_run"))?;
-    let diff = if super::pages::sees_code(state, viewer, line.project_id).await? {
+    let diff = if super::pages::sees_code(&mut transaction, viewer, line.project_id).await? {
         changes::get(&mut transaction, run_id).await?
     } else {
         None

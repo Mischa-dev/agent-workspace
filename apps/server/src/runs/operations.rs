@@ -1119,10 +1119,7 @@ impl Operation for RunChangesReport {
             input.truncated,
         )
         .await?;
-        // Open run pages read the changes again.
-        if let Some(run) = super::ops::locked(tx, run_id).await? {
-            super::ops::emit(tx, &run, "changes_reported").await?;
-        }
+        super::ops::changes_reported(tx, run_id).await?;
         let truncated = input.truncated || input.patch.len() > super::changes::MAX_PATCH_BYTES;
         call.audit_target("run", run_id, json!({ "files": input.files.len() }));
         Ok(RunChangesOutput {

@@ -563,7 +563,7 @@ pub async fn view(
     let mut lines = vec![named(state, line)];
     redact(state, viewer, &mut lines).await?;
     let run = lines.remove(0);
-    let files = if sees_code(state, viewer, run.project_id).await? {
+    let files = if sees_code(&mut *connection, viewer, run.project_id).await? {
         super::changes::get(&mut *connection, run_id)
             .await?
             .map(|changes| changes.files)
@@ -586,15 +586,15 @@ pub async fn view(
 /// Whether `viewer` sees the code of runs in `project` ("see code"): their
 /// branch, pull requests and changes.
 pub(crate) async fn sees_code(
-    state: &AppState,
+    connection: &mut PgConnection,
     viewer: Uuid,
     project: Option<Uuid>,
 ) -> Result<bool, AppError> {
     let Some(project) = project else {
         return Ok(false);
     };
-    Ok(crate::search::projects_allowing(
-        &state.pool,
+    Ok(crate::search::projects_allowing_on(
+        connection,
         viewer,
         &[project],
         crate::policy::Permission::CodeView,
