@@ -299,6 +299,25 @@ async fn a_plain_note_can_be_saved_without_scheduling_a_reminder() {
             .await
             .expect("notifications");
     assert_eq!(notifications, 0, "an untimed note sends no notification");
+
+    // A note lives in the workspace's own space; it can still be marked done
+    // and removed there.
+    let (status, done) = setup
+        .browser
+        .op(&setup.app, "later_update", json!({"id": id, "done": true}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["item"]["done"], true, "{done}");
+    let (status, removed) = setup
+        .browser
+        .op(
+            &setup.app,
+            "later_update",
+            json!({"id": id, "remove": true}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert_eq!(removed["removed"], true, "{removed}");
 }
 
 #[tokio::test]

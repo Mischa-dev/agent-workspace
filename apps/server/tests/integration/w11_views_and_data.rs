@@ -401,12 +401,12 @@ async fn a_recurring_task_runs_once_per_occurrence_and_pauses_when_its_owner_lea
     let Some(fixture) = fixture("recurring").await else {
         return;
     };
-    let base = format!("/api/v1/projects/{}", fixture.project_id);
     let (status, template) = fixture
         .member
         .post(
-            &format!("{base}/task-templates"),
+            "/api/v2/ops/template_create",
             json!({
+                "projectId": fixture.project_id,
                 "name": "Weekly review",
                 "title": "Review the week",
                 "labels": ["ritual"],
@@ -415,8 +415,11 @@ async fn a_recurring_task_runs_once_per_occurrence_and_pauses_when_its_owner_lea
             }),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{template}");
-    let template_id = template["id"].as_str().expect("template").to_owned();
+    assert_eq!(status, StatusCode::OK, "{template}");
+    let template_id = template["value"]["template"]["id"]
+        .as_str()
+        .expect("template")
+        .to_owned();
     let (status, recurring) = fixture
         .member
         .post(
@@ -769,7 +772,6 @@ async fn a_new_project_starts_from_a_saved_setup() {
     let Some(fixture) = fixture("project_templates").await else {
         return;
     };
-    let base = format!("/api/v1/projects/{}", fixture.project_id);
     let (status, label) = fixture
         .owner
         .post(
@@ -781,18 +783,18 @@ async fn a_new_project_starts_from_a_saved_setup() {
     let (status, template) = fixture
         .owner
         .post(
-            &format!("{base}/task-templates"),
-            json!({"name": "Bug report", "title": "Bug: ", "labels": ["Customer"]}),
+            "/api/v2/ops/template_create",
+            json!({"projectId": fixture.project_id, "name": "Bug report", "title": "Bug: ", "labels": ["Customer"]}),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{template}");
+    assert_eq!(status, StatusCode::OK, "{template}");
 
     // Only owners and admins can save a project's setup.
     let (status, _) = fixture
         .member
         .post(
-            &format!("{base}/save-as-template"),
-            json!({"name": "Member's setup"}),
+            "/api/v2/ops/project_template_create",
+            json!({"projectId": fixture.project_id, "name": "Member's setup"}),
         )
         .await;
     assert!(
@@ -802,12 +804,13 @@ async fn a_new_project_starts_from_a_saved_setup() {
     let (status, saved) = fixture
         .owner
         .post(
-            &format!("{base}/save-as-template"),
-            json!({"name": "Product setup", "description": "Statuses, labels and bug template"}),
+            "/api/v2/ops/project_template_create",
+            json!({"projectId": fixture.project_id, "name": "Product setup", "description": "Statuses, labels and bug template"}),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{saved}");
-    assert_eq!(saved["contains"]["taskTemplates"], 1, "{saved}");
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let saved = &saved["value"]["template"];
+    assert_eq!(saved["taskTemplates"], 1, "{saved}");
     let template_id = saved["id"].as_str().expect("template").to_owned();
 
     let (status, list) = fixture

@@ -1,6 +1,6 @@
 import { requestJson } from '../api/client'
 import { callOp } from '../api/ops'
-import { getWorkItem, normalizeCard, normalizeWorkflow } from './api'
+import { getWorkItem, getWorkItemWorkflow, normalizeCard } from './api'
 import type { BulkChanges, Milestone, ProjectLabel, TaskRelationKind, WorkflowUpdate } from './types'
 import { boolean, list, milestone, projectLabel, record } from './wire'
 
@@ -143,11 +143,17 @@ export async function setWatching(input: { projectId: string; workItemId: string
 }
 
 export async function saveWorkflow(input: { projectId: string; workflow: WorkflowUpdate; idempotencyKey: string }) {
-  return normalizeWorkflow(
-    await requestJson<unknown>(projectPath(input.projectId, 'work-item-workflow'), {
-      method: 'PUT',
-      idempotencyKey: input.idempotencyKey,
-      json: input.workflow,
-    }),
+  const { transitions, statuses, ...workflow } = input.workflow
+  await callOp(
+    'workflow_update',
+    {
+      ...workflow,
+      projectId: input.projectId,
+      statuses: statuses.map(({ semanticCategory, ...status }) => ({ ...status, category: semanticCategory })),
+      ...(transitions === 'all' ? { allTransitions: true } : { transitions }),
+    },
+    { requestId: input.idempotencyKey },
   )
+  // The page reads task counts and who may edit, which the answer leaves out.
+  return getWorkItemWorkflow(input.projectId)
 }

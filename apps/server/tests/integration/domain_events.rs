@@ -149,18 +149,16 @@ async fn a_task_made_any_way_is_one_task_created_by_its_maker() {
     assert_eq!(facts[0].0, Some(rook.actor));
 
     // A recurring schedule acts as the person who set it up.
-    let base = format!("/api/v1/projects/{project}");
-    let (status, template) = send(
-        &world.app,
-        lena.browser.request(
-            "POST",
-            &format!("{base}/task-templates"),
-            Some("k3-7-template"),
-            json!({"name": "Weekly", "title": "From a schedule"}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let (status, template) = lena
+        .browser
+        .op(
+            &world.app,
+            "template_create",
+            json!({"projectId": project, "name": "Weekly", "title": "From a schedule"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{template}");
+    let template = &template["template"];
     let (status, recurring) = send(
         &world.app,
         lena.browser.request(

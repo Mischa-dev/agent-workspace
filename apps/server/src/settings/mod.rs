@@ -27,12 +27,7 @@ pub mod ops;
 
 use std::collections::BTreeMap;
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::HeaderMap,
-    routing::{get, post},
-};
+use axum::{Json, Router, extract::State, http::HeaderMap, routing::get};
 use chrono::{DateTime, Utc};
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -42,8 +37,8 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
-    error::{ApiJson, ApiPath, ApiQuery, AppError},
+    auth::AuthenticatedActor,
+    error::{ApiQuery, AppError},
     policy::{Action, ActorKind, RoleGrant},
 };
 
@@ -1301,7 +1296,6 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/settings/registry", get(registry))
         .route("/api/v1/settings/effective", get(effective))
-        .route("/api/v1/settings/values/{key}/reset", post(reset_value))
 }
 
 #[derive(Serialize)]
@@ -1414,45 +1408,6 @@ async fn effective(
     }))
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ResetRequest {
-    scope: Scope,
-    #[serde(default)]
-    organization_id: Option<Uuid>,
-    #[serde(default)]
-    project_id: Option<Uuid>,
-    #[serde(default)]
-    expected_version: Option<i64>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WriteResponse {
-    /// The key as it now applies at the scope that was changed.
-    setting: Resolved,
-}
-
-/// Check the caller may write at `scope`. Call it inside the write's
-/// transaction: the membership rows stay locked until it commits.
-async fn authorize_target(
-    connection: &mut PgConnection,
-    principal: &AuthenticatedActor,
-    scope: Scope,
-    organization_id: Option<Uuid>,
-    project_id: Option<Uuid>,
-) -> Result<Target, AppError> {
-    authorize_target_as(
-        connection,
-        principal.actor_id,
-        actor_kind(&principal.actor_kind)?,
-        scope,
-        organization_id,
-        project_id,
-    )
-    .await
-}
-
 /// `authorize_target` for an actor, such as a person through MCP.
 pub(crate) async fn authorize_target_as(
     connection: &mut PgConnection,
@@ -1508,57 +1463,6 @@ pub(crate) async fn resolved_after(
         .get(key)
         .cloned()
         .ok_or(AppError::Internal("resolved setting"))
-}
-
-async fn reset_value(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(key): ApiPath<String>,
-    ApiJson(request): ApiJson<ResetRequest>,
-) -> Result<Json<WriteResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let definition = definition(&key).ok_or(AppError::NotFound("setting"))?;
-    if has_own_routes(definition.key) {
-        return Err(AppError::Validation("setting key"));
-    }
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let target = authorize_target(
-        &mut transaction,
-        &principal,
-        request.scope,
-        request.organization_id,
-        request.project_id,
-    )
-    .await?;
-    let removed = reset(
-        &mut transaction,
-        target,
-        definition.key,
-        request.expected_version,
-    )
-    .await?;
-    if removed {
-        audit(
-            &mut transaction,
-            &headers,
-            &principal,
-            target.project_id(),
-            "setting.reset",
-            "setting",
-            None,
-            serde_json::json!({
-                "key": definition.key,
-                "scope": target.scope(),
-                "organizationId": target.organization_id(),
-            }),
-        )
-        .await?;
-    }
-    let setting =
-        resolved_after(&mut transaction, target, principal.actor_id, definition.key).await?;
-    transaction.commit().await?;
-    Ok(Json(WriteResponse { setting }))
 }
 
 #[cfg(test)]

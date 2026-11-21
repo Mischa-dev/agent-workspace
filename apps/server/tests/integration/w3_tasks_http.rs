@@ -103,8 +103,37 @@ impl Client {
         (status, body)
     }
 
-    async fn put(&self, uri: &str, body: Value) -> (StatusCode, Value) {
-        self.send("PUT", uri, Some(body)).await
+    /// Replaces a space's workflow (`uri` is its workflow read) through
+    /// workflow_update, the page's document turned into the operation's
+    /// input; when it works, the workflow as the page then reads it.
+    async fn replace_workflow(&self, uri: &str, mut document: Value) -> (StatusCode, Value) {
+        let project = uri
+            .trim_start_matches("/api/v1/projects/")
+            .split('/')
+            .next()
+            .expect("the space in the workflow's address")
+            .to_owned();
+        for status in document["statuses"].as_array_mut().into_iter().flatten() {
+            if let Some(category) = status
+                .as_object_mut()
+                .and_then(|status| status.remove("semanticCategory"))
+            {
+                status["category"] = category;
+            }
+        }
+        if document["transitions"] == "all" {
+            document
+                .as_object_mut()
+                .expect("a workflow document")
+                .remove("transitions");
+            document["allTransitions"] = json!(true);
+        }
+        document["projectId"] = json!(project);
+        let (status, answer) = self.op("workflow_update", document).await;
+        if !status.is_success() {
+            return (status, answer);
+        }
+        self.get(uri).await
     }
 
     async fn send(&self, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
@@ -781,9 +810,12 @@ async fn owners_edit_the_workflow_and_retired_statuses_move_their_tasks() {
         "types": types,
         "transitions": "all"
     });
-    let (status, refused) = fixture.member.put(&uri, document.clone()).await;
+    let (status, refused) = fixture
+        .member
+        .replace_workflow(&uri, document.clone())
+        .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
-    let (status, updated) = owner.put(&uri, document).await;
+    let (status, updated) = owner.replace_workflow(&uri, document).await;
     assert_eq!(status, StatusCode::OK, "{updated}");
     let qa = status_named(&updated, "QA");
     assert_eq!(
@@ -833,7 +865,7 @@ async fn owners_edit_the_workflow_and_retired_statuses_move_their_tasks() {
         })
         .collect::<Vec<_>>();
     let (status, refused) = owner
-        .put(
+        .replace_workflow(
             &uri,
             json!({
                 "expectedVersion": updated["version"],
@@ -863,11 +895,11 @@ async fn owners_edit_the_workflow_and_retired_statuses_move_their_tasks() {
             "replacements": replacements
         })
     };
-    let (status, refused) = owner.put(&uri, retire(json!({}))).await;
+    let (status, refused) = owner.replace_workflow(&uri, retire(json!({}))).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
     let review_id = status_named(&updated, "Review");
     let (status, retired) = owner
-        .put(&uri, retire(json!({ qa.clone(): review_id })))
+        .replace_workflow(&uri, retire(json!({ qa.clone(): review_id })))
         .await;
     assert_eq!(status, StatusCode::OK, "{retired}");
     let (_, task_now) = owner
@@ -885,7 +917,7 @@ async fn owners_edit_the_workflow_and_retired_statuses_move_their_tasks() {
     create_task(owner, project, json!({ "title": "Sized", "estimate": 8 })).await;
     let (_, current) = owner.get(&uri).await;
     let (status, refused) = owner
-        .put(
+        .replace_workflow(
             &uri,
             json!({
                 "expectedVersion": current["version"],
@@ -897,10 +929,7 @@ async fn owners_edit_the_workflow_and_retired_statuses_move_their_tasks() {
         )
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
-    assert_eq!(
-        refused["error"]["details"]["field"], "estimateUnit",
-        "{refused}"
-    );
+    assert_eq!(refused["field"], "estimateUnit", "{refused}");
 }
 
 /// The titles a task list or board column shows, sorted.

@@ -4,8 +4,6 @@
 //! `work_item_workflow`, `work_item_labels` and `work_item_commands`, which
 //! MCP calls too.
 
-use std::collections::BTreeMap;
-
 use axum::{
     Json,
     extract::State,
@@ -36,7 +34,7 @@ use crate::{
     },
     work_item_labels::{self, LabelDelta, LabelRow},
     work_item_planning::{self as planning},
-    work_item_workflow::{self as workflow, WorkflowDocument, WorkflowRefusal},
+    work_item_workflow::{self as workflow},
 };
 
 /// Most tasks one bulk change touches.
@@ -353,63 +351,6 @@ pub(super) async fn get_workflow(
     Ok(Json(
         workflow_view(&mut connection, project_id, can_edit).await?,
     ))
-}
-
-/// The document with its replacements in a fixed order, so a retried
-/// request hashes the same.
-#[derive(Serialize)]
-struct HashableDocument<'a> {
-    document: &'a WorkflowDocument,
-    replacements: BTreeMap<&'a str, &'a str>,
-}
-
-pub(super) async fn replace_workflow(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(mut document): ApiJson<WorkflowDocument>,
-) -> Result<Response, AppError> {
-    let replacements = std::mem::take(&mut document.replacements);
-    let hashable = HashableDocument {
-        document: &document,
-        replacements: replacements
-            .iter()
-            .map(|(from, to)| (from.as_str(), to.as_str()))
-            .collect(),
-    };
-    let mut write = begin!(
-        start_write(
-            &state,
-            &headers,
-            &principal,
-            project_id,
-            Action::WorkItemView,
-            None,
-            resource_bound_scope("projects", project_id, "workflow_replace")?,
-            &hashable,
-        )
-        .await
-    );
-    // Changing the workflow changes every member's board: owners and
-    // admins, or a role that kept "Change the workflow".
-    if !may_change_workflow(&write.membership)? {
-        return Err(AppError::Forbidden);
-    }
-    document.replacements = replacements;
-    let actor = write.actor.clone();
-    match workflow::replace_workflow(&mut write.transaction, &actor, &document).await? {
-        Ok(_) => {}
-        Err(WorkflowRefusal::VersionConflict { current_version }) => {
-            return Err(AppError::VersionConflict {
-                resource: "work_item_workflow",
-                current_version,
-            });
-        }
-        Err(WorkflowRefusal::Invalid { field, message }) => return Ok(invalid(field, message)),
-    }
-    let view = workflow_view(&mut write.transaction, project_id, true).await?;
-    write.finish(StatusCode::OK, &view).await
 }
 
 // ---------------------------------------------------------------------------

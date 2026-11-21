@@ -1123,12 +1123,16 @@ async fn build_workspace(
     .await;
     assert_eq!(view["outcome"], "ok", "{label} view: {view}");
     let task_template = post(
-        format!("/api/v1/projects/{project}/task-templates"),
+        format!("/api/v2/w/{organization}/ops/template_create"),
         "template-1",
-        json!({"name": format!("Launch template{m}"), "title": format!("Launch review{m}"), "subtasks": [{"title": format!("Launch step{m}")}]}),
+        json!({"projectId": project, "name": format!("Launch template{m}"), "title": format!("Launch review{m}"), "subtasks": [{"title": format!("Launch step{m}")}]}),
     )
     .await;
-    let task_template = string_at(&task_template, "/id");
+    assert_eq!(
+        task_template["outcome"], "ok",
+        "{label} task template: {task_template}"
+    );
+    let task_template = string_at(&task_template, "/value/template/id");
     let recurring = post(
         format!("/api/v2/w/{organization}/ops/recurring_create"),
         "recurring-1",
@@ -1136,12 +1140,16 @@ async fn build_workspace(
     )
     .await;
     assert_eq!(recurring["outcome"], "ok", "{label} recurring: {recurring}");
-    post(
-        format!("/api/v1/projects/{project}/save-as-template"),
+    let project_template = post(
+        format!("/api/v2/w/{organization}/ops/project_template_create"),
         "project-template-1",
-        json!({"name": format!("Launch setup{m}"), "description": format!("Launch defaults{m}")}),
+        json!({"projectId": project, "name": format!("Launch setup{m}"), "description": format!("Launch defaults{m}")}),
     )
     .await;
+    assert_eq!(
+        project_template["outcome"], "ok",
+        "{label} project template: {project_template}"
+    );
     let import = post(
         format!("/api/v1/projects/{project}/imports"),
         "import-1",

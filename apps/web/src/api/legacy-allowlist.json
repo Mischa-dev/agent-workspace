@@ -60,10 +60,10 @@
   "threads/ThreadPanel.tsx": 1,
   "threads/threadTimeline.ts": 1,
   "threads/useThreadRunActions.ts": 1,
-  "views/api.ts": 13,
+  "views/api.ts": 12,
   "whiteboards/api.ts": 9,
   "work-items/api.ts": 13,
   "work-items/moveApi.ts": 3,
-  "work-items/planningApi.ts": 4,
+  "work-items/planningApi.ts": 3,
   "workspace-templates/api.ts": 4
 }
