@@ -991,8 +991,10 @@ impl ScratchIndex {
             .split(|byte| *byte == 0)
             .filter(|entry| !entry.is_empty())
             .partition(|entry| entry.ends_with(b"/"));
+        // Past what a diff lists, the rest wouldn't show anyway.
         let (committed, unborn): (Vec<&[u8]>, Vec<&[u8]>) = folders
             .into_iter()
+            .take(MAX_CHANGED_FILES + 1)
             .partition(|folder| has_commit(&worktree.join(OsStr::from_bytes(folder))));
         let left_out = !unborn.is_empty();
         files.extend(committed);

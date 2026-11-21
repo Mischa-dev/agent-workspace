@@ -89,7 +89,12 @@ where
             match alongside(&mut running, &mut finished, client.commands(0, 0)).await {
                 Ok(listed) => {
                     for summary in listed.commands {
-                        if running.len() >= IN_FLIGHT {
+                        // Commands finishing while others are fetched free
+                        // slots; admission still gets its turn on time.
+                        if running.len() >= IN_FLIGHT
+                            || started_since >= PER_PASS
+                            || since.elapsed() >= BETWEEN_AGAIN
+                        {
                             break;
                         }
                         if in_flight.contains(&summary.command_id)
@@ -490,6 +495,86 @@ mod tests {
         .expect("the slow command waits only for the quick ones")
         .expect("the pump");
         assert_eq!(handled, wait_for + 1);
+    }
+
+    /// A server listing all of its quick commands at once.
+    #[derive(Debug, Default)]
+    struct Burst {
+        fetched: Mutex<Vec<Uuid>>,
+    }
+
+    const BURST: u128 = 50;
+
+    impl Transport for Burst {
+        fn send(&self, request: HttpRequest) -> TransportFuture<'_> {
+            Box::pin(async move {
+                if request.path.starts_with("/api/v1/host/commands?") {
+                    let fetched = self.fetched.lock().expect("fetched").clone();
+                    let commands = (1..=BURST)
+                        .map(|n| Uuid::from_u128(1000 + n))
+                        .filter(|command_id| !fetched.contains(command_id))
+                        .map(|command_id| CommandSummary {
+                            command_id,
+                            seq: 0,
+                            kind: CommandKind::Action,
+                            run_id: None,
+                            offer: 1,
+                        })
+                        .collect();
+                    return ok(&CommandList { commands, next: 0 });
+                }
+                let command_id = request
+                    .path
+                    .trim_start_matches("/api/v1/host/commands/")
+                    .trim_end_matches("/ack")
+                    .parse::<Uuid>()
+                    .expect("a command id");
+                if request.method == "POST" {
+                    return ok(&AckReply {
+                        command_id,
+                        state: "acked".to_owned(),
+                        run_state: None,
+                    });
+                }
+                self.fetched.lock().expect("fetched").push(command_id);
+                ok(&command(command_id))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn one_long_list_still_stops_for_admission() {
+        let server = Arc::new(Burst::default());
+        let client = HostClient::with_transport("http://localhost", "token", server.clone());
+        let host = Waits {
+            wait_for: usize::MAX,
+            quick: 0.into(),
+            enough: Notify::new(),
+        };
+        let seen_at_admission = Mutex::new(Vec::new());
+        let between = || async {
+            seen_at_admission
+                .lock()
+                .expect("seen")
+                .push(server.fetched.lock().expect("fetched").len());
+            Ok::<_, RuntimeError>(())
+        };
+        let handled = tokio::time::timeout(Duration::from_secs(30), pump(&host, &client, between))
+            .await
+            .expect("the pass ends")
+            .expect("the pump");
+        assert_eq!(handled, usize::try_from(BURST).expect("small"));
+        let seen = seen_at_admission.lock().expect("seen").clone();
+        assert!(!seen.is_empty());
+        let mut before = 0;
+        for at in seen {
+            assert!(
+                at - before <= PER_PASS,
+                "{} started between admissions",
+                at - before
+            );
+            before = at;
+        }
     }
 
     /// Each command holds the one database connection for a moment.
