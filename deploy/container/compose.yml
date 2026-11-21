@@ -16,6 +16,8 @@ x-app-environment: &app-environment
   AGENT_WORKSPACE_DATA_ROOT: /var/lib/agent-workspace
   AGENT_WORKSPACE_SECRETS_KEY_PATH: /var/lib/agent-workspace-keys/keyring
   AGENT_WORKSPACE_PROFILE: ${AW_PROFILE:-standard}
+  # The `host` service calls the server by its service name.
+  AGENT_WORKSPACE_MCP_HOSTS: app,app:3100
 
 services:
   db:

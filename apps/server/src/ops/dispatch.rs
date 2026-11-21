@@ -668,10 +668,20 @@ async fn pipeline<O: Operation>(
         && !request.preview
         && !ctx.workspace_id.is_nil()
     {
+        // A call on a conversation spends a budget on it too.
+        let conversation = match &ctx.target {
+            Target::Thing {
+                kind: "conversation",
+                id,
+                ..
+            } => Some(*id),
+            _ => None,
+        };
         Box::pin(crate::budgets::admit_call(
             &state.pool,
             ctx.workspace_id,
             ctx.space_id,
+            conversation,
             ctx.caller.account_id,
             writes,
         ))

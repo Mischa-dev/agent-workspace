@@ -472,6 +472,22 @@ pub async fn use_hold(
     Ok(())
 }
 
+/// A review used by a call that then made no change is pending again
+/// (a hand-written tool spends it before it runs, `mcp::call_tool`).
+pub async fn give_back_hold(
+    transaction: &mut Transaction<'_, Postgres>,
+    hold: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE guard_holds SET state = 'pending', updated_at = now() \
+         WHERE id = $1 AND state = 'used'",
+    )
+    .bind(hold)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

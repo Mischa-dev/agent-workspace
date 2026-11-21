@@ -71,15 +71,29 @@ pub async fn admit_message(
 /// call runs (a call it sets off, as the same account, would wait on them).
 /// Every call counts, a retry or a call that then fails too: a request id
 /// says nothing about what the call does, so reusing one must not skip the
-/// budget.
+/// budget. A call in a conversation the caller can read counts there too,
+/// so a budget on that conversation holds it; one it can't read is left
+/// out, so no budget there is spent or shown to it.
 pub async fn admit_call(
     pool: &sqlx::PgPool,
     workspace: Uuid,
     space: Option<Uuid>,
+    conversation: Option<Uuid>,
     account: Uuid,
     writes: bool,
 ) -> Result<(), AppError> {
     let mut transaction = crate::db::scoped_tx(pool).await?;
+    let conversation = match conversation {
+        Some(conversation) => {
+            sqlx::query_scalar::<_, bool>("SELECT conversation_visible_to($1, $2)")
+                .bind(conversation)
+                .bind(account)
+                .fetch_one(&mut *transaction)
+                .await?
+                .then_some(conversation)
+        }
+        None => None,
+    };
     // The space first: a write holding it makes this wait, as the call
     // itself would, but holding nothing yet (recording the use locks its
     // account, which a removal waiting on nothing but this would need).
@@ -102,6 +116,7 @@ pub async fn admit_call(
             Ask {
                 account_id: Some(account),
                 space_id: space,
+                conversation_id: conversation,
                 record: Some(Recorded {
                     source_kind: "operation",
                     source_id: None,
@@ -180,6 +195,37 @@ pub async fn record_run_usage(
     ];
     for (meter, quantity) in usages {
         let Some(quantity) = quantity else { continue };
+        // Near or past a budget with this report: whoever set it is told
+        // now, not when the next run is admitted. Asked as `admit_run`
+        // asks, so the two take the counters in the same order. Already
+        // spent, so a refusal only means it is past the limit.
+        match admit(
+            transaction,
+            Ask {
+                account_id: Some(account),
+                space_id: space,
+                conversation_id: conversation,
+                ..Ask::new(workspace, meter, quantity)
+            },
+        )
+        .await
+        {
+            Ok(()) => {}
+            // A report that jumps past a hard budget still tells whoever
+            // set it (once a day, like a warning).
+            Err(AppError::LimitReached(refused)) => {
+                let notice = LimitNotice {
+                    meter: refused.meter,
+                    scope: refused.scope,
+                    limit: refused.limit,
+                    used: refused.used.saturating_add(quantity),
+                    level: "hard",
+                    budget: refused.budget,
+                };
+                warn(transaction, workspace, &notice).await?;
+            }
+            Err(error) => return Err(error),
+        }
         let key = format!("{meter}:{report}");
         metering::record(
             transaction,
@@ -204,7 +250,27 @@ pub async fn record_run_usage(
 
 /// One push to `account`'s connection: `Ok(None)` when it may go, or when
 /// a hard budget on deliveries holds it, the time it may go again.
+///
+/// In its own short transaction, committed at once: a claim admits several
+/// pushes from different conversations, and holding one's counters while
+/// asking for the next would wait in a circle with another claim that
+/// took them in the other order. Counted once by `key`, so a claim that
+/// then fails counts nothing again when it is retried.
+/// Called after the claim has committed, so it never waits for a second
+/// connection while holding one.
 pub async fn admit_delivery(
+    pool: &sqlx::PgPool,
+    event: &crate::events::LoggedEvent,
+    account: Uuid,
+    key: &str,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, AppError> {
+    let mut transaction = crate::db::scoped_tx(pool).await?;
+    let admitted = admit_delivery_in(&mut transaction, event, account, key).await?;
+    transaction.commit().await?;
+    Ok(admitted)
+}
+
+async fn admit_delivery_in(
     transaction: &mut Transaction<'_, Postgres>,
     event: &crate::events::LoggedEvent,
     account: Uuid,
@@ -270,14 +336,14 @@ async fn warn(
         agent_run_id: None,
         pull_request_id: None,
         detail: json!({
-            "title": "A budget you set is nearly used",
+            "level": notice.level,
             "meter": notice.meter,
             "limit": notice.limit,
             "used": notice.used,
             "budgetId": budget,
         }),
         group_key: format!("budget:{budget}"),
-        dedupe_key: format!("budget:{budget}:{day}"),
+        dedupe_key: format!("budget:{budget}:{day}:{}", notice.level),
     };
     if crate::notifications::deliver(transaction, &notification).await? {
         crate::notifications::announce(transaction, space, owner).await?;

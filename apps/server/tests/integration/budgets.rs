@@ -256,6 +256,15 @@ async fn nearing_a_budget_tells_whoever_set_it_once() {
                "period": "day", "softLimit": 1, "hardLimit": 10}),
     )
     .await;
+    // A second budget on the same meter that also reaches its rook: each
+    // budget gives its own notice.
+    op(
+        &world,
+        "budget_set",
+        json!({"scope": "workspace", "eachAccount": true, "meter": "messages",
+               "period": "hour", "softLimit": 2, "hardLimit": 20}),
+    )
+    .await;
     for text in ["one", "two", "three"] {
         let sent = agent_says(&world.app, rook, &general, text).await;
         assert_eq!(sent["outcome"], "ok", "{sent}");
@@ -267,7 +276,7 @@ async fn nearing_a_budget_tells_whoever_set_it_once() {
     .fetch_one(world.pool())
     .await
     .expect("warnings");
-    assert_eq!(warnings, 1);
+    assert_eq!(warnings, 2);
     world.finish().await;
 }
 
@@ -451,6 +460,36 @@ async fn a_budget_on_a_dm_stays_with_its_members() {
     world.finish().await;
 }
 
+/// A budget on a conversation's writes holds the calls made there, by an
+/// agent's tool as by anyone's.
+#[tokio::test]
+async fn a_conversations_write_budget_holds_calls_made_there() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .build("budgets_conversation_calls")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let general = channel(&world, "general").await;
+    op(
+        &world,
+        "budget_set",
+        json!({"scope": "conversation", "scopeId": general, "meter": "writes",
+               "period": "day", "hardLimit": 2}),
+    )
+    .await;
+    for text in ["one", "two"] {
+        let sent = agent_says(&world.app, rook, &general, text).await;
+        assert_eq!(sent["outcome"], "ok", "{sent}");
+    }
+    let held = agent_says(&world.app, rook, &general, "three").await;
+    assert_eq!(held["outcome"], "limit_reached", "{held}");
+    world.finish().await;
+}
+
 /// A2.14 on the built-in host: a new built-in run is refused once its
 /// agent's hard budget on what runs use is spent, as a run on any other
 /// host is.
@@ -513,6 +552,87 @@ async fn a_spent_run_budget_refuses_a_built_in_run_too() {
             Err(agent_workspace_server::error::AppError::LimitReached(_))
         ),
         "{refused:?}"
+    );
+    world.finish().await;
+}
+
+/// A run's usage is already spent, so a report that jumps past a hard
+/// budget is recorded, and whoever set the budget is told it is used up.
+#[tokio::test]
+async fn a_report_past_a_hard_budget_tells_whoever_set_it() {
+    let Some(world) = crate::support::two_workspaces::two_workspaces("budgets_jump").await else {
+        return;
+    };
+    let (account, workspace, space, conversation) = sqlx::query_as::<_, (Uuid, Uuid, Uuid, Uuid)>(
+        "SELECT worker.actor_id, project.organization_id, project.id, run.conversation_id \
+             FROM agent_runs run \
+             JOIN execution_workers worker ON worker.id = run.execution_worker_id \
+             JOIN projects project ON project.id = worker.project_id \
+             WHERE run.id = $1",
+    )
+    .bind(world.a.run)
+    .fetch_one(&world.pool)
+    .await
+    .expect("the run's agent");
+    sqlx::query(
+        "INSERT INTO spend_limits (id, workspace_id, scope_kind, scope_id, per_account, meter, \
+                                   period, hard_limit, set_by_actor_id) \
+         VALUES ($1, $2, 'account', $3, false, 'reported_tokens', 'day', 100, $3)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(workspace)
+    .bind(account)
+    .execute(&world.pool)
+    .await
+    .expect("a budget");
+    // 90 warns that it is nearly used; 20 more takes it past the limit,
+    // which updates that warning, once.
+    for tokens in [90, 20, 10] {
+        agent_workspace_server::tenancy::system("runs.host", async {
+            let mut transaction = agent_workspace_server::db::scoped_tx(&world.pool)
+                .await
+                .expect("transaction");
+            agent_workspace_server::budgets::record_run_usage(
+                &mut transaction,
+                agent_workspace_server::budgets::RunUsage {
+                    workspace,
+                    space: Some(space),
+                    conversation: Some(conversation),
+                    account,
+                    report: Uuid::now_v7(),
+                    tokens,
+                    cost: None,
+                },
+            )
+            .await
+            .expect("recorded");
+            transaction.commit().await.expect("commit");
+        })
+        .await;
+    }
+    let used = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT sum(quantity)::bigint FROM usage_events \
+         WHERE workspace_id = $1 AND meter = 'reported_tokens' AND account_id = $2",
+    )
+    .bind(workspace)
+    .bind(account)
+    .fetch_one(&world.pool)
+    .await
+    .expect("usage");
+    assert_eq!(used, Some(120), "spent usage is recorded past the limit");
+    let titles = sqlx::query_scalar::<_, String>(
+        "SELECT detail->>'level' FROM notifications \
+         WHERE recipient_actor_id = $1 AND kind = 'budget_warning' ORDER BY created_at",
+    )
+    .bind(account)
+    .fetch_all(&world.pool)
+    .await
+    .expect("warnings");
+    // One inbox item per budget: the warning becomes "used up".
+    assert_eq!(
+        titles,
+        ["hard"],
+        "the warning's item now says it is used up"
     );
     world.finish().await;
 }

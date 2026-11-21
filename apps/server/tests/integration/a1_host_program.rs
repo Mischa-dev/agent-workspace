@@ -250,6 +250,7 @@ async fn the_host_runs_as_its_own_program_through_restarts_of_either() {
         install::prepare(&pool, &code_file).await.expect("code"),
         Prepared::Waiting(code_file.clone())
     );
+    let code = std::fs::read_to_string(&code_file).expect("the written code");
     let mut host = spawn_host(root.path(), &url, &base, &code_file);
     let token_file = data.join("builtin-host/token");
     until("the host's enrolment", async || token_file.exists()).await;
@@ -298,6 +299,9 @@ async fn the_host_runs_as_its_own_program_through_restarts_of_either() {
     reach(&pool, second, "blocked").await;
     host.kill().await.expect("stop the host");
     let _ = host.wait().await;
+    // A spent code left in place (a read-only mount can't lose it) is not
+    // offered again: the host starts on the token it kept.
+    std::fs::write(&code_file, &code).expect("leave the spent code");
     let mut host = spawn_host(root.path(), &url, &base, &code_file);
     until("the run's recovery", async || {
         recoveries(&pool, second).await >= 1

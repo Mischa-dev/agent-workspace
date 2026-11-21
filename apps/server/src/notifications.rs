@@ -2274,7 +2274,12 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
         }
         // A2.14: its words come from the budget's numbers (rule 10).
         kind::BUDGET_WARNING => (
-            "A budget you set is nearly used".to_owned(),
+            if row.detail.get("level").and_then(serde_json::Value::as_str) == Some("hard") {
+                "A budget you set is used up"
+            } else {
+                "A budget you set is nearly used"
+            }
+            .to_owned(),
             match (
                 row.detail.get("used").and_then(serde_json::Value::as_i64),
                 row.detail.get("limit").and_then(serde_json::Value::as_i64),

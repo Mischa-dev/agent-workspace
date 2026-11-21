@@ -60,15 +60,26 @@ fn folder(config: &AppConfig) -> std::path::PathBuf {
     config.data_root.join("builtin-host")
 }
 
+/// The digest of a code, kept beside the token so a spent code that could
+/// not be removed (a read-only mount) is known on the next start.
+fn code_digest(code: &str) -> String {
+    use sha2::{Digest as _, Sha256};
+    hex::encode(Sha256::digest(code.trim().as_bytes()))
+}
+
 /// The install's token: exchanged for the one-time code when there is one
-/// (and the code file removed), else kept from an earlier start. A code
-/// waiting comes first: writing a new one revokes the token before it, so
-/// a host whose token was replaced enrols again on its next start.
+/// (and the code file removed), else kept from an earlier start. A new code
+/// waiting comes first: writing one revokes the token before it, so a host
+/// whose token was replaced enrols again on its next start. The code the
+/// kept token came from is not new, even when its file is still there.
 pub async fn token(config: &AppConfig, settings: &ProgramSettings) -> anyhow::Result<String> {
     let kept = folder(config).join("token");
+    let spent = folder(config).join("token.code");
+    let spent_digest = std::fs::read_to_string(&spent).ok();
     let waiting = std::fs::read_to_string(&settings.code_file)
         .ok()
-        .filter(|code| !code.trim().is_empty());
+        .filter(|code| !code.trim().is_empty())
+        .filter(|code| spent_digest.as_deref().map(str::trim) != Some(&code_digest(code)));
     if waiting.is_none()
         && let Ok(token) = std::fs::read_to_string(&kept)
     {
@@ -79,7 +90,15 @@ pub async fn token(config: &AppConfig, settings: &ProgramSettings) -> anyhow::Re
     }
     let code = waiting
         .map(Ok)
-        .unwrap_or_else(|| std::fs::read_to_string(&settings.code_file))
+        .unwrap_or_else(|| {
+            std::fs::read_to_string(&settings.code_file).and_then(|code| {
+                if code.trim().is_empty() {
+                    Err(std::io::ErrorKind::NotFound.into())
+                } else {
+                    Ok(code)
+                }
+            })
+        })
         .with_context(|| {
             format!(
                 "no token yet and no code at {}: run `agent-workspace-server enrol-builtin-host \
@@ -117,6 +136,7 @@ pub async fn token(config: &AppConfig, settings: &ProgramSettings) -> anyhow::Re
         .context("the enrolment's answer has no token")?
         .to_owned();
     write_private(&kept, &token)?;
+    write_private(&spent, &code_digest(&code))?;
     let _ = std::fs::remove_file(&settings.code_file);
     Ok(token)
 }
