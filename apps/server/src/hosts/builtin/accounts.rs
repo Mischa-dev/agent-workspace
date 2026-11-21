@@ -175,8 +175,7 @@ pub async fn ask_with_key(
 /// reset may already have happened): it is waited for as long as the
 /// harness may take, and its answer still lands if it comes later.
 async fn wait_for_answer(state: &AppState, command_id: Uuid) -> Result<Option<Ack>, AppError> {
-    let started = tokio::time::Instant::now();
-    let mut deadline = started + PICKUP_WAIT;
+    let mut deadline = tokio::time::Instant::now() + PICKUP_WAIT;
     let mut taken = false;
     loop {
         if let Some(ack) = commands::answer_of(&state.pool, command_id).await? {
@@ -187,7 +186,9 @@ async fn wait_for_answer(state: &AppState, command_id: Uuid) -> Result<Option<Ac
                 return commands::answer_of(&state.pool, command_id).await;
             }
             taken = true;
-            deadline = started
+            // The host took it during the pickup wait: its requests may
+            // have only just started, so their budget counts from now.
+            deadline = tokio::time::Instant::now()
                 + state.config.codex_request_timeout * REQUESTS_PER_QUESTION
                 + IN_FLIGHT_MARGIN;
         }
