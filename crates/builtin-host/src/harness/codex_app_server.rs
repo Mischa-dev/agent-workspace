@@ -60,7 +60,8 @@ const MAX_IDLE_PROCESSES: usize = 4;
 /// A process that started a browser or device sign-in stays up this long so
 /// the sign-in can finish.
 const LOGIN_PIN: Duration = Duration::from_secs(10 * 60);
-const MAX_MODEL_PAGES: usize = 5;
+/// The most pages a model list reads, one request each.
+pub const MAX_MODEL_PAGES: usize = 5;
 
 pub fn codex_manifest() -> AdapterManifest {
     AdapterManifest {

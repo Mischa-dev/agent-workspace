@@ -207,6 +207,8 @@ struct SupervisorHealthView {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum SupervisorState {
+    /// The host runs elsewhere and wasn't asked.
+    Unknown,
     Stopped,
     Ready,
     CircuitOpen,
@@ -1290,7 +1292,7 @@ fn execution_profile_view(
 fn supervisor_health_view(health: Option<ProfileHealth>) -> SupervisorHealthView {
     let Some(health) = health else {
         return SupervisorHealthView {
-            state: SupervisorState::Stopped,
+            state: SupervisorState::Unknown,
             consecutive_failures: 0,
             process_starts: 0,
         };

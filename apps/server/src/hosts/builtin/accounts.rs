@@ -46,6 +46,9 @@ const IN_FLIGHT_MARGIN: Duration = Duration::from_secs(15);
 /// account, then its usage windows), each within the harness's limit.
 const REQUESTS_PER_QUESTION: u32 = 2;
 const LOOK_EVERY: Duration = Duration::from_millis(200);
+/// The longest model description an answer carries: a whole catalog of
+/// them stays well under the mebibyte an action's answer may hold.
+const MAX_DESCRIPTION_CHARS: usize = 1_000;
 
 /// What the host made of a question.
 #[derive(Debug)]
@@ -122,6 +125,7 @@ pub async fn ask_with_key(
         )
         .await?;
     }
+    let question = ask.question.clone();
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let host_id = super::assistant::builtin_host_id(&mut transaction, workspace_id)
         .await?
@@ -159,7 +163,7 @@ pub async fn ask_with_key(
         .await;
         carried.ok()
     } else {
-        wait_for_answer(state, command.id).await?
+        wait_for_answer(state, command.id, &question).await?
     };
     commands::forget_answered(&state.pool, command.id).await?;
     Ok(match ack {
@@ -174,7 +178,11 @@ pub async fn ask_with_key(
 /// one. One it has taken is never closed under it (a sign-in or a spent
 /// reset may already have happened): it is waited for as long as the
 /// harness may take, and its answer still lands if it comes later.
-async fn wait_for_answer(state: &AppState, command_id: Uuid) -> Result<Option<Ack>, AppError> {
+async fn wait_for_answer(
+    state: &AppState,
+    command_id: Uuid,
+    question: &AccountQuestion,
+) -> Result<Option<Ack>, AppError> {
     let mut deadline = tokio::time::Instant::now() + PICKUP_WAIT;
     let mut taken = false;
     loop {
@@ -188,12 +196,25 @@ async fn wait_for_answer(state: &AppState, command_id: Uuid) -> Result<Option<Ac
             taken = true;
             // The host took it during the pickup wait: its requests may
             // have only just started, so their budget counts from now.
-            deadline = tokio::time::Instant::now()
-                + state.config.codex_request_timeout * REQUESTS_PER_QUESTION
-                + IN_FLIGHT_MARGIN;
+            deadline = tokio::time::Instant::now() + answer_budget(state, question);
         }
         tokio::time::sleep(LOOK_EVERY).await;
     }
+}
+
+/// How long a question the host has taken may still take: its harness
+/// requests, each within the harness's limit (a model list reads up to a
+/// few pages), or an environment check's command, plus the margin.
+fn answer_budget(state: &AppState, question: &AccountQuestion) -> Duration {
+    let request = state.config.codex_request_timeout;
+    let work = match question {
+        AccountQuestion::Models => {
+            request * u32::try_from(crate::provider::MAX_MODEL_PAGES).unwrap_or(u32::MAX)
+        }
+        AccountQuestion::CheckEnvironment { .. } => crate::provider::ENVIRONMENT_CHECK_TIMEOUT,
+        _ => request * REQUESTS_PER_QUESTION,
+    };
+    work + IN_FLIGHT_MARGIN
 }
 
 fn read_ack(ack: Ack) -> Asked {
@@ -396,9 +417,20 @@ async fn carry_out(
                 ResetOutcome::AlreadyRedeemed => ResetSpent::AlreadyRedeemed,
             },
         },
-        AccountQuestion::Models => AccountAnswer::Models {
-            models: session.list_models().await?,
-        },
+        AccountQuestion::Models => {
+            // No more than the catalog keeps, with descriptions of a few
+            // lines, so the answer fits in an acknowledgement.
+            let mut models = session.list_models().await?;
+            models.truncate(crate::model_catalog::MAX_CATALOG_MODELS);
+            for model in &mut models {
+                if let Some(description) = &mut model.description
+                    && let Some((cut, _)) = description.char_indices().nth(MAX_DESCRIPTION_CHARS)
+                {
+                    description.truncate(cut);
+                }
+            }
+            AccountAnswer::Models { models }
+        }
         AccountQuestion::CheckEnvironment { .. } => {
             return Err(HarnessError::Unsupported("environments").into());
         }
@@ -528,5 +560,12 @@ pub async fn health(
     if !host_is_here(state) {
         return None;
     }
-    state.supervisors.health(harness, account_id).await
+    // Here, an account with no process yet is plainly stopped.
+    Some(
+        state
+            .supervisors
+            .health(harness, account_id)
+            .await
+            .unwrap_or_default(),
+    )
 }

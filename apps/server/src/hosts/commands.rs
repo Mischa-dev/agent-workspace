@@ -42,6 +42,10 @@ pub const LIFETIME_HOURS: i64 = 24;
 const MAX_LIST: i64 = 100;
 /// The biggest acknowledgement kept (an action's reply).
 const MAX_ACK_BYTES: usize = 65_536;
+/// The biggest answer the built-in host gives to an action (a model
+/// account's catalog of up to `model_catalog::MAX_CATALOG_MODELS` models
+/// with their descriptions). It is read once and the row deleted.
+const MAX_BUILTIN_ACTION_ACK_BYTES: usize = 1024 * 1024;
 /// How often a waiting long-poll or stream looks again.
 const POLL_EVERY: Duration = Duration::from_secs(1);
 
@@ -621,6 +625,14 @@ async fn uncertain(
     Ok(Some(run))
 }
 
+fn too_large(builtin_action: bool) -> HostError {
+    let limit = if builtin_action { "1 MiB" } else { "64 KiB" };
+    HostError::Invalid {
+        field: "result",
+        message: format!("Keep an acknowledgement under {limit}."),
+    }
+}
+
 fn text(value: Option<&str>, fallback: &str) -> String {
     let value = value.map(str::trim).filter(|value| !value.is_empty());
     crate::run_log::redact(value.unwrap_or(fallback))
@@ -642,11 +654,9 @@ pub async fn ack(
         message: "Give outcome: accepted, refused, uncertain or done.".to_owned(),
     })?;
     let stored = redact_value(serde_json::to_value(&ack).unwrap_or(Value::Null));
-    if serde_json::to_vec(&stored).map_or(true, |bytes| bytes.len() > MAX_ACK_BYTES) {
-        return Err(HostError::Invalid {
-            field: "result",
-            message: "Keep an acknowledgement under 64 KiB.".to_owned(),
-        });
+    let size = serde_json::to_vec(&stored).map_or(usize::MAX, |bytes| bytes.len());
+    if size > MAX_BUILTIN_ACTION_ACK_BYTES || (size > MAX_ACK_BYTES && !host.builtin) {
+        return Err(too_large(host.builtin));
     }
     let mut transaction = crate::db::scoped_tx(pool).await?;
     let row = sqlx::query_as::<_, CommandRow>(&format!(
@@ -658,6 +668,9 @@ pub async fn ack(
     .await?
     .ok_or(HostError::CommandUnknown)?;
     let kind = row.kind();
+    if size > MAX_ACK_BYTES && kind != CommandKind::Action {
+        return Err(too_large(false));
+    }
     let fits = match outcome {
         AckOutcome::Accepted | AckOutcome::Refused => true,
         AckOutcome::Uncertain => kind == CommandKind::Start,

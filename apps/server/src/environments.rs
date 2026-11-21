@@ -339,10 +339,14 @@ async fn clean(
         .manifest(&request.harness)
         .ok_or(AppError::Validation("harness"))?;
     let provider_environment_id = optional_text(request.provider_environment_id);
-    if provider_environment_id
-        .as_deref()
-        .is_some_and(|id| id.chars().count() > 200 || id.chars().any(char::is_control))
-    {
+    // An id the redaction would rewrite (one that reads like a credential,
+    // such as `Basic production`) would reach the host changed, so it isn't
+    // taken.
+    if provider_environment_id.as_deref().is_some_and(|id| {
+        id.chars().count() > 200
+            || id.chars().any(char::is_control)
+            || crate::run_log::redact(id) != id
+    }) {
         return Err(AppError::Validation("providerEnvironmentId"));
     }
     if manifest.runs_on == RunLocation::Cloud && provider_environment_id.is_none() {

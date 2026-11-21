@@ -145,7 +145,6 @@
     "auth/workos/agents.rs": 3
   },
   "vendor_names_core": {
-    "environments.rs": 2,
     "error.rs": 1,
     "mcp/description_words.rs": 1,
     "mcp/oauth.rs": 1,

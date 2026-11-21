@@ -30,7 +30,11 @@ pub use adapter::{
     AccountHandle, AccountSummary, HarnessError, HarnessSession, LoginKind, LoginStart,
     ProfileHealth, RateLimitSummary, RateLimitWindow,
 };
+/// The most pages a harness reads when it lists models, one request each.
+pub use codex_app_server::MAX_MODEL_PAGES;
 pub use codex_app_server::{CODEX_KIND, codex_manifest};
+/// The longest an environment check's command may run.
+pub use codex_cloud::COMMAND_TIMEOUT as ENVIRONMENT_CHECK_TIMEOUT;
 pub use codex_cloud::{CODEX_CLOUD_KIND, codex_cloud_manifest};
 pub use registry::SupervisorRegistry;
 use run_config::RunConfig;

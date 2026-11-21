@@ -40,10 +40,14 @@ pub fn refused(reason: &str, message: &str) -> Ack {
 pub const IN_FLIGHT: usize = 8;
 /// How often the host looks for new commands while some are in flight.
 const LOOK_AGAIN: Duration = Duration::from_millis(250);
+/// The most commands one pass starts, so a pass ends under steady traffic
+/// and what runs between passes (admitting runs) gets its turn.
+pub const PER_PASS: usize = 4 * IN_FLIGHT;
 
-/// Carry out every command waiting for this host, up to [`IN_FLIGHT`] at
-/// once, until none is waiting or in flight. Commands for one run are
-/// carried out one at a time, in order. Returns how many.
+/// Carry out the commands waiting for this host, up to [`IN_FLIGHT`] at
+/// once and [`PER_PASS`] in all, until none is waiting or in flight.
+/// Commands for one run are carried out one at a time, in order. Returns
+/// how many.
 pub async fn pump<H: CommandHost>(host: &H, client: &HostClient) -> Result<usize, RuntimeError> {
     let mut handled = 0;
     let mut running = FuturesUnordered::new();
@@ -51,12 +55,13 @@ pub async fn pump<H: CommandHost>(host: &H, client: &HostClient) -> Result<usize
     // A command whose acknowledgement is overdue is listed again as
     // uncertain; one still in flight here isn't carried out twice.
     let mut in_flight = HashSet::new();
+    let mut started = 0;
     loop {
-        if running.len() < IN_FLIGHT {
+        if running.len() < IN_FLIGHT && started < PER_PASS {
             match client.commands(0, 0).await {
                 Ok(listed) => {
                     for summary in listed.commands {
-                        if running.len() >= IN_FLIGHT {
+                        if running.len() >= IN_FLIGHT || started >= PER_PASS {
                             break;
                         }
                         if in_flight.contains(&summary.command_id)
@@ -72,6 +77,7 @@ pub async fn pump<H: CommandHost>(host: &H, client: &HostClient) -> Result<usize
                             busy_runs.insert(run);
                         }
                         in_flight.insert(command.command_id);
+                        started += 1;
                         running.push(async move {
                             let ack = carry_out(host, client, &command).await;
                             let _ = client.ack(command.command_id, &ack).await;
@@ -292,5 +298,64 @@ mod tests {
             .expect("the pump");
         assert_eq!(handled, 2);
         assert_eq!(*server.acked.lock().expect("acked"), vec![QUICK, SLOW]);
+    }
+
+    /// A server that always has one more command waiting.
+    #[derive(Debug, Default)]
+    struct EndlessCommands {
+        listed: Mutex<u128>,
+    }
+
+    impl Transport for EndlessCommands {
+        fn send(&self, request: HttpRequest) -> TransportFuture<'_> {
+            Box::pin(async move {
+                if request.path.starts_with("/api/v1/host/commands?") {
+                    let mut listed = self.listed.lock().expect("listed");
+                    *listed += 1;
+                    let command_id = Uuid::from_u128(1000 + *listed);
+                    return ok(&CommandList {
+                        commands: vec![CommandSummary {
+                            command_id,
+                            seq: 0,
+                            kind: CommandKind::Action,
+                            run_id: None,
+                            offer: 1,
+                        }],
+                        next: 0,
+                    });
+                }
+                let command_id = request
+                    .path
+                    .trim_start_matches("/api/v1/host/commands/")
+                    .trim_end_matches("/ack")
+                    .parse::<Uuid>()
+                    .expect("a command id");
+                if request.method == "POST" {
+                    return ok(&AckReply {
+                        command_id,
+                        state: "acked".to_owned(),
+                        run_state: None,
+                    });
+                }
+                ok(&command(command_id))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_pass_ends_under_steady_traffic() {
+        let client = HostClient::with_transport(
+            "http://localhost",
+            "token",
+            Arc::new(EndlessCommands::default()),
+        );
+        let host = Host {
+            quick_done: Notify::new(),
+        };
+        let handled = tokio::time::timeout(Duration::from_secs(30), pump(&host, &client))
+            .await
+            .expect("the pass ends")
+            .expect("the pump");
+        assert_eq!(handled, PER_PASS);
     }
 }

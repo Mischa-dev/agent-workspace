@@ -7,21 +7,28 @@
 
 use std::{sync::Arc, time::Duration};
 
-use agent_workspace_host_protocol::account::{
-    AccountAnswer, AccountAsk, AccountQuestion, LoginStarted,
+use agent_workspace_host_protocol::{
+    Ack, AckOutcome, CommandKind,
+    account::{AccountAnswer, AccountAsk, AccountQuestion, LoginStarted},
 };
 use agent_workspace_server::{
-    AppState,
+    AppState, db,
     harness::manifest::LoginKind,
-    hosts::builtin::{
-        accounts::{self, Asked},
-        driver,
+    hosts::{
+        self,
+        builtin::{
+            accounts::{self, Asked},
+            assistant, driver,
+        },
+        commands::{self, NewCommand},
+        protocol::HostError,
     },
     provider::SupervisorRegistry,
     secrets,
     sign_ins::{self, LoginReservation},
     tenancy,
 };
+use serde_json::json;
 use uuid::Uuid;
 
 use crate::support::two_workspaces::two_workspaces;
@@ -227,4 +234,96 @@ async fn account_questions_go_to_the_host_and_keys_travel_sealed() {
     .await
     .expect("the commands");
     assert_eq!(left, 0);
+}
+
+/// An answer of about `bytes`, in short strings (one long one would be cut
+/// down when it is stored).
+fn answer_of(bytes: usize) -> Ack {
+    let mut ack = Ack::new(AckOutcome::Done);
+    let models = (0..bytes / 100)
+        .map(|n| format!("{n:0>96}"))
+        .collect::<Vec<_>>();
+    ack.result = Some(json!({ "answer": "models", "models": models }));
+    ack
+}
+
+#[tokio::test]
+async fn the_built_in_host_may_answer_a_question_with_a_large_catalog() {
+    let Some(world) = two_workspaces("a1_large_answers").await else {
+        return;
+    };
+    let workspace = world.a.organization;
+    let issue = |kind: CommandKind| {
+        let pool = world.pool.clone();
+        tenancy::system("runs.host", async move {
+            let mut transaction = db::scoped_tx(&pool).await.expect("begin");
+            let host_id = assistant::builtin_host_id(&mut transaction, workspace)
+                .await
+                .expect("the host")
+                .expect("a built-in host");
+            let host = hosts::get(&mut transaction, host_id)
+                .await
+                .expect("the host")
+                .expect("the host's row");
+            let command = commands::issue(
+                &mut transaction,
+                NewCommand {
+                    workspace_id: workspace,
+                    host_id,
+                    run_id: None,
+                    request_id: None,
+                    kind,
+                    start_key: None,
+                    body: json!({"action": "account"}),
+                },
+            )
+            .await
+            .expect("issue");
+            transaction.commit().await.expect("commit");
+            (host, command.id)
+        })
+    };
+    let ack = |host, command, bytes| {
+        let pool = world.pool.clone();
+        tenancy::system("runs.host", async move {
+            commands::ack(&pool, &host, command, answer_of(bytes)).await
+        })
+    };
+
+    // A catalog past 64 KiB is kept, as an action's answer.
+    let (host, action) = issue(CommandKind::Action).await;
+    assert!(host.builtin);
+    let kept = ack(host.clone(), action, 300 * 1024).await;
+    assert!(kept.is_ok(), "{kept:?}");
+    let answer = tenancy::system("runs.host", commands::answer_of(&world.pool, action))
+        .await
+        .expect("the answer")
+        .expect("an answer");
+    assert_eq!(answer.outcome, Some(AckOutcome::Done));
+
+    // Past a mebibyte it isn't, and no other command takes past 64 KiB.
+    let (host, action) = issue(CommandKind::Action).await;
+    let refused = ack(host, action, 1100 * 1024).await;
+    assert!(
+        matches!(
+            refused,
+            Err(HostError::Invalid {
+                field: "result",
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
+    let (host, inspect) = issue(CommandKind::Inspect).await;
+    let refused = ack(host, inspect, 100 * 1024).await;
+    assert!(
+        matches!(
+            refused,
+            Err(HostError::Invalid {
+                field: "result",
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
 }
