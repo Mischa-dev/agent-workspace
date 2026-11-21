@@ -378,8 +378,10 @@ impl StartHost for BuiltinCommands<'_> {
         state: &'static str,
         dirty: bool,
     ) -> Result<(), AppError> {
+        // A worktree the retention cleanup removed stays removed: an
+        // inspection that raced the removal found it gone on purpose.
         sqlx::query(
-            "UPDATE git_worktrees SET state = $2, dirty = $3, last_inspected_at = now(), updated_at = now() WHERE id = $1",
+            "UPDATE git_worktrees SET state = $2, dirty = $3, last_inspected_at = now(), updated_at = now() WHERE id = $1 AND state <> 'removed'",
         )
         .bind(worktree_id)
         .bind(state)
