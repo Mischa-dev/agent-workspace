@@ -175,8 +175,8 @@ describe('App Thread runs, approvals and GitHub', () => {
           queuePosition: 1,
         }, 202)
       }
-      if (path.includes('/agent-runs/run-1/acknowledge-failure')) {
-        return jsonResponse({})
+      if (path.endsWith('/ops/run_failure_hide')) {
+        return jsonResponse({ outcome: 'ok', value: { runId: 'run-1', hidden: true } })
       }
       return standardImplementation?.(input, init) ?? Promise.reject()
     })
@@ -187,10 +187,10 @@ describe('App Thread runs, approvals and GitHub', () => {
     )
     await waitFor(() => {
       const request = fetchMock.mock.calls.find(([path]) =>
-        String(path).includes('/agent-runs/run-1/acknowledge-failure'),
+        String(path).endsWith('/ops/run_failure_hide'),
       )
       expect(JSON.parse(String(request?.[1]?.body))).toEqual({
-        eventId: 'event-failed',
+        runId: 'run-1',
       })
     })
     expect(
