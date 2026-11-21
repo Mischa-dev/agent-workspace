@@ -37,9 +37,12 @@ use crate::{
 /// How long a question waits for the host to take it up when the host runs
 /// elsewhere. One the host hasn't taken by then is closed.
 const PICKUP_WAIT: Duration = Duration::from_secs(20);
-/// Beyond the harness's own request limit, how long a question the host has
-/// taken may still take: a control slot may need five seconds to free.
+/// Beyond the harness's own request limits, how long a question the host
+/// has taken may still take: a control slot may need five seconds to free.
 const IN_FLIGHT_MARGIN: Duration = Duration::from_secs(15);
+/// The most harness requests one question makes (a status reads the
+/// account, then its usage windows), each within the harness's limit.
+const REQUESTS_PER_QUESTION: u32 = 2;
 const LOOK_EVERY: Duration = Duration::from_millis(200);
 
 /// What the host made of a question.
@@ -182,7 +185,9 @@ async fn wait_for_answer(state: &AppState, command_id: Uuid) -> Result<Option<Ac
                 return commands::answer_of(&state.pool, command_id).await;
             }
             taken = true;
-            deadline = started + state.config.codex_request_timeout + IN_FLIGHT_MARGIN;
+            deadline = started
+                + state.config.codex_request_timeout * REQUESTS_PER_QUESTION
+                + IN_FLIGHT_MARGIN;
         }
         tokio::time::sleep(LOOK_EVERY).await;
     }
@@ -427,6 +432,11 @@ pub async fn attach_secret(
     else {
         return Ok(());
     };
+    // A key handed over in memory was never sealed: the secrets key is
+    // needed only to open one that was.
+    if !crate::sign_ins::has_api_key(connection, ceremony_id).await? {
+        return Ok(());
+    }
     let keys = crate::secrets::keyring(&state.config)?;
     if let Some(key) = crate::sign_ins::take_api_key(connection, keys.as_ref(), ceremony_id).await?
     {
