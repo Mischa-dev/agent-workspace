@@ -287,40 +287,37 @@ async fn roles_narrow_modules_and_never_widen_them() {
     let owner = role_of("owner");
 
     // Only modules that can be switched off, and never for owners.
-    let (status, body) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &roles_path,
-            None,
+    let (status, body) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_create",
             json!({"name": "Odd", "baseRole": "member", "permissions": member["permissions"], "modulesOff": ["workspace"]}),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_client_error(), "{status}: {body}");
-    let (status, body) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("{roles_path}/{}", owner["id"].as_str().expect("id")),
-            None,
-            json!({"modulesOff": ["runs"]}),
-        ),
-    )
-    .await;
+    let (status, body) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_update",
+            json!({"role": owner["id"], "modulesOff": ["runs"], "expectedVersion": owner["version"]}),
+        )
+        .await;
     assert!(status.is_client_error(), "{status}: {body}");
 
     // A role without Runs.
-    let (status, made) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &roles_path,
-            None,
+    let (status, made) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_create",
             json!({"name": "No runs", "baseRole": "member", "permissions": member["permissions"], "modulesOff": ["runs"]}),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_success(), "{status}: {made}");
     assert_eq!(strings(&made["modulesOff"]), ["runs"], "{made}");
     let version = sqlx::query_scalar::<_, i64>(
@@ -331,19 +328,7 @@ async fn roles_narrow_modules_and_never_widen_them() {
     .fetch_one(&setup.pool)
     .await
     .expect("membership version");
-    let (status, body) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/role",
-                setup.organization_id
-            ),
-            None,
-            json!({"roleId": made["id"], "applyToProjects": true, "expectedVersion": version}),
-        ),
-    )
-    .await;
+    let (status, body) = setup.browser.op_in(app, setup.organization_id, "role_assign", json!({"account": bea, "role": made["id"], "applyToProjects": true, "expectedVersion": version})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
     // Bea doesn't get Runs; the owner still does, and so does the workspace.
@@ -395,16 +380,15 @@ async fn roles_narrow_modules_and_never_widen_them() {
         .expect("signals")
     };
     let before = signals().await;
-    let (status, body) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("{roles_path}/{}", made["id"].as_str().expect("id")),
-            None,
-            json!({"modulesOff": ["runs", "pages"], "expectedVersion": made["version"]}),
-        ),
-    )
-    .await;
+    let (status, body) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_update",
+            json!({"role": made["id"], "modulesOff": ["runs", "pages"], "expectedVersion": made["version"]}),
+        )
+        .await;
     assert!(status.is_success(), "{status}: {body}");
     assert!(
         signals().await > before,
@@ -921,16 +905,15 @@ async fn task_lists_leave_out_projects_where_tasks_is_off() {
         .find(|role| role["key"] == "member")
         .cloned()
         .expect("member");
-    let (status, made) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &roles_path,
-            None,
+    let (status, made) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_create",
             json!({"name": "No tasks module", "baseRole": "member", "permissions": member["permissions"], "modulesOff": ["tasks"]}),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_success(), "{status}: {made}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
@@ -1004,16 +987,15 @@ pub(super) async fn narrow_in_project(
         .find(|role| role["key"] == "member")
         .cloned()
         .expect("member");
-    let (status, made) = send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &roles_path,
-            None,
+    let (status, made) = setup
+        .browser
+        .op_in(
+            &setup.app,
+            setup.organization_id,
+            "role_create",
             json!({"name": format!("Narrowed {key}"), "baseRole": "member", "permissions": member["permissions"], "modulesOff": modules_off}),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_success(), "{status}: {made}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
@@ -1702,16 +1684,14 @@ async fn the_gate_covers_pages_and_boards_named_by_id() {
     .await;
     assert!(status.is_success(), "{page}");
     let page = page["id"].as_str().expect("page").to_owned();
-    let (status, board) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            "/api/v1/whiteboards",
-            None,
+    let (status, board) = setup
+        .browser
+        .op(
+            app,
+            "whiteboard_create",
             json!({"title": "Sketch", "projectId": work}),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{board}");
     let board = board["whiteboard"]["id"]
         .as_str()
@@ -1937,16 +1917,14 @@ async fn a_space_narrows_its_own_modules_only() {
     let (_, bea_browser) = add_person(&setup, &[&work, &other], "bea").await;
     let mut boards = Vec::new();
     for project in [&work, &other] {
-        let (status, board) = send(
-            app,
-            setup.browser.request(
-                "POST",
-                "/api/v1/whiteboards",
-                None,
+        let (status, board) = setup
+            .browser
+            .op(
+                app,
+                "whiteboard_create",
                 json!({"title": "Sketch", "projectId": project}),
-            ),
-        )
-        .await;
+            )
+            .await;
         assert_eq!(status, StatusCode::OK, "{board}");
         boards.push(
             board["whiteboard"]["id"]

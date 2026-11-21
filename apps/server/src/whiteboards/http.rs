@@ -5,15 +5,14 @@ use axum::{
     extract::{DefaultBodyLimit, State},
     http::{HeaderMap, HeaderValue, header},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
 use super::{
-    BoardChange, BoardSummary, Caller, LinkView, ListFilter, Placement, TargetKind, access,
-    edit::EditError,
+    BoardSummary, Caller, LinkView, ListFilter, TargetKind, access,
     elements::{self, MAX_BATCH},
     render, scene, store,
 };
@@ -32,13 +31,9 @@ const OPERATIONS_BODY_BYTES: usize = 1024 * 1024;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/v1/whiteboards", get(list_http).post(create_http))
-        .route(
-            "/api/v1/whiteboards/{id}",
-            get(get_http).patch(change_http).delete(purge_http),
-        )
+        .route("/api/v1/whiteboards", get(list_http))
+        .route("/api/v1/whiteboards/{id}", get(get_http).delete(purge_http))
         .route("/api/v1/whiteboard-trash/empty", post(empty_trash_http))
-        .route("/api/v1/whiteboards/{id}/duplicate", post(duplicate_http))
         .route(
             "/api/v1/whiteboards/{id}/scene",
             get(scene_http)
@@ -61,11 +56,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/whiteboards/{id}/revisions/{revision}/restore",
             post(restore_http),
-        )
-        .route("/api/v1/whiteboards/{id}/links", post(link_http))
-        .route(
-            "/api/v1/whiteboards/{id}/links/{kind}/{target_id}",
-            delete(unlink_http),
         )
         .route("/api/v1/whiteboard-links", get(linked_http))
 }
@@ -150,27 +140,6 @@ async fn list_http(
     }))
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LinkTarget {
-    target_kind: String,
-    target_id: Uuid,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CreateRequest {
-    title: String,
-    /// The workspace for a board everyone there sees.
-    organization_id: Option<Uuid>,
-    /// The project for a board only its members see.
-    project_id: Option<Uuid>,
-    /// Link the new board to this task, project or page straight away.
-    link: Option<LinkTarget>,
-    /// Start from a template: a template board's ID or a built-in's name.
-    from_template_id: Option<String>,
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BoardDetail {
@@ -214,71 +183,12 @@ fn target_kind(value: &str) -> Result<TargetKind, AppError> {
     TargetKind::parse(value).ok_or(AppError::Validation("targetKind"))
 }
 
-async fn create_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiJson(request): ApiJson<CreateRequest>,
-) -> Result<Json<BoardDetail>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    let placement = match (request.project_id, request.organization_id) {
-        (Some(project_id), _) => Placement::Project(project_id),
-        (None, Some(organization_id)) => Placement::Workspace(organization_id),
-        (None, None) => return Err(AppError::Validation("organizationId")),
-    };
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let id = match request.from_template_id.as_deref() {
-        Some(template) => super::templates::create_from(
-            &mut transaction,
-            &caller,
-            template,
-            placement,
-            Some(&request.title),
-        )
-        .await
-        .map_err(|error| match error {
-            EditError::App(error) => error,
-            EditError::Invalid(_) | EditError::Conflict(_) => AppError::NotFound("template"),
-        })?,
-        None => super::create(&mut transaction, &caller, placement, &request.title).await?,
-    };
-    if let Some(link) = request.link {
-        super::set_link(
-            &mut transaction,
-            &caller,
-            id,
-            target_kind(&link.target_kind)?,
-            link.target_id,
-            true,
-        )
-        .await?;
-    }
-    transaction.commit().await?;
-    Ok(Json(detail(&state, &caller, id).await?))
-}
-
 async fn get_http(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
     ApiPath(id): ApiPath<Uuid>,
 ) -> Result<Json<BoardDetail>, AppError> {
     let caller = Caller::browser(&principal)?;
-    Ok(Json(detail(&state, &caller, id).await?))
-}
-
-async fn change_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(id): ApiPath<Uuid>,
-    ApiJson(change): ApiJson<BoardChange>,
-) -> Result<Json<BoardDetail>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    super::change(&mut transaction, &caller, id, &change).await?;
-    transaction.commit().await?;
     Ok(Json(detail(&state, &caller, id).await?))
 }
 
@@ -329,27 +239,6 @@ async fn empty_trash_http(
     .await?;
     transaction.commit().await?;
     Ok(Json(EmptyTrashResponse { deleted }))
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DuplicateRequest {
-    title: Option<String>,
-}
-
-async fn duplicate_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<DuplicateRequest>,
-) -> Result<Json<BoardDetail>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let copy = super::duplicate(&mut transaction, &caller, id, request.title.as_deref()).await?;
-    transaction.commit().await?;
-    Ok(Json(detail(&state, &caller, copy).await?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -648,51 +537,6 @@ async fn restore_http(
     .await?;
     transaction.commit().await?;
     Ok(Json(outcome))
-}
-
-async fn link_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(id): ApiPath<Uuid>,
-    ApiJson(target): ApiJson<LinkTarget>,
-) -> Result<Json<BoardDetail>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    super::set_link(
-        &mut transaction,
-        &caller,
-        id,
-        target_kind(&target.target_kind)?,
-        target.target_id,
-        true,
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(detail(&state, &caller, id).await?))
-}
-
-async fn unlink_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((id, kind, target_id)): ApiPath<(Uuid, String, Uuid)>,
-) -> Result<Json<BoardDetail>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    super::set_link(
-        &mut transaction,
-        &caller,
-        id,
-        target_kind(&kind)?,
-        target_id,
-        false,
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(detail(&state, &caller, id).await?))
 }
 
 #[derive(Debug, Deserialize)]

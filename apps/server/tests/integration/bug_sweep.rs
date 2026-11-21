@@ -97,13 +97,13 @@ async fn fixing_a_failed_scheduled_message_keeps_it_until_it_gets_a_new_time() {
         setup,
         &setup.browser,
         "POST",
-        &format!("/api/v1/conversations/{channel}/scheduled-messages"),
-        None,
-        json!({"content": text("Typo hree"), "sendAt": in_an_hour()}),
+        "/api/v2/ops/message_schedule",
+        Some(&Uuid::now_v7().to_string()),
+        json!({"conversationId": channel, "content": text("Typo hree"), "sendAt": in_an_hour()}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{scheduled}");
-    let id = scheduled["scheduledMessage"]["id"]
+    assert_eq!(status, StatusCode::OK, "{scheduled}");
+    let id = scheduled["value"]["scheduled"]["id"]
         .as_str()
         .expect("id")
         .to_owned();

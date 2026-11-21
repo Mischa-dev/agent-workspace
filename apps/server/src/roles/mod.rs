@@ -34,12 +34,7 @@ pub mod ops;
 
 use std::collections::BTreeSet;
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    routing::{get, patch, put},
-};
+use axum::{Json, Router, extract::State, http::HeaderMap, routing::get};
 use chrono::{DateTime, Utc};
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
@@ -49,8 +44,8 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
-    error::{ApiJson, ApiPath, ApiQuery, AppError},
+    auth::AuthenticatedActor,
+    error::{ApiPath, ApiQuery, AppError},
     layouts,
     mcp::McpPrincipal,
     outbox::{OutboxEventPayload, ProjectMembershipUpdatedPayload, enqueue_typed},
@@ -69,19 +64,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/api/v1/organizations/{organization_id}/roles",
-            get(list_roles).post(create_role_route),
-        )
-        .route(
-            "/api/v1/organizations/{organization_id}/roles/{role_id}",
-            patch(change_role_route).delete(remove_role_route),
-        )
-        .route(
-            "/api/v1/organizations/{organization_id}/members/{actor_id}/role",
-            put(assign_role_route),
-        )
-        .route(
-            "/api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
-            put(set_agent_limit_route),
+            get(list_roles),
         )
         .route(
             "/api/v1/organizations/{organization_id}/permissions",
@@ -2262,151 +2245,6 @@ async fn list_roles(
         can_manage_admin_roles: caller.may(Permission::RolesManage) && caller.is_owner(),
         your_permissions: caller.permissions.keys(),
     }))
-}
-
-async fn create_role_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(organization_id): ApiPath<Uuid>,
-    ApiJson(input): ApiJson<RoleInput>,
-) -> Result<(StatusCode, Json<RoleView>), AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
-    let auditor = Auditor::Browser {
-        headers: &headers,
-        principal: &principal,
-    };
-    let view = create(&mut transaction, &auditor, caller, organization_id, input).await?;
-    transaction.commit().await?;
-    Ok((StatusCode::CREATED, Json(view)))
-}
-
-async fn change_role_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((organization_id, role_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<RoleChange>,
-) -> Result<Json<RoleView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    if request.expected_version.is_none() {
-        return Err(AppError::Validation("expectedVersion"));
-    }
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
-    let auditor = Auditor::Browser {
-        headers: &headers,
-        principal: &principal,
-    };
-    let view = change(
-        &mut transaction,
-        &auditor,
-        caller,
-        organization_id,
-        role_id,
-        request,
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(view))
-}
-
-async fn remove_role_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((organization_id, role_id)): ApiPath<(Uuid, Uuid)>,
-) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
-    let auditor = Auditor::Browser {
-        headers: &headers,
-        principal: &principal,
-    };
-    remove(&mut transaction, &auditor, caller, organization_id, role_id).await?;
-    transaction.commit().await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AssignRequest {
-    role_id: Uuid,
-    #[serde(default)]
-    apply_to_projects: bool,
-    expected_version: i64,
-}
-
-async fn assign_role_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((organization_id, actor_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<AssignRequest>,
-) -> Result<Json<Assignment>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
-    let auditor = Auditor::Browser {
-        headers: &headers,
-        principal: &principal,
-    };
-    let assignment = assign(
-        &mut transaction,
-        &auditor,
-        caller,
-        organization_id,
-        actor_id,
-        request.role_id,
-        request.apply_to_projects,
-        Some(request.expected_version),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(assignment))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AgentLimitRequest {
-    /// `null`: their apps may do what they may.
-    permissions: Option<Vec<String>>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AgentLimitResponse {
-    permissions: Option<Vec<&'static str>>,
-}
-
-async fn set_agent_limit_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((organization_id, actor_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<AgentLimitRequest>,
-) -> Result<Json<AgentLimitResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
-    let auditor = Auditor::Browser {
-        headers: &headers,
-        principal: &principal,
-    };
-    let permissions = set_agent_limit(
-        &mut transaction,
-        &auditor,
-        caller,
-        organization_id,
-        actor_id,
-        request.permissions,
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(AgentLimitResponse { permissions }))
 }
 
 #[derive(Debug, Deserialize)]

@@ -292,16 +292,15 @@ impl WorldBuilder {
         }
         let mut roles = BTreeMap::new();
         for (name, base, permissions) in &self.custom_roles {
-            let (status, role) = send(
-                &app,
-                setup.browser.request(
-                    "POST",
-                    &format!("/api/v1/organizations/{}/roles", owner.organization_id),
-                    None,
+            let (status, role) = setup
+                .browser
+                .op_in(
+                    &app,
+                    owner.organization_id,
+                    "role_create",
                     json!({"name": name, "baseRole": base, "permissions": permissions}),
-                ),
-            )
-            .await;
+                )
+                .await;
             assert!(status.is_success(), "{role}");
             let id = role["role"]["id"]
                 .as_str()

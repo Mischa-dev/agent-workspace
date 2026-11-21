@@ -2616,9 +2616,9 @@ async fn an_agent_checks_the_ai_provider_settings() {
     };
     let project = f.seed.project_id.to_string();
     f.web(
-        "PUT",
-        "/api/v1/settings/values/ai.provider",
-        json!({"scope": "project", "projectId": project, "value": "fake"}),
+        "POST",
+        "/api/v2/ops/setting_update",
+        json!({"key": "ai.provider", "scope": "project", "spaceId": project, "value": "fake"}),
     )
     .await;
     let checked = f
@@ -2690,12 +2690,9 @@ async fn people_cap_their_apps_and_agents_never_do() {
     let capped_out = person("app_limit_set", json!({"lift": true})).await;
     assert_eq!(capped_out["outcome"], "permission_denied", "{capped_out}");
     f.web(
-        "PUT",
-        &format!(
-            "/api/v1/organizations/{}/members/{me}/agent-limit",
-            f.seed.organization_id
-        ),
-        json!({"permissions": null}),
+        "POST",
+        &format!("/api/v2/w/{}/ops/app_limit_set", f.seed.organization_id),
+        json!({"account": me, "lift": true}),
     )
     .await;
     f.close().await;

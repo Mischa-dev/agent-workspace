@@ -244,12 +244,13 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
     let template = send(
         &application,
         owner,
-        "PUT",
-        "/api/v1/settings/values/launch.template",
+        "POST",
+        "/api/v2/ops/setting_update",
         "template",
         json!({
+            "key": "launch.template",
             "scope": "project",
-            "projectId": seed.project_id,
+            "spaceId": seed.project_id,
             "value": "Do {{task.key}} on {{harness}}.\n{{#harness codex_cloud}}\nOpen a pull request.\n{{/harness}}"
         }),
     )
@@ -436,12 +437,12 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
         &application,
         owner,
         "POST",
-        &format!("/api/v1/organizations/{}/roles", seed.organization_id),
+        &format!("/api/v2/w/{}/ops/role_create", seed.organization_id),
         "blind-launchers",
         json!({"name": "Blind launchers", "baseRole": "member", "permissions": ["runs.launch"]}),
     )
     .await;
-    assert_eq!(role.0, StatusCode::CREATED, "{}", role.1);
+    assert_eq!(role.0, StatusCode::OK, "{}", role.1);
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -456,7 +457,7 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
         "PATCH",
         &format!("{project}/members/{member_id}"),
         "member-blind-launcher",
-        json!({"roleId": role.2["id"], "expectedVersion": version}),
+        json!({"roleId": role.2["value"]["id"], "expectedVersion": version}),
     )
     .await;
     assert_eq!(changed.0, StatusCode::OK, "{}", changed.1);

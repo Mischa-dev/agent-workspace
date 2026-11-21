@@ -40,7 +40,6 @@ mod tests {
 
     /// Every web write, in `MUTATING_ENTRY_POINTS` order.
     const WEB_WRITES: &[(MutationMethod, &str, Parity)] = &[
-        (Put, "/api/v1/settings/values/{key}", Tool("setting_update")),
         (
             Post,
             "/api/v1/settings/values/{key}/reset",
@@ -222,31 +221,6 @@ mod tests {
             Post,
             "/api/v1/organizations/{organization_id}/transfer-ownership",
             Person("ownership passes between people"),
-        ),
-        (
-            Post,
-            "/api/v1/organizations/{organization_id}/roles",
-            Tool("role_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/organizations/{organization_id}/roles/{role_id}",
-            Tool("role_update"),
-        ),
-        (
-            Delete,
-            "/api/v1/organizations/{organization_id}/roles/{role_id}",
-            Tool("role_delete"),
-        ),
-        (
-            Put,
-            "/api/v1/organizations/{organization_id}/members/{actor_id}/role",
-            Tool("role_assign"),
-        ),
-        (
-            Put,
-            "/api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
-            Tool("app_limit_set"),
         ),
         (
             Post,
@@ -596,11 +570,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/conversations/{id}/mark-unread",
-            Tool("conversation_mark_read"),
-        ),
-        (
-            Post,
             "/api/v1/conversations/{id}/messages",
             Tool("message_send"),
         ),
@@ -609,7 +578,6 @@ mod tests {
             "/api/v1/conversations/{id}/threads",
             Tool("thread_start"),
         ),
-        (Patch, "/api/v1/threads/{id}", Tool("thread_update")),
         (Post, "/api/v1/projects/{id}/pages", Tool("page_create")),
         (
             Post,
@@ -647,8 +615,6 @@ mod tests {
             "/api/v1/pages/{id}/suggestions/{suggestion_id}/decision",
             Tool("page_suggestion_decide"),
         ),
-        (Post, "/api/v1/whiteboards", Tool("whiteboard_create")),
-        (Patch, "/api/v1/whiteboards/{id}", Tool("whiteboard_update")),
         (
             Delete,
             "/api/v1/whiteboards/{id}",
@@ -658,11 +624,6 @@ mod tests {
             Post,
             "/api/v1/whiteboard-trash/empty",
             Tool("whiteboard_trash_empty"),
-        ),
-        (
-            Post,
-            "/api/v1/whiteboards/{id}/duplicate",
-            Tool("whiteboard_duplicate"),
         ),
         (
             Post,
@@ -683,21 +644,6 @@ mod tests {
             Post,
             "/api/v1/whiteboards/{id}/revisions/{revision}/restore",
             Tool("whiteboard_update"),
-        ),
-        (
-            Post,
-            "/api/v1/whiteboards/{id}/links",
-            Tool("whiteboard_link"),
-        ),
-        (
-            Delete,
-            "/api/v1/whiteboards/{id}/links/{kind}/{target_id}",
-            Tool("whiteboard_link"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{id}/decisions",
-            Tool("decision_record"),
         ),
         (Post, "/api/v1/conversations/{id}/pins", Tool("pin_set")),
         (
@@ -727,17 +673,6 @@ mod tests {
             "/api/v1/conversations/{id}/members/{actor_id}/remove",
             Tool("conversation_members_update"),
         ),
-        (
-            Post,
-            "/api/v1/conversations/{id}/continue",
-            Tool("conversation_continue"),
-        ),
-        (
-            Post,
-            "/api/v1/reply-requests/{id}/retry",
-            Tool("reply_retry"),
-        ),
-        (Post, "/api/v1/reply-requests/{id}/stop", Tool("reply_stop")),
         (
             Patch,
             "/api/v1/conversations/{id}/messages/{message_id}",
@@ -799,29 +734,9 @@ mod tests {
         (Patch, "/api/v1/later/{id}", Tool("later_update")),
         (Delete, "/api/v1/later/{id}", Tool("later_update")),
         (
-            Post,
-            "/api/v1/conversations/{id}/scheduled-messages",
-            Tool("message_schedule"),
-        ),
-        (
             Patch,
             "/api/v1/scheduled-messages/{id}",
             Tool("scheduled_message_update"),
-        ),
-        (
-            Delete,
-            "/api/v1/scheduled-messages/{id}",
-            Tool("scheduled_message_update"),
-        ),
-        (
-            Post,
-            "/api/v1/scheduled-messages/{id}/send-now",
-            Tool("scheduled_message_update"),
-        ),
-        (
-            Post,
-            "/api/v1/messages/{id}/forward",
-            Tool("message_forward"),
         ),
         (
             Post,
@@ -1195,26 +1110,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/automations",
-            Tool("automation_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/automations/{rule_id}",
-            Tool("automation_update"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/automations/{rule_id}",
-            Tool("automation_delete"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/automations/{rule_id}/run",
-            Tool("automation_run_start"),
-        ),
-        (
-            Post,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
             Tool("task_restore"),
         ),
@@ -1575,5 +1470,40 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Hand-written web writes whose tool is already an operation: each is a
+    /// second edge for something the generated route does (K2.22). The
+    /// number only goes down; when you delete one, lower it.
+    const HAND_WRITTEN_OPERATION_ROUTES: usize = 153;
+
+    #[test]
+    fn hand_written_routes_for_operations_only_go_down() {
+        let operations = crate::ops::registry()
+            .entries()
+            .map(|entry| entry.meta.name)
+            .collect::<BTreeSet<_>>();
+        let duplicates = WEB_WRITES
+            .iter()
+            .filter(|(_, _, parity)| match parity {
+                Tool(names) => names.split(", ").all(|name| operations.contains(name)),
+                _ => false,
+            })
+            .map(|(method, path, _)| format!("{method:?} {path}"))
+            .collect::<Vec<_>>();
+        assert!(
+            duplicates.len() <= HAND_WRITTEN_OPERATION_ROUTES,
+            "{} hand-written web writes do what an operation does, more than the {} allowed. \
+             The web calls the operation's v2 route instead (K2.22): {duplicates:#?}",
+            duplicates.len(),
+            HAND_WRITTEN_OPERATION_ROUTES,
+        );
+        assert_eq!(
+            duplicates.len(),
+            HAND_WRITTEN_OPERATION_ROUTES,
+            "a hand-written route for an operation is gone: lower \
+             HAND_WRITTEN_OPERATION_ROUTES to {}",
+            duplicates.len(),
+        );
     }
 }

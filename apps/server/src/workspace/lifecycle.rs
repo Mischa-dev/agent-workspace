@@ -431,12 +431,6 @@ const OTHER_ID_FAMILIES: &[(&str, &str)] = &[
          -- visibility: the space only, to refuse a write; the handler checks access\n \
          WHERE id = $1",
     ),
-    (
-        "/api/v1/reply-requests/{",
-        "SELECT project_id FROM reply_requests \
-         -- visibility: the space only, to refuse a write; the handler checks access\n \
-         WHERE id = $1",
-    ),
 ];
 
 /// The space of a conversation (channel, thread), message, scheduled

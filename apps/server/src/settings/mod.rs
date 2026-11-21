@@ -31,7 +31,7 @@ use axum::{
     Json, Router,
     extract::State,
     http::HeaderMap,
-    routing::{get, post, put},
+    routing::{get, post},
 };
 use chrono::{DateTime, Utc};
 use rmcp::schemars::{self, JsonSchema};
@@ -1301,7 +1301,6 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/settings/registry", get(registry))
         .route("/api/v1/settings/effective", get(effective))
-        .route("/api/v1/settings/values/{key}", put(set_value))
         .route("/api/v1/settings/values/{key}/reset", post(reset_value))
 }
 
@@ -1417,19 +1416,6 @@ async fn effective(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SetRequest {
-    scope: Scope,
-    #[serde(default)]
-    organization_id: Option<Uuid>,
-    #[serde(default)]
-    project_id: Option<Uuid>,
-    value: Value,
-    #[serde(default)]
-    expected_version: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ResetRequest {
     scope: Scope,
     #[serde(default)]
@@ -1522,58 +1508,6 @@ pub(crate) async fn resolved_after(
         .get(key)
         .cloned()
         .ok_or(AppError::Internal("resolved setting"))
-}
-
-async fn set_value(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(key): ApiPath<String>,
-    ApiJson(request): ApiJson<SetRequest>,
-) -> Result<Json<WriteResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let definition = definition(&key).ok_or(AppError::NotFound("setting"))?;
-    if has_own_routes(definition.key) {
-        return Err(AppError::Validation("setting key"));
-    }
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let target = authorize_target(
-        &mut transaction,
-        &principal,
-        request.scope,
-        request.organization_id,
-        request.project_id,
-    )
-    .await?;
-    let version = set(
-        &mut transaction,
-        target,
-        definition.key,
-        request.value,
-        request.expected_version,
-        principal.actor_id,
-    )
-    .await?;
-    audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        target.project_id(),
-        "setting.changed",
-        "setting",
-        None,
-        serde_json::json!({
-            "key": definition.key,
-            "scope": target.scope(),
-            "organizationId": target.organization_id(),
-            "version": version,
-        }),
-    )
-    .await?;
-    let setting =
-        resolved_after(&mut transaction, target, principal.actor_id, definition.key).await?;
-    transaction.commit().await?;
-    Ok(Json(WriteResponse { setting }))
 }
 
 async fn reset_value(

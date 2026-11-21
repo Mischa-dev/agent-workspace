@@ -107,10 +107,8 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/channels/{id}/restore",
     "POST /api/v1/channels/{id}/threads",
     "POST /api/v1/conversations/{id}/ai/summary",
-    "POST /api/v1/conversations/{id}/continue",
     "POST /api/v1/conversations/{id}/files",
     "POST /api/v1/conversations/{id}/mark-seen",
-    "POST /api/v1/conversations/{id}/mark-unread",
     "POST /api/v1/conversations/{id}/members",
     "POST /api/v1/conversations/{id}/members/{actor_id}/remove",
     "POST /api/v1/conversations/{id}/messages",
@@ -122,7 +120,6 @@ const WRITE_ROUTES: &[&str] = &[
     "PUT /api/v1/conversations/{id}/notification-level",
     "POST /api/v1/conversations/{id}/pins",
     "DELETE /api/v1/conversations/{id}/pins/{kind}/{target_id}",
-    "POST /api/v1/conversations/{id}/scheduled-messages",
     "POST /api/v1/conversations/{id}/threads",
     "POST /api/v1/direct/dms",
     "POST /api/v1/direct/groups",
@@ -131,7 +128,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/later",
     "DELETE /api/v1/later/{id}",
     "PATCH /api/v1/later/{id}",
-    "POST /api/v1/messages/{id}/forward",
     "PUT /api/v1/notification-settings/channels",
     "PUT /api/v1/notification-settings/mutes",
     "PATCH /api/v1/organizations/{organization_id}",
@@ -154,8 +150,6 @@ const WRITE_ROUTES: &[&str] = &[
     "PUT /api/v1/organizations/{organization_id}/mail",
     "POST /api/v1/organizations/{organization_id}/mail/test",
     "PATCH /api/v1/organizations/{organization_id}/members/{actor_id}",
-    "PUT /api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
-    "PUT /api/v1/organizations/{organization_id}/members/{actor_id}/role",
     "DELETE /api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
     "PUT /api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
     "POST /api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
@@ -163,9 +157,6 @@ const WRITE_ROUTES: &[&str] = &[
     "DELETE /api/v1/organizations/{organization_id}/personal-secrets/{name}",
     "PUT /api/v1/organizations/{organization_id}/personal-secrets/{name}",
     "PATCH /api/v1/organizations/{organization_id}/project-templates/{template_id}",
-    "POST /api/v1/organizations/{organization_id}/roles",
-    "DELETE /api/v1/organizations/{organization_id}/roles/{role_id}",
-    "PATCH /api/v1/organizations/{organization_id}/roles/{role_id}",
     "DELETE /api/v1/organizations/{organization_id}/secrets/{name}",
     "PUT /api/v1/organizations/{organization_id}/secrets/{name}",
     "POST /api/v1/organizations/{organization_id}/transfer-ownership",
@@ -183,7 +174,6 @@ const WRITE_ROUTES: &[&str] = &[
     "PATCH /api/v1/projects/{id}",
     "POST /api/v1/projects/{id}/archive",
     "POST /api/v1/projects/{id}/channels",
-    "POST /api/v1/projects/{id}/decisions",
     "POST /api/v1/projects/{id}/execution-profiles",
     "POST /api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
     "DELETE /api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
@@ -205,10 +195,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/ai/suggestions/{suggestion_id}/accept",
     "POST /api/v1/projects/{project_id}/ai/suggestions/{suggestion_id}/dismiss",
     "POST /api/v1/projects/{project_id}/ai/test",
-    "POST /api/v1/projects/{project_id}/automations",
-    "DELETE /api/v1/projects/{project_id}/automations/{rule_id}",
-    "PATCH /api/v1/projects/{project_id}/automations/{rule_id}",
-    "POST /api/v1/projects/{project_id}/automations/{rule_id}/run",
     "POST /api/v1/projects/{project_id}/bug-report-links",
     "POST /api/v1/projects/{project_id}/environments",
     "PUT /api/v1/projects/{project_id}/environments/{environment_id}",
@@ -315,15 +301,9 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/push/subscriptions",
     "DELETE /api/v1/push/subscriptions/{id}",
     "POST /api/v1/push/subscriptions/{id}/test",
-    "POST /api/v1/reply-requests/{id}/retry",
-    "POST /api/v1/reply-requests/{id}/stop",
-    "DELETE /api/v1/scheduled-messages/{id}",
     "PATCH /api/v1/scheduled-messages/{id}",
-    "POST /api/v1/scheduled-messages/{id}/send-now",
-    "PUT /api/v1/settings/values/{key}",
     "POST /api/v1/settings/values/{key}/reset",
     "POST /api/v1/things/{kind}/{id}/files",
-    "PATCH /api/v1/threads/{id}",
     "POST /api/v1/threads/{id}/agent-runs",
     "POST /api/v1/threads/{id}/archive",
     "POST /api/v1/threads/{id}/messages",
@@ -335,13 +315,8 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/usage/accounts/{account_id}/schedules",
     "DELETE /api/v1/usage/accounts/{account_id}/schedules/{schedule_id}",
     "POST /api/v1/whiteboard-trash/empty",
-    "POST /api/v1/whiteboards",
     "DELETE /api/v1/whiteboards/{id}",
-    "PATCH /api/v1/whiteboards/{id}",
-    "POST /api/v1/whiteboards/{id}/duplicate",
     "POST /api/v1/whiteboards/{id}/files",
-    "POST /api/v1/whiteboards/{id}/links",
-    "DELETE /api/v1/whiteboards/{id}/links/{kind}/{target_id}",
     "POST /api/v1/whiteboards/{id}/operations",
     "POST /api/v1/whiteboards/{id}/revisions/{revision}/restore",
     "POST /api/v1/whiteboards/{id}/scene",
@@ -1619,12 +1594,11 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .await;
 
     // The fake model, so the AI routes and tools run.
-    ok(
+    ok_op(
         app,
         browser,
-        "PUT",
-        "/api/v1/settings/values/ai.provider",
-        json!({"scope": "workspace", "organizationId": organization, "value": "fake"}),
+        &format!("/api/v2/w/{organization}/ops/setting_update"),
+        json!({"key": "ai.provider", "scope": "workspace", "value": "fake"}),
     )
     .await;
     // So refusing to remove these proves something: each exists in both.
@@ -1702,22 +1676,20 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         json!({"title": "Net backlog task"}),
     )
     .await;
-    let trashed = ok(
+    let trashed = ok_op(
         app,
         browser,
-        "POST",
-        "/api/v1/whiteboards",
-        json!({"title": format!("Net trashed {tag}"), "organizationId": organization}),
+        "/api/v2/ops/whiteboard_create",
+        json!({"title": format!("Net trashed {tag}"), "workspaceId": organization}),
     )
     .await;
     let trashed_whiteboard =
         Uuid::parse_str(&string_at(&trashed, "/whiteboard/id")).expect("trashed board");
-    ok(
+    ok_op(
         app,
         browser,
-        "PATCH",
-        &format!("/api/v1/whiteboards/{trashed_whiteboard}"),
-        json!({"deleted": true}),
+        "/api/v2/ops/whiteboard_update",
+        json!({"whiteboardId": trashed_whiteboard, "deleted": true}),
     )
     .await;
 
@@ -2380,9 +2352,8 @@ struct Spares {
     /// A second connected app, revoked.
     grant: Uuid,
     oauth_client: String,
-    /// Reply requests: stopped over HTTP; claimed, then progress and a
-    /// reply; passed; released (held already); stopped through MCP.
-    reply_stop: Uuid,
+    /// Reply requests: claimed, then progress and a reply; passed;
+    /// released (held already); stopped through MCP. The first is unused.
     reply_claim: Uuid,
     reply_pass: Uuid,
     reply_release: Uuid,
@@ -2548,12 +2519,11 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     )
     .await;
     for text_value in ["Net spare one", "Net spare two"] {
-        ok(
+        ok_op(
             app,
             browser,
-            "POST",
-            &format!("/api/v1/conversations/{}/scheduled-messages", a.channel),
-            json!({"content": text(text_value), "sendAt": soon}),
+            "/api/v2/ops/message_schedule",
+            json!({"conversationId": a.channel, "content": text(text_value), "sendAt": soon}),
         )
         .await;
     }
@@ -2598,12 +2568,12 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         "Net spare",
     )
     .await;
-    let spare_rule = ok(
+    let spare_rule = ok_op(
         app,
         browser,
-        "POST",
-        &format!("/api/v1/projects/{project}/automations"),
+        "/api/v2/ops/automation_create",
         json!({
+            "projectId": project,
             "name": "Net spare rule",
             "trigger": {"kind": "task_created"},
             "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
@@ -2705,22 +2675,20 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         .await;
         comments.push(Uuid::parse_str(&string_at(&created, "/comment/id")).expect("comment"));
     }
-    let trashed = ok(
+    let trashed = ok_op(
         app,
         browser,
-        "POST",
-        "/api/v1/whiteboards",
-        json!({"title": "Net spare trashed", "organizationId": a.organization}),
+        "/api/v2/ops/whiteboard_create",
+        json!({"title": "Net spare trashed", "workspaceId": a.organization}),
     )
     .await;
     let trashed_whiteboard =
         Uuid::parse_str(&string_at(&trashed, "/whiteboard/id")).expect("trashed board");
-    ok(
+    ok_op(
         app,
         browser,
-        "PATCH",
-        &format!("/api/v1/whiteboards/{trashed_whiteboard}"),
-        json!({"deleted": true}),
+        "/api/v2/ops/whiteboard_update",
+        json!({"whiteboardId": trashed_whiteboard, "deleted": true}),
     )
     .await;
     let profile = ok(
@@ -3091,7 +3059,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         launch: queued_launch,
         grant,
         oauth_client,
-        reply_stop: replies[0],
         reply_claim: replies[1],
         reply_pass: replies[2],
         reply_release: replies[3],
@@ -3111,6 +3078,14 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         data_connection,
         data_query,
     }
+}
+
+/// Runs a setup operation as `browser` at `path` (`/api/v2/ops/{name}` or
+/// `/api/v2/w/{workspace}/ops/{name}`) and returns its value; it must work.
+async fn ok_op(app: &axum::Router, browser: &Browser, path: &str, input: Value) -> Value {
+    let mut body = ok(app, browser, "POST", path, input).await;
+    assert_eq!(body["outcome"], "ok", "setup {path}: {body}");
+    body["value"].take()
 }
 
 /// Sends a setup request as `browser` and returns the body; it must work.
@@ -4279,11 +4254,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         )
         .rejecting(vec![json!({"name": "Net thread", "originMessageId": b.message})]),
         path_case(
-            "PATCH /api/v1/threads/{id}",
-            &[id(&a.thread, &b.thread)],
-            json_body(json!({"name": "Launch thread"})),
-        ),
-        path_case(
             "POST /api/v1/threads/{id}/archive",
             &[id(&sp.thread, &b.thread)],
             versioned("conversations", 0, json!({})),
@@ -4318,11 +4288,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         ),
         path_case(
-            "POST /api/v1/conversations/{id}/continue",
-            &[id(&a.group, &b.group)],
-            empty(),
-        ),
-        path_case(
             "POST /api/v1/conversations/{id}/files",
             &[channel()],
             |_| Payload::Bytes("text/plain", b"Net file".to_vec()),
@@ -4339,16 +4304,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[channel()],
             json_body(json!({"highestSeenSequence": 1})),
         ),
-        path_case(
-            "POST /api/v1/conversations/{id}/mark-unread",
-            &[channel()],
-            |values| {
-                Payload::Json(json!({
-                    "messageId": if is_a(values, &a.channel) { &a.message } else { &b.message }
-                }))
-            },
-        )
-        .rejecting(vec![json!({"messageId": b.message})]),
         path_case(
             "POST /api/v1/conversations/{id}/members",
             &[id(&a.group, &b.group)],
@@ -4445,22 +4400,11 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         ),
         path_case(
-            "POST /api/v1/conversations/{id}/scheduled-messages",
-            &[channel()],
-            json_body(json!({"content": text("Net later"), "sendAt": soon})),
-        ),
-        path_case(
             "POST /api/v1/conversations/{id}/threads",
             &[channel()],
             json_body(json!({"name": "Net thread two"})),
         )
         .rejecting(vec![json!({"name": "Net thread two", "originMessageId": b.message})]),
-        path_case(
-            "POST /api/v1/messages/{id}/forward",
-            &[id(&a.message, &b.message)],
-            json_body(json!({"conversationId": a.dm, "text": "Net forward"})),
-        )
-        .rejecting(vec![json!({"conversationId": b.channel}), json!({"conversationId": b.dm})]),
         // Direct messages and groups
         body_case(
             "POST /api/v1/direct/dms",
@@ -4530,16 +4474,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             "PATCH /api/v1/scheduled-messages/{id}",
             &[id(ax.scheduled, bx.scheduled)],
             json_body(json!({"content": text("Net later, edited")})),
-        ),
-        path_case(
-            "DELETE /api/v1/scheduled-messages/{id}",
-            &[id(ax.scheduled, bx.scheduled)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/scheduled-messages/{id}/send-now",
-            &[id(sp.scheduled[0], bx.scheduled)],
-            empty(),
         ),
         // Notification settings
         body_case(
@@ -4729,48 +4663,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             },
         ),
         path_case(
-            "PUT /api/v1/organizations/{organization_id}/members/{actor_id}/role",
-            &[organization(), id(a.rook, b.rook)],
-            |values| {
-                Payload::Json(json!({
-                    "roleId": ax.custom_role,
-                    "applyToProjects": false,
-                    "expectedVersion": current(
-                        "organization_memberships",
-                        "version",
-                        &[("organization_id", values[0].clone()), ("actor_id", values[1].clone())],
-                        1,
-                    ),
-                }))
-            },
-        )
-        .rejecting(vec![json!({"roleId": bx.custom_role, "applyToProjects": true, "expectedVersion": 1})]),
-        path_case(
-            "PUT /api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
-            &[organization(), id(a.rook, b.rook)],
-            json_body(json!({"permissions": null})),
-        ),
-        path_case(
-            "POST /api/v1/organizations/{organization_id}/roles",
-            &[organization()],
-            json_body(json!({"name": "Net made role", "baseRole": "member", "permissions": ["tasks.view"]})),
-        ),
-        path_case(
-            "PATCH /api/v1/organizations/{organization_id}/roles/{role_id}",
-            &[organization(), id(ax.custom_role, bx.custom_role)],
-            |values| {
-                Payload::Json(json!({
-                    "expectedVersion": current("workspace_roles", "version", &[("id", values[1].clone())], 1),
-                    "description": "Net changed",
-                }))
-            },
-        ),
-        path_case(
-            "DELETE /api/v1/organizations/{organization_id}/roles/{role_id}",
-            &[organization(), id(sp.role, bx.custom_role)],
-            empty(),
-        ),
-        path_case(
             "PUT /api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
             &[organization(), same("codex_app_server"), same("net-model")],
             json_body(json!({"displayName": "Net model"})),
@@ -4948,16 +4840,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             json_body(json!({"name": "net-channel"})),
         ),
         path_case(
-            "POST /api/v1/projects/{id}/decisions",
-            &[project()],
-            json_body(json!({"title": "Net decision"})),
-        )
-        .rejecting(vec![
-            json!({"title": "Net decision", "sourceMessageId": b.message}),
-            json!({"title": "Net decision", "sourceConversationId": b.channel}),
-            json!({"title": "Net decision", "supersedes": bx.decision}),
-        ]),
-        path_case(
             "POST /api/v1/projects/{id}/execution-profiles",
             &[project()],
             empty(),
@@ -5092,53 +4974,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         ),
         // Automations
-        path_case(
-            "POST /api/v1/projects/{project_id}/automations",
-            &[project()],
-            json_body(json!({
-                "name": "Net rule",
-                "trigger": {"kind": "task_created"},
-                "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
-            })),
-        )
-        .rejecting(vec![
-            json!({
-                "name": "Net rule b",
-                "trigger": {"kind": "task_created"},
-                "actions": [{"kind": "post_message", "conversationId": b.channel, "text": "Net"}],
-            }),
-            json!({
-                "name": "Net rule c",
-                "trigger": {"kind": "task_created"},
-                "actions": [{"kind": "launch", "environmentId": bx.environment}],
-            }),
-            json!({
-                "name": "Net rule d",
-                "trigger": {"kind": "task_created"},
-                "actions": [{"kind": "launch", "agentProfileId": bx.agent_profile}],
-            }),
-        ]),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/automations/{rule_id}",
-            &[project(), id(a.rule, b.rule)],
-            versioned("automation_rules", 1, json!({"name": "Rule"})),
-        )
-        .rejecting(vec![json!({
-            "expectedVersion": version("automation_rules", a.rule),
-            "actions": [{"kind": "post_message", "conversationId": b.channel, "text": "Net"}],
-        })]),
-        path_case(
-            "POST /api/v1/projects/{project_id}/automations/{rule_id}/run",
-            &[project(), id(a.rule, b.rule)],
-            empty(),
-        )
-        .rejecting(vec![json!({"workItemId": b.task})]),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/automations/{rule_id}",
-            &[project(), id(a.rule, b.rule)],
-            empty(),
-        )
-        .last(),
         path_case(
             "POST /api/v1/projects/{project_id}/bug-report-links",
             &[project()],
@@ -6069,26 +5904,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         )
         .last(),
         // Reply requests
-        path_case(
-            "POST /api/v1/reply-requests/{id}/stop",
-            &[id(sp.reply_stop, bx.reply)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/reply-requests/{id}/retry",
-            &[id(ax.stopped_reply, bx.stopped_reply)],
-            empty(),
-        ),
         // Settings
-        body_case(
-            "PUT /api/v1/settings/values/{key}",
-            &["run.model"],
-            json!({"scope": "workspace", "organizationId": a.organization, "value": "net-model"}),
-            vec![
-                json!({"scope": "workspace", "organizationId": b.organization, "value": "net-model"}),
-                json!({"scope": "project", "projectId": b.project, "value": "net-model"}),
-            ],
-        ),
         body_case(
             "POST /api/v1/settings/values/{key}/reset",
             &["run.model"],
@@ -6151,58 +5967,10 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         )
         .last(),
         // Whiteboards
-        body_case(
-            "POST /api/v1/whiteboards",
-            &[],
-            json!({"title": "Net sketch", "organizationId": a.organization}),
-            vec![
-                json!({"title": "Net sketch", "organizationId": b.organization}),
-                json!({"title": "Net sketch", "projectId": b.project}),
-            ],
-        )
-        .rejecting(vec![json!({
-            "title": "Net sketch",
-            "projectId": a.project,
-            "link": {"targetKind": "task", "targetId": b.task},
-        })]),
-        path_case(
-            "PATCH /api/v1/whiteboards/{id}",
-            &[id(a.project_whiteboard, b.project_whiteboard)],
-            versioned("whiteboards", 0, json!({"title": "Plan"})),
-        )
-        .rejecting(vec![json!({
-            "projectId": b.project,
-            "expectedVersion": version("whiteboards", a.project_whiteboard),
-        })]),
-        path_case(
-            "POST /api/v1/whiteboards/{id}/duplicate",
-            &[id(a.whiteboard, b.whiteboard)],
-            json_body(json!({"title": "Net copy"})),
-        ),
         path_case(
             "POST /api/v1/whiteboards/{id}/files",
             &[id(a.whiteboard, b.whiteboard)],
             json_body(json!({"id": "netphoto", "mimeType": "image/png", "dataURL": TINY_PNG})),
-        ),
-        path_case(
-            "POST /api/v1/whiteboards/{id}/links",
-            &[id(a.project_whiteboard, b.project_whiteboard)],
-            |values| {
-                Payload::Json(json!({
-                    "targetKind": "task",
-                    "targetId": if values[0] == a.project_whiteboard.to_string() { a.subtask } else { b.subtask },
-                }))
-            },
-        )
-        .rejecting(vec![
-            json!({"targetKind": "task", "targetId": b.task}),
-            json!({"targetKind": "page", "targetId": b.page}),
-            json!({"targetKind": "project", "targetId": b.project}),
-        ]),
-        path_case(
-            "DELETE /api/v1/whiteboards/{id}/links/{kind}/{target_id}",
-            &[id(a.whiteboard, b.whiteboard), same("project"), project()],
-            empty(),
         ),
         path_case(
             "POST /api/v1/whiteboards/{id}/operations",
@@ -6994,11 +6762,10 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         .rejecting(vec![json!({"role": bx.custom_role, "expectedVersion": version("workspace_roles", bx.custom_role), "description": "Net"})]),
         mcp_case(
             "role_delete",
-            json!({"role": ax.custom_role}),
+            json!({"role": sp.role}),
             vec![json!({"workspace": b.organization, "role": bx.custom_role})],
         )
-        .rejecting(vec![json!({"role": bx.custom_role})])
-        .without_own("A's role is held and the cases after it use it; roles_and_access removes one"),
+        .rejecting(vec![json!({"role": bx.custom_role})]),
         mcp_case(
             "workspace_template_apply",
             json!({"projectId": a.project, "template": "everything"}),

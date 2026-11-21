@@ -272,9 +272,9 @@ impl Fixture {
     async fn set_workspace(&self, key: &str, value: Value) {
         let (status, body) = self
             .owner
-            .put(
-                &format!("/api/v1/settings/values/{key}"),
-                json!({"scope": "workspace", "organizationId": self.organization_id, "value": value}),
+            .post(
+                &format!("/api/v2/w/{}/ops/setting_update", self.organization_id),
+                json!({"key": key, "scope": "workspace", "value": value}),
             )
             .await;
         assert_eq!(status, StatusCode::OK, "{key}: {body}");
@@ -283,9 +283,9 @@ impl Fixture {
     async fn set_project(&self, key: &str, value: Value) {
         let (status, body) = self
             .owner
-            .put(
-                &format!("/api/v1/settings/values/{key}"),
-                json!({"scope": "project", "projectId": self.project_id, "value": value}),
+            .post(
+                "/api/v2/ops/setting_update",
+                json!({"key": key, "scope": "project", "spaceId": self.project_id, "value": value}),
             )
             .await;
         assert_eq!(status, StatusCode::OK, "{key}: {body}");
@@ -1058,12 +1058,9 @@ impl Fixture {
     async fn limit_member_apps(&self, permissions: Value) {
         let (status, body) = self
             .owner
-            .put(
-                &format!(
-                    "/api/v1/organizations/{}/members/{}/agent-limit",
-                    self.organization_id, self.member_actor
-                ),
-                json!({"permissions": permissions}),
+            .post(
+                &format!("/api/v2/w/{}/ops/app_limit_set", self.organization_id),
+                json!({"account": self.member_actor, "permissions": permissions}),
             )
             .await;
         assert_eq!(status, StatusCode::OK, "{body}");

@@ -49,11 +49,9 @@ fn role<'a>(listed: &'a Value, key: &str) -> &'a Value {
 }
 
 async fn create_role(setup: &Setup, browser: &Browser, body: Value) -> (StatusCode, Value) {
-    send(
-        &setup.app,
-        browser.request("POST", &roles_path(setup), None, body),
-    )
-    .await
+    browser
+        .op_in(&setup.app, setup.organization_id, "role_create", body)
+        .await
 }
 
 async fn assign(
@@ -71,19 +69,7 @@ async fn assign(
     .fetch_one(&setup.pool)
     .await
     .expect("membership version");
-    send(
-        &setup.app,
-        browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{actor}/role",
-                setup.organization_id
-            ),
-            None,
-            json!({"roleId": role_id, "applyToProjects": apply, "expectedVersion": version}),
-        ),
-    )
-    .await
+    browser.op_in(&setup.app, setup.organization_id, "role_assign", json!({"account": actor, "role": role_id, "applyToProjects": apply, "expectedVersion": version})).await
 }
 
 async fn make_admin(setup: &Setup, actor: Uuid) {
@@ -175,7 +161,7 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
         json!({"name": "Contractor", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit", "channels.post"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{contractor}");
+    assert_eq!(status, StatusCode::OK, "{contractor}");
     // K1.9: closed under levels (editing tasks holds the levels below it,
     // posting holds seeing conversations), with the required keys.
     assert_eq!(
@@ -198,63 +184,47 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
         json!({"name": "Too much", "baseRole": "member", "permissions": ["code.manage"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{beyond}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{beyond}");
 
     // Changing a starting role's words keeps its permissions. (K1.10: its
     // permissions are data an owner may edit, the Owner role's aside:
     // `every_membership_names_a_role_row_and_starting_roles_are_data`.)
     let member = role(&listed, "member").clone();
-    let member_path = format!(
-        "{}/{}",
-        roles_path(&setup),
-        member["id"].as_str().expect("id")
-    );
-    let (status, renamed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &member_path,
-            None,
-            json!({"expectedVersion": member["version"], "description": "Does the work."}),
-        ),
-    )
-    .await;
+    let (status, renamed) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_update",
+            json!({"role": member["id"], "expectedVersion": member["version"], "description": "Does the work."}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{renamed}");
     assert_eq!(renamed["permissions"], member["permissions"]);
     let owner_role = role(&listed, "owner").clone();
-    let (status, refused) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!(
-                "{}/{}",
-                roles_path(&setup),
-                owner_role["id"].as_str().expect("id")
-            ),
-            None,
-            json!({"expectedVersion": owner_role["version"], "agentLimit": ["tasks.view"]}),
-        ),
-    )
-    .await;
+    let (status, refused) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_update",
+            json!({"role": owner_role["id"], "expectedVersion": owner_role["version"], "agentLimit": ["tasks.view"]}),
+        )
+        .await;
     assert_eq!(
         status,
-        StatusCode::BAD_REQUEST,
+        StatusCode::UNPROCESSABLE_ENTITY,
         "owners' apps aren't limited: {refused}"
     );
-    let (status, _) = send(
-        app,
-        setup.browser.request(
-            "DELETE",
-            &format!(
-                "{}/{}",
-                roles_path(&setup),
-                owner_role["id"].as_str().expect("id")
-            ),
-            None,
-            Value::Null,
-        ),
-    )
-    .await;
+    let (status, _) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_delete",
+            json!({"role": owner_role["id"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::CONFLICT, "built-in roles stay");
 
     // Admins make roles from Member or Viewer, never from Admin.
@@ -271,7 +241,7 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
         json!({"name": "Reviewer", "baseRole": "viewer", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{reviewer}");
+    assert_eq!(status, StatusCode::OK, "{reviewer}");
     // An admin holding a narrowed role can't hand out what it took away.
     let (status, narrowed) = create_role(
         &setup,
@@ -279,7 +249,7 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
         json!({"name": "Ops", "baseRole": "admin", "permissions": ["roles.manage", "members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{narrowed}");
+    assert_eq!(status, StatusCode::OK, "{narrowed}");
     let (status, assigned) = assign(&setup, &setup.browser, alex, &narrowed["id"], false).await;
     assert_eq!(status, StatusCode::OK, "{assigned}");
     let (status, refused) = create_role(
@@ -429,7 +399,7 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
     .await;
     assert_eq!(
         status,
-        StatusCode::BAD_REQUEST,
+        StatusCode::UNPROCESSABLE_ENTITY,
         "nobody changes their own role: {refused}"
     );
 
@@ -455,18 +425,15 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
     assert_eq!(owners, 1);
 
     // A role somebody holds can't go; once nobody does, it can.
-    let contractor_path = format!(
-        "{}/{}",
-        roles_path(&setup),
-        contractor["id"].as_str().expect("id")
-    );
-    let (status, _) = send(
-        app,
-        setup
-            .browser
-            .request("DELETE", &contractor_path, None, Value::Null),
-    )
-    .await;
+    let delete_contractor = || {
+        setup.browser.op_in(
+            app,
+            setup.organization_id,
+            "role_delete",
+            json!({"role": contractor["id"]}),
+        )
+    };
+    let (status, _) = delete_contractor().await;
     assert_eq!(status, StatusCode::CONFLICT);
     let (status, _) = assign(
         &setup,
@@ -477,14 +444,8 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (status, _) = send(
-        app,
-        setup
-            .browser
-            .request("DELETE", &contractor_path, None, Value::Null),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = delete_contractor().await;
+    assert_eq!(status, StatusCode::OK);
 
     // Every change is in the audit log, with what it was before.
     let changed = sqlx::query_scalar::<_, Value>(
@@ -600,19 +561,15 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
     let listed = roles(&setup, &setup.browser).await;
 
     // Bea's apps may only read and comment, though Bea herself may do more.
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["tasks.view", "channels.post"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "permissions": ["tasks.view", "channels.post"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
 
     // In the web app, Bea creates tasks as before.
@@ -721,31 +678,26 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
     assert_eq!(scripted, 0, "nothing the limit forbids happened");
 
     // A role's own limit applies the same way, to everyone holding it.
-    let (status, _) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": null}),
-        ),
-    )
-    .await;
+    let (status, _) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "lift": true}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK);
     let member = role(&listed, "member");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("{}/{}", roles_path(&setup), member["id"].as_str().expect("id")),
-            None,
-            json!({"expectedVersion": member["version"], "agentLimit": ["tasks.view", "tasks.create"]}),
-        ),
-    )
-    .await;
+    let (status, changed) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_update",
+            json!({"role": member["id"], "expectedVersion": member["version"], "agentLimit": ["tasks.view", "tasks.create"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     let made = tool(
         app,
@@ -778,7 +730,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         json!({"name": "Readers", "baseRole": "viewer", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{readers}");
+    assert_eq!(status, StatusCode::OK, "{readers}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -982,7 +934,7 @@ async fn people_arrive_where_their_role_says() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{lead}");
+    assert_eq!(status, StatusCode::OK, "{lead}");
     assert_eq!(lead["defaults"]["channels"], json!(["Leads", "secret"]));
     let (status, refused) = create_role(
         &setup,
@@ -990,7 +942,7 @@ async fn people_arrive_where_their_role_says() {
         json!({"name": "Odd", "baseRole": "member", "permissions": [], "defaults": {"pinnedViews": ["everything"]}}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
 
     // Cara signs in through another project first.
     let elsewhere = create_project(&setup, "ELSE", "Elsewhere").await;
@@ -1049,7 +1001,7 @@ async fn creating_from_a_template_needs_create_tasks_in_that_project() {
         json!({"name": "Editors", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{editors}");
+    assert_eq!(status, StatusCode::OK, "{editors}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -1130,7 +1082,7 @@ async fn a_narrowed_project_admin_role_does_not_make_a_workspace_admin() {
         json!({"name": "Project lead", "baseRole": "admin", "permissions": ["tasks.view", "tasks.edit"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{lead}");
+    assert_eq!(status, StatusCode::OK, "{lead}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -1199,7 +1151,7 @@ async fn task_files_follow_who_can_see_tasks() {
         json!({"name": "Task editors", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{editors}");
+    assert_eq!(status, StatusCode::OK, "{editors}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -1280,19 +1232,15 @@ async fn task_files_follow_who_can_see_tasks() {
     )
     .await;
     assert_eq!(opened["value"]["text"], "task notes", "{opened}");
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["channels.post"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "permissions": ["channels.post"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let refused = tool(
         app,
@@ -1316,7 +1264,7 @@ async fn task_files_follow_who_can_see_tasks() {
         json!({"name": "No tasks", "baseRole": "viewer", "permissions": []}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    assert_eq!(status, StatusCode::OK, "{blind}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -1365,7 +1313,7 @@ async fn a_narrowed_admin_cannot_bring_back_more_than_they_hold() {
         json!({"name": "Ops", "baseRole": "admin", "permissions": ["members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{narrowed}");
+    assert_eq!(status, StatusCode::OK, "{narrowed}");
     let narrowed_id = narrowed["id"]
         .as_str()
         .expect("id")
@@ -1507,19 +1455,15 @@ async fn file_search_leaves_out_task_files_where_tasks_are_hidden() {
         ["budget-channel.txt", "budget-task.txt"],
         "{found}"
     );
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["channels.post"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "permissions": ["channels.post"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let found = tool(app, &bea_app, &bea_session, "search", search.clone()).await;
     assert_eq!(names(&found), ["budget-channel.txt"], "{found}");
@@ -1532,7 +1476,7 @@ async fn file_search_leaves_out_task_files_where_tasks_are_hidden() {
         json!({"name": "Posters", "baseRole": "member", "permissions": ["channels.post"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{posters}");
+    assert_eq!(status, StatusCode::OK, "{posters}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -1674,7 +1618,7 @@ async fn invitations_and_agents_stay_within_what_the_giver_holds_now() {
         json!({"name": "Ops", "baseRole": "admin", "permissions": ["agents.manage", "members.invite", "members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{ops}");
+    assert_eq!(status, StatusCode::OK, "{ops}");
     let (status, assigned) = assign(&setup, &setup.browser, alex, &ops["id"], false).await;
     assert_eq!(status, StatusCode::OK, "{assigned}");
     sqlx::query(
@@ -1921,7 +1865,7 @@ async fn reads_naming_tasks_or_repositories_follow_the_role_and_limit() {
         json!({"name": "No tasks", "baseRole": "viewer", "permissions": []}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    assert_eq!(status, StatusCode::OK, "{blind}");
     let other_id = other.parse::<Uuid>().expect("project");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
@@ -1969,19 +1913,15 @@ async fn reads_naming_tasks_or_repositories_follow_the_role_and_limit() {
 
     // Her app's limit leaves out "see tasks" and "see code": Work's task,
     // its notification and the repository go too.
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["channels.post"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "permissions": ["channels.post"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let later = tool(app, &bea_app, &session, "later_list", json!({})).await;
     assert_eq!(listed(&later, "items").len(), 0, "{later}");
@@ -2116,19 +2056,15 @@ async fn an_app_moderates_only_within_its_agent_limit() {
     };
 
     // Bea's app may see and edit tasks, but not moderate.
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["tasks.view", "tasks.edit"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "permissions": ["tasks.view", "tasks.edit"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
     let session = initialize(app, &bea_app).await.expect("Bea's app");
@@ -2148,19 +2084,15 @@ async fn an_app_moderates_only_within_its_agent_limit() {
     );
 
     // With the limit lifted, Bea's admin role moderates through it.
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": null}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "lift": true}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let deleted = tool(app, &bea_app, &session, "task_comment_delete", delete).await;
     assert_eq!(deleted["outcome"], "ok", "{deleted}");
@@ -2231,7 +2163,7 @@ async fn task_chips_name_the_task_only_for_readers_who_see_tasks() {
         json!({"name": "No tasks", "baseRole": "viewer", "permissions": []}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    assert_eq!(status, StatusCode::OK, "{blind}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -2262,19 +2194,15 @@ async fn task_chips_name_the_task_only_for_readers_who_see_tasks() {
 
     // Cal's app, limited away from "see tasks", reads the channel without
     // the task's title; Cal in the browser still sees it.
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{cal}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["channels.post"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": cal, "permissions": ["channels.post"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let cal_app = connect_app(app, &cal_browser, "Cal's app", "full").await;
     let session = initialize(app, &cal_app).await.expect("Cal's app");
@@ -2367,19 +2295,15 @@ async fn a_tasks_linked_code_needs_see_code() {
     );
 
     // Her app's limit leaves out "see code": the task, without its code.
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["tasks.view"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "permissions": ["tasks.view"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let opened = tool(
         app,
@@ -2408,7 +2332,7 @@ async fn a_tasks_linked_code_needs_see_code() {
         json!({"name": "Tasks only", "baseRole": "viewer", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{tasks_only}");
+    assert_eq!(status, StatusCode::OK, "{tasks_only}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -2468,19 +2392,15 @@ async fn set_project_role(
 /// role under its levels (editing tasks implies seeing them), but not a
 /// limit, so a limit is how a caller ends up changing tasks it can't see.
 async fn limit_apps(setup: &Setup, actor: Uuid, permissions: &[&str]) {
-    let (status, limit) = send(
-        &setup.app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{actor}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({ "permissions": permissions }),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            &setup.app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": actor, "permissions": permissions}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
 }
 
@@ -2514,7 +2434,7 @@ async fn a_project_role_never_makes_a_workspace_role() {
         json!({"name": "Project manager", "baseRole": "admin", "permissions": ["members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{manager}");
+    assert_eq!(status, StatusCode::OK, "{manager}");
     let invitations = format!(
         "/api/v1/organizations/{}/invitations",
         setup.organization_id
@@ -2648,7 +2568,7 @@ async fn a_narrowed_admin_cannot_connect_an_app_as_a_stronger_agent() {
         json!({"name": "Ops", "baseRole": "admin", "permissions": ["agents.manage", "members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{ops}");
+    assert_eq!(status, StatusCode::OK, "{ops}");
     let (status, assigned) = assign(&setup, &setup.browser, alex, &ops["id"], false).await;
     assert_eq!(status, StatusCode::OK, "{assigned}");
     sqlx::query("UPDATE project_memberships SET role = 'admin', role_id = $3 WHERE project_id = $1 AND actor_id = $2")
@@ -2690,7 +2610,7 @@ async fn connecting_an_app_as_an_agent_stays_within_the_project_role() {
         json!({"name": "Agent keepers in Work", "baseRole": "admin", "permissions": ["agents.manage", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{keepers}");
+    assert_eq!(status, StatusCode::OK, "{keepers}");
     let set_alex = |role_id: Option<Uuid>| {
         let pool = setup.pool.clone();
         async move {
@@ -2868,7 +2788,7 @@ async fn a_custom_admin_invitation_does_not_make_a_workspace_admin() {
         json!({"name": "Project manager", "baseRole": "admin", "permissions": ["members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{manager}");
+    assert_eq!(status, StatusCode::OK, "{manager}");
     let mut tokens = Vec::new();
     for _ in 0..2 {
         let (status, issued) = send(
@@ -2990,7 +2910,7 @@ async fn a_project_invitation_lapses_when_its_issuer_loses_invite_in_the_project
         json!({"name": "No inviting", "baseRole": "admin", "permissions": ["members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{narrowed}");
+    assert_eq!(status, StatusCode::OK, "{narrowed}");
     sqlx::query(
         "UPDATE project_memberships SET role_id = $3 WHERE project_id = $1 AND actor_id = $2",
     )
@@ -3076,7 +2996,7 @@ async fn linked_tasks_in_another_project_follow_see_tasks_there() {
         json!({"name": "No tasks", "baseRole": "viewer", "permissions": []}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    assert_eq!(status, StatusCode::OK, "{blind}");
     let (status, changed) = set_project_role(
         &setup,
         &other,
@@ -3105,20 +3025,15 @@ async fn the_built_in_viewer_cannot_be_the_workspace_default() {
     let listed = roles(&setup, &setup.browser).await;
     assert_eq!(role(&listed, "member")["isDefault"], true);
     let viewer = role(&listed, "viewer");
-    let (status, refused) = send(
-        &setup.app,
-        setup.browser.request(
-            "PATCH",
-            &format!(
-                "{}/{}",
-                roles_path(&setup),
-                viewer["id"].as_str().expect("id")
-            ),
-            None,
-            json!({"expectedVersion": viewer["version"], "isDefault": true}),
-        ),
-    )
-    .await;
+    let (status, refused) = setup
+        .browser
+        .op_in(
+            &setup.app,
+            setup.organization_id,
+            "role_update",
+            json!({"role": viewer["id"], "expectedVersion": viewer["version"], "isDefault": true}),
+        )
+        .await;
     assert!(!status.is_success(), "{status}: {refused}");
     let listed = roles(&setup, &setup.browser).await;
     assert_eq!(role(&listed, "member")["isDefault"], true, "{listed}");
@@ -3141,7 +3056,7 @@ async fn the_audit_log_follows_read_the_audit_log() {
         json!({"name": "Settings keeper", "baseRole": "admin", "permissions": ["members.view", "settings.manage"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{keeper}");
+    assert_eq!(status, StatusCode::OK, "{keeper}");
     assert!(!keys(&keeper["permissions"]).contains(&"settings.audit".to_owned()));
     let (status, assigned) = assign(&setup, &setup.browser, bea, &keeper["id"], false).await;
     assert_eq!(status, StatusCode::OK, "{assigned}");
@@ -3183,14 +3098,14 @@ async fn a_write_token_follows_any_write_permission() {
         json!({"name": "Page writers", "baseRole": "member", "permissions": ["tasks.view", "pages.edit"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{writers}");
+    assert_eq!(status, StatusCode::OK, "{writers}");
     let (status, readers) = create_role(
         &setup,
         &setup.browser,
         json!({"name": "Readers", "baseRole": "viewer", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{readers}");
+    assert_eq!(status, StatusCode::OK, "{readers}");
     for (actor, role, key) in [
         (bea, &writers, "bea-writers"),
         (cal, &readers, "cal-readers"),
@@ -3282,7 +3197,7 @@ async fn archiving_without_see_tasks_reveals_no_task() {
         json!({"name": "Archivers", "baseRole": "member", "permissions": ["tasks.delete"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{archivers}");
+    assert_eq!(status, StatusCode::OK, "{archivers}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -3389,7 +3304,7 @@ async fn a_rule_run_by_hand_shows_only_tasks_its_maker_sees() {
         json!({"name": "Editors", "baseRole": "member", "permissions": ["tasks.edit"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{editors}");
+    assert_eq!(status, StatusCode::OK, "{editors}");
     assert!(
         keys(&editors["permissions"]).contains(&"tasks.view".to_owned()),
         "editing implies seeing: {editors}"
@@ -3403,30 +3318,29 @@ async fn a_rule_run_by_hand_shows_only_tasks_its_maker_sees() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
-    let (status, rule) = send(
-        app,
-        bea_browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/automations"),
-            None,
+    let (status, rule) = bea_browser
+        .op(
+            app,
+            "automation_create",
             json!({
+                "projectId": work,
                 "name": "Tell me",
                 "trigger": {"kind": "task_created"},
                 "actions": [{"kind": "notify", "recipients": "owner", "message": "Task: {{task.title}}"}],
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_success(), "{status}: {rule}");
     let rule_id = rule["id"].as_str().expect("rule").to_owned();
-    let run_path = format!("/api/v1/projects/{work}/automations/{rule_id}/run");
 
     // Her role edits tasks, so it sees them: her run tells her the title.
-    let (status, run) = send(
-        app,
-        bea_browser.request("POST", &run_path, None, json!({"workItemId": task})),
-    )
-    .await;
+    let (status, run) = bea_browser
+        .op(
+            app,
+            "automation_run_start",
+            json!({"projectId": work, "ruleId": rule_id, "taskId": task}),
+        )
+        .await;
     assert!(status.is_success(), "{status}: {run}");
     assert_eq!(run["state"], "succeeded", "{run}");
     assert_eq!(notified_of(&setup, bea, "Secret rule plan").await, 1);
@@ -3444,38 +3358,32 @@ async fn a_browser_rule_run_through_an_app_keeps_to_the_apps_limit() {
     let work = create_project(&setup, "WORK", "Work").await;
     let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
     let task = owner_task(&setup, &work, "Secret app plan").await;
-    let (status, rule) = send(
-        app,
-        bea_browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/automations"),
-            None,
+    let (status, rule) = bea_browser
+        .op(
+            app,
+            "automation_create",
             json!({
+                "projectId": work,
                 "name": "Tell me",
                 "trigger": {"kind": "task_created"},
                 "actions": [{"kind": "notify", "recipients": "owner", "message": "Task: {{task.title}}"}],
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_success(), "{status}: {rule}");
     let rule_id = rule["id"].as_str().expect("rule").to_owned();
     let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
     let session = initialize(app, &bea_app).await.expect("Bea's app");
     // Her apps may change tasks but not see them.
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["tasks.edit"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "permissions": ["tasks.edit"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
 
     let ran = tool(
@@ -3491,16 +3399,13 @@ async fn a_browser_rule_run_through_an_app_keeps_to_the_apps_limit() {
     assert!(!ran.to_string().contains("Secret app plan"), "{ran}");
     assert_eq!(notified_of(&setup, bea, "Secret app plan").await, 0);
 
-    let (status, run) = send(
-        app,
-        bea_browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/automations/{rule_id}/run"),
-            None,
-            json!({"workItemId": task}),
-        ),
-    )
-    .await;
+    let (status, run) = bea_browser
+        .op(
+            app,
+            "automation_run_start",
+            json!({"projectId": work, "ruleId": rule_id, "taskId": task}),
+        )
+        .await;
     assert!(status.is_success(), "{status}: {run}");
     assert_eq!(run["state"], "succeeded", "{run}");
     assert_eq!(notified_of(&setup, bea, "Secret app plan").await, 1);
@@ -3526,14 +3431,14 @@ async fn applying_a_role_to_projects_skips_those_the_caller_cant_manage() {
         json!({"name": "No members", "baseRole": "admin", "permissions": ["tasks.view", "members.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{no_members}");
+    assert_eq!(status, StatusCode::OK, "{no_members}");
     let (status, helpers) = create_role(
         &setup,
         &setup.browser,
         json!({"name": "Helpers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{helpers}");
+    assert_eq!(status, StatusCode::OK, "{helpers}");
     // Alex manages members in Open (built-in admin) but not in Shut.
     sqlx::query(
         "UPDATE project_memberships SET role = 'admin' WHERE project_id = $1 AND actor_id = $2",
@@ -3603,7 +3508,7 @@ async fn a_former_owner_without_post_messages_cant_send_direct_messages() {
         json!({"name": "Quiet", "baseRole": "member", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{quiet}");
+    assert_eq!(status, StatusCode::OK, "{quiet}");
 
     // The owner opens Messages and a DM with Bea while still the owner.
     direct_space(&setup).await;
@@ -3710,7 +3615,7 @@ async fn cancelling_a_launch_without_see_tasks_reveals_no_task() {
         json!({"name": "Launchers", "baseRole": "member", "permissions": ["runs.launch"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    assert_eq!(status, StatusCode::OK, "{blind}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -3745,7 +3650,7 @@ async fn cancelling_a_launch_without_see_tasks_reveals_no_task() {
         json!({"name": "Seeing launchers", "baseRole": "member", "permissions": ["tasks.view", "runs.launch"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{seeing}");
+    assert_eq!(status, StatusCode::OK, "{seeing}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -3790,7 +3695,7 @@ async fn an_invite_only_admin_sees_which_roles_they_may_invite_to() {
         json!({"name": "Editors", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
     ] {
         let (status, role) = create_role(&setup, &setup.browser, body).await;
-        assert_eq!(status, StatusCode::CREATED, "{role}");
+        assert_eq!(status, StatusCode::OK, "{role}");
         created.push(role);
     }
     let (status, assigned) = assign(&setup, &setup.browser, alex, &created[0]["id"], false).await;
@@ -3846,7 +3751,7 @@ async fn rotating_an_agent_checks_the_role_it_holds() {
         json!({"name": "Agent keepers", "baseRole": "admin", "permissions": ["agents.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{keepers}");
+    assert_eq!(status, StatusCode::OK, "{keepers}");
     let (status, assigned) = assign(&setup, &setup.browser, alex, &keepers["id"], false).await;
     assert_eq!(status, StatusCode::OK, "{assigned}");
     sqlx::query(
@@ -3876,7 +3781,7 @@ async fn rotating_an_agent_checks_the_role_it_holds() {
         json!({"name": "Quiet agents", "baseRole": "member", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{quiet}");
+    assert_eq!(status, StatusCode::OK, "{quiet}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -3924,7 +3829,7 @@ async fn agents_are_given_only_what_the_giver_holds_in_the_project() {
         json!({"name": "Agent keepers here", "baseRole": "admin", "permissions": ["agents.manage", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{keepers}");
+    assert_eq!(status, StatusCode::OK, "{keepers}");
     sqlx::query(
         "UPDATE project_memberships SET role = 'admin', role_id = $3 WHERE project_id = $1 AND actor_id = $2",
     )
@@ -3982,7 +3887,7 @@ async fn agents_are_given_only_what_the_giver_holds_in_the_project() {
         json!({"name": "Reading agents", "baseRole": "member", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{readers}");
+    assert_eq!(status, StatusCode::OK, "{readers}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -4037,7 +3942,7 @@ async fn project_roles_are_given_only_within_the_givers_project_role() {
         json!({"name": "Member keepers here", "baseRole": "admin", "permissions": ["members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{keepers}");
+    assert_eq!(status, StatusCode::OK, "{keepers}");
     sqlx::query(
         "UPDATE project_memberships SET role = 'admin', role_id = $3 WHERE project_id = $1 AND actor_id = $2",
     )
@@ -4053,14 +3958,14 @@ async fn project_roles_are_given_only_within_the_givers_project_role() {
         json!({"name": "Workers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit", "code.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{workers}");
+    assert_eq!(status, StatusCode::OK, "{workers}");
     let (status, readers) = create_role(
         &setup,
         &setup.browser,
         json!({"name": "Readers", "baseRole": "member", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{readers}");
+    assert_eq!(status, StatusCode::OK, "{readers}");
     let give = |role: &Value, version: i64, key: &str| {
         alex_browser.request(
             "PATCH",
@@ -4113,7 +4018,7 @@ async fn applying_a_role_to_projects_stays_within_the_callers_project_role() {
         json!({"name": "Member keepers in Work", "baseRole": "admin", "permissions": ["members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{keepers}");
+    assert_eq!(status, StatusCode::OK, "{keepers}");
     sqlx::query(
         "UPDATE project_memberships SET role = 'admin', role_id = $3 WHERE project_id = $1 AND actor_id = $2",
     )
@@ -4129,14 +4034,14 @@ async fn applying_a_role_to_projects_stays_within_the_callers_project_role() {
         json!({"name": "Workers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit", "code.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{workers}");
+    assert_eq!(status, StatusCode::OK, "{workers}");
     let (status, readers) = create_role(
         &setup,
         &setup.browser,
         json!({"name": "Readers", "baseRole": "member", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{readers}");
+    assert_eq!(status, StatusCode::OK, "{readers}");
 
     // More than Alex holds in Work: the workspace role changes, Work doesn't.
     let (status, assigned) = assign(&setup, &alex_browser, bea, &workers["id"], true).await;
@@ -4215,7 +4120,7 @@ async fn a_project_invitation_lapses_when_its_issuers_project_role_narrows_below
         json!({"name": "Inviters only", "baseRole": "admin", "permissions": ["members.invite", "members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{narrowed}");
+    assert_eq!(status, StatusCode::OK, "{narrowed}");
     sqlx::query(
         "UPDATE project_memberships SET role_id = $3 WHERE project_id = $1 AND actor_id = $2",
     )
@@ -4269,7 +4174,7 @@ async fn working_with_a_worker_needs_see_tasks() {
         json!({"name": "Blind doers", "baseRole": "member", "permissions": ["runs.launch", "channels.post"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{doers}");
+    assert_eq!(status, StatusCode::OK, "{doers}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -4345,7 +4250,7 @@ async fn managing_a_repository_needs_see_code() {
         json!({"name": "Code keepers", "baseRole": "admin", "permissions": ["code.manage"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{managers}");
+    assert_eq!(status, StatusCode::OK, "{managers}");
     assert!(
         keys(&managers["permissions"]).contains(&"code.view".to_owned()),
         "managing code implies seeing it: {managers}"
@@ -4356,7 +4261,7 @@ async fn managing_a_repository_needs_see_code() {
         json!({"name": "Blind code keepers", "baseRole": "admin", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{keepers}");
+    assert_eq!(status, StatusCode::OK, "{keepers}");
     sqlx::query(
         "UPDATE project_memberships SET role = 'admin', role_id = $3 WHERE project_id = $1 AND actor_id = $2",
     )
@@ -4427,7 +4332,7 @@ async fn comment_references_show_titles_only_with_see_tasks() {
         json!({"name": "Commenters", "baseRole": "member", "permissions": ["tasks.edit", "channels.post"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{editors}");
+    assert_eq!(status, StatusCode::OK, "{editors}");
     assert!(
         keys(&editors["permissions"]).contains(&"tasks.view".to_owned()),
         "editing implies seeing: {editors}"
@@ -4618,7 +4523,7 @@ async fn bulk_changes_without_see_tasks_reveal_no_task() {
         json!({"name": "Archivers", "baseRole": "member", "permissions": ["tasks.delete"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{archivers}");
+    assert_eq!(status, StatusCode::OK, "{archivers}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -4662,7 +4567,7 @@ async fn bulk_changes_without_see_tasks_reveal_no_task() {
         json!({"name": "Seeing archivers", "baseRole": "member", "permissions": ["tasks.view", "tasks.delete"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{seeing}");
+    assert_eq!(status, StatusCode::OK, "{seeing}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -4735,7 +4640,7 @@ async fn a_repeated_move_shows_the_title_only_where_tasks_are_seen() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    assert_eq!(status, StatusCode::OK, "{blind}");
     let (status, changed) = set_project_role(
         &setup,
         &dest,
@@ -4766,7 +4671,7 @@ async fn a_repeated_move_shows_the_title_only_where_tasks_are_seen() {
         json!({"name": "Seeing creators", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit", "tasks.create"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{seeing}");
+    assert_eq!(status, StatusCode::OK, "{seeing}");
     let (status, changed) = set_project_role(
         &setup,
         &dest,
@@ -4837,7 +4742,7 @@ async fn board_links_show_task_titles_only_where_tasks_are_seen() {
         json!({"name": "No tasks", "baseRole": "viewer", "permissions": []}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    assert_eq!(status, StatusCode::OK, "{blind}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -4947,7 +4852,7 @@ async fn github_imports_follow_see_code() {
         json!({"name": "Importers", "baseRole": "member", "permissions": ["tasks.view", "tasks.create", "tasks.edit"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{importers}");
+    assert_eq!(status, StatusCode::OK, "{importers}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -5102,19 +5007,15 @@ async fn github_imports_follow_see_code() {
 
     // Cal sees code as a person, but their app's limit leaves it out.
     let (cal, cal_browser) = add_person(&setup, &[&work], "cal").await;
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{cal}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["tasks.view", "tasks.create", "tasks.edit"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": cal, "permissions": ["tasks.view", "tasks.create", "tasks.edit"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let cal_app = connect_app(app, &cal_browser, "Cal's app", "full").await;
     let cal_session = initialize(app, &cal_app).await.expect("Cal's app");
@@ -5205,7 +5106,7 @@ async fn the_workspace_member_directory_follows_directory_view() {
         json!({"name": "Helpers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{helpers}");
+    assert_eq!(status, StatusCode::OK, "{helpers}");
     assert!(
         !keys(&helpers["permissions"]).contains(&"directory.view".to_owned()),
         "{helpers}"
@@ -5223,7 +5124,7 @@ async fn the_workspace_member_directory_follows_directory_view() {
         json!({"name": "Managers", "baseRole": "admin", "permissions": ["members.manage"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{managers}");
+    assert_eq!(status, StatusCode::OK, "{managers}");
     let (status, assigned) = assign(&setup, &setup.browser, alex, &managers["id"], false).await;
     assert_eq!(status, StatusCode::OK, "{assigned}");
     let (status, narrowed) = send(app, directory(&alex_browser)).await;
@@ -5232,16 +5133,15 @@ async fn the_workspace_member_directory_follows_directory_view() {
     assert!(!narrowed.to_string().contains("\"bea\""), "{narrowed}");
 
     // The owner gives Helpers the directory: Cal sees everyone again.
-    let (status, given) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("{}/{}", roles_path(&setup), helpers["id"].as_str().expect("id")),
-            None,
-            json!({"expectedVersion": helpers["version"], "permissions": ["tasks.view", "tasks.edit", "directory.view"]}),
-        ),
-    )
-    .await;
+    let (status, given) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_update",
+            json!({"role": helpers["id"], "expectedVersion": helpers["version"], "permissions": ["tasks.view", "tasks.edit", "directory.view"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{given}");
     let (status, everyone) = send(app, directory(&cal_browser)).await;
     assert_eq!(status, StatusCode::OK, "{everyone}");
@@ -5318,14 +5218,11 @@ async fn redelivering_through_an_app_keeps_to_its_limit() {
         .expect("stored delivery")
     };
     let limit = |permissions: Value| {
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": permissions}),
+        setup.browser.op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "permissions": permissions}),
         )
     };
     let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
@@ -5333,7 +5230,7 @@ async fn redelivering_through_an_app_keeps_to_its_limit() {
     let redeliver = json!({"connectionId": webhook, "eventPosition": position});
 
     // Her app may change tasks but not see them: no resending.
-    let (status, limited) = send(app, limit(json!(["tasks.edit", "channels.post"]))).await;
+    let (status, limited) = limit(json!(["tasks.edit", "channels.post"])).await;
     assert_eq!(status, StatusCode::OK, "{limited}");
     let refused = tool(
         app,
@@ -5347,11 +5244,7 @@ async fn redelivering_through_an_app_keeps_to_its_limit() {
     assert_eq!(stored(setup.pool.clone()).await, "delivered");
 
     // With "see tasks", it's queued.
-    let (status, limited) = send(
-        app,
-        limit(json!(["tasks.view", "tasks.edit", "channels.post"])),
-    )
-    .await;
+    let (status, limited) = limit(json!(["tasks.view", "tasks.edit", "channels.post"])).await;
     assert_eq!(status, StatusCode::OK, "{limited}");
     let queued = tool(app, &bea_app, &session, "connection_redeliver", redeliver).await;
     assert_eq!(queued["outcome"], "ok", "{queued}");
@@ -5448,7 +5341,7 @@ async fn moving_a_task_needs_its_contents_and_code_to_be_seen() {
                     body["agentLimit"] = limit;
                 }
                 let (status, role) = create_role(setup, &setup.browser, body).await;
-                assert_eq!(status, StatusCode::CREATED, "{role}");
+                assert_eq!(status, StatusCode::OK, "{role}");
                 let (status, changed) =
                     set_project_role(setup, &work, bea, key, json!({"roleId": role["id"]})).await;
                 assert_eq!(status, StatusCode::OK, "{changed}");
@@ -5596,7 +5489,7 @@ async fn link_changes_name_the_task_only_where_tasks_are_seen() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{editors}");
+    assert_eq!(status, StatusCode::OK, "{editors}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -5697,7 +5590,7 @@ async fn link_changes_list_linked_tasks_only_where_the_app_sees_them() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{limited}");
+    assert_eq!(status, StatusCode::OK, "{limited}");
     let (status, changed) = set_project_role(
         &setup,
         &other_project,
@@ -5735,7 +5628,7 @@ async fn link_changes_list_linked_tasks_only_where_the_app_sees_them() {
         json!({"name": "Blind elsewhere", "baseRole": "viewer", "permissions": []}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    assert_eq!(status, StatusCode::OK, "{blind}");
     let (status, changed) = set_project_role(
         &setup,
         &other_project,
@@ -5830,7 +5723,11 @@ async fn catalogue_matches_sql_and_role_allows_holds_to_the_role() {
             };
             (
                 info.key.to_owned(),
-                info.module.to_owned(),
+                // Grouped by the module whose manifest claims it (M1.3o).
+                agent_workspace_server::modules::registry::Registry::global()
+                    .module_of_permission(info.key)
+                    .map(|module| module.id.clone())
+                    .unwrap_or_default(),
                 scope.to_owned(),
                 info.required,
                 default_for,
@@ -5876,16 +5773,15 @@ async fn catalogue_matches_sql_and_role_allows_holds_to_the_role() {
     assert!(!allows("member", None, "no.such_key").await);
 
     // A custom role: its list, within its base, plus what every role holds.
-    let (status, body) = send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &roles_path(&setup),
-            None,
+    let (status, body) = setup
+        .browser
+        .op_in(
+            &setup.app,
+            setup.organization_id,
+            "role_create",
             json!({"name": "Reader", "baseRole": "viewer", "permissions": ["tasks.view"]}),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_success(), "{body}");
     let reader = body["role"]["id"]
         .as_str()
@@ -6099,22 +5995,19 @@ async fn every_membership_names_a_role_row_and_starting_roles_are_data() {
             .fetch_one(pool)
             .await
             .expect("owner version");
-    let (status, refused) = send(
-        &world.app,
-        world.owner.browser.request(
-            "PATCH",
-            &format!(
-                "/api/v1/organizations/{organization}/roles/{}",
-                ids["owner"]
-            ),
-            None,
-            json!({"permissions": ["projects.view"], "expectedVersion": owner_version}),
-        ),
-    )
-    .await;
+    let (status, refused) = world
+        .owner
+        .browser
+        .op_in(
+            &world.app,
+            organization,
+            "role_update",
+            json!({"role": ids["owner"], "permissions": ["projects.view"], "expectedVersion": owner_version}),
+        )
+        .await;
     assert!(!status.is_success(), "{status}: {refused}");
     assert!(
-        refused["error"]["message"]
+        refused["message"]
             .as_str()
             .is_some_and(|message| message.contains("Owner")),
         "{refused}"
@@ -6167,19 +6060,16 @@ async fn every_membership_names_a_role_row_and_starting_roles_are_data() {
             .fetch_one(pool)
             .await
             .expect("member version");
-    let (status, edited) = send(
-        &world.app,
-        world.owner.browser.request(
-            "PATCH",
-            &format!(
-                "/api/v1/organizations/{organization}/roles/{}",
-                ids["member"]
-            ),
-            None,
-            json!({"permissions": narrowed, "expectedVersion": member_version}),
-        ),
-    )
-    .await;
+    let (status, edited) = world
+        .owner
+        .browser
+        .op_in(
+            &world.app,
+            organization,
+            "role_update",
+            json!({"role": ids["member"], "permissions": narrowed, "expectedVersion": member_version}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{edited}");
     let (customized, effective) = sqlx::query_as::<_, (bool, Vec<String>)>(
         "SELECT customized, effective_permissions FROM workspace_roles WHERE id = $1",
@@ -6377,21 +6267,20 @@ async fn suggesting_is_a_role_not_an_account_kind() {
     }
 
     // An owner picks the role new agents get.
-    let (status, written) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            "/api/v1/settings/values/access.default_agent_role_id",
-            None,
+    let (status, written) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "setting_update",
             json!({
+                "key": "access.default_agent_role_id",
                 "scope": "workspace",
-                "organizationId": setup.organization_id,
                 "value": suggests,
                 "expectedVersion": 0,
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{written}");
     let (vale, _) = create_agent(app, &setup.browser, &space, "Vale", "vale").await;
     assert_eq!(workspace_role(vale).await, "member-suggests");
@@ -6468,7 +6357,7 @@ async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
         json!({"name": "Commenters", "baseRole": "member", "permissions": ["tasks.view", "tasks.comment"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{commenters}");
+    assert_eq!(status, StatusCode::OK, "{commenters}");
     let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
     let (mara, mara_token) = create_agent(app, &setup.browser, &work, "Mara", "mara").await;
     for (who, actor) in [("alex", alex), ("mara", mara)] {
@@ -6589,7 +6478,7 @@ async fn a_page_save_suggests_or_edits_as_the_role_says() {
         json!({"name": "Suggester", "baseRole": "member", "permissions": ["pages.suggest"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{suggester}");
+    assert_eq!(status, StatusCode::OK, "{suggester}");
     let (status, changed) = set_project_role(
         &setup,
         &work,

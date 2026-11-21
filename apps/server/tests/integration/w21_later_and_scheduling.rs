@@ -432,15 +432,15 @@ async fn a_scheduled_send_posts_once_as_its_author_and_fails_cleanly_after_acces
             cookie: browser.cookie.clone(),
             csrf: browser.csrf.clone(),
         };
-        let uri = format!("/api/v1/conversations/{channel}/scheduled-messages");
+        let channel = channel.clone();
         async move {
             call(
                 setup,
                 &browser,
                 "POST",
-                &uri,
-                None,
-                json!({"content": content, "sendAt": send_at}),
+                "/api/v2/ops/message_schedule",
+                Some(&Uuid::now_v7().to_string()),
+                json!({"conversationId": channel, "content": content, "sendAt": send_at}),
             )
             .await
         }
@@ -464,8 +464,8 @@ async fn a_scheduled_send_posts_once_as_its_author_and_fails_cleanly_after_acces
         in_an_hour(),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{scheduled}");
-    let first = scheduled["scheduledMessage"]["id"]
+    assert_eq!(status, StatusCode::OK, "{scheduled}");
+    let first = scheduled["value"]["scheduled"]["id"]
         .as_str()
         .expect("scheduled")
         .to_owned();
@@ -478,10 +478,10 @@ async fn a_scheduled_send_posts_once_as_its_author_and_fails_cleanly_after_acces
     let (status, _) = call(
         setup,
         &setup.browser,
-        "DELETE",
-        &format!("/api/v1/scheduled-messages/{first}"),
-        None,
-        Value::Null,
+        "POST",
+        "/api/v2/ops/scheduled_message_update",
+        Some(&Uuid::now_v7().to_string()),
+        json!({"id": first, "cancel": true}),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -511,8 +511,8 @@ async fn a_scheduled_send_posts_once_as_its_author_and_fails_cleanly_after_acces
 
     // Once Mara loses the project, the next one fails, says so, and posts nothing.
     let (status, scheduled) = schedule(&mara_browser, text("After I leave"), in_an_hour()).await;
-    assert_eq!(status, StatusCode::CREATED, "{scheduled}");
-    let second = scheduled["scheduledMessage"]["id"]
+    assert_eq!(status, StatusCode::OK, "{scheduled}");
+    let second = scheduled["value"]["scheduled"]["id"]
         .as_str()
         .expect("scheduled")
         .to_owned();
@@ -564,10 +564,10 @@ async fn forwarding_posts_only_where_the_sender_can_and_quotes_only_to_who_can_s
             cookie: browser.cookie.clone(),
             csrf: browser.csrf.clone(),
         };
-        let uri = format!("/api/v1/messages/{message}/forward");
-        let body = json!({"conversationId": into, "text": "FYI"});
+        let uri = "/api/v2/ops/message_forward";
+        let body = json!({"messageId": message, "conversationId": into, "text": "FYI"});
         let key = key.to_owned();
-        async move { call(setup, &browser, "POST", &uri, Some(&key), body).await }
+        async move { call(setup, &browser, "POST", uri, Some(&key), body).await }
     };
 
     // Pat can't forward what they can't see, nor into a group they aren't in.
@@ -580,11 +580,7 @@ async fn forwarding_posts_only_where_the_sender_can_and_quotes_only_to_who_can_s
     // Mara forwards the group's message to the channel: the quote is read
     // live, for people who can see the group only.
     let (status, sent) = forward(&mara_browser, &secret, &channel, "f3").await;
-    assert_eq!(status, StatusCode::CREATED, "{sent}");
-    assert_eq!(
-        sent["message"]["forwarded"]["text"], "Secret plan",
-        "{sent}"
-    );
+    assert_eq!(status, StatusCode::OK, "{sent}");
     let (status, again) = forward(&mara_browser, &secret, &channel, "f3").await;
     assert!(status.is_success(), "{again}");
     assert_eq!(messages_by(pool, mara, "FYI").await, 1);

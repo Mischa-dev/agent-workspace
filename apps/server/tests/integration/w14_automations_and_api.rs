@@ -843,9 +843,9 @@ async fn webhooks_and_automations_walk() {
         &application,
         owner,
         "POST",
-        &format!("/api/v1/scheduled-messages/{scheduled_id}/send-now"),
+        "/api/v2/ops/scheduled_message_update",
         "script-message-now",
-        json!({}),
+        json!({"id": scheduled_id, "sendNow": true}),
     )
     .await;
     assert!(sent.0.is_success(), "{}", sent.1);
@@ -1315,17 +1315,18 @@ async fn webhooks_and_automations_walk() {
         &application,
         member,
         "POST",
-        &format!("{project}/automations"),
+        "/api/v2/ops/automation_create",
         "members-rule",
         json!({
+            "projectId": seed.project_id,
             "name": "Raise new tasks",
             "trigger": {"kind": "task_created"},
             "actions": [{"kind": "set_field", "field": "priority", "value": "urgent"}],
         }),
     )
     .await;
-    assert_eq!(members_rule.0, StatusCode::CREATED, "{}", members_rule.1);
-    let members_rule_id = uuid_field(&members_rule.2, "id");
+    assert_eq!(members_rule.0, StatusCode::OK, "{}", members_rule.1);
+    let members_rule_id = uuid_field(&members_rule.2["value"], "id");
     sqlx::query(
         "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND actor_id = $2",
     )

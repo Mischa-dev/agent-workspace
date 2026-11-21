@@ -1999,17 +1999,8 @@ async fn a_threads_run_shows_its_branch_only_to_those_who_see_code() {
     assert_eq!(shows_code(&seen), (true, true, true), "{seen}");
 
     // A role that may stop runs but not see code.
-    let (status, role) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/organizations/{}/roles", setup.organization_id),
-            None,
-            json!({"name": "No code", "baseRole": "member", "permissions": ["tasks.view", "channels.post", "runs.interrupt"]}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{role}");
+    let (status, role) = setup.browser.op_in(app, setup.organization_id, "role_create", json!({"name": "No code", "baseRole": "member", "permissions": ["tasks.view", "channels.post", "runs.interrupt"]})).await;
+    assert_eq!(status, StatusCode::OK, "{role}");
     let version: i64 = sqlx::query_scalar(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )

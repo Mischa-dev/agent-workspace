@@ -23,17 +23,16 @@ async fn sheet_suggester(setup: &Setup, project: &str, actor: Uuid) {
 /// Gives `actor` a role in `project` holding only `permission` (a suggest
 /// level) besides a member's basics.
 async fn suggester(setup: &Setup, project: &str, actor: Uuid, name: &str, permission: &str) {
-    let (status, role) = send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/organizations/{}/roles", setup.organization_id),
-            None,
+    let (status, role) = setup
+        .browser
+        .op_in(
+            &setup.app,
+            setup.organization_id,
+            "role_create",
             json!({"name": name, "baseRole": "member", "permissions": [permission]}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{role}");
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{role}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1::uuid AND actor_id = $2",
     )
