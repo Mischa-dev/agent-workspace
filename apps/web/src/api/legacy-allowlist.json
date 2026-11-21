@@ -35,7 +35,7 @@
   "modules/ModuleGate.tsx": 1,
   "modules/references/thingQuery.ts": 1,
   "onboarding/api.ts": 2,
-  "projects/api.ts": 7,
+  "projects/api.ts": 6,
   "projects/homeApi.ts": 1,
   "projects/ProjectOverviewPage.tsx": 1,
   "repositories/api.ts": 1,

@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { normalizeNavigation, normalizeProject } from './api'
+import { archiveProject, normalizeNavigation, normalizeProject } from './api'
 
 function projectWithCapabilities(capabilities: unknown) {
   return normalizeProject({
@@ -91,5 +91,46 @@ describe('Project wire normalization', () => {
       href: '/w/-/s/project-a',
       version: 6,
     })
+  })
+})
+
+describe('archiveProject', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const wire = (archivedAt: string | null) => ({
+    id: 'project-a',
+    organizationId: 'organization-a',
+    key: 'A',
+    name: 'Project A',
+    role: 'owner',
+    version: archivedAt ? 2 : 1,
+    archivedAt,
+    capabilities: {},
+    navigation: { location: { kind: 'project_overview' }, version: 1 },
+  })
+  const json = (body: unknown, status = 200) =>
+    Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }))
+  // The archive's answer was lost: the retry finds the space closed.
+  const closed = () => json({ outcome: 'not_found', message: 'That space' }, 404)
+
+  it('takes a retry that finds the space already archived as done', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        String(input).endsWith('/ops/space_archive') ? closed() : json(wire('2026-11-21T21:00:00Z')),
+      ),
+    )
+    const project = await archiveProject('project-a', 1)
+    expect(project.archivedAt).toBe('2026-11-21T21:00:00Z')
+  })
+
+  it('still fails when the space is not archived', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        String(input).endsWith('/ops/space_archive') ? closed() : json(wire(null)),
+      ),
+    )
+    await expect(archiveProject('project-a', 1)).rejects.toMatchObject({ code: 'not_found' })
   })
 })

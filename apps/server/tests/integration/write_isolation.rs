@@ -159,7 +159,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/pages/{id}/document/sync",
     "POST /api/v1/pages/{id}/document/updates",
     "POST /api/v1/pages/{id}/suggestions/{suggestion_id}/decision",
-    "POST /api/v1/projects",
     "PUT /api/v1/projects/rail-order",
     "POST /api/v1/projects/{id}/channels",
     "POST /api/v1/projects/{id}/execution-profiles",
@@ -2398,8 +2397,8 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
             app,
             browser,
             "POST",
-            "/api/v1/projects",
-            json!({"organizationId": a.organization, "key": key, "name": format!("Net {key}")}),
+            &format!("/api/v2/w/{}/ops/space_create", a.organization),
+            json!({"key": key, "name": format!("Net {key}")}),
         )
         .await;
         projects.push(
@@ -4589,18 +4588,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         },
         // Project invitations
         // Projects
-        body_case(
-            "POST /api/v1/projects",
-            &[],
-            json!({"organizationId": a.organization, "key": "NET", "name": "Net"}),
-            vec![json!({"organizationId": b.organization, "key": "NETB", "name": "Net"})],
-        )
-        .rejecting(vec![json!({
-            "organizationId": a.organization,
-            "key": "NETC",
-            "name": "Net",
-            "templateId": bx.project_template,
-        })]),
         // The rail's order is the caller's own; projects they can't open in
         // it are skipped.
         body_case(

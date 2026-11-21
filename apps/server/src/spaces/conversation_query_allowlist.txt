@@ -34,7 +34,6 @@ message_edits.rs::scrub_thread_replays | scrubs a removed message's words from s
 message_edits.rs::threads_from | threads under a message being removed, by id
 notifications.rs::list_sql | the reader's own notifications; the conversation is joined for its name; K4.4 reviews it
 projects.rs::fetch_project_row | whether a saved navigation location's conversation is archived, nothing of its contents
-projects.rs::fetch_project_row_in_transaction | whether a saved navigation location's conversation is archived, nothing of its contents
 projects.rs::list_projects | whether a saved navigation location's conversation is archived, nothing of its contents
 projects.rs::validate_navigation_location | locks a conversation by id in a space the caller sets their navigation in
 reactions.rs::set_reaction | locks a message by id; lock_message_conversation checks the conversation

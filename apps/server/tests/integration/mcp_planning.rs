@@ -138,13 +138,14 @@ async fn dependencies_cross_projects_but_never_workspaces_or_private_projects() 
         app,
         setup.browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", elsewhere),
             Some("create-OTHER"),
-            json!({"organizationId": elsewhere, "key": "OTHER", "name": "Other"}),
+            json!({"key": "OTHER", "name": "Other"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{other}");
+    assert_eq!(status, StatusCode::OK, "{other}");
+    let other = other["value"].clone();
     let other = other["id"].as_str().expect("other").to_owned();
 
     let codex = connect_app(app, &setup.browser, "Codex", "full").await;

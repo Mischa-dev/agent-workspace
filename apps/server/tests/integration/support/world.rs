@@ -67,13 +67,14 @@ pub(crate) async fn create_project(setup: &Setup, key: &str, name: &str) -> Stri
         &setup.app,
         setup.browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", setup.organization_id),
             Some(&format!("create-{key}")),
-            json!({"organizationId": setup.organization_id, "key": key, "name": name}),
+            json!({"key": key, "name": name}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{project}");
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project = project["value"].clone();
     project["id"].as_str().expect("project").to_owned()
 }
 

@@ -30,12 +30,12 @@ test('a task moves to another project after a private preview and one confirmati
   const projects = (await (await request.get('/api/v1/projects')).json()) as { projects: Project[] }
   const home = projects.projects.find((project) => project.id === source)
   expect(home).toBeTruthy()
-  const madeTarget = await request.post('/api/v1/projects', {
+  const madeTarget = await request.post(`/api/v2/w/${home?.organizationId}/ops/space_create`, {
     headers: headers(`move-target-${run}`),
-    data: { organizationId: home?.organizationId, key: `MV${run}`, name: `Moved here ${run}` },
+    data: { key: `MV${run}`, name: `Moved here ${run}` },
   })
   expect(madeTarget.ok(), await madeTarget.text()).toBe(true)
-  const target = (await madeTarget.json()) as Project
+  const target = ((await madeTarget.json()) as { value: Project }).value
 
   // Notes fits the target's Notes; the target's Tier has no Gold.
   const field = async (projectId: string, body: Record<string, unknown>, key: string) => {

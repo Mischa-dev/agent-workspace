@@ -137,12 +137,12 @@ async fn channel(world: &World, browser: &Browser, workspace: Uuid, key: &str) -
         world.api(),
         browser,
         "POST",
-        "/api/v1/projects",
+        &format!("/api/v2/w/{}/ops/space_create", workspace),
         Some(&format!("{key}-project")),
-        json!({"organizationId": workspace, "key": key.to_ascii_uppercase(), "name": key}),
+        json!({"key": key.to_ascii_uppercase(), "name": key}),
     )
     .await;
-    let project: Uuid = project["id"]
+    let project: Uuid = project["value"]["id"]
         .as_str()
         .expect("project")
         .parse()

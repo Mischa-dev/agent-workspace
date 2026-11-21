@@ -44,7 +44,7 @@ describe('App Project creation and settings', () => {
         if (path.startsWith('/api/v1/projects?') && method === 'GET') {
           return jsonResponse({ projects: [] })
         }
-        if (path.endsWith('/projects') && method === 'POST') {
+        if (path.endsWith('/ops/space_create') && method === 'POST') {
           idempotencyKeys.push(
             new Headers(init?.headers).get('idempotency-key'),
           )
@@ -59,7 +59,7 @@ describe('App Project creation and settings', () => {
                 },
                 500,
               )
-            : jsonResponse(created, 201)
+            : jsonResponse({ outcome: 'ok', value: { id: created.id } })
         }
         if (path.endsWith(`/${created.id}/switch`)) {
           return jsonResponse({

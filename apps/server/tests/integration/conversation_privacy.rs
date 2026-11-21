@@ -428,13 +428,14 @@ async fn channels_are_joined_left_and_browsed() {
         app,
         world.owner.browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", world.organization),
             Some("c2-7-side"),
-            json!({"organizationId": world.organization, "key": "SIDE", "name": "Side"}),
+            json!({"key": "SIDE", "name": "Side"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{side}");
+    assert_eq!(status, StatusCode::OK, "{side}");
+    let side = side["value"].clone();
     let side = side["id"].as_str().expect("side").to_owned();
     let (status, open) = send(
         app,
