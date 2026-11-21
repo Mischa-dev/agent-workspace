@@ -13,7 +13,7 @@ use crate::{
     AppState,
     domain::RunState,
     error::AppError,
-    git_runtime::worktree_is_dirty,
+    git_runtime::{RunDiff, run_diff, worktree_is_dirty},
     hosts::builtin::report::{self, RunReports},
     message_content::{MessageContent, MessageContentError, ValidatedMessageContent},
 };
@@ -469,6 +469,10 @@ impl turn::TurnHost for BuiltinTurns {
         fail_run(&self.state, &self.reports, run_id, reason).await
     }
 
+    async fn files_may_have_changed(&self, run_id: Uuid) {
+        report_changes_of(&self.state, &self.reports, run_id).await;
+    }
+
     async fn complete(&self, run_id: Uuid, reply: &str) -> Result<(), AppError> {
         complete_run(&self.state, &self.reports, run_id, reply, None).await
     }
@@ -774,9 +778,9 @@ async fn complete_run(
 ) -> Result<(), AppError> {
     let validated_message =
         validated_worker_message(message).map_err(|error| provider_message_error(run_id, error))?;
-    let worktree_path = sqlx::query_scalar::<_, String>(
+    let (worktree_path, base_commit) = sqlx::query_as::<_, (String, Option<String>)>(
         r#"
-        SELECT gw.path
+        SELECT gw.path, rw.base_commit
         FROM agent_runs ar
         JOIN repository_workspaces rw ON rw.id = ar.repository_workspace_id
         JOIN git_worktrees gw ON gw.repository_workspace_id = rw.id
@@ -786,11 +790,15 @@ async fn complete_run(
     .bind(run_id)
     .fetch_one(crate::db::scoped(&state.pool))
     .await?;
-    let dirty = tokio::task::spawn_blocking(move || {
-        worktree_is_dirty(PathBuf::from(worktree_path).as_path())
-    })
-    .await
-    .map_err(|_| AppError::Internal("join worktree inspection task"))??;
+    let worktree = PathBuf::from(worktree_path);
+    let dirty = {
+        let worktree = worktree.clone();
+        tokio::task::spawn_blocking(move || worktree_is_dirty(worktree.as_path()))
+            .await
+            .map_err(|_| AppError::Internal("join worktree inspection task"))??
+    };
+    // Before the run finishes, while its reports are still taken.
+    report_changes(reports, worktree, base_commit).await;
 
     // What the agent said goes to the thread like any host's answer (a
     // `text_message` for the thread, posted by `runs::say`), and the run
@@ -866,6 +874,94 @@ async fn complete_run(
     Ok(())
 }
 
+/// The largest patch a changes report carries whole; the server keeps no
+/// bigger one either.
+const MAX_CHANGES_PATCH_BYTES: usize = 768 * 1024;
+
+/// [`report_changes`] for a run whose worktree isn't at hand: looked up, and
+/// nothing reported when the run has none.
+pub(crate) async fn report_changes_of(state: &AppState, reports: &RunReports, run_id: Uuid) {
+    let place = sqlx::query_as::<_, (String, String)>(
+        r#"
+        SELECT gw.path, rw.base_commit
+        FROM agent_runs ar
+        JOIN repository_workspaces rw ON rw.id = ar.repository_workspace_id
+        JOIN git_worktrees gw ON gw.repository_workspace_id = rw.id
+        WHERE ar.id = $1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(crate::db::scoped(&state.pool))
+    .await;
+    match place {
+        Ok(Some((worktree, base))) => {
+            report_changes(reports, PathBuf::from(worktree), Some(base)).await;
+        }
+        Ok(None) => {}
+        Err(error) => tracing::warn!(
+            run_id = %run_id,
+            error_category = AppError::from(error).log_category(),
+            "the run's changes were not reported"
+        ),
+    }
+}
+
+/// A1.17: what the run changed against its base, told to the server as any
+/// host tells it, so the run's page never reads this machine's disk. A run
+/// whose changes can't be read or taken still finishes; its page then shows
+/// none.
+async fn report_changes(reports: &RunReports, worktree: PathBuf, base_commit: Option<String>) {
+    let Some(base) = base_commit else {
+        return;
+    };
+    let diff = tokio::task::spawn_blocking(move || -> Result<RunDiff, AppError> {
+        Ok(run_diff(
+            &worktree,
+            false,
+            &base,
+            None,
+            MAX_CHANGES_PATCH_BYTES,
+        )?)
+    })
+    .await;
+    let reported = match diff {
+        Ok(Ok(mut diff)) => {
+            // What the server takes: the files it can list, the rest left
+            // out and said so.
+            let before = diff.files.len();
+            diff.files.retain(|file| {
+                (1..=1_000).contains(&file.path.chars().count())
+                    && !file.path.chars().any(char::is_control)
+            });
+            diff.files.truncate(crate::runs::changes::MAX_FILES);
+            diff.truncated |= diff.files.len() < before;
+            // A report the server would refuse for its size drops the patch
+            // first (as one too big to keep would), then files from the end.
+            let room = crate::runs::changes::MAX_REPORT_BYTES - 64 * 1024;
+            let size =
+                |diff: &RunDiff| serde_json::to_vec(diff).map_or(usize::MAX, |body| body.len());
+            if size(&diff) > room {
+                diff.patch.clear();
+                diff.truncated = true;
+                while size(&diff) > room && !diff.files.is_empty() {
+                    let keep = diff.files.len() * 3 / 4;
+                    diff.files.truncate(keep);
+                }
+            }
+            reports.changes(&diff).await.map_err(AppError::from)
+        }
+        Ok(Err(error)) => Err(error),
+        Err(_) => Err(AppError::Internal("join the run's diff")),
+    };
+    if let Err(error) = reported {
+        tracing::warn!(
+            run_id = %reports.run_id(),
+            error_category = error.log_category(),
+            "the run's changes were not reported"
+        );
+    }
+}
+
 /// Attempts at failing a run whose turn failed before leaving it to
 /// recovery, and the wait before the first retry (doubled each time).
 const FAIL_RUN_ATTEMPTS: u32 = 4;
@@ -927,6 +1023,8 @@ pub(crate) async fn fail_run(
     reports
         .note("provider:run:failed", "run_failed", reason, true)
         .await?;
+    // What it changed before failing is still worth reading.
+    report_changes_of(state, reports, run_id).await;
     reports.moved("failed", Some(reason)).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     crate::hosts::builtin::move_detail(&mut transaction, run_id, RunState::Failed, Some(reason))

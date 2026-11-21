@@ -980,6 +980,12 @@
   {
     "kind": "create",
     "module": "runs",
+    "name": "run_changes_report",
+    "title": "Report a run's changes"
+  },
+  {
+    "kind": "create",
+    "module": "runs",
     "name": "run_create",
     "title": "Open a run"
   },

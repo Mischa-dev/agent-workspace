@@ -4,10 +4,8 @@
 //! Every read checks the reader can open the run's project
 //! (`actor_can_access_project`) and see its thread (`conversation_visible_to`):
 //! a run is visible exactly when its thread is. Steps were redacted and
-//! capped when they were stored (`run_log`); the diff is read live from the
-//! run's worktree, or from the mirror once the worktree is gone.
-
-use std::path::PathBuf;
+//! capped when they were stored (`run_log`); the changes are what the
+//! run's host last reported (`runs::changes`).
 
 use axum::{Json, Router, extract::State, routing::get};
 use chrono::{DateTime, NaiveDate, Utc};
@@ -20,14 +18,12 @@ use crate::{
     AppState,
     auth::AuthenticatedActor,
     error::{ApiPath, ApiQuery, AppError},
-    git_runtime::{ChangedFile, RunDiff},
     run_log::{TOTALS, UsageTotals},
+    runs::changes::{self, ChangedFile, Changes},
 };
 
 /// The most steps the run page shows; long runs show their last ones.
 const MAX_STEPS: i64 = 2_000;
-/// The largest diff the run page shows inline.
-const MAX_PATCH_BYTES: usize = 768 * 1024;
 const MAX_USAGE_DAYS: i64 = 400;
 
 pub fn router() -> Router<AppState> {
@@ -199,8 +195,8 @@ pub struct RunDetail {
     pub hidden_steps: i64,
     pub tests: TestSummary,
     pub usage_by_model: Vec<ModelUsage>,
-    /// The files the run's branch changed against its base, when the
-    /// worktree or the published commit is still there to read.
+    /// The files the run changed against where it started, as its host last
+    /// reported them; none before its first report.
     pub files: Option<Vec<ChangedFile>>,
 }
 
@@ -339,23 +335,15 @@ pub async fn run_detail(
     .bind(run_id)
     .fetch_all(&mut *transaction)
     .await?;
-    drop(transaction);
     // Changed files are code: only for a viewer who sees it.
-    let files = if !code {
-        None
+    let files = if code {
+        changes::get(&mut transaction, run_id)
+            .await?
+            .map(|changes| changes.files)
     } else {
-        match read_diff(state, &run, 0).await {
-            Ok(Some(diff)) => Some(diff.files),
-            Ok(None) => None,
-            Err(error) => {
-                tracing::debug!(
-                    error_category = error.log_category(),
-                    "run diff unavailable"
-                );
-                None
-            }
-        }
+        None
     };
+    drop(transaction);
     Ok(RunDetail {
         run,
         prompt,
@@ -384,55 +372,11 @@ async fn detail_http(
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunDiffView {
-    /// ready, or unavailable when neither the worktree nor a published
-    /// commit is left to read.
+    /// ready, or unavailable when the run's host hasn't reported its
+    /// changes (or the viewer doesn't see its code).
     pub state: &'static str,
     #[serde(flatten)]
-    pub diff: Option<RunDiff>,
-}
-
-/// Where the run's changes can be read now: its live worktree (including
-/// uncommitted changes), else the mirror at the published commit.
-async fn read_diff(
-    state: &AppState,
-    run: &RunSummary,
-    max_patch_bytes: usize,
-) -> Result<Option<RunDiff>, AppError> {
-    let Some(base) = run.base_commit.clone() else {
-        return Ok(None);
-    };
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let location = sqlx::query_as::<_, (Option<String>, String)>(
-        r#"
-        SELECT worktree.path, repository.mirror_path
-        FROM agent_runs run
-        JOIN repositories repository ON repository.id = run.repository_id
-        LEFT JOIN git_worktrees worktree
-          ON worktree.repository_workspace_id = run.repository_workspace_id
-         AND worktree.state IN ('ready', 'dirty')
-        WHERE run.id = $1
-        "#,
-    )
-    .bind(run.id)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    drop(transaction);
-    let Some((worktree, mirror)) = location else {
-        return Ok(None);
-    };
-    let (path, bare, head) = match (worktree, &run.published_commit) {
-        (Some(worktree), _) if PathBuf::from(&worktree).is_dir() => {
-            (PathBuf::from(worktree), false, None)
-        }
-        (_, Some(published)) => (PathBuf::from(mirror), true, Some(published.clone())),
-        _ => return Ok(None),
-    };
-    let diff = tokio::task::spawn_blocking(move || {
-        crate::git_runtime::run_diff(&path, bare, &base, head.as_deref(), max_patch_bytes)
-    })
-    .await
-    .map_err(|_| AppError::Internal("read the run's diff"))??;
-    Ok(Some(diff))
+    pub diff: Option<Changes>,
 }
 
 pub async fn run_diff(
@@ -440,14 +384,17 @@ pub async fn run_diff(
     viewer: Uuid,
     run_id: Uuid,
 ) -> Result<RunDiffView, AppError> {
-    let (run, code) = visible_run(state, viewer, run_id).await?;
-    if !code {
-        return Ok(RunDiffView {
-            state: "unavailable",
-            diff: None,
-        });
-    }
-    let diff = read_diff(state, &run, MAX_PATCH_BYTES).await?;
+    // Any run, whoever runs it: the shared run view's visibility, and its
+    // code only for a viewer who sees code.
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let line = super::pages::visible_line(&mut transaction, viewer, run_id)
+        .await?
+        .ok_or(AppError::NotFound("agent_run"))?;
+    let diff = if super::pages::sees_code(&mut transaction, viewer, line.project_id).await? {
+        changes::get(&mut transaction, run_id).await?
+    } else {
+        None
+    };
     Ok(RunDiffView {
         state: if diff.is_some() {
             "ready"

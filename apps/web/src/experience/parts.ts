@@ -59,6 +59,7 @@ export const PART_IDS = [
   'page.references',
   'tech.task_keys',
   'tech.run_usage',
+  'tech.run_files',
   'tech.ids',
   'thing.activity',
   'home.working_now',

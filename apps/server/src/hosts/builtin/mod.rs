@@ -25,6 +25,7 @@ pub mod recovery;
 pub mod report;
 pub mod requests;
 pub mod transport;
+pub mod worktrees;
 
 use crate::{
     AppState,

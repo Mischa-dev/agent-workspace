@@ -192,6 +192,27 @@ async fn members_never_read_what_they_are_not_in() {
         .execute(pool)
         .await
         .expect("pull request title");
+    // A1.17: what A's run changed, as its host reported it, is code: only
+    // a reader who sees the run's thread and its code reads the files.
+    let reported = sqlx::query(
+        r#"
+        INSERT INTO run_changes (
+            run_id, workspace_id, space_id, files, patch, truncated, reported_by_account_id
+        )
+        SELECT run.id, run.workspace_id, run.space_id, $2, $3, false, agent_run.requesting_actor_id
+        FROM runs run JOIN agent_runs agent_run ON agent_run.id = run.id
+        WHERE run.id = $1
+        "#,
+    )
+    .bind(a.run)
+    .bind(
+        json!([{"path": format!("src/{TASK}.rs"), "status": "modified", "added": 1, "removed": 0}]),
+    )
+    .bind(format!("diff --git a/src/{TASK}.rs b/src/{TASK}.rs\n"))
+    .execute(pool)
+    .await
+    .expect("run changes");
+    assert_eq!(reported.rows_affected(), 1, "A's run has its runs row");
 
     // The callers.
     let outsider = add_person(

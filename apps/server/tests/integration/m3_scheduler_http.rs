@@ -478,6 +478,16 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     .await;
     assert_eq!(repeated_question.0, StatusCode::OK);
     wait_for_state(&pool, second_run_id, "completed").await;
+    // A1.17: its host reported what it changed before it finished, so the
+    // run's page reads that, never the worktree.
+    let reported = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM run_changes WHERE run_id = $1)",
+    )
+    .bind(second_run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("run changes");
+    assert!(reported, "the built-in host reports the run's changes");
     agent_workspace_server::scheduler::drain_now(&state)
         .await
         .expect("promote explicit repository run after completion");
@@ -594,9 +604,12 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     .await
     .expect("read retained workspace repository");
     let mut cleanup = pool.begin().await.expect("begin cleanup");
-    agent_workspace_server::retention::lock_repository_retention(&mut cleanup, repository_id)
-        .await
-        .expect("cleanup takes the retention lock");
+    agent_workspace_server::hosts::builtin::worktrees::lock_repository_retention(
+        &mut cleanup,
+        repository_id,
+    )
+    .await
+    .expect("cleanup takes the retention lock");
     sqlx::query("UPDATE repository_workspaces SET state = 'cleaned' WHERE id = $1")
         .bind(workspace_id)
         .execute(&mut *cleanup)

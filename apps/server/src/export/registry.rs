@@ -1916,6 +1916,17 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "run_changes",
+                table: "run_changes",
+                references: &[
+                    ("run_id", "runs"),
+                    ("space_id", "projects"),
+                    ("reported_by_account_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "run_usage",
                 table: "run_usage",
                 references: &[

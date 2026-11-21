@@ -769,6 +769,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "app_limit_set",
     "run_activity_report",
     "run_cancel",
+    "run_changes_report",
     "run_failure_hide",
     "run_mark_not_started",
     "run_create",
@@ -8857,6 +8858,11 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "run_activity_report",
             json!({"runId": ax.reported_runs[0], "activities": [{"id": "net-own", "kind": "text_message", "payload": {"text": "Net"}}]}),
             vec![json!({"runId": bx.reported_runs[0], "activities": [{"id": "net-b", "kind": "text_message", "payload": {"text": "Net"}}]})],
+        ),
+        mcp_case(
+            "run_changes_report",
+            json!({"runId": ax.reported_runs[0], "files": [{"path": "net-own.rs", "status": "added", "added": 1, "removed": 0}]}),
+            vec![json!({"runId": bx.reported_runs[0], "files": [{"path": "net-b.rs", "status": "added", "added": 1, "removed": 0}]})],
         ),
         mcp_case(
             "run_usage_report",

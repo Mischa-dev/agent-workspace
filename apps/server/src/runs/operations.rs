@@ -47,6 +47,7 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<RunActivityReport>()
         .add::<RunUsageReport>()
         .add::<RunResultReport>()
+        .add::<RunChangesReport>()
         .add::<RunCancel>()
         .add::<RunMarkNotStarted>()
         .add::<super::pages::RunDetailGet>()
@@ -1041,6 +1042,89 @@ impl Operation for RunResultReport {
         Ok(RunResultOutput {
             added,
             run: RunRecord::from(&run),
+        })
+    }
+}
+
+// ------------------------------------------------------ run_changes_report
+
+pub struct RunChangesReport;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunChangesReportInput {
+    /// The run (one you opened).
+    pub run_id: IdRef,
+    /// Each file the run changed against where it started: at most 2,000.
+    pub files: Vec<super::changes::ChangedFile>,
+    /// The unified diff. One over 768 KB is dropped and the report kept as
+    /// truncated.
+    #[serde(default)]
+    pub patch: String,
+    /// Set when files or the patch were left out for size.
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+impl Targeted for RunChangesReportInput {
+    fn target(&self) -> Target {
+        Target::thing("run", self.run_id.id())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RunChangesOutput {
+    /// How many files the run's changes now list.
+    pub files: usize,
+    /// Whether the patch was kept whole.
+    pub truncated: bool,
+}
+
+impl Operation for RunChangesReport {
+    const NAME: &'static str = "run_changes_report";
+    const KIND: OpKind = OpKind::Create;
+    const MODULE: &'static str = "runs";
+    const PERMISSION: Option<Perm> = Some(Perm::RunsReport);
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const TITLE: &'static str = "Report a run's changes";
+    const DESCRIPTION: &'static str = "Say what a run of yours has changed in its repository \
+        so far: the files and the unified diff against where it started. Each report replaces \
+        the last, so send the whole picture each time (after a turn, and when the run ends); \
+        the run's page shows the latest.";
+    const EMITS: &'static [&'static str] = &["run.changes_reported"];
+    const MAX_BODY_BYTES: usize = super::changes::MAX_REPORT_BYTES;
+
+    type Input = RunChangesReportInput;
+    type Output = RunChangesOutput;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: RunChangesReportInput,
+    ) -> Result<RunChangesOutput, OpError> {
+        report_rate(call).await?;
+        if let Some((field, message)) = super::changes::problem(&input.files) {
+            return Err(OpError::invalid(field, message));
+        }
+        let run_id = input.run_id.id();
+        own_run(call, run_id).await?;
+        let reporter = call.account_id();
+        let tx = call.tx().await?;
+        super::changes::put(
+            tx,
+            run_id,
+            reporter,
+            &input.files,
+            &input.patch,
+            input.truncated,
+        )
+        .await?;
+        super::ops::changes_reported(tx, run_id).await?;
+        let truncated = input.truncated || input.patch.len() > super::changes::MAX_PATCH_BYTES;
+        call.audit_target("run", run_id, json!({ "files": input.files.len() }));
+        Ok(RunChangesOutput {
+            files: input.files.len(),
+            truncated,
         })
     }
 }

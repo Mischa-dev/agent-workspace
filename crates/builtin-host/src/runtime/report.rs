@@ -1,8 +1,9 @@
 //! A1.16: what the built-in host tells the server about a run goes only
 //! through the host protocol's run reports (`run_activity_report`,
-//! `run_update`, `run_usage_report`), with the credential the run's start
-//! carried, as any host reports. The built-in host's own step names
-//! (`command_started`, `run_failed`, ...) travel in `payload.step`.
+//! `run_update`, `run_usage_report`, `run_changes_report`), with the
+//! credential the run's start carried, as any host reports. The built-in
+//! host's own step names (`command_started`, `run_failed`, ...) travel in
+//! `payload.step`.
 
 use agent_workspace_host_protocol::{ClientError, HostClient, RunReporter, StreamDelta};
 use serde_json::{Map, Value, json};
@@ -62,6 +63,10 @@ pub struct RunReports {
     run_id: Uuid,
     start_command_id: Uuid,
     reporter: Mutex<RunReporter>,
+    /// Changes reports sent by these reports (named by `opened`), for each
+    /// one's key.
+    changes_sent: std::sync::atomic::AtomicU64,
+    opened: Uuid,
 }
 
 impl std::fmt::Debug for RunReports {
@@ -101,6 +106,8 @@ impl RunReports {
             run_id,
             start_command_id,
             reporter: Mutex::new(reporter),
+            changes_sent: std::sync::atomic::AtomicU64::new(0),
+            opened: Uuid::now_v7(),
         })
     }
 
@@ -283,6 +290,30 @@ impl RunReports {
             ),
         )
         .await?;
+        Ok(())
+    }
+
+    /// What the run changed in its repository against where it started
+    /// (A1.17): the server keeps the latest and shows it on the run's page,
+    /// reading nothing on this machine's disk. The same changes sent again
+    /// are taken once.
+    pub async fn changes(&self, diff: &crate::git::RunDiff) -> Result<(), AppError> {
+        let fields = serde_json::to_value(diff)
+            .map_err(|_| AppError::Internal("serialize the run's changes"))?;
+        // Each report has its own key, the same on its retries: a report
+        // sent again after a newer one is answered from the first, never
+        // written over the newer one, and the same changes sent again later
+        // (an edit undone) still count.
+        let report = self
+            .changes_sent
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let key = format!(
+            "changes-{}",
+            hex::encode(Sha256::digest(
+                format!("{}-{}-{report}", self.run_id.simple(), self.opened.simple()).as_bytes()
+            ))
+        );
+        self.call("run_changes_report", fields, &key).await?;
         Ok(())
     }
 }

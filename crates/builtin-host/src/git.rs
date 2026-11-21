@@ -851,6 +851,10 @@ pub struct ChangedFile {
     pub removed: Option<u32>,
 }
 
+/// The most files a run's diff lists; past it the diff says it was
+/// truncated.
+pub const MAX_CHANGED_FILES: usize = 2_000;
+
 /// What a run's branch changed against its base commit.
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -901,6 +905,8 @@ pub fn run_diff(
     let numstat = run_git(args(&["--numstat", "-z"]))?;
     let statuses = run_git(args(&["--name-status", "-z"]))?;
     let mut files = parse_numstat(&numstat.stdout);
+    let more_files = files.len() > MAX_CHANGED_FILES;
+    files.truncate(MAX_CHANGED_FILES);
     let status_of = parse_name_status(&statuses.stdout);
     for file in &mut files {
         file.status = status_of
@@ -920,7 +926,7 @@ pub fn run_diff(
     Ok(RunDiff {
         files,
         patch,
-        truncated,
+        truncated: truncated || more_files,
     })
 }
 
@@ -944,7 +950,8 @@ fn parse_numstat(output: &[u8]) -> Vec<ChangedFile> {
                 .map(|to| String::from_utf8_lossy(to).into_owned())
                 .unwrap_or_default();
         }
-        if !path.is_empty() && files.len() < 2_000 {
+        // One past the most listed, so the caller can tell there were more.
+        if !path.is_empty() && files.len() <= MAX_CHANGED_FILES {
             files.push(ChangedFile {
                 path,
                 status: String::new(),

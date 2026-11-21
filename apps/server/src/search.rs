@@ -950,6 +950,20 @@ pub async fn projects_allowing(
     projects: &[Uuid],
     permission: crate::policy::Permission,
 ) -> Result<Vec<Uuid>, AppError> {
+    projects_allowing_on(crate::db::scoped(pool), viewer, projects, permission).await
+}
+
+/// [`projects_allowing`] on a connection the caller already holds (inside
+/// its transaction), so a read never waits on a second one.
+pub async fn projects_allowing_on<'e, E>(
+    executor: E,
+    viewer: Uuid,
+    projects: &[Uuid],
+    permission: crate::policy::Permission,
+) -> Result<Vec<Uuid>, AppError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     Ok(sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT project_id FROM project_memberships
@@ -960,7 +974,7 @@ pub async fn projects_allowing(
     .bind(viewer)
     .bind(projects)
     .bind(permission.info().key)
-    .fetch_all(crate::db::scoped(pool))
+    .fetch_all(executor)
     .await?
     .into_iter()
     .filter(|project| !crate::access::limit_hides(viewer, *project, permission))

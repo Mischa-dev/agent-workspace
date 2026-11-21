@@ -19,6 +19,7 @@
     "run_activity_report": "create",
     "run_usage_report": "create",
     "run_result_report": "create",
+    "run_changes_report": "create",
     "run_cancel": "change",
     "run_mark_not_started": "change",
     "run_stop": "change",
@@ -128,7 +129,7 @@
   "web": { "folder": "runs" },
   "slots": {
     "pages": ["/runs", "/runs/:runId", "/projects/:projectId/launches"],
-    "parts": ["area.runs", "task.runs", "tech.run_usage", "home.working_now", "home.capacity", "workspace.runs"],
+    "parts": ["area.runs", "task.runs", "tech.run_usage", "tech.run_files", "home.working_now", "home.capacity", "workspace.runs"],
     "sidebar": [],
     "home": ["working", "capacity"],
     "settings": [

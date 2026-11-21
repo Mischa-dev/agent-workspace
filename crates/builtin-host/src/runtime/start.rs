@@ -147,6 +147,11 @@ pub trait StartHost: Send + Sync {
         run_id: Uuid,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
+    /// Tell the server what the run changed so far, while its reports
+    /// still hold a credential. A failure is logged; the stop goes on.
+    fn report_changes(&self, reports: &RunReports, run_id: Uuid)
+    -> impl Future<Output = ()> + Send;
+
     /// The run is interrupted (its turn, watching it, stops); its workspace
     /// is kept and its harness session idles.
     fn interrupted(
@@ -343,6 +348,8 @@ async fn stop<H: StartHost>(
     {
         return Ok(());
     }
+    // Before `run_interrupted`, which ends the reports' credential.
+    host.report_changes(reports, run_id).await;
     reports
         .step(
             &format!("run_interrupted:{run_id}"),

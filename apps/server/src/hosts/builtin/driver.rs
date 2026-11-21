@@ -238,6 +238,10 @@ impl StartHost for BuiltinCommands<'_> {
         go_on(self.state, reports, run_id).await
     }
 
+    async fn report_changes(&self, reports: &RunReports, run_id: Uuid) {
+        provider::report_changes_of(self.state, reports, run_id).await;
+    }
+
     async fn interrupted(&self, run_id: Uuid, reason: &str) -> Result<(), AppError> {
         let mut transaction = crate::db::scoped_tx(&self.state.pool).await?;
         super::move_detail(
@@ -374,8 +378,10 @@ impl StartHost for BuiltinCommands<'_> {
         state: &'static str,
         dirty: bool,
     ) -> Result<(), AppError> {
+        // A worktree the retention cleanup removed stays removed: an
+        // inspection that raced the removal found it gone on purpose.
         sqlx::query(
-            "UPDATE git_worktrees SET state = $2, dirty = $3, last_inspected_at = now(), updated_at = now() WHERE id = $1",
+            "UPDATE git_worktrees SET state = $2, dirty = $3, last_inspected_at = now(), updated_at = now() WHERE id = $1 AND state <> 'removed'",
         )
         .bind(worktree_id)
         .bind(state)
@@ -398,7 +404,7 @@ impl StartHost for BuiltinCommands<'_> {
         // Retention cleanup removes retained worktrees under this lock. Take
         // it, then claim only if the workspace is still retained: one
         // cleaned up since the inspection is gone.
-        crate::retention::lock_repository_retention(&mut transaction, run.repository_id).await?;
+        super::worktrees::lock_repository_retention(&mut transaction, run.repository_id).await?;
         // The retry publishes its own commit: the predecessor's publication
         // must not stand in for it, or a pull request could open from a
         // commit this run never made.

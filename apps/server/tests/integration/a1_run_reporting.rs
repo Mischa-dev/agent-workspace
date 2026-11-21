@@ -141,6 +141,10 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
             "run_usage_report",
             json!({"runId": run_id, "reportKey": "x", "model": "m", "inputTokens": 1}),
         ),
+        (
+            "run_changes_report",
+            json!({"runId": run_id, "files": [{"path": "x.rs", "status": "added"}]}),
+        ),
     ] {
         let refused = tool(app, &other_token, &other, name, arguments).await;
         assert_eq!(refused["outcome"], "not_found", "{name}: {refused}");
@@ -225,6 +229,91 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
     assert_eq!(added["value"]["added"], 1, "{added}");
     let added = call("run_result", result).await;
     assert_eq!(added["value"]["added"], 0, "{added}");
+
+    // A1.17: the run's changes are what it last reported; the server reads
+    // no disk for them. Each report replaces the last, a patch too big to
+    // keep is dropped and the report says so, and a bad path is refused.
+    let changes = |pool: sqlx::PgPool| async move {
+        sqlx::query_as::<_, (Value, String, bool)>(
+            "SELECT files, patch, truncated FROM run_changes WHERE run_id = $1",
+        )
+        .bind(run)
+        .fetch_one(&pool)
+        .await
+        .expect("changes")
+    };
+    let reported = call(
+        "run_changes_report",
+        json!({"runId": run_id, "files": [
+            {"path": "src/lib.rs", "status": "modified", "added": 3, "removed": 1},
+            {"path": "logo.png", "status": "added"}],
+            "patch": "diff --git a/src/lib.rs b/src/lib.rs\n"}),
+    )
+    .await;
+    assert_eq!(reported["outcome"], "ok", "{reported}");
+    assert_eq!(reported["value"]["files"], 2, "{reported}");
+    let (files, patch, truncated) = changes(setup.pool.clone()).await;
+    assert_eq!(
+        files[1]["added"],
+        Value::Null,
+        "a binary file has no line counts"
+    );
+    assert!(patch.starts_with("diff --git"));
+    assert!(!truncated);
+    let reported = call(
+        "run_changes_report",
+        json!({"runId": run_id, "files": [{"path": "src/main.rs", "status": "deleted", "added": 0, "removed": 9}],
+               "patch": "x".repeat(runs::changes::MAX_PATCH_BYTES + 1)}),
+    )
+    .await;
+    assert_eq!(reported["value"]["truncated"], true, "{reported}");
+    let (files, patch, truncated) = changes(setup.pool.clone()).await;
+    assert_eq!(
+        files.as_array().map(Vec::len),
+        Some(1),
+        "the latest report replaces the last"
+    );
+    assert!(
+        patch.is_empty() && truncated,
+        "an oversized patch is dropped, said so"
+    );
+    // Whoever runs it, its page shows them: the files in the run's view, the
+    // rest from its diff.
+    let workspace = setup.organization_id;
+    let (status, viewed) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/run_detail_get"),
+            None,
+            json!({"runId": run_id}),
+        ),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{viewed}");
+    assert_eq!(
+        viewed["value"]["files"][0]["path"], "src/main.rs",
+        "{viewed}"
+    );
+    let (status, diff) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/agent-runs/{run_id}/diff"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{diff}");
+    assert_eq!(diff["state"], "ready", "{diff}");
+    assert_eq!(diff["truncated"], true, "{diff}");
+    let refused = call(
+        "run_changes_report",
+        json!({"runId": run_id, "files": [{"path": "a\nb", "status": "added"}]}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
 
     // run_finished finishes it, and a finished run stays finished.
     let finished = call(

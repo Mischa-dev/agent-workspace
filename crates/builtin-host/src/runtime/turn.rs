@@ -75,6 +75,11 @@ pub trait TurnHost: Send + Sync {
         reason: &'static str,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
+    /// The agent changed files, or ran a command that may have: what the run
+    /// changed so far is reported, so its page shows it while it goes, and
+    /// after a stop. Best effort: a failure is the host's to log.
+    fn files_may_have_changed(&self, run_id: Uuid) -> impl Future<Output = ()> + Send;
+
     /// The turn completed with the agent's `reply` (perhaps empty).
     fn complete(
         &self,
@@ -156,9 +161,11 @@ pub async fn drive<H: TurnHost>(
                     HarnessEvent::ItemCompleted(event)
                         if event.kind == ItemKind::CommandExecution => {
                         record_step(reports, &event, "command_completed", true).await?;
+                        host.files_may_have_changed(run_id).await;
                     }
                     HarnessEvent::ItemCompleted(event) if event.kind == ItemKind::FileChange => {
                         record_step(reports, &event, "file_change", true).await?;
+                        host.files_may_have_changed(run_id).await;
                     }
                     HarnessEvent::ItemCompleted(event)
                         if event.kind == ItemKind::Other && event.detail.tool.is_some() => {

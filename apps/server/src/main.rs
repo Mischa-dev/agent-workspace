@@ -387,7 +387,7 @@ async fn main() -> anyhow::Result<()> {
         Some("retention-worktrees") => {
             let options = parse_options(arguments)?;
             reject_unknown_options(&options, &["apply"])?;
-            let result = retention::clean_worktrees(
+            let result = agent_workspace_server::hosts::builtin::worktrees::clean_worktrees(
                 &pool,
                 &config.data_root,
                 optional_bool(&options, "apply", false)?,

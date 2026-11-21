@@ -285,6 +285,29 @@ pub async fn locked(
     load(transaction, run_id).await
 }
 
+/// A1.17: a run reported what it changed. Like any report, it shows the run
+/// is alive; open run pages read the changes again.
+pub async fn changes_reported(
+    transaction: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+) -> Result<(), AppError> {
+    let touched = sqlx::query_as::<_, RunRow>(&format!(
+        r#"
+        UPDATE runs run SET last_report_at = now(), liveness = 'ok',
+               version = run.version + 1, updated_at = now()
+        WHERE run.id = $1
+        RETURNING {RUN_COLUMNS}
+        "#
+    ))
+    .bind(run_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    if let Some(run) = touched {
+        emit(transaction, &run, "changes_reported").await?;
+    }
+    Ok(())
+}
+
 /// A1.12: the host, asked, doesn't know a start it may not have had; the
 /// run stays `start_uncertain` for a person to decide, and says so.
 pub async fn start_unknown_to_host(

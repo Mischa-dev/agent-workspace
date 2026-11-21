@@ -4751,6 +4751,22 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "run.changes_reported"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "runs",
+    "name": "run_changes_report",
+    "permission": "runs.report",
+    "preview": false,
+    "proposable": false,
+    "title": "Report a run's changes"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "run.opened"
     ],
     "idempotent": true,
