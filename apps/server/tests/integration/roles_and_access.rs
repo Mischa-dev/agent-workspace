@@ -1002,18 +1002,15 @@ async fn creating_from_a_template_needs_create_tasks_in_that_project() {
     assert_eq!(status, StatusCode::OK, "{changed}");
 
     for project in [&alpha, &beta] {
-        let key = format!("template-{project}");
-        let (status, template) = send(
-            app,
-            setup.browser.request(
-                "POST",
-                &format!("/api/v1/projects/{project}/task-templates"),
-                Some(&key),
-                json!({"name": "Weekly", "title": "From the template"}),
-            ),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED, "{template}");
+        let (status, template) = setup
+            .browser
+            .op(
+                app,
+                "template_create",
+                json!({"projectId": project, "name": "Weekly", "title": "From the template"}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{template}");
     }
 
     let session = initialize(app, &tom_token).await.expect("Tom");

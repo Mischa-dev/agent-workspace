@@ -30,7 +30,7 @@ use uuid::Uuid;
 
 use super::{
     authorize_work_item, capabilities,
-    planning::{Started, begin, invalid, refusal, start_write},
+    planning::{Started, begin, invalid, start_write},
     project_membership,
 };
 use crate::{
@@ -534,68 +534,6 @@ pub(crate) async fn change_task_template(
         .await?
         .ok_or(AppError::Internal("template just changed is missing"))?;
     Ok(TemplateOutcome::Done(Box::new(row.into())))
-}
-
-/// The web's answer to a template write that didn't go through.
-fn template_refusal(outcome: TemplateOutcome) -> Result<Response, AppError> {
-    Ok(match outcome {
-        TemplateOutcome::Done(_) => {
-            return Err(AppError::Internal("a template write wasn't refused"));
-        }
-        TemplateOutcome::Invalid(field, message) => invalid(field, message),
-        TemplateOutcome::TooMany => refusal(
-            StatusCode::CONFLICT,
-            "too_many_templates",
-            "This project has 200 templates. Archive one you no longer use first.".to_owned(),
-            json!({}),
-        ),
-        TemplateOutcome::VersionConflict(current) => refusal(
-            StatusCode::CONFLICT,
-            "version_conflict",
-            "Someone changed this template first. You’re now looking at the latest version."
-                .to_owned(),
-            json!({ "resource": "task_template", "currentVersion": current.version, "current": current }),
-        ),
-    })
-}
-
-pub(super) async fn create_template(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<TemplateFields>,
-) -> Result<Response, AppError> {
-    let fields = match normalize_template(request.clone()) {
-        Ok(fields) => fields,
-        Err((field, message)) => return Ok(invalid(field, message)),
-    };
-    let mut write = begin!(
-        start_write(
-            &state,
-            &headers,
-            &principal,
-            project_id,
-            Action::WorkItemEdit,
-            None,
-            resource_bound_scope("projects", project_id, "task_templates_create")?,
-            &request,
-        )
-        .await
-    );
-    let actor = write.actor.clone();
-    match create_task_template(
-        &mut write.transaction,
-        &actor,
-        project_id,
-        principal.actor_id,
-        &fields,
-    )
-    .await?
-    {
-        TemplateOutcome::Done(view) => write.finish(StatusCode::CREATED, &view).await,
-        refused => template_refusal(refused),
-    }
 }
 
 /// What applying a template may change from it.

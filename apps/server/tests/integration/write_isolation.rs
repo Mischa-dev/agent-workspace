@@ -230,12 +230,9 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
     "POST /api/v1/projects/{project_id}/repositories",
     "POST /api/v1/projects/{project_id}/repositories/{repository_id}/archive",
-    "POST /api/v1/projects/{project_id}/save-as-template",
     "DELETE /api/v1/projects/{project_id}/secrets/{name}",
     "PUT /api/v1/projects/{project_id}/secrets/{name}",
-    "POST /api/v1/projects/{project_id}/task-templates",
     "POST /api/v1/projects/{project_id}/task-templates/{template_id}/apply",
-    "PUT /api/v1/projects/{project_id}/work-item-workflow",
     "POST /api/v1/projects/{project_id}/work-items",
     "POST /api/v1/projects/{project_id}/work-items/bulk",
     "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}",
@@ -253,7 +250,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/push/subscriptions",
     "DELETE /api/v1/push/subscriptions/{id}",
     "POST /api/v1/push/subscriptions/{id}/test",
-    "POST /api/v1/settings/values/{key}/reset",
     "POST /api/v1/things/{kind}/{id}/files",
     "POST /api/v1/threads/{id}/agent-runs",
     "POST /api/v1/threads/{id}/archive",
@@ -3941,43 +3937,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         "p256dh": URL_SAFE_NO_PAD.encode(device_public.as_ref()),
         "auth": URL_SAFE_NO_PAD.encode([9_u8; 16]),
     });
-    let workflow = |statuses: &[Value], types: &[Value]| {
-        json!({
-            "statuses": statuses,
-            "types": types,
-            "transitions": "all",
-        })
-    };
-    // A's statuses and types, each with one more: new in A's own request,
-    // and B's in the others, which are then valid but for B's ID.
-    let added_status =
-        json!({"name": "Net added status", "semanticCategory": "review", "isDefault": false});
-    let added_type = json!({"name": "Net added type", "isDefault": false});
-    let plus = |entries: &[Value], entry: Value| {
-        let mut entries = entries.to_vec();
-        entries.push(entry);
-        entries
-    };
-    let a_workflow = workflow(
-        &plus(&sp.statuses, added_status.clone()),
-        &plus(&sp.types, added_type.clone()),
-    );
-    let b_status_workflow = workflow(
-        &plus(&sp.statuses, with(&added_status, "id", json!(bx.status))),
-        &plus(&sp.types, added_type.clone()),
-    );
-    let b_type_workflow = workflow(
-        &plus(&sp.statuses, added_status),
-        &plus(&sp.types, with(&added_type, "id", json!(bx.task_type))),
-    );
-    let workflow_version = |project: &str| {
-        current(
-            "project_task_settings",
-            "workflow_version",
-            &[("project_id", project.to_owned())],
-            1,
-        )
-    };
     let navigation_version = |project: &str| {
         current(
             "project_navigation_states",
@@ -5191,11 +5150,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         .without_own(NEEDS_GITHUB),
         // Recurring tasks and templates
         path_case(
-            "POST /api/v1/projects/{project_id}/task-templates",
-            &[project()],
-            json_body(json!({"name": "Net template", "title": "Net review"})),
-        ),
-        path_case(
             "POST /api/v1/projects/{project_id}/task-templates/{template_id}/apply",
             &[project(), looked_up(ax.task_template, bx.task_template)],
             json_body(json!({"title": "Net applied"})),
@@ -5204,11 +5158,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             json!({"title": "Net applied", "assigneeActorId": b.rook}),
             json!({"title": "Net applied", "milestoneId": bx.milestone}),
         ]),
-        path_case(
-            "POST /api/v1/projects/{project_id}/save-as-template",
-            &[project()],
-            json_body(json!({"name": "Net setup two", "description": "Net"})),
-        ),
         // Repositories
         path_case(
             "POST /api/v1/projects/{project_id}/repositories",
@@ -5240,25 +5189,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         ),
         // The workflow
-        path_case(
-            "PUT /api/v1/projects/{project_id}/work-item-workflow",
-            &[project()],
-            |values| {
-                Payload::Json(with(&a_workflow, "expectedVersion", workflow_version(&values[0])))
-            },
-        )
-        .rejecting(vec![
-            with(
-                &b_status_workflow,
-                "expectedVersion",
-                workflow_version(&a.project),
-            ),
-            with(
-                &b_type_workflow,
-                "expectedVersion",
-                workflow_version(&a.project),
-            ),
-        ]),
         // Tasks
         path_case(
             "POST /api/v1/projects/{project_id}/work-items",
@@ -5463,15 +5393,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         .last(),
         // Reply requests
         // Settings
-        body_case(
-            "POST /api/v1/settings/values/{key}/reset",
-            &["run.model"],
-            json!({"scope": "project", "projectId": a.project}),
-            vec![
-                json!({"scope": "project", "projectId": b.project}),
-                json!({"scope": "workspace", "organizationId": b.organization}),
-            ],
-        ),
         // Usage
         path_case(
             "POST /api/v1/usage/accounts/{account_id}/batch",

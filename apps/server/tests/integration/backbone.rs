@@ -1318,16 +1318,14 @@ async fn a_project_overrides_the_workspace_says_so_and_reset_falls_back() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 
     // Reset at the project falls back to the workspace.
-    let (status, reset) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            "/api/v1/settings/values/run.model/reset",
-            None,
-            json!({"scope": "project", "projectId": project}),
-        ),
-    )
-    .await;
+    let (status, reset) = setup
+        .browser
+        .op(
+            app,
+            "setting_update",
+            json!({"key": "run.model", "reset": true, "scope": "project", "spaceId": project}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{reset}");
     assert_eq!(reset["setting"]["value"], "big-model");
     assert_eq!(reset["setting"]["source"], "workspace");

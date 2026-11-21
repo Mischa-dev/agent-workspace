@@ -107,12 +107,6 @@ macro_rules! boundary_route {
 }
 
 pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
-    policy_route!(
-        "settings",
-        Post,
-        "/api/v1/settings/values/{key}/reset",
-        SettingsManage
-    ),
     // Layouts: owners and admins of the project or workspace, checked in the
     // handler; "mine" is each person's own view.
     policy_route!(
@@ -1454,12 +1448,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "work_items",
         Post,
-        "/api/v1/projects/{project_id}/task-templates",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
         "/api/v1/projects/{project_id}/task-templates/{template_id}/apply",
         WorkItemCreate
     ),
@@ -1483,21 +1471,9 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     policy_route!(
         "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/save-as-template",
-        SettingsManage
-    ),
-    policy_route!(
-        "work_items",
         Patch,
         "/api/v1/organizations/{organization_id}/project-templates/{template_id}",
         SettingsManage
-    ),
-    policy_route!(
-        "work_items",
-        Put,
-        "/api/v1/projects/{project_id}/work-item-workflow",
-        WorkflowManage
     ),
 ];
 
