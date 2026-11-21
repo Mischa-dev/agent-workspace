@@ -73,13 +73,16 @@ async fn environment(setup: &Setup, project: &str, harness: &str) -> String {
         setup,
         &setup.browser,
         "POST",
-        &format!("/api/v1/projects/{project}/environments"),
+        "/api/v2/ops/environment_create",
         Some(&format!("environment-{project}")),
-        json!({"name": "Here", "harness": harness, "setupNotes": "Nothing to set up."}),
+        json!({"projectId": project, "name": "Here", "harness": harness, "setupNotes": "Nothing to set up."}),
     )
     .await;
     assert!(status.is_success(), "{created}");
-    created["id"].as_str().expect("environment").to_owned()
+    created["value"]["environment"]["id"]
+        .as_str()
+        .expect("environment")
+        .to_owned()
 }
 
 fn keys(tasks: &Value) -> Vec<String> {

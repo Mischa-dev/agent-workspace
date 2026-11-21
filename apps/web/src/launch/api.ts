@@ -205,31 +205,47 @@ export function listEnvironments(projectId: string) {
   return requestJson<EnvironmentList>(projectPath(projectId, 'environments'))
 }
 
-export function createEnvironment(projectId: string, input: EnvironmentInput) {
-  return requestJson<Environment>(projectPath(projectId, 'environments'), { method: 'POST', json: input, idempotencyKey: crypto.randomUUID() })
-}
+/** The operations leave out what's left out; an empty string clears it. */
+const cleared = (value: string | null | undefined) => (value === null ? '' : value)
 
-export function updateEnvironment(projectId: string, environmentId: string, input: EnvironmentInput) {
-  return requestJson<Environment>(projectPath(projectId, `environments/${encodeURIComponent(environmentId)}`), {
-    method: 'PUT',
-    json: input,
-    idempotencyKey: crypto.randomUUID(),
+export async function createEnvironment(projectId: string, input: EnvironmentInput) {
+  const done = await callOp('environment_create', {
+    projectId,
+    name: input.name,
+    harness: input.harness,
+    providerEnvironmentId: input.providerEnvironmentId ?? undefined,
+    repositoryId: input.repositoryId ?? undefined,
+    branch: input.branch ?? undefined,
+    setupNotes: input.setupNotes,
+    makeDefault: input.makeDefault,
   })
+  return done.environment as unknown as Environment
 }
 
-export function environmentAction(projectId: string, environmentId: string, action: 'archive' | 'default') {
-  return requestJson<EnvironmentList>(projectPath(projectId, `environments/${encodeURIComponent(environmentId)}/${action}`), {
-    method: 'POST',
-    json: {},
-    idempotencyKey: crypto.randomUUID(),
+export async function updateEnvironment(projectId: string, environmentId: string, input: EnvironmentInput) {
+  const done = await callOp('environment_update', {
+    ...input,
+    projectId,
+    environment: environmentId,
+    providerEnvironmentId: cleared(input.providerEnvironmentId),
+    repositoryId: cleared(input.repositoryId),
+    branch: cleared(input.branch),
   })
+  return done.environment as unknown as Environment
 }
 
-export function checkEnvironment(projectId: string, environmentId: string) {
-  return requestJson<{ ok: boolean; message: string; environment: Environment }>(
-    projectPath(projectId, `environments/${encodeURIComponent(environmentId)}/check`),
-    { method: 'POST', json: {}, idempotencyKey: crypto.randomUUID() },
-  )
+export async function environmentAction(projectId: string, environmentId: string, action: 'archive' | 'default') {
+  if (action === 'archive') await callOp('environment_archive', { projectId, environment: environmentId })
+  else await callOp('environment_update', { projectId, environment: environmentId, makeDefault: true })
+}
+
+export async function checkEnvironment(projectId: string, environmentId: string) {
+  const done = await callOp('environment_check', { projectId, environment: environmentId })
+  return {
+    ok: done.checkOk ?? false,
+    message: done.checkMessage ?? '',
+    environment: done.environment as unknown as Environment,
+  }
 }
 
 export function listAgentSessions(conversationId: string) {

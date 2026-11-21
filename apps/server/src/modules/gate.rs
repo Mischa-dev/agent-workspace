@@ -162,16 +162,12 @@ pub(crate) const ID_EXEMPT: &[(&str, &str)] = &[
         "a public form by token; its collection's module is checked by the handler",
     ),
     (
-        "/api/v1/later/",
-        "a person's own saved items, across workspaces",
-    ),
-    (
         "/api/v1/messages/",
         "a message is read with its conversation",
     ),
     (
         "/api/v1/project-invitations/",
-        "an invitation is revoked or replaced from its project's members screen, whose routes the gate covers",
+        "an invitation is opened and accepted by its token, before the person is in the project",
     ),
     (
         "/api/v1/scheduled-messages/",

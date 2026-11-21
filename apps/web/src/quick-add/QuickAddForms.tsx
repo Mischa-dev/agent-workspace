@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { queryKeys } from '../api/queryKeys'
 import { isConnectionError, readLocal, writeLocal } from '../app/localDrafts'
 import { useRetryWhenOnline } from '../app/useRetryWhenOnline'
+import { useWorkspaceId } from '../app/workspace'
 import { getProjectConversationSidebar, sendConversationMessage } from '../conversations/api'
 import { BLANK_MESSAGE_CONTENT, buildMessageContent, MAX_MESSAGE_SCALAR_VALUES } from '../conversations/composerModel'
 import type { ConversationKind } from '../conversations/types'
@@ -336,6 +337,7 @@ export function QuickNoteForm({
   viewerId: string
 }) {
   const navigate = useNavigate()
+  const workspaceId = useWorkspaceId()
   const [text, setText] = useState(() => (shared ? messageFromShare(shared) : ''))
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID())
   const [offline, setOffline] = useState(false)
@@ -348,7 +350,7 @@ export function QuickNoteForm({
   const capture = useMutation({
     mutationFn: async () => {
       if (mode === 'later') {
-        await saveForLater({ note })
+        await saveForLater({ note }, workspaceId)
         return here('/later')
       }
       if (!content) throw new Error('Write something to keep.')

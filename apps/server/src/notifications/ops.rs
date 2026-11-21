@@ -154,9 +154,9 @@ tool_op!(LaterSave {
     home: true,
     audited: true,
     title: "Save for later",
-    description: "Save a message (messageId) or task for later, or set yourself a reminder: \
-        text and at (RFC 3339, up to a year ahead). Saving the same message or task again \
-        updates it.",
+    description: "Save a message (messageId) or task for later, or keep a note for yourself \
+        (text). Add at (RFC 3339, up to a year ahead) to be reminded. Saving the same message \
+        or task again updates it.",
     emits: ["later.changed"],
     input: later_tools::ReminderSetArguments,
     output: later_tools::LaterItemValue,

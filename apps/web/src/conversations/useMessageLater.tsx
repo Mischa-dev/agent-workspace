@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
+import { useWorkspaceId } from '../app/workspace'
 import { useProjectExperience } from '../experience/layout'
 import { changeSaved, invalidateLater, removeSaved, saveForLater } from '../later/api'
 import { TimeDialog } from '../later/TimeDialog'
@@ -34,6 +35,7 @@ export function useMessageLater({
   taskProject: boolean
 }) {
   const queryClient = useQueryClient()
+  const workspaceId = useWorkspaceId()
   const navigate = useNavigate()
   const [marks, setMarks] = useState(new Map<string, SavedMark | null>())
   const [open, setOpen] = useState<Open | null>(null)
@@ -53,8 +55,8 @@ export function useMessageLater({
   const save = (message: ConversationMessage, remindAt: Date | null = null) => {
     const saved = markOf(message)
     const request = saved
-      ? changeSaved(saved.id, { remindAt: remindAt ? remindAt.toISOString() : null, done: false })
-      : saveForLater({ messageId: message.id, remindAt: remindAt?.toISOString() ?? null })
+      ? changeSaved(saved.id, { remindAt: remindAt ? remindAt.toISOString() : null, done: false }, workspaceId)
+      : saveForLater({ messageId: message.id, remindAt: remindAt?.toISOString() ?? null }, workspaceId)
     return request.then((item) => {
       mark(message.id, { id: item.id, remindAt: item.remindAt })
       refresh()
@@ -68,7 +70,7 @@ export function useMessageLater({
 
   const unsave = (message: ConversationMessage, saved: SavedMark) => {
     mark(message.id, null)
-    void removeSaved(saved.id)
+    void removeSaved(saved.id, workspaceId)
       .then(() => {
         refresh()
         showToast({
