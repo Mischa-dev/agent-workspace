@@ -190,6 +190,20 @@ pub trait Operation: Send + Sync + 'static {
         Self::LONG
     }
 
+    /// Turns what the input names by something other than its id (a link,
+    /// say) into the id, before the call is located and checked, so a
+    /// reference by link is checked exactly as one by id. `workspace` is
+    /// the one the call named, if any. Leaves anything it can't find (or
+    /// the caller can't see) as written, which then isn't found.
+    fn resolve_refs(
+        _state: &crate::AppState,
+        _caller: &Caller,
+        _workspace: Option<uuid::Uuid>,
+        _input: &mut serde_json::Value,
+    ) -> impl Future<Output = Result<(), OpError>> + Send {
+        async { Ok(()) }
+    }
+
     /// Does the work. Writes run inside the dispatcher's transaction
     /// (`call.tx()`); the dispatcher commits after the audit row.
     fn run(

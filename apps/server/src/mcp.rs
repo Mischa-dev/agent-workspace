@@ -3472,17 +3472,6 @@ async fn keys_to_ids(
             changed = true;
         }
     }
-    // K2.18: pull_request_get takes a pull request's link as well as its
-    // ID; the operation finds it by ID.
-    if tool == "pull_request_get"
-        && let Some(link) = unresolved(arguments, "identifier")
-        && !link.is_empty()
-        && link.len() <= 2048
-        && let Some((id, _)) = pull_request_by_link(state, principal, &link, None).await?
-    {
-        arguments["identifier"] = serde_json::Value::String(id.to_string());
-        changed = true;
-    }
     if let Some(full_name) = unresolved(arguments, "repositoryId")
         && is_repository_name(&full_name)
         && let Some(within) = repository_scope(state, principal, arguments).await?
@@ -3493,36 +3482,6 @@ async fn keys_to_ids(
         changed = true;
     }
     Ok(changed)
-}
-
-/// The pull request at `link` the caller may see, and its space, preferring
-/// their home project's; only one in `workspace` when the call was made in
-/// one.
-pub(crate) async fn pull_request_by_link(
-    state: &AppState,
-    principal: &McpPrincipal,
-    link: &str,
-    workspace: Option<Uuid>,
-) -> Result<Option<(Uuid, Uuid)>, AppError> {
-    Ok(sqlx::query_as::<_, (Uuid, Uuid)>(
-        r#"
-        SELECT pull.id, pull.project_id FROM github_pull_requests pull
-        JOIN projects project ON project.id = pull.project_id
-        WHERE pull.html_url = $1
-          AND (pull.project_id = $2 OR actor_can_access_project($3, $4, pull.project_id))
-          AND pull_request_visible_to(pull.id, $3)
-          AND ($5::uuid IS NULL OR project.organization_id = $5)
-        ORDER BY pull.project_id = $2 DESC, pull.project_id
-        LIMIT 1
-        "#,
-    )
-    .bind(link)
-    .bind(principal.project_id)
-    .bind(principal.actor_id)
-    .bind(principal.external_agent_connection_id)
-    .bind(workspace)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await?)
 }
 
 /// "owner/name", as GitHub writes a repository.

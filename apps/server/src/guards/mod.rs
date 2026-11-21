@@ -375,7 +375,10 @@ async fn review(
     }
     // The same keyed call that an allowed review already let through goes
     // on to its command, which answers it from its own record of the first
-    // run (a lost answer doesn't ask the reviewers again).
+    // run (a lost answer doesn't ask the reviewers again). Only while that
+    // record lasts: a receipt lives 24 hours from its reservation, which
+    // comes after the review was used, so a retry inside 24 hours of the
+    // use always finds it and replays rather than writing again.
     if let Some(key) = request_key {
         let used = sqlx::query_scalar::<_, bool>(
             r#"
@@ -384,7 +387,7 @@ async fn review(
                 WHERE account_id = $1 AND operation = $2 AND key_hash = $3
                   AND input_hash = $4 AND workspace_id = $5 AND guard_id = $6
                   AND space_id IS NOT DISTINCT FROM $7
-                  AND state = 'used' AND updated_at > now() - interval '7 days'
+                  AND state = 'used' AND updated_at > now() - interval '24 hours'
             )
             "#,
         )
