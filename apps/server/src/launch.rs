@@ -21,6 +21,7 @@ use serde_json::{Map, Value, json};
 use sqlx::{FromRow, PgConnection, PgExecutor, Postgres, Transaction};
 use uuid::Uuid;
 
+use crate::harness_catalog::Harnesses;
 use crate::{
     AppState,
     addresses::{Place, Target},
@@ -1268,11 +1269,12 @@ async fn plan_for(
         .or_else(|| environment.map(|environment| environment.harness.clone()))
         .or_else(|| defaults.harness.clone());
     let mut harnesses = Vec::new();
-    for manifest in state.supervisors.manifests_in(defaults.organization_id) {
+    let known = Harnesses::of(&state, defaults.organization_id).await?;
+    for manifest in known.manifests() {
         let catalog =
-            crate::provider::catalog::run_catalog(&state.pool, defaults.organization_id, &manifest)
+            crate::provider::catalog::run_catalog(&state.pool, defaults.organization_id, manifest)
                 .await?;
-        let runner = state.supervisors.runner_for(&manifest.kind);
+        let runner = known.runner_for(&manifest.kind);
         let runner_name = match runner {
             Some(actor_id) => {
                 sqlx::query_scalar::<_, String>(
@@ -1599,9 +1601,9 @@ pub(crate) async fn launch_tasks(
             .map(|environment| environment.harness.clone())
     });
     if let Some(harness) = &harness
-        && state
-            .supervisors
-            .manifest_in(defaults.organization_id, harness)
+        && Harnesses::of(&state, defaults.organization_id)
+            .await?
+            .manifest(harness)
             .is_none()
     {
         return Err(AppError::Validation("harness"));
@@ -2040,9 +2042,10 @@ async fn start_launch(
                 .as_ref()
                 .map(|environment| environment.harness.clone())
         });
+    let known = Harnesses::visible(&state).await?;
     let manifest = harness
         .as_deref()
-        .and_then(|harness| state.supervisors.manifest(harness));
+        .and_then(|harness| known.manifest(harness));
     let mut options = Map::new();
     if let (Some(environment), Some(manifest)) = (&environment, &manifest) {
         options = environment_options(environment, manifest);
@@ -2139,7 +2142,7 @@ async fn start_launch(
     let runner = launch.agent_account_id.or_else(|| {
         harness
             .as_deref()
-            .and_then(|harness| state.supervisors.runner_for(harness))
+            .and_then(|harness| known.runner_for(harness))
     });
     if let Some(runner) = runner {
         return hand_off(
@@ -2672,11 +2675,11 @@ async fn drain_here(state: &AppState) -> Result<usize, AppError> {
             }
         };
         // A connected runner needs no account here: the task goes to it.
-        if harness
-            .as_deref()
-            .and_then(|harness| state.supervisors.runner_for(harness))
-            .is_some()
-        {
+        let runner = match harness.as_deref() {
+            Some(harness) => Harnesses::visible(&state).await?.runner_for(harness),
+            None => None,
+        };
+        if runner.is_some() {
             let caller = LaunchCaller {
                 actor_id: queued.requested_by_actor_id,
                 actor_kind: kind,

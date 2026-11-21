@@ -5,6 +5,7 @@ mod a1_a2a_binding;
 mod a1_assistant;
 mod a1_builtin_requests;
 mod a1_example_host;
+mod a1_harness_catalog;
 mod a1_host_program;
 mod a1_host_protocol;
 mod a1_launch_paths;

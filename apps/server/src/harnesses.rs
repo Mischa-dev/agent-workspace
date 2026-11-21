@@ -517,7 +517,7 @@ async fn create(
         .bind(&row.kind)
         .fetch_one(&mut *transaction)
         .await?;
-        if !taken && state.supervisors.manifest(&row.kind).is_none() {
+        if !taken && !crate::harness_catalog::is_builtin(&mut transaction, &row.kind).await? {
             break;
         }
     }

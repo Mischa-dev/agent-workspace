@@ -67,10 +67,11 @@ pub async fn builtin_estimate(
     else {
         return Ok(None);
     };
-    let Some(manifest) = state.supervisors.manifest(&scope.adapter_kind) else {
+    let harnesses = crate::harness_catalog::Harnesses::of(&state, scope.workspace_id).await?;
+    let Some(manifest) = harnesses.manifest(&scope.adapter_kind) else {
         return Ok(None);
     };
-    let prices = catalog::run_catalog(&state.pool, scope.workspace_id, &manifest)
+    let prices = catalog::run_catalog(&state.pool, scope.workspace_id, manifest)
         .await?
         .into_iter()
         .find(|entry| entry.id == model)

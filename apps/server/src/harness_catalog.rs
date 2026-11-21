@@ -12,10 +12,10 @@
 use std::collections::BTreeMap;
 
 use serde_json::Value;
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgConnection, PgPool};
 use uuid::Uuid;
 
-use crate::{error::AppError, harness::manifest::AdapterManifest};
+use crate::{AppState, error::AppError, harness::manifest::AdapterManifest};
 
 /// The most harnesses the built-in host may describe.
 pub const MAX_BUILTIN_HARNESSES: usize = 32;
@@ -30,10 +30,10 @@ struct Entry {
     runner: Option<Uuid>,
 }
 
-/// The harnesses a workspace can run (or, from [`Catalog::visible`], every
+/// The harnesses a workspace can run (or, from [`Harnesses::visible`], every
 /// harness the caller can see, for naming them).
 #[derive(Clone, Debug, Default)]
-pub struct Catalog {
+pub struct Harnesses {
     entries: BTreeMap<String, Entry>,
     /// Built-in kinds first, then registered ones, each by kind.
     order: Vec<String>,
@@ -49,35 +49,71 @@ struct Registered {
     enabled: bool,
 }
 
-impl Catalog {
+impl Harnesses {
     /// The workspace's catalog: the built-in host's harnesses and the
     /// workspace's own registered ones.
-    pub async fn of(pool: &PgPool, organization_id: Uuid) -> Result<Self, AppError> {
+    pub async fn of(state: &AppState, organization_id: Uuid) -> Result<Self, AppError> {
+        crate::db::scoped_one(&state.pool, async |connection| {
+            Self::of_on(state, connection, organization_id).await
+        })
+        .await
+    }
+
+    /// [`Self::of`], read on a connection the caller holds (inside its
+    /// transaction).
+    pub async fn of_on(
+        state: &AppState,
+        connection: &mut PgConnection,
+        organization_id: Uuid,
+    ) -> Result<Self, AppError> {
         let registered = sqlx::query_as::<_, Registered>(
             "SELECT kind, name, transport, manifest, runner_actor_id, enabled \
              FROM custom_harnesses WHERE organization_id = $1 ORDER BY kind",
         )
         .bind(organization_id)
-        .fetch_all(crate::db::scoped(pool))
+        .fetch_all(&mut *connection)
         .await?;
-        Self::build(pool, registered).await
+        Self::build(state, connection, registered).await
     }
 
     /// Every harness the caller can see, to name the harness of a run, a
     /// session or a profile wherever it was registered.
-    pub async fn visible(pool: &PgPool) -> Result<Self, AppError> {
+    pub async fn visible(state: &AppState) -> Result<Self, AppError> {
+        crate::db::scoped_one(&state.pool, async |connection| {
+            Self::visible_on(state, connection).await
+        })
+        .await
+    }
+
+    /// [`Self::visible`], on a connection the caller holds.
+    pub async fn visible_on(
+        state: &AppState,
+        connection: &mut PgConnection,
+    ) -> Result<Self, AppError> {
         let registered = sqlx::query_as::<_, Registered>(
             "SELECT kind, name, transport, manifest, runner_actor_id, enabled \
              FROM custom_harnesses ORDER BY kind",
         )
-        .fetch_all(crate::db::scoped(pool))
+        .fetch_all(&mut *connection)
         .await?;
-        Self::build(pool, registered).await
+        Self::build(state, connection, registered).await
     }
 
-    async fn build(pool: &PgPool, registered: Vec<Registered>) -> Result<Self, AppError> {
+    async fn build(
+        state: &AppState,
+        connection: &mut PgConnection,
+        registered: Vec<Registered>,
+    ) -> Result<Self, AppError> {
         let mut catalog = Self::default();
-        for manifest in builtin(pool).await? {
+        let mut described = builtin(connection).await?;
+        // Until the built-in host has described its harnesses (the first
+        // second after it takes its lease), a process that holds the host
+        // answers for it.
+        if described.is_empty() && state.config.builtin_host {
+            described = state.supervisors.builtin_manifests();
+            described.sort_by(|left, right| left.kind.cmp(&right.kind));
+        }
+        for manifest in described {
             catalog.insert(manifest, true, None);
         }
         for row in registered {
@@ -162,10 +198,10 @@ fn readable(harness: &str) -> String {
 
 /// The built-in host's harnesses, as it last described them. A manifest
 /// this server can't read (from a newer host) is left out.
-async fn builtin(pool: &PgPool) -> Result<Vec<AdapterManifest>, AppError> {
+async fn builtin(connection: &mut PgConnection) -> Result<Vec<AdapterManifest>, AppError> {
     let rows =
         sqlx::query_scalar::<_, Value>("SELECT manifest FROM builtin_host_harnesses ORDER BY kind")
-            .fetch_all(crate::db::scoped(pool))
+            .fetch_all(connection)
             .await?;
     Ok(rows
         .into_iter()
@@ -325,7 +361,7 @@ mod tests {
 
     #[test]
     fn unknown_harnesses_read_by_their_word() {
-        let catalog = Catalog::default();
+        let catalog = Harnesses::default();
         assert_eq!(catalog.name("night_runner"), "Night Runner");
         assert!(catalog.manifest("night_runner").is_none());
     }

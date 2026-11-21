@@ -1059,6 +1059,11 @@ mod tests {
             Plumbing("the built-in host's own program enrolling with the code its operator wrote"),
         ),
         (
+            Put,
+            "/api/v1/host/builtin/harnesses",
+            Plumbing("the built-in host describing the harnesses it runs"),
+        ),
+        (
             Post,
             "/api/v1/connected-modules/token",
             Plumbing("a connected module trading its one-time install code"),
