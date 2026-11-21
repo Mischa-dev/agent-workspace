@@ -106,8 +106,11 @@ describe('TeamSettings', () => {
         if (path.endsWith('/invitations') && (init?.method ?? 'GET') === 'GET') {
           return jsonResponse([invitation])
         }
-        if (path.endsWith(`/members/${actorId}`)) {
-          return jsonResponse({ ...member, role: 'viewer', version: 2 })
+        if (path.endsWith('/ops/space_member_update')) {
+          return jsonResponse({
+            outcome: 'ok',
+            value: { accountId: actorId, name: member.displayName, handle: member.handle, role: 'viewer', version: 2, active: true, spaceId: projectId, viaGroup: false },
+          })
         }
         throw new Error(`Unexpected request: ${path}`)
       }),
@@ -131,15 +134,15 @@ describe('TeamSettings', () => {
     })
 
     await waitFor(() => {
-      const update = requests.find(({ path }) => path.endsWith(`/members/${actorId}`))
+      const update = requests.find(({ path }) => path.endsWith('/ops/space_member_update'))
       expect(JSON.parse(String(update?.init?.body))).toEqual({
+        spaceId: projectId,
+        account: actorId,
         expectedVersion: 1,
         role: 'viewer',
       })
       const headers = new Headers(update?.init?.headers)
-      expect(headers.get('idempotency-key')).toBe(
-        '019fb800-0000-7000-8000-000000000006',
-      )
+      expect(headers.get('idempotency-key')).toBeTruthy()
       expect(headers.get('x-csrf-token')).toBe('csrf-team')
     })
   })
@@ -152,8 +155,8 @@ describe('TeamSettings', () => {
         const path = String(input)
         paths.push(path)
         if (path.endsWith('/members')) return jsonResponse({ members: [member] })
-        if (path.endsWith('/invitations') && init?.method === 'POST') {
-          return jsonResponse({ ...invitation, invitationUrl })
+        if (path.endsWith('/ops/invitation_create') && init?.method === 'POST') {
+          return jsonResponse({ outcome: 'ok', value: { done: 'sent', invitation, joinUrl: invitationUrl } })
         }
         if (path.endsWith('/invitations')) return jsonResponse([invitation])
         throw new Error(`Unexpected request: ${path}`)

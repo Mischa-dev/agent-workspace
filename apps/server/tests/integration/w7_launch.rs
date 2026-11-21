@@ -454,10 +454,10 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
     let changed = send(
         &application,
         owner,
-        "PATCH",
-        &format!("{project}/members/{member_id}"),
+        "POST",
+        "/api/v2/ops/space_member_update",
         "member-blind-launcher",
-        json!({"roleId": role.2["value"]["id"], "expectedVersion": version}),
+        json!({"spaceId": seed.project_id, "account": member_id, "role": role.2["value"]["id"], "expectedVersion": version}),
     )
     .await;
     assert_eq!(changed.0, StatusCode::OK, "{}", changed.1);

@@ -146,7 +146,7 @@ export function TeamSettings({ organizationId, projectId }: { organizationId?: s
     onError: mutationError('The invitation wasn’t created.'),
   })
   const revokeMutation = useMutation({
-    mutationFn: (invitation: Invitation) => revokeInvitation(invitation.id, invitation.version),
+    mutationFn: (invitation: Invitation) => revokeInvitation(projectId, invitation.id, invitation.version),
     onSuccess: async () => {
       setRevoking(null)
       showToast({ tone: 'success', title: 'Invitation revoked', description: 'Its link no longer works.' })
@@ -154,7 +154,7 @@ export function TeamSettings({ organizationId, projectId }: { organizationId?: s
     },
   })
   const replaceMutation = useMutation({
-    mutationFn: (invitation: Invitation) => replaceInvitation(invitation.id, invitation.version, DEFAULT_INVITATION_HOURS),
+    mutationFn: (invitation: Invitation) => replaceInvitation(projectId, invitation.id, invitation.version, DEFAULT_INVITATION_HOURS),
     onSuccess: async (issued) => {
       setOneShot(issued)
       await refresh()

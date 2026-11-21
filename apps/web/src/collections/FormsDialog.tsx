@@ -366,10 +366,13 @@ function FormEditor({
       }
       return createCollectionForm(projectId, body.collection.id, name, form)
     },
-    onSuccess: (created) => {
+    // A link made on an earlier try can answer without its address: list it either way.
+    onSettled: () => {
       void client.invalidateQueries({ queryKey: bugReportKeys.links(projectId) })
       void client.invalidateQueries({ queryKey: opPrefix('form_list', workspaceId) })
       void client.invalidateQueries({ queryKey: opPrefix('form_get', workspaceId) })
+    },
+    onSuccess: (created) => {
       if (created) onShared(created.link.name, created.formUrl ?? created.url)
       else {
         showToast({ title: `${draft.name.trim()} saved` })

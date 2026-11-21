@@ -1129,16 +1129,14 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
     // It reaches the run's space only, even where the agent itself is a
     // member too.
     let elsewhere = create_project(&setup, "ELSE", "Elsewhere").await;
-    let (status, added) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{elsewhere}/members"),
-            None,
-            json!({"actorId": fixer, "role": "member"}),
-        ),
-    )
-    .await;
+    let (status, added) = setup
+        .browser
+        .op(
+            app,
+            "space_member_add",
+            json!({"spaceId": elsewhere, "account": fixer, "role": "member"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{added}");
     let listed = tool(app, &token, &session, "projects_list", json!({})).await;
     assert!(!listed.to_string().contains(&elsewhere), "{listed}");

@@ -127,16 +127,14 @@ pub(super) async fn space(setup: &Setup) -> String {
 }
 
 pub(super) async fn add_member(setup: &Setup, project: &str, actor: Uuid, role: &str) {
-    let (status, added) = send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{project}/members"),
-            None,
-            json!({"actorId": actor, "role": role}),
-        ),
-    )
-    .await;
+    let (status, added) = setup
+        .browser
+        .op(
+            &setup.app,
+            "space_member_add",
+            json!({"spaceId": project, "account": actor, "role": role}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{added}");
 }
 

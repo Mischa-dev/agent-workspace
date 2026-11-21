@@ -361,16 +361,13 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
     // Tasks: the app creates one in the Work project; two agents race to
     // claim it and exactly one wins.
     for agent in [mara, rook] {
-        let (status, added) = send(
-            &app,
-            browser.request(
-                "POST",
-                &format!("/api/v1/projects/{project_id}/members"),
-                None,
-                json!({"actorId": agent, "role": "member"}),
-            ),
-        )
-        .await;
+        let (status, added) = browser
+            .op(
+                &app,
+                "space_member_add",
+                json!({"spaceId": project_id, "account": agent, "role": "member"}),
+            )
+            .await;
         assert_eq!(status, StatusCode::OK, "{added}");
     }
     let created = tool(

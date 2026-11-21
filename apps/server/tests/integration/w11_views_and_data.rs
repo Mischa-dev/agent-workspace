@@ -733,9 +733,9 @@ async fn a_github_import_stops_when_its_committer_loses_see_code() {
     .expect("membership version");
     let (status, changed) = fixture
         .owner
-        .patch(
-            &format!("{base}/members/{member}"),
-            json!({"roleId": role["id"], "expectedVersion": version}),
+        .post(
+            "/api/v2/ops/space_member_update",
+            json!({"spaceId": project, "account": member, "role": role["id"], "expectedVersion": version}),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{changed}");

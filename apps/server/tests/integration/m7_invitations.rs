@@ -132,12 +132,13 @@ async fn project_invitations_are_digest_only_role_scoped_and_revocable() {
         .clone()
         .oneshot(request(
             "POST",
-            &invitations_uri,
+            "/api/v2/ops/invitation_create",
             &[
                 ("origin", "http://127.0.0.1:3100"),
                 ("cookie", owner_cookie.as_str()),
+                ("idempotency-key", "m7-invite-no-csrf"),
             ],
-            json!({"role":"viewer","expiresInHours":24}),
+            json!({"projectId": seed.project_id, "role":"viewer","expiresInHours":24}),
         ))
         .await
         .expect("missing CSRF invitation response");
@@ -147,32 +148,32 @@ async fn project_invitations_are_digest_only_role_scoped_and_revocable() {
         .clone()
         .oneshot(request(
             "POST",
-            &invitations_uri,
-            &write_headers(&owner_cookie, &owner_csrf),
-            json!({"role":"viewer","expiresInHours":169}),
+            "/api/v2/ops/invitation_create",
+            &op_headers(&owner_cookie, &owner_csrf, "m7-invite-1"),
+            json!({"projectId": seed.project_id, "role":"viewer","expiresInHours":169}),
         ))
         .await
         .expect("invalid expiry response");
-    assert_eq!(invalid_expiry.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(invalid_expiry.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
     let issued_response = application
         .clone()
         .oneshot(request(
             "POST",
-            &invitations_uri,
-            &write_headers(&owner_cookie, &owner_csrf),
-            json!({"role":"admin","expiresInHours":24}),
+            "/api/v2/ops/invitation_create",
+            &op_headers(&owner_cookie, &owner_csrf, "m7-invite-2"),
+            json!({"projectId": seed.project_id, "role":"admin","expiresInHours":24}),
         ))
         .await
         .expect("owner invitation response");
-    assert_eq!(issued_response.status(), StatusCode::CREATED);
+    assert_eq!(issued_response.status(), StatusCode::OK);
     let issued = response_json(issued_response).await;
-    let invitation_id = issued["id"]
+    let invitation_id = issued["value"]["invitation"]["id"]
         .as_str()
         .expect("invitation ID")
         .parse::<Uuid>()
         .expect("invitation UUID");
-    let invitation_url = issued["invitationUrl"]
+    let invitation_url = issued["value"]["joinUrl"]
         .as_str()
         .expect("one-shot invitation URL");
     let token = invitation_url
@@ -204,8 +205,11 @@ async fn project_invitations_are_digest_only_role_scoped_and_revocable() {
     assert_eq!(listed_response.status(), StatusCode::OK);
     let listed = response_json(listed_response).await;
     assert_eq!(listed.as_array().expect("invitation list").len(), 1);
-    assert_eq!(listed[0]["id"], issued["id"]);
-    assert_eq!(listed[0]["tokenPrefix"], issued["tokenPrefix"]);
+    assert_eq!(listed[0]["id"], issued["value"]["invitation"]["id"]);
+    assert_eq!(
+        listed[0]["tokenPrefix"],
+        issued["value"]["invitation"]["tokenPrefix"]
+    );
     let safe_list = serde_json::to_string(&listed).expect("serialize safe list");
     assert!(!safe_list.contains(token));
     assert!(!safe_list.contains("invitationUrl"));
@@ -214,20 +218,20 @@ async fn project_invitations_are_digest_only_role_scoped_and_revocable() {
         .clone()
         .oneshot(request(
             "POST",
-            &invitations_uri,
-            &write_headers(&admin_cookie, &admin_csrf),
-            json!({"role":"member","expiresInHours":24}),
+            "/api/v2/ops/invitation_create",
+            &op_headers(&admin_cookie, &admin_csrf, "m7-invite-3"),
+            json!({"projectId": seed.project_id, "role":"member","expiresInHours":24}),
         ))
         .await
         .expect("admin member invitation response");
-    assert_eq!(admin_member.status(), StatusCode::CREATED);
+    assert_eq!(admin_member.status(), StatusCode::OK);
     let admin_member = response_json(admin_member).await;
-    let admin_member_id = admin_member["id"]
+    let admin_member_id = admin_member["value"]["invitation"]["id"]
         .as_str()
         .expect("admin member invitation ID")
         .parse::<Uuid>()
         .expect("admin member invitation UUID");
-    let admin_member_token = admin_member["invitationUrl"]
+    let admin_member_token = admin_member["value"]["joinUrl"]
         .as_str()
         .expect("admin member invitation URL")
         .split_once("#token=")
@@ -235,32 +239,31 @@ async fn project_invitations_are_digest_only_role_scoped_and_revocable() {
         .1
         .to_owned();
 
-    let replace_uri = format!("/api/v1/project-invitations/{admin_member_id}/replace");
     let replacement_response = application
         .clone()
         .oneshot(request(
             "POST",
-            &replace_uri,
-            &write_headers(&admin_cookie, &admin_csrf),
-            json!({"expectedVersion":1,"expiresInHours":48}),
+            "/api/v2/ops/invitation_update",
+            &op_headers(&admin_cookie, &admin_csrf, "m7-replace-1"),
+            json!({"projectId": seed.project_id, "invitation": admin_member_id, "replace": true, "expectedVersion":1,"expiresInHours":48}),
         ))
         .await
         .expect("replace invitation response");
-    assert_eq!(replacement_response.status(), StatusCode::CREATED);
+    assert_eq!(replacement_response.status(), StatusCode::OK);
     let replacement = response_json(replacement_response).await;
-    let replacement_id = replacement["id"]
+    let replacement_id = replacement["value"]["invitation"]["id"]
         .as_str()
         .expect("replacement invitation ID")
         .parse::<Uuid>()
         .expect("replacement invitation UUID");
-    let replacement_token = replacement["invitationUrl"]
+    let replacement_token = replacement["value"]["joinUrl"]
         .as_str()
         .expect("replacement invitation URL")
         .split_once("#token=")
         .expect("replacement token fragment")
         .1;
     assert_ne!(replacement_token, admin_member_token);
-    assert_eq!(replacement["role"], "member");
+    assert_eq!(replacement["value"]["invitation"]["role"], "member");
     let replacement_shape = sqlx::query_as::<_, (String, i64, Option<Uuid>)>(
         "SELECT status, version, replaced_by_invitation_id FROM project_invitations WHERE id = $1",
     )
@@ -276,9 +279,9 @@ async fn project_invitations_are_digest_only_role_scoped_and_revocable() {
         .clone()
         .oneshot(request(
             "POST",
-            &replace_uri,
-            &write_headers(&admin_cookie, &admin_csrf),
-            json!({"expectedVersion":1,"expiresInHours":48}),
+            "/api/v2/ops/invitation_update",
+            &op_headers(&admin_cookie, &admin_csrf, "m7-replace-2"),
+            json!({"projectId": seed.project_id, "invitation": admin_member_id, "replace": true, "expectedVersion":1,"expiresInHours":48}),
         ))
         .await
         .expect("replayed replace response");
@@ -298,9 +301,9 @@ async fn project_invitations_are_digest_only_role_scoped_and_revocable() {
         .clone()
         .oneshot(request(
             "POST",
-            &invitations_uri,
-            &write_headers(&admin_cookie, &admin_csrf),
-            json!({"role":"admin","expiresInHours":24}),
+            "/api/v2/ops/invitation_create",
+            &op_headers(&admin_cookie, &admin_csrf, "m7-invite-4"),
+            json!({"projectId": seed.project_id, "role":"admin","expiresInHours":24}),
         ))
         .await
         .expect("admin elevation invitation response");
@@ -318,9 +321,9 @@ async fn project_invitations_are_digest_only_role_scoped_and_revocable() {
         .clone()
         .oneshot(request(
             "POST",
-            &invitations_uri,
-            &write_headers(&admin_cookie, &admin_csrf),
-            json!({"role":"viewer","expiresInHours":24}),
+            "/api/v2/ops/invitation_create",
+            &op_headers(&admin_cookie, &admin_csrf, "m7-invite-5"),
+            json!({"projectId": seed.project_id, "role":"viewer","expiresInHours":24}),
         ))
         .await
         .expect("Project-role-only invitation response");
@@ -329,14 +332,13 @@ async fn project_invitations_are_digest_only_role_scoped_and_revocable() {
         StatusCode::FORBIDDEN
     );
 
-    let revoke_uri = format!("/api/v1/project-invitations/{invitation_id}/revoke");
     let stale_revoke = application
         .clone()
         .oneshot(request(
             "POST",
-            &revoke_uri,
-            &write_headers(&owner_cookie, &owner_csrf),
-            json!({"expectedVersion":2}),
+            "/api/v2/ops/invitation_update",
+            &op_headers(&owner_cookie, &owner_csrf, "m7-revoke-stale"),
+            json!({"projectId": seed.project_id, "invitation": invitation_id, "revoke": true, "expectedVersion":2}),
         ))
         .await
         .expect("stale revoke response");
@@ -346,29 +348,32 @@ async fn project_invitations_are_digest_only_role_scoped_and_revocable() {
         .clone()
         .oneshot(request(
             "POST",
-            &revoke_uri,
-            &write_headers(&owner_cookie, &owner_csrf),
-            json!({"expectedVersion":1}),
+            "/api/v2/ops/invitation_update",
+            &op_headers(&owner_cookie, &owner_csrf, "m7-revoke"),
+            json!({"projectId": seed.project_id, "invitation": invitation_id, "revoke": true, "expectedVersion":1}),
         ))
         .await
         .expect("revoke invitation response");
     assert_eq!(revoked_response.status(), StatusCode::OK);
     let revoked = response_json(revoked_response).await;
-    assert_eq!(revoked["status"], "revoked");
-    assert_eq!(revoked["version"], 2);
+    assert_eq!(revoked["value"]["invitation"]["status"], "revoked");
+    assert_eq!(revoked["value"]["invitation"]["version"], 2);
 
     let replay_response = application
         .clone()
         .oneshot(request(
             "POST",
-            &revoke_uri,
-            &write_headers(&owner_cookie, &owner_csrf),
-            json!({"expectedVersion":1}),
+            "/api/v2/ops/invitation_update",
+            &op_headers(&owner_cookie, &owner_csrf, "m7-revoke"),
+            json!({"projectId": seed.project_id, "invitation": invitation_id, "revoke": true, "expectedVersion":1}),
         ))
         .await
         .expect("replayed revoke response");
     assert_eq!(replay_response.status(), StatusCode::OK);
-    assert_eq!(response_json(replay_response).await["version"], 2);
+    assert_eq!(
+        response_json(replay_response).await["value"]["invitation"]["version"],
+        2
+    );
 
     let audit_count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM audit_events WHERE target_id = $1 AND action IN ('project.invitation.issue', 'project.invitation.revoke')",
@@ -449,28 +454,27 @@ async fn invitation_acceptance_creates_or_extends_one_human_identity_atomically(
     .expect("bootstrap M7 acceptance owner");
     let application = test_app(pool.clone(), config);
     let (owner_cookie, owner_csrf) = login(&application, OWNER_LOGIN, OWNER_PASSWORD).await;
-    let invitations_uri = format!("/api/v1/projects/{}/invitations", seed.project_id);
 
     let new_user_invitation = application
         .clone()
         .oneshot(request(
             "POST",
-            &invitations_uri,
-            &write_headers(&owner_cookie, &owner_csrf),
-            json!({"role":"viewer","expiresInHours":24}),
+            "/api/v2/ops/invitation_create",
+            &op_headers(&owner_cookie, &owner_csrf, "m7-invite-6"),
+            json!({"projectId": seed.project_id, "role":"viewer","expiresInHours":24}),
         ))
         .await
         .expect("new-user invitation response");
-    assert_eq!(new_user_invitation.status(), StatusCode::CREATED);
+    assert_eq!(new_user_invitation.status(), StatusCode::OK);
     let new_user_invitation = response_json(new_user_invitation).await;
-    let new_user_token = new_user_invitation["invitationUrl"]
+    let new_user_token = new_user_invitation["value"]["joinUrl"]
         .as_str()
         .expect("new-user invitation URL")
         .split_once("#token=")
         .expect("new-user token fragment")
         .1
         .to_owned();
-    let new_user_invitation_id = new_user_invitation["id"]
+    let new_user_invitation_id = new_user_invitation["value"]["invitation"]["id"]
         .as_str()
         .expect("new-user invitation ID")
         .parse::<Uuid>()
@@ -642,22 +646,22 @@ async fn invitation_acceptance_creates_or_extends_one_human_identity_atomically(
         .clone()
         .oneshot(request(
             "POST",
-            &invitations_uri,
-            &write_headers(&owner_cookie, &owner_csrf),
-            json!({"role":"admin","expiresInHours":24}),
+            "/api/v2/ops/invitation_create",
+            &op_headers(&owner_cookie, &owner_csrf, "m7-invite-7"),
+            json!({"projectId": seed.project_id, "role":"admin","expiresInHours":24}),
         ))
         .await
         .expect("existing-user invitation response");
-    assert_eq!(existing_invitation_response.status(), StatusCode::CREATED);
+    assert_eq!(existing_invitation_response.status(), StatusCode::OK);
     let existing_invitation = response_json(existing_invitation_response).await;
-    let existing_token = existing_invitation["invitationUrl"]
+    let existing_token = existing_invitation["value"]["joinUrl"]
         .as_str()
         .expect("existing-user invitation URL")
         .split_once("#token=")
         .expect("existing-user token fragment")
         .1
         .to_owned();
-    let existing_invitation_id = existing_invitation["id"]
+    let existing_invitation_id = existing_invitation["value"]["invitation"]["id"]
         .as_str()
         .expect("existing-user invitation ID")
         .parse::<Uuid>()
@@ -830,6 +834,15 @@ fn response_cookies(response: &axum::response::Response) -> (String, String) {
         .expect("CSRF cookie")
         .to_owned();
     (cookies.join("; "), csrf)
+}
+
+fn op_headers<'a>(cookie: &'a str, csrf: &'a str, key: &'a str) -> [(&'a str, &'a str); 4] {
+    [
+        ("origin", "http://127.0.0.1:3100"),
+        ("cookie", cookie),
+        ("x-csrf-token", csrf),
+        ("idempotency-key", key),
+    ]
 }
 
 fn write_headers<'a>(cookie: &'a str, csrf: &'a str) -> [(&'a str, &'a str); 3] {

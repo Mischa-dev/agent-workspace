@@ -305,12 +305,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         SessionAuthentication
     ),
     policy_route!(
-        "memberships",
-        Post,
-        "/api/v1/projects/{project_id}/members",
-        MembershipManage
-    ),
-    policy_route!(
         "workspace",
         Patch,
         "/api/v1/organizations/{organization_id}",
@@ -1091,24 +1085,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/internal/work/tick",
         OperatorWorkToken
     ),
-    policy_route!(
-        "invitations",
-        Post,
-        "/api/v1/projects/{project_id}/invitations",
-        InvitationManage
-    ),
-    policy_route!(
-        "invitations",
-        Post,
-        "/api/v1/project-invitations/{invitation_id}/revoke",
-        InvitationManage
-    ),
-    policy_route!(
-        "invitations",
-        Post,
-        "/api/v1/project-invitations/{invitation_id}/replace",
-        InvitationManage
-    ),
     boundary_route!(
         "invitations",
         Post,
@@ -1126,12 +1102,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/project-invitations/accept-existing",
         InvitationCapability
-    ),
-    policy_route!(
-        "memberships",
-        Patch,
-        "/api/v1/projects/{project_id}/members/{actor_id}",
-        MembershipManage
     ),
     policy_route!(
         "external_agents",

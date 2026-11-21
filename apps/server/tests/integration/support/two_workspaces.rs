@@ -1086,16 +1086,13 @@ async fn build_workspace(
     .await
     .expect("the edit made a change set");
 
-    let (status, invitation) = send(
-        app,
-        browser.request(
-            "POST",
-            &format!("/api/v1/projects/{project}/invitations"),
-            Some("invite-1"),
-            json!({"role": "viewer", "expiresInHours": 24}),
-        ),
-    )
-    .await;
+    let (status, invitation) = browser
+        .op(
+            app,
+            "invitation_create",
+            json!({"projectId": project, "role": "viewer", "expiresInHours": 24}),
+        )
+        .await;
     assert!(
         status.is_success(),
         "{label} invitation: {status} {invitation}"

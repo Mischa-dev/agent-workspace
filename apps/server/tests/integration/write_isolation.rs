@@ -164,8 +164,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/pages/{id}/document/sync",
     "POST /api/v1/pages/{id}/document/updates",
     "POST /api/v1/pages/{id}/suggestions/{suggestion_id}/decision",
-    "POST /api/v1/project-invitations/{invitation_id}/replace",
-    "POST /api/v1/project-invitations/{invitation_id}/revoke",
     "POST /api/v1/projects",
     "PUT /api/v1/projects/rail-order",
     "PATCH /api/v1/projects/{id}",
@@ -215,7 +213,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/imports/{import_id}/commit",
     "POST /api/v1/projects/{project_id}/integrations/github/connect",
     "POST /api/v1/projects/{project_id}/integrations/github/repositories",
-    "POST /api/v1/projects/{project_id}/invitations",
     "POST /api/v1/projects/{project_id}/fields",
     "PATCH /api/v1/projects/{project_id}/fields/{field_id}",
     "POST /api/v1/projects/{project_id}/collections",
@@ -232,8 +229,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/launches/{launch_id}/cancel",
     "PUT /api/v1/projects/{project_id}/layout",
     "PUT /api/v1/projects/{project_id}/layout/rules",
-    "POST /api/v1/projects/{project_id}/members",
-    "PATCH /api/v1/projects/{project_id}/members/{actor_id}",
     "POST /api/v1/projects/{project_id}/provider-accounts",
     "DELETE /api/v1/projects/{project_id}/provider-accounts/{account_id}",
     "PATCH /api/v1/projects/{project_id}/provider-accounts/{account_id}",
@@ -2311,6 +2306,7 @@ struct Spares {
     rule: Uuid,
     /// An environment A's own environment_archive archives.
     environment: Uuid,
+    /// A's own invitation_update revokes it.
     project_invitation: Uuid,
     /// An agent in the project to change, rotate and remove.
     agent_connection: Uuid,
@@ -2557,12 +2553,11 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         "Net spare cloud",
     )
     .await;
-    ok(
+    ok_op(
         app,
         browser,
-        "POST",
-        &format!("/api/v1/projects/{project}/invitations"),
-        json!({"role": "viewer", "expiresInHours": 24}),
+        "/api/v2/ops/invitation_create",
+        json!({"projectId": project, "role": "viewer", "expiresInHours": 24}),
     )
     .await;
     let project_invitation = scalar(
@@ -4718,16 +4713,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             )
         },
         // Project invitations
-        path_case(
-            "POST /api/v1/project-invitations/{invitation_id}/replace",
-            &[id(ax.project_invitation, bx.project_invitation)],
-            versioned("project_invitations", 0, json!({"expiresInHours": 48})),
-        ),
-        path_case(
-            "POST /api/v1/project-invitations/{invitation_id}/revoke",
-            &[id(sp.project_invitation, bx.project_invitation)],
-            versioned("project_invitations", 0, json!({})),
-        ),
         // Projects
         body_case(
             "POST /api/v1/projects",
@@ -5090,11 +5075,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         .without_own(NEEDS_GITHUB),
         // Invitations, labels, launches, members, milestones
         path_case(
-            "POST /api/v1/projects/{project_id}/invitations",
-            &[project()],
-            json_body(json!({"role": "viewer", "expiresInHours": 24})),
-        ),
-        path_case(
             "POST /api/v1/projects/{project_id}/fields",
             &[project()],
             json_body(json!({"name": "Net field", "type": "text"})),
@@ -5285,27 +5265,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
                 {"actorId": b.rook, "preset": "bug_reporting"},
             ]}),
         ]),
-        path_case(
-            "POST /api/v1/projects/{project_id}/members",
-            &[project()],
-            json_body(json!({"actorId": ax.wren, "role": "member"})),
-        )
-        .rejecting(vec![json!({"actorId": bx.wren, "role": "member"})]),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/members/{actor_id}",
-            &[project(), id(a.rook, b.rook)],
-            |values| {
-                Payload::Json(json!({
-                    "expectedVersion": current(
-                        "project_memberships",
-                        "version",
-                        &[("project_id", values[0].clone()), ("actor_id", values[1].clone())],
-                        1,
-                    ),
-                    "enabled": true,
-                }))
-            },
-        ),
         // Provider accounts
         path_case(
             "POST /api/v1/projects/{project_id}/provider-accounts",
@@ -6472,10 +6431,9 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         ]),
         mcp_case(
             "invitation_update",
-            json!({}),
+            json!({"projectId": a.project, "invitation": sp.project_invitation, "revoke": true}),
             vec![json!({"projectId": b.project, "invitation": bx.project_invitation, "revoke": true})],
         )
-        .without_own("revoking A's invitation would break the cases after it; m7 invitation tests revoke and replace one")
         .rejecting(vec![
             json!({"projectId": a.project, "invitation": bx.project_invitation, "revoke": true}),
             json!({"projectId": a.project, "invitation": bx.project_invitation, "replace": true}),
@@ -6700,6 +6658,13 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"id": ax.later, "text": "Net"}),
             vec![json!({"id": bx.later, "text": "Net"})],
         ),
+        // Wren joins A's project here: the requests below ask Wren.
+        mcp_case(
+            "space_member_add",
+            json!({"spaceId": a.project, "account": "@wren", "role": "member"}),
+            vec![json!({"spaceId": b.project, "account": "@wren", "role": "member"})],
+        )
+        .rejecting(vec![json!({"spaceId": a.project, "account": bx.wren, "role": "member"})]),
         mcp_case(
             "request_create",
             json!({"spaceId": a.project, "title": "Net?", "audience": {"accounts": ["@wren"]},
@@ -8480,12 +8445,6 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         ),
         // K4.8: space members, last: removing @wren from A's project would
         // take them from the cases above. B's spaces and B's people aren't A's.
-        mcp_case(
-            "space_member_add",
-            json!({"spaceId": a.project, "account": "@wren", "role": "member"}),
-            vec![json!({"spaceId": b.project, "account": "@wren", "role": "member"})],
-        )
-        .rejecting(vec![json!({"spaceId": a.project, "account": bx.wren, "role": "member"})]),
         mcp_case(
             "space_member_update",
             json!({"spaceId": a.project, "account": "@wren", "role": "viewer"}),

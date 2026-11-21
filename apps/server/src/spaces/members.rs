@@ -242,7 +242,8 @@ impl Operation for SpaceMemberAdd {
     const TITLE: &'static str = "Add someone to a space";
     const DESCRIPTION: &'static str = "Add a person or agent of this workspace to a project or \
         team space, as a member, a viewer or a custom role within yours. Someone already in it \
-        is changed with space_member_update. Returns their membership.";
+        is changed with space_member_update. Adding someone who was removed brings them back, \
+        in their old role unless you name one. Returns their membership.";
 
     type Input = SpaceMemberAddInput;
     type Output = SpaceMemberView;
@@ -256,28 +257,58 @@ impl Operation for SpaceMemberAdd {
         let tx = call.tx().await?;
         managed_space(tx, space).await?;
         let account = account_in(tx, space, &input.account).await?;
-        let (role, role_id) = match input.role.as_deref() {
-            None => (Some("member".to_owned()), None),
-            Some(text) => role_named(tx, space, text).await?,
-        };
-        let added = memberships::add_member(
-            tx,
-            caller,
-            space,
-            account,
-            role.as_deref().unwrap_or("member"),
-            role_id,
+        let removed = sqlx::query_scalar::<_, bool>(
+            "SELECT NOT enabled FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
         )
+        .bind(space)
+        .bind(account)
+        .fetch_optional(&mut **tx)
         .await
-        .map_err(refused)?;
-        if let Some(expires_at) = input.expires_at.as_deref() {
-            set_expiry(tx, space, added.member.actor_id, expiry(expires_at)?).await?;
+        .map_err(AppError::from)?
+        .unwrap_or(false);
+        if removed {
+            // Someone removed earlier comes back, in the role they had
+            // unless another is named.
+            let (role, role_id) = match input.role.as_deref() {
+                None => (None, None),
+                Some(text) => role_named(tx, space, text).await?,
+            };
+            memberships::change_member(
+                tx,
+                caller,
+                space,
+                account,
+                role.as_deref(),
+                role_id,
+                Some(true),
+                None,
+            )
+            .await
+            .map_err(refused)?;
+        } else {
+            let (role, role_id) = match input.role.as_deref() {
+                None => (Some("member".to_owned()), None),
+                Some(text) => role_named(tx, space, text).await?,
+            };
+            memberships::add_member(
+                tx,
+                caller,
+                space,
+                account,
+                role.as_deref().unwrap_or("member"),
+                role_id,
+            )
+            .await
+            .map_err(refused)?;
         }
-        let view = member(tx, space, added.member.actor_id).await?;
+        if let Some(expires_at) = input.expires_at.as_deref() {
+            set_expiry(tx, space, account, expiry(expires_at)?).await?;
+        }
+        let view = member(tx, space, account).await?;
         call.audit_target(
             "account",
             account,
-            json!({ "space": space, "role": view.role, "roleId": view.role_id }),
+            json!({ "space": space, "role": view.role, "roleId": view.role_id, "restored": removed }),
         );
         Ok(view)
     }

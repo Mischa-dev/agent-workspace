@@ -923,15 +923,7 @@ async fn task_lists_leave_out_projects_where_tasks_is_off() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{other}/members/{bea}"),
-            Some("awd75-bea-other"),
-            json!({"expectedVersion": version, "roleId": made["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": other, "account": bea, "expectedVersion": version, "role": made["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
 
@@ -1005,15 +997,7 @@ pub(super) async fn narrow_in_project(
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        &setup.app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{project}/members/{actor}"),
-            Some(key),
-            json!({"expectedVersion": version, "roleId": made["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(&setup.app, "space_member_update", json!({"spaceId": project, "account": actor, "expectedVersion": version, "role": made["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
 }

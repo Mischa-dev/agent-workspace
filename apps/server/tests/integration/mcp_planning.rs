@@ -48,16 +48,14 @@ async fn agent_in(setup: &Setup, project: &str, name: &str, handle: &str) -> (Uu
         .expect("space")
         .to_owned();
     let (actor, token) = create_agent(app, &setup.browser, &space, name, handle).await;
-    let (status, added) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{project}/members"),
-            None,
-            json!({"actorId": actor, "role": "member"}),
-        ),
-    )
-    .await;
+    let (status, added) = setup
+        .browser
+        .op(
+            app,
+            "space_member_add",
+            json!({"spaceId": project, "account": actor, "role": "member"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{added}");
     (actor, token)
 }

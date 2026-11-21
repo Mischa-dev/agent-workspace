@@ -54,16 +54,14 @@ async fn only_owners_change_projects_and_archived_ones_come_back() {
         .expect("space")
         .to_owned();
     let (mara, mara_token) = create_agent(app, &setup.browser, &space, "Mara", "mara").await;
-    let (status, added) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/members"),
-            None,
-            json!({"actorId": mara, "role": "member"}),
-        ),
-    )
-    .await;
+    let (status, added) = setup
+        .browser
+        .op(
+            app,
+            "space_member_add",
+            json!({"spaceId": work, "account": mara, "role": "member"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{added}");
     let codex = connect_app(app, &setup.browser, "Codex", "full").await;
     let session = initialize(app, &codex).await.expect("Codex MCP");
@@ -604,16 +602,14 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
         .to_owned();
     // Mara works only in the old project, so she can't follow the task.
     let (mara, mara_token) = create_agent(app, &setup.browser, &space, "Mara", "mara").await;
-    let (status, added) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{old}/members"),
-            None,
-            json!({"actorId": mara, "role": "member"}),
-        ),
-    )
-    .await;
+    let (status, added) = setup
+        .browser
+        .op(
+            app,
+            "space_member_add",
+            json!({"spaceId": old, "account": mara, "role": "member"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{added}");
     let codex = connect_app(app, &setup.browser, "Codex", "full").await;
     let session = initialize(app, &codex).await.expect("Codex MCP");

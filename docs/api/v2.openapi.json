@@ -164676,7 +164676,7 @@
     },
     "/api/v2/w/{workspace}/ops/space_member_add": {
       "post": {
-        "description": "Add a person or agent of this workspace to a project or team space, as a member, a viewer or a custom role within yours. Someone already in it is changed with space_member_update. Returns their membership. Needs \"Change roles and remove people\" where it acts.",
+        "description": "Add a person or agent of this workspace to a project or team space, as a member, a viewer or a custom role within yours. Someone already in it is changed with space_member_update. Adding someone who was removed brings them back, in their old role unless you name one. Returns their membership. Needs \"Change roles and remove people\" where it acts.",
         "operationId": "space_member_add",
         "parameters": [
           {

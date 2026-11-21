@@ -1737,12 +1737,13 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     sqlx::query("INSERT INTO project_memberships(id,project_id,actor_id,role,display_name,handle) SELECT $1,$2,actor_id,role,display_name,handle FROM project_memberships WHERE project_id=$3 AND actor_id=$4").bind(Uuid::now_v7()).bind(other_project).bind(seed.project_id).bind(seed.human_actor_id).execute(&pool).await.expect("other project owner");
     let cross_org = application
         .clone()
-        .oneshot(write_request(
+        .oneshot(write_request_with_idempotency(
             "POST",
-            &format!("/api/v1/projects/{other_project}/members"),
+            "/api/v2/ops/space_member_add",
             &cookie,
             &csrf,
-            json!({"actorId":actor,"role":"member"}),
+            "cross-org-add",
+            json!({"spaceId":other_project,"account":actor,"role":"member"}),
         ))
         .await
         .expect("cross organization request");
@@ -1792,19 +1793,20 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     );
     let add = application
         .clone()
-        .oneshot(write_request(
+        .oneshot(write_request_with_idempotency(
             "POST",
-            &format!("/api/v1/projects/{second}/members"),
+            "/api/v2/ops/space_member_add",
             &cookie,
             &csrf,
-            json!({"actorId":actor,"role":"member"}),
+            "second-add",
+            json!({"spaceId":second,"account":actor,"role":"member"}),
         ))
         .await
         .expect("account fixture operation");
     assert_eq!(add.status(), StatusCode::OK);
     let added = response_json(add).await;
-    assert_eq!(added["actorKind"], "external_agent");
-    assert_eq!(added["handle"], "shared_agent");
+    assert_eq!(added["value"]["accountId"], actor.to_string());
+    assert_eq!(added["value"]["handle"], "shared_agent");
     let mentions = application
         .clone()
         .oneshot(read_request(
@@ -1948,12 +1950,12 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     let elevated = application
         .clone()
         .oneshot(write_request_with_idempotency(
-            "PATCH",
-            &format!("/api/v1/projects/{second}/members/{actor}"),
+            "POST",
+            "/api/v2/ops/space_member_update",
             &cookie,
             &csrf,
             "agent-admin",
-            json!({"expectedVersion":1,"role":"admin"}),
+            json!({"spaceId":second,"account":actor,"expectedVersion":1,"role":"admin"}),
         ))
         .await
         .expect("account fixture operation");
@@ -1962,12 +1964,12 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     let removed = application
         .clone()
         .oneshot(write_request_with_idempotency(
-            "PATCH",
-            &format!("/api/v1/projects/{second}/members/{actor}"),
+            "POST",
+            "/api/v2/ops/space_member_remove",
             &cookie,
             &csrf,
             "remove-agent",
-            json!({"expectedVersion":2,"enabled":false}),
+            json!({"spaceId":second,"account":actor,"expectedVersion":2}),
         ))
         .await
         .expect("account fixture operation");
@@ -2019,12 +2021,13 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
         .to_owned();
     let joined = application
         .clone()
-        .oneshot(write_request(
+        .oneshot(write_request_with_idempotency(
             "POST",
-            &format!("/api/v1/projects/{}/members", seed.project_id),
+            "/api/v2/ops/space_member_add",
             &cookie,
             &csrf,
-            json!({"actorId":approver_actor,"role":"member"}),
+            "approver-add",
+            json!({"spaceId":seed.project_id,"account":approver_actor,"role":"member"}),
         ))
         .await
         .expect("add approver to seed project");
@@ -2107,15 +2110,12 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     let removed = application
         .clone()
         .oneshot(write_request_with_idempotency(
-            "PATCH",
-            &format!(
-                "/api/v1/projects/{}/members/{approver_actor}",
-                seed.project_id
-            ),
+            "POST",
+            "/api/v2/ops/space_member_remove",
             &cookie,
             &csrf,
             "remove-approver",
-            json!({"expectedVersion":member_version,"enabled":false}),
+            json!({"spaceId":seed.project_id,"account":approver_actor,"expectedVersion":member_version}),
         ))
         .await
         .expect("remove approver from seed project");
@@ -2136,15 +2136,12 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     let rejoined = application
         .clone()
         .oneshot(write_request_with_idempotency(
-            "PATCH",
-            &format!(
-                "/api/v1/projects/{}/members/{approver_actor}",
-                seed.project_id
-            ),
+            "POST",
+            "/api/v2/ops/space_member_add",
             &cookie,
             &csrf,
             "restore-approver",
-            json!({"expectedVersion":member_version.as_i64().expect("version") + 1,"enabled":true}),
+            json!({"spaceId":seed.project_id,"account":approver_actor}),
         ))
         .await
         .expect("restore approver in seed project");

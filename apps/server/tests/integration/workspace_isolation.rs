@@ -3664,16 +3664,14 @@ async fn check_token(
     .expect("B's owner's profile in A");
     {
         let space = &a.project;
-        let (status, added) = send_json(
-            app,
-            a.browser.request(
-                "POST",
-                &format!("/api/v1/projects/{space}/members"),
-                None,
-                json!({"actorId": b_owner, "role": "member"}),
-            ),
-        )
-        .await;
+        let (status, added) = a
+            .browser
+            .op(
+                app,
+                "space_member_add",
+                json!({"spaceId": space, "account": b_owner, "role": "member"}),
+            )
+            .await;
         assert!(status.is_success(), "{status} {added}");
     }
     // B's DMs and groups are kept in B (ruling R20): B's, not the account's
