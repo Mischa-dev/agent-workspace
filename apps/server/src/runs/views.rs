@@ -384,9 +384,13 @@ pub async fn run_diff(
     viewer: Uuid,
     run_id: Uuid,
 ) -> Result<RunDiffView, AppError> {
-    let (_, code) = visible_run(state, viewer, run_id).await?;
-    let diff = if code {
-        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    // Any run, whoever runs it: the shared run view's visibility, and its
+    // code only for a viewer who sees code.
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let line = super::pages::visible_line(&mut transaction, viewer, run_id)
+        .await?
+        .ok_or(AppError::NotFound("agent_run"))?;
+    let diff = if super::pages::sees_code(state, viewer, line.project_id).await? {
         changes::get(&mut transaction, run_id).await?
     } else {
         None

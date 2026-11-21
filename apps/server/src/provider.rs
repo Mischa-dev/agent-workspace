@@ -469,6 +469,10 @@ impl turn::TurnHost for BuiltinTurns {
         fail_run(&self.state, &self.reports, run_id, reason).await
     }
 
+    async fn files_may_have_changed(&self, run_id: Uuid) {
+        report_changes_of(&self.state, &self.reports, run_id).await;
+    }
+
     async fn complete(&self, run_id: Uuid, reply: &str) -> Result<(), AppError> {
         complete_run(&self.state, &self.reports, run_id, reply, None).await
     }
@@ -931,12 +935,18 @@ async fn report_changes(reports: &RunReports, worktree: PathBuf, base_commit: Op
             });
             diff.files.truncate(crate::runs::changes::MAX_FILES);
             diff.truncated |= diff.files.len() < before;
-            // A report the server would refuse for its size keeps its files
-            // and drops the patch, as one too big to keep would.
-            let size = serde_json::to_vec(&diff).map_or(usize::MAX, |body| body.len());
-            if size > crate::runs::changes::MAX_REPORT_BYTES - 64 * 1024 {
+            // A report the server would refuse for its size drops the patch
+            // first (as one too big to keep would), then files from the end.
+            let room = crate::runs::changes::MAX_REPORT_BYTES - 64 * 1024;
+            let size =
+                |diff: &RunDiff| serde_json::to_vec(diff).map_or(usize::MAX, |body| body.len());
+            if size(&diff) > room {
                 diff.patch.clear();
                 diff.truncated = true;
+                while size(&diff) > room && !diff.files.is_empty() {
+                    let keep = diff.files.len() * 3 / 4;
+                    diff.files.truncate(keep);
+                }
             }
             reports.changes(&diff).await.map_err(AppError::from)
         }

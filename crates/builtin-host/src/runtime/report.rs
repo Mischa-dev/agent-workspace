@@ -63,6 +63,10 @@ pub struct RunReports {
     run_id: Uuid,
     start_command_id: Uuid,
     reporter: Mutex<RunReporter>,
+    /// Changes reports sent by these reports (named by `opened`), for each
+    /// one's key.
+    changes_sent: std::sync::atomic::AtomicU64,
+    opened: Uuid,
 }
 
 impl std::fmt::Debug for RunReports {
@@ -102,6 +106,8 @@ impl RunReports {
             run_id,
             start_command_id,
             reporter: Mutex::new(reporter),
+            changes_sent: std::sync::atomic::AtomicU64::new(0),
+            opened: Uuid::now_v7(),
         })
     }
 
@@ -294,10 +300,17 @@ impl RunReports {
     pub async fn changes(&self, diff: &crate::git::RunDiff) -> Result<(), AppError> {
         let fields = serde_json::to_value(diff)
             .map_err(|_| AppError::Internal("serialize the run's changes"))?;
+        // Each report has its own key, the same on its retries: a report
+        // sent again after a newer one is answered from the first, never
+        // written over the newer one, and the same changes sent again later
+        // (an edit undone) still count.
+        let report = self
+            .changes_sent
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let key = format!(
             "changes-{}",
             hex::encode(Sha256::digest(
-                format!("{}-{fields}", self.run_id.simple()).as_bytes()
+                format!("{}-{}-{report}", self.run_id.simple(), self.opened.simple()).as_bytes()
             ))
         );
         self.call("run_changes_report", fields, &key).await?;

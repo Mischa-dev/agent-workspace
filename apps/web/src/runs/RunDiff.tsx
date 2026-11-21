@@ -9,7 +9,7 @@ const STATUS_LABEL: Record<string, string> = { added: 'Added', modified: 'Change
 
 /** Why a run has no files to list: still going, no branch, or its host never said what it changed. */
 function noFilesText(run: Pick<RunDetail, 'agentName' | 'baseCommit' | 'publishedCommit'>, live: boolean) {
-  if (live) return `Changes show up here when ${run.agentName ?? 'the agent'} finishes its turn.`
+  if (live) return `Changes show up here once ${run.agentName ?? 'the agent'} edits files.`
   if (!run.baseCommit) return 'This run didn’t work on a branch, so it has no changes to show.'
   if (run.publishedCommit) return 'This run didn’t report its changes here. Open its branch to read them.'
   return 'This run didn’t report its changes, so there are none to show.'

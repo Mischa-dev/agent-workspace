@@ -1086,7 +1086,7 @@ impl Operation for RunChangesReport {
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "runs";
     const PERMISSION: Option<Perm> = Some(Perm::RunsReport);
-    const IDEMPOTENCY: Idempotency = Idempotency::Command;
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
     const TITLE: &'static str = "Report a run's changes";
     const DESCRIPTION: &'static str = "Say what a run of yours has changed in its repository \
         so far: the files and the unified diff against where it started. Each report replaces \
@@ -1124,8 +1124,6 @@ impl Operation for RunChangesReport {
             super::ops::emit(tx, &run, "changes_reported").await?;
         }
         let truncated = input.truncated || input.patch.len() > super::changes::MAX_PATCH_BYTES;
-        // The latest report is the run's changes: sending it again keeps it.
-        call.key_honoured();
         call.audit_target("run", run_id, json!({ "files": input.files.len() }));
         Ok(RunChangesOutput {
             files: input.files.len(),

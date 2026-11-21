@@ -277,6 +277,37 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
         patch.is_empty() && truncated,
         "an oversized patch is dropped, said so"
     );
+    // Whoever runs it, its page shows them: the files in the run's view, the
+    // rest from its diff.
+    let workspace = setup.organization_id;
+    let (status, viewed) = send(
+        app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/run_detail_get"),
+            None,
+            json!({"runId": run_id}),
+        ),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{viewed}");
+    assert_eq!(
+        viewed["value"]["files"][0]["path"], "src/main.rs",
+        "{viewed}"
+    );
+    let (status, diff) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/agent-runs/{run_id}/diff"),
+            None,
+            Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{diff}");
+    assert_eq!(diff["state"], "ready", "{diff}");
+    assert_eq!(diff["truncated"], true, "{diff}");
     let refused = call(
         "run_changes_report",
         json!({"runId": run_id, "files": [{"path": "a\nb", "status": "added"}]}),

@@ -144241,6 +144241,16 @@
                                 "null"
                               ]
                             },
+                            "files": {
+                              "description": "The files it changed in its repository, as its host last reported\nthem (`run_changes_report`), for a viewer who sees code; null before\nthe first report. The diff is read on its own.",
+                              "items": {
+                                "$ref": "#/components/schemas/ChangedFile"
+                              },
+                              "type": [
+                                "array",
+                                "null"
+                              ]
+                            },
                             "finishedAt": {
                               "format": "date-time",
                               "type": [
@@ -144702,6 +144712,16 @@
                             "failureReason": {
                               "type": [
                                 "string",
+                                "null"
+                              ]
+                            },
+                            "files": {
+                              "description": "The files it changed in its repository, as its host last reported\nthem (`run_changes_report`), for a viewer who sees code; null before\nthe first report. The diff is read on its own.",
+                              "items": {
+                                "$ref": "#/components/schemas/ChangedFile"
+                              },
+                              "type": [
+                                "array",
                                 "null"
                               ]
                             },

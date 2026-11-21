@@ -173,6 +173,8 @@ export type RunView = RunLine & {
   /** Pull requests it opened or reported that the space has, with their checks. */
   pullRequests: OpOutput<'run_detail_get'>['pullRequests']
   usageByModel: ModelUsageLine[]
+  /** What it changed, as its host last reported it; null before a report (or without "see code"). */
+  files: ChangedFile[] | null
 }
 
 export type StepFile = { path: string; change?: string }
