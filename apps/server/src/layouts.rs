@@ -134,7 +134,17 @@ fn builtin(id: &str) -> Option<&'static BuiltinPreset> {
 }
 
 fn part_known(id: &str) -> bool {
-    registry().parts.iter().any(|part| part.id == id)
+    registry().parts.iter().any(|part| part.id == id) || module_part(id)
+}
+
+/// `module.<key>`: a built module's own part, one per module, made as
+/// modules are built rather than listed in the registry. It shows unless a
+/// layout or My view hides it (M1.7).
+fn module_part(id: &str) -> bool {
+    id.len() <= 60
+        && id
+            .strip_prefix("module.")
+            .is_some_and(|name| name.len() <= 40 && is_name(name))
 }
 
 /// A noun's own words, before any layout renames it.
@@ -383,6 +393,8 @@ pub struct PresetRef {
 #[derive(Clone, Debug)]
 struct Shape {
     visible: BTreeSet<&'static str>,
+    /// Built modules' parts it hides (`module.<key>`), which show otherwise.
+    hidden_modules: BTreeSet<String>,
     words: BTreeMap<String, Word>,
     lead: Vec<String>,
     preset: Option<PresetRef>,
@@ -398,6 +410,7 @@ impl Shape {
                 .filter(|part| part.default)
                 .map(|part| part.id.as_str())
                 .collect(),
+            hidden_modules: BTreeSet::new(),
             words: BTreeMap::new(),
             lead: Vec::new(),
             preset: None,
@@ -422,6 +435,7 @@ impl Shape {
         };
         Self {
             visible,
+            hidden_modules: BTreeSet::new(),
             words: preset.words.clone(),
             lead: preset.lead.clone(),
             preset: Some(PresetRef {
@@ -460,7 +474,23 @@ impl Shape {
         shape
     }
 
+    /// Whether it shows `part`, a registered part or a built module's.
+    fn shows(&self, part: &str) -> bool {
+        if module_part(part) {
+            !self.hidden_modules.contains(part)
+        } else {
+            self.visible.contains(part)
+        }
+    }
+
     fn apply(&mut self, changes: &BTreeMap<String, bool>, words: &BTreeMap<String, Word>) {
+        for (part, shown) in changes.iter().filter(|(part, _)| module_part(part)) {
+            if *shown {
+                self.hidden_modules.remove(part);
+            } else {
+                self.hidden_modules.insert(part.clone());
+            }
+        }
         for part in &registry().parts {
             match changes.get(&part.id) {
                 Some(true) => {
@@ -511,6 +541,9 @@ pub struct Effective {
     /// Parts this person doesn't see: the layout's (unless they show hidden
     /// parts) and the ones they hid for themselves.
     pub hidden: Vec<&'static str>,
+    /// The same for built modules' own parts (`module.<key>`), which aren't
+    /// in the registry.
+    pub hidden_modules: Vec<String>,
     /// Nouns renamed from their own words.
     pub words: BTreeMap<String, Word>,
     /// Parts to put first, such as Runs in Agent lab.
@@ -595,6 +628,16 @@ fn effective(inputs: &Inputs<'_>) -> Effective {
         layout_hidden: parts().filter(|id| !shape.visible.contains(id)).collect(),
         hidden: parts()
             .filter(|id| mine.contains(id) || (!inputs.show_hidden && !shape.visible.contains(id)))
+            .collect(),
+        hidden_modules: shape
+            .hidden_modules
+            .iter()
+            .filter(|_| !inputs.show_hidden)
+            .map(String::as_str)
+            .chain(mine.iter().copied().filter(|part| module_part(part)))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(str::to_owned)
             .collect(),
         words: shape
             .words
@@ -1142,7 +1185,7 @@ async fn checked_layout(
         Shape::preset(&layout.preset, &saved).ok_or(AppError::Validation("layout preset"))?;
     layout
         .changes
-        .retain(|part, shown| shape.visible.contains(part.as_str()) != *shown);
+        .retain(|part, shown| shape.shows(part) != *shown);
     layout
         .words
         .retain(|noun, word| shape.word(noun).as_ref() != Some(word));
@@ -1249,8 +1292,7 @@ async fn flattened(
     let mut words = saved.words;
     words.extend(layout.words);
     let base = builtin(&saved.base).map_or_else(Shape::everything, Shape::builtin);
-    changes
-        .retain(|part, shown| part_known(part) && base.visible.contains(part.as_str()) != *shown);
+    changes.retain(|part, shown| part_known(part) && base.shows(part) != *shown);
     words.retain(|noun, word| {
         noun_default(noun).is_some() && base.word(noun).as_ref() != Some(word)
     });
@@ -1736,11 +1778,18 @@ async fn change_my_view(
     if wanted.len() != request.hidden.len() || !wanted.iter().all(|part| part_known(part)) {
         return Err(AppError::Validation("hidden parts"));
     }
+    // Registered parts in registry order, then built modules' parts.
     let hidden = registry()
         .parts
         .iter()
         .filter(|part| wanted.contains(part.id.as_str()))
         .map(|part| part.id.clone())
+        .chain(
+            wanted
+                .iter()
+                .filter(|part| module_part(part))
+                .map(|part| (*part).to_owned()),
+        )
         .collect::<Vec<_>>();
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     settings::authorize_personal(&mut *transaction, &principal, organization_id).await?;
@@ -2212,6 +2261,28 @@ mod tests {
         let showing = effective(&chosen);
         assert_eq!(hidden(&showing), BTreeSet::from(["area.tasks"]));
         assert!(showing.layout_hidden.contains(&"area.runs") && showing.showing_hidden);
+    }
+
+    #[test]
+    fn built_modules_parts_show_until_a_layout_or_my_view_hides_them() {
+        assert!(
+            part_known("module.crm") && !part_known("module.local.crm") && !part_known("module.")
+        );
+        let saved = Vec::new();
+        let mut project = Layout::preset("minimal");
+        project.changes.insert("module.crm".to_owned(), false);
+        let mine = vec!["module.sales".to_owned(), "area.tasks".to_owned()];
+        let mut chosen = inputs(&saved, &mine);
+        chosen.project = Some(&project);
+        let plain = effective(&chosen);
+        assert_eq!(plain.hidden_modules, ["module.crm", "module.sales"]);
+        assert!(!plain.hidden.contains(&"module.crm"));
+        // Showing hidden parts undoes the layout's, not your own.
+        chosen.show_hidden = true;
+        assert_eq!(effective(&chosen).hidden_modules, ["module.sales"]);
+        // A module nobody hid shows.
+        assert!(Shape::layout(&project, &saved).shows("module.other"));
+        assert!(!Shape::layout(&project, &saved).shows("module.crm"));
     }
 
     #[test]

@@ -68,7 +68,7 @@ export type BudgetScope = "workspace" | "account" | "space" | "conversation"
 
 export type BudgetView = { eachAccount: boolean; hardLimit?: number | null; id?: string | null; isDefault: boolean; meter: string; meterName: string; period: string; scope: string; scopeId?: string | null; setBy?: string | null; softLimit?: number | null; unit: string; used: number; version?: number | null }
 
-export type BuiltModuleSummary = { description: string; icon?: string | null; id: string; key: string; name: string; on: boolean; parts: number; spaceId?: string | null }
+export type BuiltModuleSummary = { description: string; icon?: string | null; id: string; key: string; name: string; nav: NavView[]; on: boolean; parts: number; spaceId?: string | null }
 
 export type ButtonInput = { label?: string | null; steps: ButtonStepInput[] }
 
@@ -132,7 +132,7 @@ export type ConditionalRule = ({ value: unknown; when: "lessThan" } | { value: u
 
 export type Conditions = { filters?: Record<string, string>; viewId?: string | null }
 
-export type ConnectedModuleView = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; fileCheck?: Record<string, unknown> | null; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
+export type ConnectedModuleView = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; fileCheck?: Record<string, unknown> | null; fileSource?: boolean; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
 
 export type ConnectionEntry = { address: string; id: string; kind: string; name: string; queries: number; updatedAt: string; version: number }
 
@@ -372,7 +372,7 @@ export type LinkedThread = { id: string; name: string; url: string }
 
 export type MadeTask = { elementId: string; id: string; key: string; title: string }
 
-export type ManifestSummary = { accountName: string; description: string; digest: string; events: string[]; frameOrigins: string[]; key: string; kinds: string[]; name: string; operations: OperationSummary[]; panels: PanelSummary[]; publisher?: string | null; scopes: ScopeView[]; version: string }
+export type ManifestSummary = { accountName: string; description: string; digest: string; events: string[]; fileSource?: boolean; frameOrigins: string[]; key: string; kinds: string[]; name: string; operations: OperationSummary[]; panels: PanelSummary[]; publisher?: string | null; scopes: ScopeView[]; version: string }
 
 export type MeasureOp = "count" | "sum" | "average" | "min" | "max"
 
@@ -422,7 +422,7 @@ export type NamedRange = { name: string; range: string; tab: string; tabId: stri
 
 export type NavEntry = { icon?: string | null; label: string; target: unknown }
 
-export type NavView = { icon?: string | null; id: string; label: string; target: unknown }
+export type NavView = { icon?: string | null; id: string; label: string; spaceId?: string | null; target: unknown }
 
 export type NewSpace = { key: string; name: string }
 
@@ -1080,11 +1080,11 @@ export type CommentThreadUpdateOutput = { outcome?: string | null; status: strin
 
 export type ConnectedModuleApproveInput = { digest?: string | null; moduleId: string; scopes?: string[] | null }
 
-export type ConnectedModuleApproveOutput = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; fileCheck?: Record<string, unknown> | null; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
+export type ConnectedModuleApproveOutput = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; fileCheck?: Record<string, unknown> | null; fileSource?: boolean; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
 
 export type ConnectedModuleInstallInput = { digest?: string | null; scopes?: string[] | null; url: string }
 
-export type ConnectedModuleInstallOutput = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; fileCheck?: Record<string, unknown> | null; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
+export type ConnectedModuleInstallOutput = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; fileCheck?: Record<string, unknown> | null; fileSource?: boolean; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
 
 export type ConnectedModuleListInput = { includeRevoked?: boolean; moduleId?: string | null }
 
@@ -1096,7 +1096,7 @@ export type ConnectedModuleRefreshOutput = { module: ConnectedModuleView; refres
 
 export type ConnectedModuleRevokeInput = { moduleId: string }
 
-export type ConnectedModuleRevokeOutput = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; fileCheck?: Record<string, unknown> | null; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
+export type ConnectedModuleRevokeOutput = { accountId: string; accountName: string; approvedAt: string; approvedBy: string; baseUrl: string; description: string; digest: string; events: string[]; fileCheck?: Record<string, unknown> | null; fileSource?: boolean; frameOrigins: string[]; installSentAt?: string | null; key: string; kinds: string[]; manifestUrl: string; moduleId: string; name: string; operations: OperationSummary[]; panels: PanelSummary[]; pending?: ManifestSummary | null; publisher?: string | null; revokedAt?: string | null; scopes: ScopeView[]; state: string; version: string }
 
 export type ConnectedModuleRunInput = { input?: Record<string, unknown>; operation: string }
 

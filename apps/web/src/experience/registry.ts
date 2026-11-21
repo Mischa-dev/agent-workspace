@@ -115,6 +115,17 @@ export function layoutFrom(preset: string, visible: Set<PartId>, words: Partial<
   }
 }
 
+/**
+ * `layout` with the built modules' switches (`module.<key>`) that `stored`
+ * holds. The editor has no switch for them yet, so a save of anything else
+ * keeps them rather than dropping them.
+ */
+export function keepModuleChanges(layout: Layout, stored: Layout | null): Layout {
+  const kept = Object.entries(stored?.changes ?? {}).filter(([part]) => part.startsWith('module.'))
+  if (!kept.length) return layout
+  return { ...layout, changes: { ...Object.fromEntries(kept), ...layout.changes } }
+}
+
 /** A preset's name, for a reference that may be built in, saved or gone. */
 export function presetName(reference: string, saved: SavedPreset[]) {
   return builtinPreset(reference)?.name ?? saved.find((preset) => preset.id === reference)?.name ?? 'A removed preset'

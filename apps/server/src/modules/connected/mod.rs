@@ -248,6 +248,10 @@ pub struct ManifestSummary {
     pub events: Vec<String>,
     pub panels: Vec<PanelSummary>,
     pub frame_origins: Vec<String>,
+    /// It serves files (a file source), which `connected_module_test`
+    /// checks.
+    #[serde(default)]
+    pub file_source: bool,
     /// SHA-256 of the manifest served: pass it to install or approve to be
     /// sure nothing changed since you looked.
     pub digest: String,
@@ -298,6 +302,7 @@ fn summary(manifest: &Manifest, digest: &str, approved: &BTreeSet<String>) -> Ma
                 title: panel.title.clone(),
             })
             .collect(),
+        file_source: manifest.file_source.is_some(),
         frame_origins: manifest
             .frame_origins
             .iter()

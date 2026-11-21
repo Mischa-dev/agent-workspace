@@ -76,6 +76,9 @@ pub(crate) struct BuiltModuleSummary {
     #[schemars(with = "Option<String>")]
     pub space_id: Option<Uuid>,
     pub parts: i64,
+    /// Its sidebar entries the caller may follow, each with the space it
+    /// shows in.
+    pub nav: Vec<crate::modules::built::NavView>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]

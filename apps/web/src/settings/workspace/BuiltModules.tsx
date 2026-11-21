@@ -28,6 +28,7 @@ import {
   showToast,
   type IconName,
 } from '../../ui'
+import { MODULE_ICONS, moduleIcon } from '../../modules/builtIcons'
 
 import './modules.css'
 
@@ -44,26 +45,6 @@ function read<N extends OpName>(name: N, input: OpInput<N>, workspaceId: string)
   return { queryKey: opKey(name, input, workspaceId), queryFn: (): Promise<OpOutput<N>> => callOp(name, input, { workspaceId }) }
 }
 type Opened = OpOutput<'module_open'>
-
-/** The icons a module can wear: the shared set's ones that read as a place. */
-const MODULE_ICONS: { value: IconName; label: string }[] = [
-  { value: 'table', label: 'Table' },
-  { value: 'list', label: 'List' },
-  { value: 'board', label: 'Board' },
-  { value: 'checklist', label: 'Checklist' },
-  { value: 'chart', label: 'Chart' },
-  { value: 'inbox', label: 'Inbox' },
-  { value: 'bookmark', label: 'Bookmark' },
-  { value: 'star', label: 'Star' },
-  { value: 'activity', label: 'Activity' },
-  { value: 'users', label: 'People' },
-  { value: 'repo', label: 'Code' },
-  { value: 'whiteboard', label: 'Whiteboard' },
-]
-
-function moduleIcon(icon: string | null | undefined): IconName {
-  return MODULE_ICONS.find((choice) => choice.value === icon)?.value ?? 'table'
-}
 
 /** A key from a name: lowercase letters, digits and underscores, starting with a letter. */
 function keyFrom(name: string) {

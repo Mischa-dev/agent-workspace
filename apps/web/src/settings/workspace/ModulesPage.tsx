@@ -25,6 +25,7 @@ import { ShapePicker } from '../../workspace-templates/ShapePicker'
 import type { SettingsPageProps } from '../types'
 import { AvailablePackages } from './AvailablePackages'
 import { BuiltModules } from './BuiltModules'
+import { ConnectedModules } from './ConnectedModules'
 
 // AWD-75: Workspace › Modules. Which whole features are on in the workspace.
 // Off hides a module everywhere (its pages, sidebar rows, palette entries,
@@ -58,6 +59,7 @@ export default function ModulesPage({ projects, workspace }: SettingsPageProps) 
   return workspace ? (
     <WorkspaceModules
       canBuild={can(workspace, 'modules.build')}
+      canConnect={can(workspace, 'modules.manage')}
       key={workspace.id}
       name={workspace.name}
       organizationId={workspace.id}
@@ -70,11 +72,13 @@ type Tab = 'installed' | 'available'
 
 function WorkspaceModules({
   canBuild,
+  canConnect,
   name,
   organizationId,
   projects,
 }: {
   canBuild: boolean
+  canConnect: boolean
   name: string
   organizationId: string
   projects: SettingsPageProps['projects']
@@ -197,6 +201,7 @@ function WorkspaceModules({
             </RowList>
           </Section>
           <BuiltModules canBuild={canBuild} projects={projects} workspaceId={organizationId} />
+          {canConnect ? <ConnectedModules workspaceId={organizationId} /> : null}
         </>
       )}
     </>

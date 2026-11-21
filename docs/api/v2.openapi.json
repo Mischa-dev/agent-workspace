@@ -1051,6 +1051,13 @@
           "name": {
             "type": "string"
           },
+          "nav": {
+            "description": "Its sidebar entries the caller may follow, each with the space it\nshows in.",
+            "items": {
+              "$ref": "#/components/schemas/NavView"
+            },
+            "type": "array"
+          },
           "on": {
             "description": "Switched on here (module_set).",
             "type": "boolean"
@@ -1072,7 +1079,8 @@
           "name",
           "description",
           "on",
-          "parts"
+          "parts",
+          "nav"
         ],
         "type": "object"
       },
@@ -2502,6 +2510,11 @@
               "object",
               "null"
             ]
+          },
+          "fileSource": {
+            "default": false,
+            "description": "It serves files (a file source), which `connected_module_test`\nchecks.",
+            "type": "boolean"
           },
           "frameOrigins": {
             "items": {
@@ -7444,6 +7457,11 @@
             },
             "type": "array"
           },
+          "fileSource": {
+            "default": false,
+            "description": "It serves files (a file source), which `connected_module_test`\nchecks.",
+            "type": "boolean"
+          },
           "frameOrigins": {
             "items": {
               "type": "string"
@@ -8419,6 +8437,13 @@
           },
           "label": {
             "type": "string"
+          },
+          "spaceId": {
+            "description": "The space the entry's collection, page or form is in, where the\nsidebar shows it; none when what it points at is gone.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "target": true
         },
@@ -39437,6 +39462,11 @@
                                 "null"
                               ]
                             },
+                            "fileSource": {
+                              "default": false,
+                              "description": "It serves files (a file source), which `connected_module_test`\nchecks.",
+                              "type": "boolean"
+                            },
                             "frameOrigins": {
                               "items": {
                                 "type": "string"
@@ -39715,6 +39745,11 @@
                                 "object",
                                 "null"
                               ]
+                            },
+                            "fileSource": {
+                              "default": false,
+                              "description": "It serves files (a file source), which `connected_module_test`\nchecks.",
+                              "type": "boolean"
                             },
                             "frameOrigins": {
                               "items": {
@@ -39935,7 +39970,7 @@
     },
     "/api/v2/w/{workspace}/ops/connected_module_install": {
       "post": {
-        "description": "Install an outside app as a module from its manifest's address, approving the scopes given (or all it asks for that this server has). The app gets its own account here with a role holding exactly what was approved, and is sent a one-time code at its install address to collect its credentials. You can only approve what you hold yourself. Pass preview: true first to see who publishes it, each scope it asks for and why, and the kinds, operations, events, panels and frame origins it adds, with nothing installed; then install with the digest it showed. Needs \"Manage modules\" where it acts.",
+        "description": "Install an outside app as a module from its manifest's address, approving the scopes given (or all it asks for that this server has). The app gets its own account here with a role holding exactly what was approved, and is sent a one-time code at its install address to collect its credentials. You can only approve what you hold yourself. Pass preview: true first to see who publishes it, each scope it asks for and why, and the kinds, operations, events, panels and frame origins it adds, with nothing installed (a preview that names no scopes approves only the required ones); then install with the digest it showed and the scopes you chose. Needs \"Manage modules\" where it acts.",
         "operationId": "connected_module_install",
         "parameters": [
           {
@@ -40075,6 +40110,11 @@
                                 "object",
                                 "null"
                               ]
+                            },
+                            "fileSource": {
+                              "default": false,
+                              "description": "It serves files (a file source), which `connected_module_test`\nchecks.",
+                              "type": "boolean"
                             },
                             "frameOrigins": {
                               "items": {
@@ -40354,6 +40394,11 @@
                                 "object",
                                 "null"
                               ]
+                            },
+                            "fileSource": {
+                              "default": false,
+                              "description": "It serves files (a file source), which `connected_module_test`\nchecks.",
+                              "type": "boolean"
                             },
                             "frameOrigins": {
                               "items": {
@@ -41380,6 +41425,11 @@
                                 "null"
                               ]
                             },
+                            "fileSource": {
+                              "default": false,
+                              "description": "It serves files (a file source), which `connected_module_test`\nchecks.",
+                              "type": "boolean"
+                            },
                             "frameOrigins": {
                               "items": {
                                 "type": "string"
@@ -41658,6 +41708,11 @@
                                 "object",
                                 "null"
                               ]
+                            },
+                            "fileSource": {
+                              "default": false,
+                              "description": "It serves files (a file source), which `connected_module_test`\nchecks.",
+                              "type": "boolean"
                             },
                             "frameOrigins": {
                               "items": {

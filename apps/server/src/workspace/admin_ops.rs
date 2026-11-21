@@ -169,8 +169,10 @@ impl Operation for ModuleList {
         let mut built = Vec::with_capacity(rows.len());
         for row in rows {
             let on = modules::built::is_on(tx, &row).await?;
+            let nav = modules::built::nav(tx, row.id, reader).await?;
             built.push(BuiltModuleSummary {
                 parts: counts.get(&row.id).copied().unwrap_or(0),
+                nav,
                 id: row.id,
                 key: row.module_key,
                 name: row.name,

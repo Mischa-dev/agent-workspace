@@ -330,6 +330,16 @@ async fn a_connected_module_holds_what_was_approved_until_it_is_revoked() {
     let preview = &preview["value"];
     assert_eq!(preview["key"], "acme.builds");
     assert_eq!(preview["scopes"].as_array().expect("scopes").len(), 3);
+    // A preview that chose nothing grants only what the app needs, so
+    // someone who can't grant an optional scope still sees the app.
+    let approved = preview["scopes"]
+        .as_array()
+        .expect("scopes")
+        .iter()
+        .filter(|scope| scope["approved"] == true)
+        .map(|scope| scope["scope"].as_str().expect("scope"))
+        .collect::<Vec<_>>();
+    assert_eq!(approved, ["members.view"], "{preview}");
     let digest = preview["digest"].as_str().expect("digest").to_owned();
     let left: i64 = sqlx::query_scalar("SELECT count(*) FROM modules WHERE kind = 'connected'")
         .fetch_one(&pool)
