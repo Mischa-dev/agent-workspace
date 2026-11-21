@@ -71,18 +71,22 @@ where
     let mut started_since = 0;
     let mut since = tokio::time::Instant::now();
     let mut stopped = None;
+    // Commands that finished while the pump waited on something else.
+    let mut finished = Vec::new();
     loop {
         // Admission (and the lease check in it) comes before anything new is
         // fetched: once it fails, nothing more starts.
         if stopped.is_none() && (started_since >= PER_PASS || since.elapsed() >= BETWEEN_AGAIN) {
-            if let Err(error) = between().await {
+            // The commands in flight keep going meanwhile: they may hold what
+            // admission waits for (a database connection).
+            if let Err(error) = alongside(&mut running, &mut finished, between()).await {
                 stopped = Some(error);
             }
             started_since = 0;
             since = tokio::time::Instant::now();
         }
         if stopped.is_none() && running.len() < IN_FLIGHT {
-            match client.commands(0, 0).await {
+            match alongside(&mut running, &mut finished, client.commands(0, 0)).await {
                 Ok(listed) => {
                     for summary in listed.commands {
                         if running.len() >= IN_FLIGHT {
@@ -93,7 +97,13 @@ where
                         {
                             continue;
                         }
-                        let Ok(command) = client.command(summary.command_id).await else {
+                        let fetched = alongside(
+                            &mut running,
+                            &mut finished,
+                            client.command(summary.command_id),
+                        )
+                        .await;
+                        let Ok(command) = fetched else {
                             // Closed since it was listed: nothing to do.
                             continue;
                         };
@@ -116,6 +126,13 @@ where
                 Err(_) => {}
             }
         }
+        for (command_id, run) in finished.drain(..) {
+            handled += 1;
+            in_flight.remove(&command_id);
+            if let Some(run) = run {
+                busy_runs.remove(&run);
+            }
+        }
         if running.is_empty() {
             return match stopped {
                 Some(error) => Err(error),
@@ -131,6 +148,22 @@ where
                 }
             }
             () = tokio::time::sleep(LOOK_AGAIN) => {}
+        }
+    }
+}
+
+/// Wait for `work` while the commands in flight keep being carried out;
+/// those that finish meanwhile are kept in `finished`.
+async fn alongside<R: Future, T>(
+    running: &mut FuturesUnordered<R>,
+    finished: &mut Vec<R::Output>,
+    work: impl Future<Output = T>,
+) -> T {
+    let mut work = std::pin::pin!(work);
+    loop {
+        tokio::select! {
+            out = &mut work => return out,
+            Some(done) = running.next(), if !running.is_empty() => finished.push(done),
         }
     }
 }
@@ -457,6 +490,58 @@ mod tests {
         .expect("the slow command waits only for the quick ones")
         .expect("the pump");
         assert_eq!(handled, wait_for + 1);
+    }
+
+    /// Each command holds the one database connection for a moment.
+    struct OneConnection {
+        connection: tokio::sync::Semaphore,
+    }
+
+    impl CommandHost for OneConnection {
+        async fn start(&self, _: &HostClient, _: &Command) -> Ack {
+            refused("unused", "unused")
+        }
+        async fn inspect(&self, _: &Command) -> Ack {
+            refused("unused", "unused")
+        }
+        async fn answered(&self, _: &Command) -> Ack {
+            refused("unused", "unused")
+        }
+        async fn cancelled(&self, _: &Command) -> Ack {
+            refused("unused", "unused")
+        }
+        async fn action(&self, _: &Command) -> Ack {
+            let _held = self.connection.acquire().await.expect("the connection");
+            // Longer than the pump waits before looking again: others queue.
+            tokio::time::sleep(LOOK_AGAIN * 2).await;
+            let mut ack = Ack::new(AckOutcome::Accepted);
+            ack.result = Some(json!({}));
+            ack
+        }
+    }
+
+    #[tokio::test]
+    async fn admission_gets_the_connection_a_command_in_flight_holds() {
+        let client =
+            HostClient::with_transport("http://localhost", "token", Arc::new(Queue::new(false, 8)));
+        let host = OneConnection {
+            connection: tokio::sync::Semaphore::new(1),
+        };
+        let admitted = std::sync::atomic::AtomicUsize::new(0);
+        let between = || async {
+            let _held = tokio::time::timeout(Duration::from_secs(3), host.connection.acquire())
+                .await
+                .map_err(|_| RuntimeError::Internal("no connection for admission"))?
+                .expect("the connection");
+            admitted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok::<_, RuntimeError>(())
+        };
+        let handled = tokio::time::timeout(Duration::from_secs(60), pump(&host, &client, between))
+            .await
+            .expect("the pass ends")
+            .expect("admission waits only for a command to let the connection go");
+        assert_eq!(handled, 8);
+        assert!(admitted.load(std::sync::atomic::Ordering::SeqCst) > 0);
     }
 
     #[tokio::test]
