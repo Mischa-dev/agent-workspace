@@ -1196,9 +1196,9 @@ async fn run_controls_stay_inside_a_private_thread() {
     let interrupt = |browser: &Browser, key: &str| {
         browser.request(
             "POST",
-            &format!("/api/v1/agent-runs/{blocked_run}/interrupt"),
+            "/api/v2/ops/run_stop",
             Some(key),
-            Value::Null,
+            json!({"runId": blocked_run}),
         )
     };
     let respond = |browser: &Browser, key: &str| {
@@ -1217,14 +1217,18 @@ async fn run_controls_stay_inside_a_private_thread() {
         app,
         dana_browser.request(
             "POST",
-            &format!("/api/v1/agent-runs/{}/interrupt", Uuid::now_v7()),
+            "/api/v2/ops/run_stop",
             Some("dana-interrupt-missing"),
-            Value::Null,
+            json!({"runId": Uuid::now_v7()}),
         ),
     )
     .await;
     assert_eq!(missing_status, StatusCode::NOT_FOUND, "{missing}");
-    assert_eq!(body["error"], missing["error"], "{body} vs {missing}");
+    assert_eq!(
+        (&body["outcome"], &body["message"]),
+        (&missing["outcome"], &missing["message"]),
+        "{body} vs {missing}"
+    );
     let (status, body) = send(
         app,
         respond(&dana_browser, "0190b6a4-1c2d-7e3f-8a9b-0c1d2e3f4a61"),
@@ -1978,9 +1982,9 @@ async fn a_threads_run_shows_its_branch_only_to_those_who_see_code() {
     let interrupt = |browser: &Browser, key: &str| {
         browser.request(
             "POST",
-            &format!("/api/v1/agent-runs/{run_id}/interrupt"),
+            "/api/v2/ops/run_stop",
             Some(key),
-            Value::Null,
+            json!({"runId": run_id}),
         )
     };
     let shows_code = |body: &Value| {
@@ -2040,14 +2044,11 @@ async fn a_threads_run_shows_its_branch_only_to_those_who_see_code() {
     );
     assert_eq!(shows_code(&finished), (false, false, false), "{finished}");
 
-    // The owner sees code: the same answers carry the branch and commits.
+    // The owner sees code: run_stop's answer carries the branch (it names no
+    // commits), and the timeline carries the branch and commits.
     let (status, owner_stopped) = send(app, interrupt(&setup.browser, "owner-interrupt")).await;
     assert_eq!(status, StatusCode::OK, "{owner_stopped}");
-    assert_eq!(
-        shows_code(&owner_stopped),
-        (true, true, true),
-        "{owner_stopped}"
-    );
+    assert!(shows_code(&owner_stopped).0, "{owner_stopped}");
     let (status, owner_finished) = send(app, open(&setup.browser)).await;
     assert_eq!(status, StatusCode::OK, "{owner_finished}");
     assert_eq!(

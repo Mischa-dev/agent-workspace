@@ -1269,12 +1269,15 @@ pub(super) async fn interrupt(
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/api/v1/agent-runs/{run_id}/interrupt"))
+                    .uri("/api/v2/ops/run_stop")
                     .header("origin", ORIGIN)
                     .header("cookie", cookie)
                     .header("x-csrf-token", csrf)
                     .header("idempotency-key", format!("interrupt-{run_id}"))
-                    .body(Body::empty())
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({"runId": run_id})).expect("serialize stop"),
+                    ))
                     .expect("build scheduler interrupt"),
             )
             .await
@@ -1357,7 +1360,7 @@ async fn acknowledge_failure(
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/api/v1/agent-runs/{run_id}/acknowledge-failure"))
+                    .uri("/api/v2/ops/run_failure_hide")
                     .header("origin", ORIGIN)
                     .header("cookie", cookie)
                     .header("x-csrf-token", csrf)
@@ -1367,7 +1370,7 @@ async fn acknowledge_failure(
                     )
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        serde_json::to_vec(&json!({"eventId": event_id}))
+                        serde_json::to_vec(&json!({"runId": run_id}))
                             .expect("serialize failure acknowledgement"),
                     ))
                     .expect("build failure acknowledgement"),

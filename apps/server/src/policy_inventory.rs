@@ -482,19 +482,7 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         SessionAuthentication
     ),
     policy_route!("api", Post, "/api/v1/threads/{id}/agent-runs", WorkerInvoke),
-    policy_route!(
-        "api",
-        Post,
-        "/api/v1/agent-runs/{id}/interrupt",
-        RunInterrupt
-    ),
     policy_route!("api", Post, "/api/v1/agent-runs/{id}/retry", WorkerInvoke),
-    policy_route!(
-        "api",
-        Post,
-        "/api/v1/agent-runs/{id}/acknowledge-failure",
-        ReadStateUpdate
-    ),
     policy_route!(
         "account",
         Post,
@@ -1195,19 +1183,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects",
         OrganizationProjectCreate
-    ),
-    policy_route!("projects", Patch, "/api/v1/projects/{id}", ProjectManage),
-    policy_route!(
-        "projects",
-        Post,
-        "/api/v1/projects/{id}/archive",
-        ProjectManage
-    ),
-    policy_route!(
-        "projects",
-        Post,
-        "/api/v1/projects/{id}/restore",
-        ProjectManage
     ),
     policy_route!(
         "projects",
