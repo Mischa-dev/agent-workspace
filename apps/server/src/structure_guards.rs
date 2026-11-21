@@ -515,7 +515,8 @@ pub(crate) fn background_spawns(source: &str) -> usize {
 /// The server reaching into what runs agents (A1 guard G10): the harness
 /// layer (`crate::provider`, or a `provider::` path brought in by a `use`),
 /// git on the host's mirrors and worktrees (the built-in host's `git`
-/// module, once `git_runtime`) or a child process (`Command::new`),
+/// module, once `git_runtime`, or a bare `git::` path brought in by a
+/// grouped `use`) or a child process (`Command::new`),
 /// unless its line says it runs no agent (`// g10: not an agent (<why>)`).
 /// The embedded host's spawn point (`hosts/builtin/`) and the harness layer
 /// itself are left out by [`counts`].
@@ -526,16 +527,20 @@ pub(crate) fn server_runs_agents(source: &str) -> usize {
         if line.contains("// g10: not an agent") {
             return 0;
         }
-        let bare_provider_paths = line
-            .match_indices("provider::")
-            .filter(|(index, _)| {
-                !line[..*index].bytes().next_back().is_some_and(|byte| {
-                    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b':'
+        // A path that starts at this name: brought in by a `use`, a
+        // grouped one (`{git}`) included.
+        let bare_paths = |name: &str| {
+            line.match_indices(name)
+                .filter(|(index, _)| {
+                    !line[..*index].bytes().next_back().is_some_and(|byte| {
+                        byte.is_ascii_alphanumeric() || byte == b'_' || byte == b':'
+                    })
                 })
-            })
-            .count();
+                .count()
+        };
         line.matches("crate::provider").count()
-            + bare_provider_paths
+            + bare_paths("provider::")
+            + bare_paths("git::")
             + line.matches("git_runtime").count()
             + line.matches("builtin::git").count()
             + line.matches("builtin_host::git").count()
@@ -1388,6 +1393,17 @@ async fn notify(pool: &PgPool, client: &reqwest::Client) -> Result<(), Error> {
             server_runs_agents("crate::hosts::builtin::repositories::remove(root, id)"),
             0
         );
+        assert_eq!(
+            server_runs_agents(
+                "use crate::hosts::builtin::{git};\ngit::prepare_repository(root, r)"
+            ),
+            1
+        );
+        assert_eq!(
+            server_runs_agents("use crate::hosts::builtin::{git::prepare_repository};"),
+            1
+        );
+        assert_eq!(server_runs_agents("let digit::x = 1; mygit::y();"), 0);
         assert_eq!(
             server_runs_agents(
                 "let tar = Command::new(\"tar\"); // g10: not an agent (backup archive)"
