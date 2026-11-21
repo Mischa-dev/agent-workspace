@@ -1,4 +1,5 @@
 import { requestJson } from '../api/client'
+import { isApiError } from '../api/errors'
 import { callOp } from '../api/ops'
 import { normalizeLocation, safeProjectHref } from './locations'
 import type {
@@ -153,7 +154,16 @@ export async function archiveProject(
   projectId: string,
   expectedVersion: number,
 ): Promise<Project> {
-  await callOp('space_archive', { spaceId: projectId }, { expectedVersion })
+  try {
+    await callOp('space_archive', { spaceId: projectId }, { expectedVersion })
+  } catch (error) {
+    // A retry after a lost answer finds the space already archived, which
+    // the server treats as closed; it did what was asked.
+    if (!isApiError(error) || error.code !== 'not_found') throw error
+    const current = await getProject(projectId).catch(() => null)
+    if (!current?.archivedAt) throw error
+    return current
+  }
   return getProject(projectId)
 }
 
