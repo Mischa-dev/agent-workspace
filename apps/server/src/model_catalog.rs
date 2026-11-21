@@ -7,8 +7,11 @@ use serde_json::Value;
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-use super::manifest::{AdapterManifest, ModelEntry, ModelOverrides};
 use crate::error::AppError;
+use crate::harness::{
+    manifest::{AdapterManifest, ModelEntry, ModelOverrides},
+    run_config::RunConfig,
+};
 
 /// The most models one harness may list for one workspace.
 pub const MAX_CATALOG_MODELS: usize = 200;
@@ -399,6 +402,54 @@ pub async fn remove_model(
     .await?
     .rows_affected();
     Ok(deleted + cleared > 0)
+}
+
+/// Resolves a run's settings for the account it runs on: the launch
+/// overrides over the account's defaults over the workspace catalog and the
+/// harness's manifest as the host described it. Refuses values the harness
+/// doesn't offer, and a harness the workspace has switched off.
+pub(crate) async fn resolve_run_config(
+    state: &crate::AppState,
+    organization_id: Uuid,
+    adapter_kind: &str,
+    account_defaults: &Value,
+    launch: &RunConfig,
+) -> Result<RunConfig, AppError> {
+    let harnesses = crate::harness_catalog::Harnesses::of(state, organization_id).await?;
+    let manifest = harnesses.manifest(adapter_kind).ok_or(AppError::Conflict(
+        "agent_run",
+        "this harness is not installed",
+    ))?;
+    let catalog = run_catalog(&state.pool, organization_id, manifest).await?;
+    launch
+        .resolve(&RunConfig::from_value(account_defaults), manifest, &catalog)
+        .map_err(|error| AppError::Validation(error.0))
+}
+
+/// `resolve_run_config` for settings that were valid once: whatever the
+/// harness or catalog stopped offering falls back on its own, and the rest
+/// (isolation above all) is kept. A harness switched off since still
+/// resolves, so a run queued before keeps what it asked for.
+pub(crate) async fn resolve_stored_run_config(
+    state: &crate::AppState,
+    organization_id: Uuid,
+    adapter_kind: &str,
+    account_defaults: &Value,
+    launch: &RunConfig,
+) -> Result<RunConfig, AppError> {
+    let harnesses = crate::harness_catalog::Harnesses::of(state, organization_id).await?;
+    let manifest = harnesses.known(adapter_kind).ok_or(AppError::Conflict(
+        "agent_run",
+        "this harness is not installed",
+    ))?;
+    let catalog = run_catalog(&state.pool, organization_id, manifest).await?;
+    launch
+        .resolve_keeping_what_still_fits(
+            &RunConfig::from_value(account_defaults),
+            manifest,
+            &catalog,
+        )
+        .map_err(|error| AppError::Validation(error.0))
 }
 
 #[cfg(test)]

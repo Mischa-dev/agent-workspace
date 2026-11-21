@@ -1,7 +1,9 @@
 //! Provider sign-ins in progress (K5.14), in the database so any instance
 //! can answer the page's next poll, a replayed start or a cancel: one row
 //! per provider account, for ten minutes at most. A row keeps what the
-//! person is shown (an address, a device code), never a key or token.
+//! person is shown (an address, a device code). An API key to sign in with
+//! is kept sealed beside its sign-in only until the host takes it
+//! ([`seal_api_key`], [`take_api_key`]), never in plain text.
 
 use std::time::Duration;
 
@@ -9,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::adapter::{LoginKind, LoginStart};
-use crate::error::AppError;
+use agent_workspace_host_protocol::account::LoginStarted as LoginStart;
+
+use crate::{error::AppError, harness::manifest::LoginKind};
 
 /// How many sign-ins may be open at once, server-wide.
 const MAX_LOGIN_CEREMONIES: i64 = 32;
@@ -275,4 +278,118 @@ pub async fn clear_login(
     .execute(crate::db::scoped(pool))
     .await?;
     Ok(())
+}
+
+/// What binds a sealed sign-in key to its row.
+fn api_key_aad(ceremony_id: Uuid, account_id: Uuid) -> Vec<u8> {
+    format!("aw-sign-in-key:v1:{ceremony_id}:{account_id}").into_bytes()
+}
+
+/// Seal `api_key` beside the account's open sign-in `ceremony_id`, for the
+/// host to take once ([`take_api_key`]).
+pub async fn seal_api_key(
+    pool: &PgPool,
+    keys: &dyn crate::secrets::KeyEncryption,
+    account_id: Uuid,
+    ceremony_id: Uuid,
+    api_key: &str,
+) -> Result<(), AppError> {
+    let sealed = crate::secrets::seal_detached(
+        keys,
+        &api_key_aad(ceremony_id, account_id),
+        api_key.as_bytes(),
+    )?;
+    let mut transaction = crate::db::scoped_tx(pool).await?;
+    crate::secrets::hold_off_rotation(&mut transaction, keys).await?;
+    let stored = sqlx::query(
+        r#"
+        UPDATE provider_login_ceremonies
+           SET api_key_ciphertext = $3, api_key_nonce = $4, api_key_wrapped_key = $5,
+               api_key_wrap_nonce = $6, api_key_master_key_id = $7
+         WHERE account_id = $1 AND ceremony_id = $2 AND expires_at > now()
+        "#,
+    )
+    .bind(account_id)
+    .bind(ceremony_id)
+    .bind(&sealed.ciphertext)
+    .bind(sealed.nonce.as_slice())
+    .bind(&sealed.wrapped.ciphertext)
+    .bind(sealed.wrapped.nonce.as_ref().map(|nonce| nonce.as_slice()))
+    .bind(&sealed.wrapped.master_key_id)
+    .execute(&mut *transaction)
+    .await?;
+    if stored.rows_affected() == 0 {
+        return Err(AppError::NotFound("login_ceremony"));
+    }
+    transaction.commit().await?;
+    Ok(())
+}
+
+#[derive(sqlx::FromRow)]
+struct SealedKey {
+    account_id: Uuid,
+    api_key_ciphertext: Vec<u8>,
+    api_key_nonce: Vec<u8>,
+    api_key_wrapped_key: Vec<u8>,
+    api_key_wrap_nonce: Option<Vec<u8>>,
+    api_key_master_key_id: String,
+}
+
+/// Take the API key sealed beside sign-in `ceremony_id`, once: the row
+/// keeps it no longer. `None` when it was taken already or the sign-in
+/// ended.
+pub async fn take_api_key(
+    connection: &mut sqlx::PgConnection,
+    keys: &dyn crate::secrets::KeyEncryption,
+    ceremony_id: Uuid,
+) -> Result<Option<zeroize::Zeroizing<String>>, AppError> {
+    let Some(row) = sqlx::query_as::<_, SealedKey>(
+        r#"
+        WITH taken AS (
+            SELECT account_id, api_key_ciphertext, api_key_nonce, api_key_wrapped_key,
+                   api_key_wrap_nonce, api_key_master_key_id
+              FROM provider_login_ceremonies
+             WHERE ceremony_id = $1 AND expires_at > now()
+               AND api_key_ciphertext IS NOT NULL
+             FOR UPDATE
+        )
+        UPDATE provider_login_ceremonies ceremony
+           SET api_key_ciphertext = NULL, api_key_nonce = NULL, api_key_wrapped_key = NULL,
+               api_key_wrap_nonce = NULL, api_key_master_key_id = NULL
+          FROM taken
+         WHERE ceremony.ceremony_id = $1
+        RETURNING taken.account_id, taken.api_key_ciphertext, taken.api_key_nonce,
+                  taken.api_key_wrapped_key, taken.api_key_wrap_nonce,
+                  taken.api_key_master_key_id
+        "#,
+    )
+    .bind(ceremony_id)
+    .fetch_optional(&mut *connection)
+    .await?
+    else {
+        return Ok(None);
+    };
+    let broken = || AppError::Internal("sealed sign-in key");
+    let sealed = crate::secrets::DetachedSeal {
+        ciphertext: row.api_key_ciphertext,
+        nonce: row
+            .api_key_nonce
+            .as_slice()
+            .try_into()
+            .map_err(|_| broken())?,
+        wrapped: crate::secrets::WrappedKey {
+            master_key_id: row.api_key_master_key_id,
+            nonce: row
+                .api_key_wrap_nonce
+                .as_deref()
+                .map(|nonce| nonce.try_into())
+                .transpose()
+                .map_err(|_| broken())?,
+            ciphertext: row.api_key_wrapped_key,
+        },
+    };
+    let opened =
+        crate::secrets::open_detached(keys, &api_key_aad(ceremony_id, row.account_id), &sealed)?;
+    let text = String::from_utf8(opened.to_vec()).map_err(|_| broken())?;
+    Ok(Some(zeroize::Zeroizing::new(text)))
 }

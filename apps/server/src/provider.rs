@@ -18,8 +18,6 @@ use crate::{
     message_content::{MessageContent, MessageContentError, ValidatedMessageContent},
 };
 
-pub mod catalog;
-pub mod ceremonies;
 pub(crate) mod registry;
 
 pub use agent_workspace_builtin_host::harness::{
@@ -32,7 +30,6 @@ pub use adapter::{
     AccountHandle, AccountSummary, HarnessError, HarnessSession, LoginKind, LoginStart,
     ProfileHealth, RateLimitSummary, RateLimitWindow,
 };
-pub use ceremonies::{LoginCeremonyError, LoginCeremonySnapshot, LoginReservation};
 pub use codex_app_server::{CODEX_KIND, codex_manifest};
 pub use codex_cloud::{CODEX_CLOUD_KIND, codex_cloud_manifest};
 pub use registry::SupervisorRegistry;
@@ -92,60 +89,6 @@ async fn run_config(state: &AppState, run_id: Uuid) -> Result<RunConfig, AppErro
     Ok(RunConfig::from_value(&config))
 }
 
-/// Resolves a run's settings for the account it runs on: the launch
-/// overrides over the account's defaults over the workspace catalog and the
-/// adapter's manifest. Refuses values the harness doesn't offer.
-pub(crate) async fn resolve_run_config(
-    state: &AppState,
-    organization_id: Uuid,
-    adapter_kind: &str,
-    account_defaults: &Value,
-    launch: &RunConfig,
-) -> Result<RunConfig, AppError> {
-    let manifest = state
-        .supervisors
-        .manifest(adapter_kind)
-        .ok_or(AppError::Conflict(
-            "agent_run",
-            "this harness is not installed",
-        ))?;
-    let catalog = catalog::run_catalog(&state.pool, organization_id, &manifest).await?;
-    launch
-        .resolve(
-            &RunConfig::from_value(account_defaults),
-            &manifest,
-            &catalog,
-        )
-        .map_err(|error| AppError::Validation(error.0))
-}
-
-/// `resolve_run_config` for settings that were valid once: whatever the
-/// harness or catalog stopped offering falls back on its own, and the rest
-/// (isolation above all) is kept.
-pub(crate) async fn resolve_stored_run_config(
-    state: &AppState,
-    organization_id: Uuid,
-    adapter_kind: &str,
-    account_defaults: &Value,
-    launch: &RunConfig,
-) -> Result<RunConfig, AppError> {
-    let manifest = state
-        .supervisors
-        .manifest(adapter_kind)
-        .ok_or(AppError::Conflict(
-            "agent_run",
-            "this harness is not installed",
-        ))?;
-    let catalog = catalog::run_catalog(&state.pool, organization_id, &manifest).await?;
-    launch
-        .resolve_keeping_what_still_fits(
-            &RunConfig::from_value(account_defaults),
-            &manifest,
-            &catalog,
-        )
-        .map_err(|error| AppError::Validation(error.0))
-}
-
 /// The run's frozen settings. Runs created without them (by paths that
 /// predate H4) get their account's defaults once, here, and keep them.
 async fn ensure_run_config(state: &AppState, run_id: Uuid) -> Result<RunConfig, AppError> {
@@ -166,7 +109,7 @@ async fn ensure_run_config(state: &AppState, run_id: Uuid) -> Result<RunConfig, 
     .fetch_one(crate::db::scoped(&state.pool))
     .await?;
     // Defaults that stopped matching the catalog fall back one by one.
-    let resolved = resolve_stored_run_config(
+    let resolved = crate::model_catalog::resolve_stored_run_config(
         state,
         organization_id,
         &adapter_kind,

@@ -13,13 +13,11 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
+    harness::manifest::{AdapterManifest, ModelOverrides},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
+    model_catalog::{self as catalog, Catalog},
     policy::{Action, Permission, RoleGrant},
-    provider::{
-        CODEX_KIND, ProfileHealth,
-        catalog::{self, Catalog},
-        manifest::{AdapterManifest, ModelOverrides},
-    },
+    provider::{CODEX_KIND, ProfileHealth},
 };
 
 const MAX_EXECUTION_RESOURCES: i64 = 100;

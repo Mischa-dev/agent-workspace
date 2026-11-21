@@ -172,6 +172,64 @@ pub async fn issue(
     Ok(row)
 }
 
+/// A command the process that wrote it carries out itself (the server
+/// asking its own built-in host, in process): taken at once, so no host
+/// loop lists it too.
+pub async fn take_here(
+    transaction: &mut Transaction<'_, Postgres>,
+    command_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE host_commands
+           SET state = 'fetched', attempts = 1,
+               ack_due_at = now() + make_interval(secs => $2::double precision),
+               updated_at = now()
+         WHERE id = $1 AND state = 'pending'
+        "#,
+    )
+    .bind(command_id)
+    .bind(ACK_SECONDS as f64)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+/// The host's acknowledgement of an action, once it has one.
+pub async fn answer_of(pool: &PgPool, command_id: Uuid) -> Result<Option<Ack>, AppError> {
+    let ack = sqlx::query_scalar::<_, Option<Value>>(
+        "SELECT ack FROM host_commands WHERE id = $1 AND state IN ('acked', 'refused')",
+    )
+    .bind(command_id)
+    .fetch_optional(crate::db::scoped(pool))
+    .await?
+    .flatten();
+    Ok(ack.and_then(|ack| serde_json::from_value(ack).ok()))
+}
+
+/// An action nobody answered in time is closed: a host that comes to it
+/// later finds it gone.
+pub async fn close_unanswered(pool: &PgPool, command_id: Uuid) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE host_commands SET state = 'expired', ack_due_at = NULL, updated_at = now() \
+         WHERE id = $1 AND state IN ('pending', 'fetched')",
+    )
+    .bind(command_id)
+    .execute(crate::db::scoped(pool))
+    .await?;
+    Ok(())
+}
+
+/// Once its asker has read an action's answer, the row keeps only that it
+/// was answered, not what it said.
+pub async fn forget_result(pool: &PgPool, command_id: Uuid) -> Result<(), AppError> {
+    sqlx::query("UPDATE host_commands SET ack = ack - 'result' WHERE id = $1 AND ack ? 'result'")
+        .bind(command_id)
+        .execute(crate::db::scoped(pool))
+        .await?;
+    Ok(())
+}
+
 /// For a push host, a job that sends the host this command's thin event;
 /// for an A2A host, the job that makes the call.
 async fn push_later(
@@ -451,6 +509,17 @@ pub async fn fetch(state: &AppState, host: &HostRow, command_id: Uuid) -> Result
     }
     if let Some(start_key) = &row.start_key {
         command.insert("startKey".into(), json!(start_key));
+    }
+    if row.kind == "action" && host.builtin {
+        // An API key to sign in with is handed over now and kept in no
+        // command (A1.17).
+        crate::hosts::builtin::accounts::attach_secret(
+            state,
+            &mut transaction,
+            &row.body,
+            &mut command,
+        )
+        .await?;
     }
     command.insert("issuedAt".into(), json!(timestamp(row.created_at)));
     command.insert("expiresAt".into(), json!(timestamp(row.expires_at)));

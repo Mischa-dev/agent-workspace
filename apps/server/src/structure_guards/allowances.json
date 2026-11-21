@@ -133,14 +133,13 @@
     "work_items.rs": 1
   },
   "server_runs_agents": {
-    "account.rs": 2,
     "environments.rs": 3,
     "execution.rs": 3,
     "github.rs": 1,
     "harness_host.rs": 1,
     "harnesses.rs": 3,
     "hosts/windows.rs": 1,
-    "launch.rs": 3,
+    "launch.rs": 2,
     "lib.rs": 2,
     "migration_preflight.rs": 1,
     "preflight.rs": 1,

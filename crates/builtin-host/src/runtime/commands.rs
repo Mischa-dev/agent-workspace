@@ -20,6 +20,9 @@ pub trait CommandHost: Send + Sync {
     fn answered(&self, command: &Command) -> impl Future<Output = Ack> + Send;
     /// Stop a run.
     fn cancelled(&self, command: &Command) -> impl Future<Output = Ack> + Send;
+    /// Answer a question that isn't about a run, such as one about a model
+    /// account (`agent_workspace_host_protocol::account`).
+    fn action(&self, command: &Command) -> impl Future<Output = Ack> + Send;
 }
 
 /// A refusal, with the reason a server keeps and the message people see.
@@ -88,6 +91,25 @@ async fn carry_out<H: CommandHost>(host: &H, client: &HostClient, command: &Comm
             "unsupported",
             "The built-in host takes a new message as a new run.",
         ),
-        CommandKind::Action => refused("unknown_action", "The built-in host has no actions."),
+        CommandKind::Action => host.action(command).await,
     }
+}
+
+/// Carry out one command this process claimed when it wrote it (the
+/// server asking its own built-in host, in process), and acknowledge it.
+pub async fn carry_out_one<H: CommandHost>(
+    host: &H,
+    client: &HostClient,
+    command_id: Uuid,
+) -> Result<Ack, RuntimeError> {
+    let command = client
+        .command(command_id)
+        .await
+        .map_err(|_| RuntimeError::Internal("read the built-in host's command"))?;
+    let ack = carry_out(host, client, &command).await;
+    client
+        .ack(command.command_id, &ack)
+        .await
+        .map_err(|_| RuntimeError::Internal("acknowledge the built-in host's command"))?;
+    Ok(ack)
 }

@@ -15,6 +15,7 @@ use serde_json::Value;
 use sqlx::{PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
+pub mod accounts;
 pub mod assistant;
 pub mod capacity;
 pub mod driver;
@@ -150,7 +151,7 @@ pub(crate) async fn resolve_config_with(
         Some(manifest) => crate::launch::merged_defaults(&setup.run_defaults, defaults, &manifest),
         None => setup.run_defaults.clone(),
     };
-    crate::provider::resolve_run_config(
+    crate::model_catalog::resolve_run_config(
         state,
         setup.organization_id,
         &setup.adapter_kind,

@@ -25,8 +25,13 @@ use crate::{AppState, domain::RunState, error::AppError, provider};
 use super::report::RunReports;
 
 /// The built-in host's own rows for its runs, over the server's database.
-struct BuiltinCommands<'a> {
+pub(super) struct BuiltinCommands<'a> {
     state: &'a AppState,
+}
+
+/// The built-in host's command handlers, for a command carried out at once.
+pub(super) fn host(state: &AppState) -> BuiltinCommands<'_> {
+    BuiltinCommands { state }
 }
 
 impl commands::CommandHost for BuiltinCommands<'_> {
@@ -48,6 +53,14 @@ impl commands::CommandHost for BuiltinCommands<'_> {
 
     async fn cancelled(&self, command: &Command) -> Ack {
         start::cancelled(self, command).await
+    }
+
+    async fn action(&self, command: &Command) -> Ack {
+        if super::accounts::is_account_action(command) {
+            super::accounts::answer(self.state, command).await
+        } else {
+            commands::refused("unknown_action", "The built-in host has no such action.")
+        }
     }
 }
 

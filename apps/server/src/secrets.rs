@@ -1037,8 +1037,12 @@ async fn rewrap_rows(
 }
 
 /// Every master key id something sealed still uses.
+/// A sign-in's sealed API key lives minutes at most and isn't re-sealed;
+/// its key is kept until the host takes it or the sign-in ends.
 const KEYS_IN_USE_SQL: &str = "SELECT master_key_id FROM secrets \
-     UNION SELECT master_key_id FROM user_totp_factors ORDER BY 1";
+     UNION SELECT master_key_id FROM user_totp_factors \
+     UNION SELECT api_key_master_key_id FROM provider_login_ceremonies \
+           WHERE api_key_master_key_id IS NOT NULL ORDER BY 1";
 
 /// The master key ids secrets still use.
 pub async fn master_keys_in_use(pool: &PgPool) -> Result<Vec<String>, AppError> {

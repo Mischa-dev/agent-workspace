@@ -14,10 +14,8 @@
 use uuid::Uuid;
 
 use crate::{
-    AppState,
-    error::AppError,
-    harness::manifest::ModelPrices,
-    provider::{adapter::TokenUsage, catalog},
+    AppState, error::AppError, harness::manifest::ModelPrices, model_catalog as catalog,
+    provider::adapter::TokenUsage,
 };
 
 pub use agent_workspace_redaction::{
