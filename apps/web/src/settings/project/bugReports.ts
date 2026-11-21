@@ -50,11 +50,23 @@ type LinkRef = Pick<BugReportLink, 'id' | 'projectId'>
 export const listBugReportLinks = (projectId: string) =>
   requestJson<BugReportLinkList>(`/api/v1/projects/${encodeURIComponent(projectId)}/bug-report-links`)
 
+/**
+ * A link's address is shown once: a retried request that the server had
+ * already done answers without it. Say so rather than offer a missing URL.
+ */
+function withUrl(value: unknown): BugReportLinkWithUrl {
+  const answer = value as BugReportLinkWithUrl
+  if (!answer.url) {
+    throw new Error("Its address didn't arrive. Replace the link from the list to get a new one.")
+  }
+  return answer
+}
+
 export const createBugReportLink = async (projectId: string, name: string) =>
-  (await callOp('bug_report_link_create', { projectId, name })) as BugReportLinkWithUrl
+  withUrl(await callOp('bug_report_link_create', { projectId, name }))
 
 export const createCollectionForm = async (projectId: string, collectionId: string, name: string, form: FormSettings) =>
-  (await callOp('bug_report_link_create', { projectId, name, collection: collectionId, form })) as BugReportLinkWithUrl
+  withUrl(await callOp('bug_report_link_create', { projectId, name, collection: collectionId, form }))
 
 export const updateBugReportLink = async (
   link: LinkRef,
@@ -69,7 +81,7 @@ export const updateBugReportLink = async (
   })) as BugReportLink
 
 export const replaceBugReportLink = async (link: LinkRef) =>
-  (await callOp('bug_report_link_update', { projectId: link.projectId, linkId: link.id, replace: true })) as BugReportLinkWithUrl
+  withUrl(await callOp('bug_report_link_update', { projectId: link.projectId, linkId: link.id, replace: true }))
 
 export const deleteBugReportLink = async (link: LinkRef) => {
   await callOp('bug_report_link_update', { projectId: link.projectId, linkId: link.id, delete: true })

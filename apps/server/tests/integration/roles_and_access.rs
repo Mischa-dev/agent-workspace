@@ -6448,6 +6448,21 @@ async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
     assert_eq!(status, StatusCode::CREATED, "{attached}");
     let (status, refused) = send(app, upload("")).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    // A direct upload asks the same: this server has no direct store, so a
+    // start Alex may make answers that, and one Alex may not make is refused.
+    let start = |for_comment: bool| {
+        alex_browser.op(
+            app,
+            "file_upload_start",
+            json!({"taskId": task, "forComment": for_comment, "name": "shot.png",
+                   "size": 5, "sha256": "0".repeat(64)}),
+        )
+    };
+    let (_, started) = start(true).await;
+    assert_eq!(started["code"], "direct_upload_unavailable", "{started}");
+    let (status, refused) = start(false).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(refused["details"]["permission"], "tasks.edit", "{refused}");
 
     // Mara comments through her tools.
     let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");
