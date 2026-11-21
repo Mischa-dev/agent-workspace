@@ -4754,7 +4754,7 @@
       "run.changes_reported"
     ],
     "idempotent": true,
-    "kind": "change",
+    "kind": "create",
     "long": false,
     "module": "runs",
     "name": "run_changes_report",

@@ -1083,7 +1083,7 @@ pub struct RunChangesOutput {
 
 impl Operation for RunChangesReport {
     const NAME: &'static str = "run_changes_report";
-    const KIND: OpKind = OpKind::Change;
+    const KIND: OpKind = OpKind::Create;
     const MODULE: &'static str = "runs";
     const PERMISSION: Option<Perm> = Some(Perm::RunsReport);
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;

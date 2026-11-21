@@ -978,7 +978,7 @@
     "title": "Stop a run"
   },
   {
-    "kind": "change",
+    "kind": "create",
     "module": "runs",
     "name": "run_changes_report",
     "title": "Report a run's changes"
