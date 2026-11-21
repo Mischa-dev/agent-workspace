@@ -207,6 +207,50 @@ pub async fn reserve(
     }))
 }
 
+/// A finished answer already kept for this key, read without reserving it
+/// (nothing is held after it returns). For a check that has to run before
+/// the call's own transaction opens; [`reserve`] still settles a race.
+pub async fn finished(
+    connection: &mut sqlx::PgConnection,
+    actor_id: Uuid,
+    scope: &str,
+    key: &IdempotencyKey,
+    request_hash: RequestHash,
+) -> Result<Option<IdempotencyReplay>, AppError> {
+    validate_scope(scope)?;
+    let existing = sqlx::query_as::<_, IdempotencyRow>(
+        r#"
+        SELECT request_hash, response_status, response_body
+        FROM idempotency_keys
+        WHERE actor_id = $1 AND scope = $2 AND key = $3
+          AND expires_at > now()
+        "#,
+    )
+    .bind(actor_id)
+    .bind(scope)
+    .bind(key.as_str())
+    .fetch_optional(&mut *connection)
+    .await?;
+    let Some(existing) = existing else {
+        return Ok(None);
+    };
+    if existing.request_hash.as_slice() != request_hash.as_bytes() {
+        return Err(AppError::Conflict("idempotency_key", "payload mismatch"));
+    }
+    let status = existing
+        .response_status
+        .and_then(|value| u16::try_from(value).ok())
+        .and_then(|value| StatusCode::from_u16(value).ok());
+    Ok(match (status, existing.response_body) {
+        (Some(status), Some(response_body)) => Some(IdempotencyReplay {
+            status,
+            response_body,
+        }),
+        // Still running: `reserve` answers that once it gets there.
+        _ => None,
+    })
+}
+
 pub async fn complete<T: Serialize>(
     transaction: &mut Transaction<'_, Postgres>,
     reservation: &IdempotencyReservation,

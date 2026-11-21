@@ -53,15 +53,22 @@ pub async fn lock_repository_retention(
     Ok(())
 }
 
+/// The built-in host's lease a sweep holds while it removes worktrees: each
+/// removal checks it is still held, and keeps it from being taken until
+/// that removal is recorded. A sweep run by hand (the command line) has
+/// none.
+pub type Holding = Option<(crate::cluster::Cluster, crate::cluster::Lease)>;
+
 pub async fn clean_worktrees(
     pool: &PgPool,
     data_root: &Path,
     apply: bool,
+    holding: Holding,
 ) -> Result<WorktreeRetentionResult, AppError> {
     // Retention runs over every workspace.
     crate::tenancy::system(
         "retention",
-        Box::pin(clean_worktrees_here(pool, data_root, apply)),
+        Box::pin(clean_worktrees_here(pool, data_root, apply, holding)),
     )
     .await
 }
@@ -70,6 +77,7 @@ async fn clean_worktrees_here(
     pool: &PgPool,
     data_root: &Path,
     apply: bool,
+    holding: Holding,
 ) -> Result<WorktreeRetentionResult, AppError> {
     let live_worktrees: u64 = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM git_worktrees WHERE state IN ('creating','ready','dirty','missing','failed')",
@@ -105,6 +113,10 @@ async fn clean_worktrees_here(
         }
 
         let mut transaction = crate::db::scoped_tx(pool).await?;
+        // Another holder works on this disk now: this sweep stops here.
+        if let Some((cluster, lease)) = holding.as_ref() {
+            cluster.fence(&mut transaction, lease).await?;
+        }
         lock_repository_retention(&mut transaction, candidate.repository_id).await?;
         if !candidate_is_current(&mut transaction, &candidate).await? {
             transaction.rollback().await?;
@@ -234,10 +246,31 @@ pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
             // for it instead of racing it.
             let pool = context.state.pool.clone();
             let data_root = context.state.config.data_root.clone();
+            let holding = match context.state.supervisors.cluster() {
+                // A state without a cluster (a test's) is its own host.
+                None => None,
+                Some(cluster) => {
+                    match cluster.held_lease(&crate::cluster::LeaseName::BuiltinHost) {
+                        Some(lease) => Some((cluster.clone(), lease)),
+                        // The host is elsewhere now: its holder sweeps.
+                        None => return Ok(()),
+                    }
+                }
+            };
             let result =
-                tokio::spawn(async move { clean_worktrees(&pool, &data_root, true).await })
-                    .await
-                    .map_err(|_| AppError::Internal("join worktree retention"))??;
+                tokio::spawn(
+                    async move { clean_worktrees(&pool, &data_root, true, holding).await },
+                )
+                .await
+                .map_err(|_| AppError::Internal("join worktree retention"))?;
+            let result = match result {
+                // The lease went mid-sweep: the next holder sweeps the rest.
+                Err(AppError::LeaseLost) => {
+                    tracing::info!("worktree retention stopped: the built-in host moved");
+                    return Ok(());
+                }
+                other => other?,
+            };
             tracing::info!(
                 removed = result.removed_worktrees,
                 preserved = result.preserved_worktrees,

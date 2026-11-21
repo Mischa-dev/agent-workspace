@@ -144337,6 +144337,10 @@
                                 "null"
                               ]
                             },
+                            "changesTruncated": {
+                              "description": "The host couldn't report all of it (too many files, a diff too big\nto keep, or changes it couldn't list), so `files` may be missing\nsome. False with no report.",
+                              "type": "boolean"
+                            },
                             "conversationId": {
                               "type": [
                                 "string",
@@ -144628,7 +144632,8 @@
                             "requests",
                             "results",
                             "pullRequests",
-                            "usageByModel"
+                            "usageByModel",
+                            "changesTruncated"
                           ],
                           "title": "RunView",
                           "type": "object"
@@ -144811,6 +144816,10 @@
                                 "null"
                               ]
                             },
+                            "changesTruncated": {
+                              "description": "The host couldn't report all of it (too many files, a diff too big\nto keep, or changes it couldn't list), so `files` may be missing\nsome. False with no report.",
+                              "type": "boolean"
+                            },
                             "conversationId": {
                               "type": [
                                 "string",
@@ -145102,7 +145111,8 @@
                             "requests",
                             "results",
                             "pullRequests",
-                            "usageByModel"
+                            "usageByModel",
+                            "changesTruncated"
                           ],
                           "title": "RunView",
                           "type": "object"

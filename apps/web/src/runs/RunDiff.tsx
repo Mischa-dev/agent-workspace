@@ -16,7 +16,13 @@ function noFilesText(run: Pick<RunDetail, 'agentName' | 'baseCommit' | 'publishe
 }
 
 /** The files the run changed, with the diff fetched only when asked for. */
-export function RunDiff({ live, run }: { live: boolean; run: Pick<RunDetail, 'agentName' | 'baseCommit' | 'files' | 'id' | 'publishedCommit'> }) {
+export function RunDiff({
+  live,
+  run,
+}: {
+  live: boolean
+  run: Pick<RunDetail, 'agentName' | 'baseCommit' | 'files' | 'id' | 'publishedCommit'> & { changesTruncated?: boolean }
+}) {
   const { files } = run
   const [wanted, setWanted] = useState(false)
   const queryClient = useQueryClient()
@@ -32,6 +38,9 @@ export function RunDiff({ live, run }: { live: boolean; run: Pick<RunDetail, 'ag
   }, [queryClient, run.id, signature, wanted])
 
   if (files === null) return <p className="aw-runs__quiet">{noFilesText(run, live)}</p>
+  if (files.length === 0 && run.changesTruncated) {
+    return <p className="aw-runs__quiet">This run’s changes couldn’t all be listed here. Open its branch to read them.</p>
+  }
   if (files.length === 0) {
     return <p className="aw-runs__quiet">{live ? `No files changed yet. They show up here as ${run.agentName ?? 'the agent'} edits them.` : 'The run didn’t change any files.'}</p>
   }

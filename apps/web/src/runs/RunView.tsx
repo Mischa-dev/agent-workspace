@@ -65,7 +65,7 @@ export function RunView({ runId }: { runId: string }) {
       {view.isPending ? <PageSkeleton /> : null}
       {notFound ? <RunNotFound /> : null}
       {view.isError && !notFound ? <ErrorState error={view.error} onRetry={() => void view.refetch()} title="The run didn’t load" /> : null}
-      {view.data?.builtin ? <BuiltinRun runId={view.data.id} /> : null}
+      {view.data?.builtin ? <BuiltinRun changesTruncated={view.data.changesTruncated} runId={view.data.id} /> : null}
       {view.data && !view.data.builtin ? <ReportedRunPage onRefresh={() => void view.refetch()} run={view.data} /> : null}
     </>
   )
@@ -94,7 +94,7 @@ function ReportedRunPage({ onRefresh, run }: { onRefresh: () => void; run: RunVi
 }
 
 /** A run on this server's own host: its full page. */
-function BuiltinRun({ runId }: { runId: string }) {
+function BuiltinRun({ changesTruncated, runId }: { changesTruncated: boolean; runId: string }) {
   const run = useQuery({
     queryKey: runKeys.detail(runId),
     queryFn: () => getRun(runId),
@@ -104,7 +104,7 @@ function BuiltinRun({ runId }: { runId: string }) {
   if (run.isPending) return <PageSkeleton />
   if (notFound) return <RunNotFound />
   if (run.isError) return <ErrorState error={run.error} onRetry={() => void run.refetch()} title="The run didn’t load" />
-  return <RunBody run={run.data} />
+  return <RunBody changesTruncated={changesTruncated} run={run.data} />
 }
 
 /** Ticks while the run is live, so its running time keeps counting. */
@@ -124,7 +124,7 @@ const STOP_TITLE: Partial<Record<RunDetail['state'], string>> = {
   canceled: 'The run was stopped.',
 }
 
-function RunBody({ run }: { run: RunDetail }) {
+function RunBody({ changesTruncated, run }: { changesTruncated: boolean; run: RunDetail }) {
   const status = runStatus(run.state)
   const live = isLiveRun(run.state)
   const now = useNow(live)
@@ -281,7 +281,7 @@ function RunBody({ run }: { run: RunDetail }) {
       {/* Empty sections on a run still working are promises, not news: they appear once there's something in them. */}
       {experience.shows('tech.run_files') && !(live && !run.files?.length) ? (
         <Section id="run-files" title="Files changed">
-          <RunDiff live={live} run={run} />
+          <RunDiff live={live} run={{ ...run, changesTruncated }} />
         </Section>
       ) : null}
       {run.tests.runs === 0 ? null : (

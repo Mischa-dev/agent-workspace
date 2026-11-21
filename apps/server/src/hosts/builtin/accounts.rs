@@ -261,9 +261,33 @@ pub async fn answer(state: &AppState, command: &Command) -> Ack {
     else {
         return refused("invalid", "That account question can't be read.");
     };
+    if ask.question == AccountQuestion::Forget {
+        state
+            .supervisors
+            .shutdown_account(&ask.harness, ask.account_id)
+            .await;
+        return match forget_home(state, &ask.home).await {
+            Ok(()) => {
+                let mut ack = Ack::new(AckOutcome::Done);
+                ack.result = serde_json::to_value(AccountAnswer::Done).ok();
+                ack
+            }
+            Err(error) => {
+                tracing::warn!(account_id = %ask.account_id, error = %error, "removing an account's home failed");
+                refused(REFUSED_FAILED, "The account's home couldn't be removed.")
+            }
+        };
+    }
+    let home = match home_here(state, &ask.home).await {
+        Ok(home) => home,
+        Err(error) => {
+            tracing::warn!(account_id = %ask.account_id, error = %error, "preparing an account's home failed");
+            return refused(REFUSED_FAILED, "The account's home couldn't be prepared.");
+        }
+    };
     let handle = AccountHandle {
         id: ask.account_id,
-        home: PathBuf::from(&ask.home),
+        home,
         max_concurrent_runs: ask.max_concurrent_runs.max(1),
     };
     let api_key = command
@@ -283,6 +307,51 @@ pub async fn answer(state: &AppState, command: &Command) -> Ack {
             refused(reason, "The account's harness couldn't do that.")
         }
     }
+}
+
+/// The key an account's home goes by: the last part of the path the server
+/// names it with. The host keeps the home under its own root, whatever the
+/// rest of that path says.
+fn home_key(named: &str) -> Result<String, AppError> {
+    std::path::Path::new(named)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_owned)
+        .ok_or(AppError::Invalid("account home"))
+}
+
+/// An account's private home on this host's disk, made (private) when it
+/// isn't there yet.
+pub(crate) async fn home_here(state: &AppState, named: &str) -> Result<PathBuf, AppError> {
+    let key = home_key(named)?;
+    let data_root = state.config.data_root.clone();
+    let home_root = state.config.codex_home_root.clone();
+    Ok(tokio::task::spawn_blocking(move || {
+        crate::profile_runtime::prepare_private_profile_directory(&data_root, &home_root, &key)
+    })
+    .await
+    .map_err(|_| AppError::Internal("prepare an account home"))??)
+}
+
+/// Remove an account's home from this host's disk.
+async fn forget_home(state: &AppState, named: &str) -> Result<(), AppError> {
+    let key = home_key(named)?;
+    let data_root = state.config.data_root.clone();
+    let home_root = state.config.codex_home_root.clone();
+    Ok(tokio::task::spawn_blocking(move || {
+        let root = crate::profile_runtime::resolve_path_within_data_root(&data_root, &home_root)?;
+        let Ok(root) = root.canonicalize() else {
+            // No homes here at all.
+            return Ok(());
+        };
+        crate::profile_runtime::remove_private_profile_directory(
+            &data_root,
+            &home_root,
+            &root.join(key),
+        )
+    })
+    .await
+    .map_err(|_| AppError::Internal("remove an account home"))??)
 }
 
 /// Why the host couldn't answer.
@@ -430,6 +499,8 @@ async fn carry_out(
         AccountQuestion::CheckEnvironment { .. } => {
             return Err(HarnessError::Unsupported("environments").into());
         }
+        // Carried out before any session is opened (`answer`).
+        AccountQuestion::Forget => AccountAnswer::Done,
     };
     Ok(answer)
 }
@@ -555,12 +626,13 @@ impl ProfileAccount {
         }
     }
 
-    pub(crate) fn handle(&self) -> AccountHandle {
-        AccountHandle {
+    /// The account as this host's harness reaches it, its home ready.
+    pub(crate) async fn handle(&self, state: &AppState) -> Result<AccountHandle, AppError> {
+        Ok(AccountHandle {
             id: self.account_id,
-            home: PathBuf::from(&self.home_path),
+            home: home_here(state, &self.home_path).await?,
             max_concurrent_runs: u16::try_from(self.max_concurrent_runs).unwrap_or(1),
-        }
+        })
     }
 
     pub(crate) async fn for_profile(

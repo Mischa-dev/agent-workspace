@@ -391,6 +391,7 @@ async fn main() -> anyhow::Result<()> {
                 &pool,
                 &config.data_root,
                 optional_bool(&options, "apply", false)?,
+                None,
             )
             .await
             .context("clean eligible retained worktrees")?;
