@@ -474,10 +474,43 @@ pub async fn use_hold(
 
 /// A review used by a call that then made no change is pending again
 /// (a hand-written tool spends it before it runs, `mcp::call_tool`).
+///
+/// The same call made again while this one ran found no open review and
+/// asked a new one. While nobody has answered that one, it is withdrawn
+/// and this allowed review comes back in its place, so the retry uses it;
+/// once someone has answered it, that answer stands and this one stays
+/// used.
 pub async fn give_back_hold(
     transaction: &mut Transaction<'_, Postgres>,
     hold: Uuid,
 ) -> Result<(), AppError> {
+    let asked_again = sqlx::query_as::<_, (Uuid, String)>(
+        r#"
+        SELECT newer.id, request.status
+        FROM guard_holds given
+        JOIN guard_holds newer
+          ON newer.workspace_id = given.workspace_id
+         AND newer.guard_id = given.guard_id
+         AND newer.account_id = given.account_id
+         AND newer.operation = given.operation
+         AND newer.input_hash = given.input_hash
+         AND newer.space_id IS NOT DISTINCT FROM given.space_id
+         AND newer.state IN ('pending', 'allowed')
+        JOIN requests request ON request.id = newer.request_id
+        WHERE given.id = $1 AND given.state = 'used'
+        FOR UPDATE OF given, newer
+        "#,
+    )
+    .bind(hold)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    if let Some((newer, status)) = asked_again {
+        if status != "open" {
+            return Ok(());
+        }
+        settle(transaction, newer, "declined").await?;
+        crate::requests::withdraw_about(transaction, "guard_hold", &[newer]).await?;
+    }
     sqlx::query(
         "UPDATE guard_holds SET state = 'pending', updated_at = now() \
          WHERE id = $1 AND state = 'used'",

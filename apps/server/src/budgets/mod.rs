@@ -321,8 +321,21 @@ async fn warn(
     let Some((budget, owner)) = notice.budget else {
         return Ok(());
     };
-    let space = crate::spaces::workspace::ensure(transaction, workspace).await?;
     let day = chrono::Utc::now().format("%Y-%m-%d");
+    // The highest level told today stays: once whoever set it heard the
+    // budget is used up, another account only nearing the same per-account
+    // budget doesn't turn that back into "nearly used".
+    if notice.level != "hard"
+        && crate::notifications::delivered(
+            transaction,
+            owner,
+            &format!("budget:{budget}:{day}:hard"),
+        )
+        .await?
+    {
+        return Ok(());
+    }
+    let space = crate::spaces::workspace::ensure(transaction, workspace).await?;
     let notification = crate::notifications::NewNotification {
         project_id: space,
         recipient_actor_id: owner,

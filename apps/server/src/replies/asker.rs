@@ -27,6 +27,47 @@ pub struct Context {
 
 const SHAPE: &str = "context names one of replyRequestId, runId or eventId, by id.";
 
+/// `context` as a tool lists it. Every tool takes it, hand-written ones
+/// and operations alike.
+pub fn schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "description": "What this call acts on, so it is made for whoever asked. Name one, by id.",
+        "properties": {
+            "replyRequestId": {
+                "type": "string",
+                "format": "uuid",
+                "description": "A reply request addressed to you.",
+            },
+            "runId": {
+                "type": "string",
+                "format": "uuid",
+                "description": "One of your runs.",
+            },
+            "eventId": {
+                "type": "string",
+                "format": "uuid",
+                "description": "An event you were shown.",
+            },
+        },
+        "additionalProperties": false,
+    })
+}
+
+/// `tool` with `context` among its arguments, unless it already lists one.
+pub fn listed_with_context(mut tool: rmcp::model::Tool) -> rmcp::model::Tool {
+    let mut input = std::sync::Arc::unwrap_or_clone(tool.input_schema);
+    if let Some(properties) = input
+        .entry("properties")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+    {
+        properties.entry("context").or_insert_with(schema);
+    }
+    tool.input_schema = std::sync::Arc::new(input);
+    tool
+}
+
 /// The asker `context` names for `caller`, or a refusal naming `context`.
 pub async fn resolve(
     connection: &mut PgConnection,

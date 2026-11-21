@@ -405,6 +405,83 @@ async fn guards_hold_tools_called_by_their_old_names() {
     assert_eq!(next["value"]["status"], "pending_review", "{next}");
 }
 
+/// A review given back after the same call asked again while the first
+/// ran (the first then made nothing): the unanswered second ask is
+/// withdrawn, and the allowed review is used by the next call.
+#[tokio::test]
+async fn a_review_given_back_replaces_the_ask_a_retry_raised_meanwhile() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .build("teammate_guards_give_back")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let space = world.project("WORK");
+    let write = json!({"projectId": space, "title": "Plan", "body": "Notes."});
+    op(
+        &world,
+        "guard_set",
+        json!({"name": "Pages get a look", "action": "review",
+               "operations": ["page_write"], "reviewers": [world.owner.actor]}),
+    )
+    .await;
+    let held = tool(&world, rook, "page_write", write.clone()).await;
+    let first_request = held["value"]["requestId"]
+        .as_str()
+        .expect("request")
+        .to_owned();
+    op(
+        &world,
+        "request_respond",
+        json!({"requestId": first_request, "optionId": "allow"}),
+    )
+    .await;
+    // The first call has used the review and is still running.
+    let first = sqlx::query_scalar::<_, Uuid>(
+        "UPDATE guard_holds SET state = 'used' WHERE request_id = $1::uuid RETURNING id",
+    )
+    .bind(&first_request)
+    .fetch_one(world.pool())
+    .await
+    .expect("the first call uses its review");
+    let again = tool(&world, rook, "page_write", write.clone()).await;
+    assert_eq!(again["value"]["status"], "pending_review", "{again}");
+    let second_request = again["value"]["requestId"]
+        .as_str()
+        .expect("request")
+        .to_owned();
+    assert_ne!(second_request, first_request);
+    // The first call made nothing, so its review comes back.
+    agent_workspace_server::tenancy::system("runs.host", async {
+        let mut transaction = agent_workspace_server::db::scoped_tx(world.pool())
+            .await
+            .expect("transaction");
+        agent_workspace_server::guards::give_back_hold(&mut transaction, first)
+            .await
+            .expect("given back");
+        transaction.commit().await.expect("commit");
+    })
+    .await;
+    let status = sqlx::query_scalar::<_, String>("SELECT status FROM requests WHERE id = $1::uuid")
+        .bind(&second_request)
+        .fetch_one(world.pool())
+        .await
+        .expect("the second ask");
+    assert_eq!(status, "cancelled", "the second ask is withdrawn");
+    let made = tool(&world, rook, "page_write", write).await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let pages =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM project_pages WHERE title = 'Plan'")
+            .fetch_one(world.pool())
+            .await
+            .expect("pages");
+    assert_eq!(pages, 1);
+    world.finish().await;
+}
+
 /// A2.27: a guard on records sees a bulk record write as a change to
 /// records, though the call is aimed at its space; the same for a
 /// collection's and a sheet's writes, under their new and old names.

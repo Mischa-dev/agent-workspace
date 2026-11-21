@@ -313,6 +313,22 @@ impl NewNotification {
     }
 }
 
+/// Whether the occurrence `dedupe_key` was already delivered to `recipient`.
+pub async fn delivered(
+    transaction: &mut Transaction<'_, Postgres>,
+    recipient: Uuid,
+    dedupe_key: &str,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM notification_occurrences \
+         WHERE recipient_actor_id = $1 AND dedupe_key = $2)",
+    )
+    .bind(recipient)
+    .bind(dedupe_key)
+    .fetch_one(&mut **transaction)
+    .await?)
+}
+
 /// Delivers one occurrence. Returns whether anything changed (false when
 /// this occurrence was already applied). The caller checks the recipient may
 /// see the subject; reads check again.
