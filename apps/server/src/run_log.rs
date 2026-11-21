@@ -14,8 +14,8 @@
 use uuid::Uuid;
 
 use crate::{
-    AppState, error::AppError, harness::manifest::ModelPrices, model_catalog as catalog,
-    provider::adapter::TokenUsage,
+    AppState, error::AppError, harness::manifest::ModelPrices, harness::report::TokenUsage,
+    model_catalog as catalog,
 };
 
 pub use agent_workspace_redaction::{
@@ -119,7 +119,7 @@ pub const TOTALS: &str = r#"
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::adapter::{HarnessItem, ItemDetail, ItemKind, TestCounts};
+    use crate::harness::report::{HarnessItem, ItemDetail, ItemKind, TestCounts};
 
     #[test]
     fn credentials_are_removed_from_reported_text() {

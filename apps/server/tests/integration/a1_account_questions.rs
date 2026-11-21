@@ -179,6 +179,24 @@ async fn account_questions_go_to_the_host_and_keys_travel_sealed() {
         "{status:?}"
     );
 
+    // Signed in, the host lists the account's models; a harness with no
+    // environments of its own says so.
+    let models = ask_remote(&asking, &host, workspace, ask(AccountQuestion::Models)).await;
+    assert!(
+        matches!(&models, Asked::Answered(AccountAnswer::Models { models }) if !models.is_empty()),
+        "{models:?}"
+    );
+    let environment = ask_remote(
+        &asking,
+        &host,
+        workspace,
+        ask(AccountQuestion::CheckEnvironment {
+            environment: "main".to_owned(),
+        }),
+    )
+    .await;
+    assert!(matches!(environment, Asked::Unsupported), "{environment:?}");
+
     // The key was taken once: the sign-in keeps it no longer, and asking
     // again has nothing to sign in with.
     let still_sealed = sqlx::query_scalar::<_, bool>(
