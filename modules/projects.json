@@ -28,8 +28,6 @@
     "/api/v1/projects",
     "/api/v1/projects/rail-order",
     "/api/v1/projects/{id}",
-    "/api/v1/projects/{id}/archive",
-    "/api/v1/projects/{id}/restore",
     "/api/v1/projects/{id}/switch",
     "/api/v1/projects/{id}/navigation",
     "/api/v1/projects/{id}/mentionable-actors",

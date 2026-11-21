@@ -9,7 +9,6 @@ conversations.rs::enqueue_external_message_events | builds events for one writte
 conversations.rs::lock_conversation_for | locks the parent of a conversation the caller was just checked for
 conversations.rs::refresh_auto_thread_names | renames threads under a message the caller just wrote or edited
 conversations.rs::set_conversation_archived | locks a conversation and its threads by id after the archive permission check
-hosts/builtin/http.rs::fetch_run | reads a run by id after the run access check; joins the thread for its project
 hosts/builtin/http.rs::guard_conversation_mutation | locks a parent channel by id inside a write the caller is already authorised for
 hosts/builtin/http.rs::retry_run_in | reads whether a run's prompt message was removed, by id, after the run access check
 hosts/builtin/http.rs::select_run_setup_for | locks the thread a run starts in, by id, after the run access check

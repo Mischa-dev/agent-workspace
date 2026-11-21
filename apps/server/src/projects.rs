@@ -30,12 +30,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/projects", get(list_projects).post(create_project))
         .route("/api/v1/projects/rail-order", put(set_rail_order))
-        .route(
-            "/api/v1/projects/{id}",
-            get(get_project).patch(update_project),
-        )
-        .route("/api/v1/projects/{id}/archive", post(archive_project))
-        .route("/api/v1/projects/{id}/restore", post(restore_project))
+        .route("/api/v1/projects/{id}", get(get_project))
         .route(
             "/api/v1/projects/{id}/navigation",
             get(get_navigation).put(update_navigation),
@@ -167,19 +162,6 @@ struct CreateProjectRequest {
     /// A project template in the same workspace to start from.
     #[serde(default)]
     template_id: Option<Uuid>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ArchiveProjectRequest {
-    expected_version: i64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct UpdateProjectRequest {
-    expected_version: i64,
-    name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -610,141 +592,6 @@ async fn get_project(
     principal: AuthenticatedActor,
     ApiPath(project_id): ApiPath<Uuid>,
 ) -> Result<Json<ProjectView>, AppError> {
-    Ok(Json(fetch_project(&state, &principal, project_id).await?))
-}
-
-/// Renames a project from its settings, as `space_update` does for agents:
-/// whoever may manage it, against the version they read. The key stays.
-async fn update_project(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<UpdateProjectRequest>,
-) -> Result<Json<ProjectView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let name = manage::normalize_name(&request.name)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let project = lock_project_membership(&mut transaction, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("project"))?;
-    authorize_project_action(&principal, &project, Action::ProjectManage)?;
-    let current = manage::lock(&mut transaction, project_id)
-        .await?
-        .ok_or(AppError::Forbidden)?;
-    if current.archived {
-        return Err(AppError::ProjectArchived);
-    }
-    if current.version != request.expected_version {
-        return Err(AppError::VersionConflict {
-            resource: "project",
-            current_version: current.version,
-        });
-    }
-    let (changed, _) = manage::update(
-        &mut transaction,
-        principal.actor_id,
-        project_id,
-        &current,
-        manage::Changes {
-            name: Some(name),
-            ..manage::Changes::default()
-        },
-    )
-    .await?;
-    if !changed.is_empty() {
-        insert_audit_event(
-            &mut transaction,
-            &headers,
-            &principal,
-            Some(project_id),
-            "project.renamed",
-            "project",
-            project_id,
-            serde_json::json!({
-                "previous_name": current.name,
-                "previous_version": current.version,
-            }),
-        )
-        .await?;
-    }
-    transaction.commit().await?;
-    Ok(Json(fetch_project(&state, &principal, project_id).await?))
-}
-
-/// Archives a project for whoever may manage it, against the version they
-/// read, as `space_archive` does.
-async fn archive_project(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<ArchiveProjectRequest>,
-) -> Result<Json<ProjectView>, AppError> {
-    set_archived(state, headers, principal, project_id, request, true).await
-}
-
-/// Brings an archived project back, for whoever may manage it, against the
-/// version they read, as `space_restore` does. Its channels, tasks and
-/// settings were kept as they were.
-async fn restore_project(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<ArchiveProjectRequest>,
-) -> Result<Json<ProjectView>, AppError> {
-    set_archived(state, headers, principal, project_id, request, false).await
-}
-
-async fn set_archived(
-    state: AppState,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    project_id: Uuid,
-    request: ArchiveProjectRequest,
-    archive: bool,
-) -> Result<Json<ProjectView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let project = lock_project_membership(&mut transaction, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("project"))?;
-    authorize_project_action(&principal, &project, Action::ProjectManage)?;
-    let current = manage::lock(&mut transaction, project_id)
-        .await?
-        .ok_or(AppError::Forbidden)?;
-    if current.archived == archive {
-        transaction.commit().await?;
-        return Ok(Json(fetch_project(&state, &principal, project_id).await?));
-    }
-    if current.version != request.expected_version {
-        return Err(AppError::VersionConflict {
-            resource: "project",
-            current_version: current.version,
-        });
-    }
-    if archive {
-        manage::archive(&mut transaction, principal.actor_id, project_id, &current).await?;
-    } else {
-        manage::restore(&mut transaction, principal.actor_id, project_id, &current).await?;
-    }
-    insert_audit_event(
-        &mut transaction,
-        &headers,
-        &principal,
-        Some(project_id),
-        if archive {
-            "project.archived"
-        } else {
-            "project.restored"
-        },
-        "project",
-        project_id,
-        serde_json::json!({"previous_version": current.version}),
-    )
-    .await?;
-    transaction.commit().await?;
     Ok(Json(fetch_project(&state, &principal, project_id).await?))
 }
 

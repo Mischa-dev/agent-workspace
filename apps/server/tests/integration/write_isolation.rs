@@ -96,8 +96,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/account/connected-apps/{id}/revoke",
     "PUT /api/v1/account/default-workspace",
     "POST /api/v1/account/sessions/{session_id}/revoke",
-    "POST /api/v1/agent-runs/{id}/acknowledge-failure",
-    "POST /api/v1/agent-runs/{id}/interrupt",
     "POST /api/v1/agent-runs/{id}/retry",
     "POST /api/v1/channels/{id}/archive",
     "POST /api/v1/channels/{id}/messages",
@@ -163,8 +161,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/pages/{id}/suggestions/{suggestion_id}/decision",
     "POST /api/v1/projects",
     "PUT /api/v1/projects/rail-order",
-    "PATCH /api/v1/projects/{id}",
-    "POST /api/v1/projects/{id}/archive",
     "POST /api/v1/projects/{id}/channels",
     "POST /api/v1/projects/{id}/execution-profiles",
     "DELETE /api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
@@ -172,7 +168,6 @@ const WRITE_ROUTES: &[&str] = &[
     "PUT /api/v1/projects/{id}/navigation",
     "POST /api/v1/projects/{id}/pages",
     "POST /api/v1/projects/{id}/pages/import",
-    "POST /api/v1/projects/{id}/restore",
     "POST /api/v1/projects/{id}/switch",
     "POST /api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
     "POST /api/v1/projects/{project_id}/agent-runs/{run_id}/pull-request",
@@ -1479,10 +1474,8 @@ struct Targets {
     /// Threads with no repository or run yet, to start runs in: one over
     /// HTTP, one through MCP.
     run_threads: [Uuid; 2],
-    /// A run that failed, and the event that says so, to acknowledge and
-    /// retry.
+    /// A run that failed, to dismiss and retry.
     failed_run: Uuid,
-    failed_event: Uuid,
     /// A board in the trash. B's is one A's "Delete forever" and "Empty
     /// trash" must leave alone; A's goes when A empties its trash.
     trashed_whiteboard: Uuid,
@@ -2235,7 +2228,6 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         stopped_reply,
         run_threads: [run_threads[0], run_threads[1]],
         failed_run,
-        failed_event,
         trashed_whiteboard,
         record_fields: [
             collection_field(pool, world.collection, "person").await,
@@ -4063,22 +4055,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         ),
         // Runs
         path_case(
-            "POST /api/v1/agent-runs/{id}/acknowledge-failure",
-            &[id(ax.failed_run, bx.failed_run)],
-            |values| {
-                Payload::Json(json!({
-                    "eventId": if is_a(values, &ax.failed_run.to_string()) { ax.failed_event } else { bx.failed_event }
-                }))
-            },
-        )
-        .rejecting(vec![json!({"eventId": bx.failed_event})]),
-        path_case(
-            "POST /api/v1/agent-runs/{id}/interrupt",
-            &[id(a.run, b.run)],
-            empty(),
-        )
-        .last(),
-        path_case(
             "POST /api/v1/agent-runs/{id}/retry",
             &[id(ax.failed_run, bx.failed_run)],
             empty(),
@@ -4637,24 +4613,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             json!({"projectIds": [b.project]}),
             json!({"projectIds": [b.project, a.project]}),
         ]),
-        path_case(
-            "PATCH /api/v1/projects/{id}",
-            &[project()],
-            versioned("projects", 0, json!({"name": "Work"})),
-        ),
-        path_case(
-            "POST /api/v1/projects/{id}/archive",
-            &[id(&sp.projects[0], &b.project)],
-            versioned("projects", 0, json!({})),
-        )
-        .last(),
         // After the archive above, which runs first.
-        path_case(
-            "POST /api/v1/projects/{id}/restore",
-            &[id(&sp.projects[0], &b.project)],
-            versioned("projects", 0, json!({})),
-        )
-        .last(),
         path_case(
             "POST /api/v1/projects/{id}/channels",
             &[project()],
@@ -6206,6 +6165,9 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![
                 json!({"spaceId": b.project, "key": "run.model", "value": "net-model"}),
                 json!({"workspace": b.organization, "key": "run.model", "scope": "workspace", "value": "net-model"}),
+                // A reset reaches as far as a set: never another workspace's value.
+                json!({"spaceId": b.project, "key": "run.model", "scope": "project", "reset": true}),
+                json!({"workspace": b.organization, "key": "run.model", "scope": "workspace", "reset": true}),
             ],
         ),
         mcp_case(

@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { type FormEvent, useMemo, useState } from 'react'
 
 import { requestJson } from '../api/client'
+import { callOp } from '../api/ops'
 import { queryKeys } from '../api/queryKeys'
 import { useInstantMutation } from '../app/mutations'
 import { isSafeMessageText } from '../conversations/messageContentModel'
@@ -26,7 +27,8 @@ const post = (path: string, idempotencyKey: string, json: unknown = {}) =>
 const threadApi = {
   startRun: (threadId: string, prompt: string, key: string) =>
     post(`/api/v1/threads/${encodeURIComponent(threadId)}/agent-runs`, key, { prompt }),
-  interrupt: (runId: string) => post(`/api/v1/agent-runs/${encodeURIComponent(runId)}/interrupt`, `interrupt-${runId}`),
+  // Stopping or dismissing twice changes nothing, so each try is its own request.
+  interrupt: (runId: string) => callOp('run_stop', { runId }),
   retry: (runId: string) => post(`/api/v1/agent-runs/${encodeURIComponent(runId)}/retry`, `retry-${runId}`),
   publish: (projectId: string, runId: string, key: string) =>
     post(`/api/v1/projects/${encodeURIComponent(projectId)}/agent-runs/${encodeURIComponent(runId)}/publish`, key),
@@ -34,8 +36,7 @@ const threadApi = {
     post(`/api/v1/projects/${encodeURIComponent(projectId)}/agent-runs/${encodeURIComponent(runId)}/pull-request`, key, json),
   refreshPullRequest: (projectId: string, pullRequestId: string) =>
     post(`/api/v1/projects/${encodeURIComponent(projectId)}/pull-requests/${encodeURIComponent(pullRequestId)}/refresh`, crypto.randomUUID()),
-  acknowledgeFailure: (runId: string, eventId: string) =>
-    post(`/api/v1/agent-runs/${encodeURIComponent(runId)}/acknowledge-failure`, `acknowledge-failure-${runId}-${eventId}`, { eventId }),
+  acknowledgeFailure: (runId: string) => callOp('run_failure_hide', { runId }),
 }
 
 /**
@@ -197,8 +198,7 @@ export function useThreadRunActions({
       return
     }
     const runId = latestTerminalRun.id
-    const eventId = latestFailureEvent.id
-    void perform('acknowledge-failure', () => threadApi.acknowledgeFailure(runId, eventId)).then((succeeded) => {
+    void perform('acknowledge-failure', () => threadApi.acknowledgeFailure(runId)).then((succeeded) => {
       if (succeeded) setAcknowledgedRunId(runId)
     })
   }

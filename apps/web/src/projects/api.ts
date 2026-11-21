@@ -1,4 +1,5 @@
 import { requestJson } from '../api/client'
+import { callOp } from '../api/ops'
 import { normalizeLocation, safeProjectHref } from './locations'
 import type {
   Project,
@@ -147,19 +148,13 @@ export async function getProject(projectId: string): Promise<Project> {
   return normalizeProject(record.project ?? payload)
 }
 
+/** Archives a project, against the version the caller read; returns it as it now reads. */
 export async function archiveProject(
   projectId: string,
   expectedVersion: number,
 ): Promise<Project> {
-  const payload = await requestJson<unknown>(
-    `/api/v1/projects/${encodeURIComponent(projectId)}/archive`,
-    {
-      method: 'POST',
-      json: { expectedVersion },
-    },
-  )
-  const record = asRecord(payload)
-  return normalizeProject(record.project ?? payload)
+  await callOp('space_archive', { spaceId: projectId }, { expectedVersion })
+  return getProject(projectId)
 }
 
 /** Brings an archived project back, against the version the caller read. */
@@ -167,15 +162,18 @@ export async function restoreProject(
   projectId: string,
   expectedVersion: number,
 ): Promise<Project> {
-  const payload = await requestJson<unknown>(
-    `/api/v1/projects/${encodeURIComponent(projectId)}/restore`,
-    {
-      method: 'POST',
-      json: { expectedVersion },
-    },
-  )
-  const record = asRecord(payload)
-  return normalizeProject(record.project ?? payload)
+  await callOp('space_restore', { spaceId: projectId }, { expectedVersion })
+  return getProject(projectId)
+}
+
+/** Renames a project, against the version the caller read. */
+export async function renameProject(
+  projectId: string,
+  name: string,
+  expectedVersion: number,
+): Promise<Project> {
+  await callOp('space_update', { spaceId: projectId, name }, { expectedVersion })
+  return getProject(projectId)
 }
 
 export async function getProjectNavigation(

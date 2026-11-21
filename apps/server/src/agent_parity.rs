@@ -347,16 +347,10 @@ mod tests {
             "/api/v1/threads/{id}/agent-runs",
             Tool("run_start, run_request"),
         ),
-        (Post, "/api/v1/agent-runs/{id}/interrupt", Tool("run_stop")),
         (
             Post,
             "/api/v1/agent-runs/{id}/retry",
             Tool("run_retry, run_request"),
-        ),
-        (
-            Post,
-            "/api/v1/agent-runs/{id}/acknowledge-failure",
-            Tool("run_failure_hide"),
         ),
         (
             Post,
@@ -932,9 +926,6 @@ mod tests {
         (Post, "/api/v2/w/{workspace}/ops/{name}", Op),
         (Post, "/api/v2/ops/{name}", Op),
         (Post, "/api/v1/projects", Tool("space_create")),
-        (Patch, "/api/v1/projects/{id}", Tool("space_update")),
-        (Post, "/api/v1/projects/{id}/archive", Tool("space_archive")),
-        (Post, "/api/v1/projects/{id}/restore", Tool("space_restore")),
         (
             Put,
             "/api/v1/projects/rail-order",
@@ -1227,7 +1218,7 @@ mod tests {
     /// Hand-written web writes whose tool is already an operation: each is a
     /// second edge for something the generated route does (K2.22). The
     /// number only goes down; when you delete one, lower it.
-    const HAND_WRITTEN_OPERATION_ROUTES: usize = 100;
+    const HAND_WRITTEN_OPERATION_ROUTES: usize = 95;
 
     #[test]
     fn hand_written_routes_for_operations_only_go_down() {

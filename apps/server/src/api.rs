@@ -30,15 +30,7 @@ pub fn router() -> Router<AppState> {
             "/api/v1/threads/{id}/agent-runs",
             post(http::start_agent_run),
         )
-        .route(
-            "/api/v1/agent-runs/{id}/interrupt",
-            post(http::interrupt_agent_run),
-        )
         .route("/api/v1/agent-runs/{id}/retry", post(http::retry_agent_run))
-        .route(
-            "/api/v1/agent-runs/{id}/acknowledge-failure",
-            post(http::acknowledge_run_failure),
-        )
         .route("/api/v1/realtime", get(crate::realtime::websocket))
         // The live contract (K5.19): tickets and resume on `api`, the
         // connection and publishes on `live`.
