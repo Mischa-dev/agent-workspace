@@ -335,6 +335,22 @@ struct SealedKey {
     api_key_master_key_id: String,
 }
 
+/// Whether an API key is sealed beside sign-in `ceremony_id` and not yet
+/// taken.
+pub async fn has_api_key(
+    connection: &mut sqlx::PgConnection,
+    ceremony_id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT api_key_ciphertext IS NOT NULL FROM provider_login_ceremonies \
+         WHERE ceremony_id = $1",
+    )
+    .bind(ceremony_id)
+    .fetch_optional(connection)
+    .await?
+    .unwrap_or(false))
+}
+
 /// Take the API key sealed beside sign-in `ceremony_id`, once: the row
 /// keeps it no longer. `None` when it was taken already or the sign-in
 /// ended.
