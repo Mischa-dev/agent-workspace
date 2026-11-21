@@ -21,7 +21,10 @@ use serde_json::{Map, Value, json};
 use sqlx::{FromRow, PgConnection, PgExecutor, Postgres, Transaction};
 use uuid::Uuid;
 
+use agent_workspace_host_protocol::account::{AccountAnswer, AccountAsk, AccountQuestion};
+
 use crate::harness_catalog::Harnesses;
+use crate::hosts::builtin::accounts::Asked;
 use crate::{
     AppState,
     addresses::{Place, Target},
@@ -1036,11 +1039,14 @@ pub(crate) struct LaunchAccount {
 }
 
 impl LaunchAccount {
-    fn handle(&self) -> crate::provider::AccountHandle {
-        crate::provider::AccountHandle {
-            id: self.id,
-            home: std::path::PathBuf::from(&self.home_path),
+    /// A question for the built-in host about this account.
+    fn ask(&self, question: AccountQuestion) -> AccountAsk {
+        AccountAsk {
+            account_id: self.id,
+            harness: self.adapter_kind.clone(),
+            home: self.home_path.clone(),
             max_concurrent_runs: u16::try_from(self.max_concurrent_runs).unwrap_or(1),
+            question,
         }
     }
 }
@@ -1123,26 +1129,32 @@ async fn thread_busy(
     crate::hosts::builtin::thread_busy(executor, conversation_id).await
 }
 
-/// When the account's usage window resets, from the harness.
+/// When the account's usage window resets, as its harness says through the
+/// built-in host.
 async fn window_reset(
     state: &AppState,
+    workspace_id: Uuid,
     account: &LaunchAccount,
 ) -> Result<Option<DateTime<Utc>>, AppError> {
-    let Ok(mut session) = state
-        .supervisors
-        .acquire_control(&account.adapter_kind, account.handle())
-        .await
+    let asked = crate::hosts::builtin::accounts::ask(
+        state,
+        workspace_id,
+        account.ask(AccountQuestion::Status),
+    )
+    .await?;
+    let Asked::Answered(AccountAnswer::Status {
+        rate_limits: Some(limits),
+        ..
+    }) = asked
     else {
         return Ok(None);
     };
-    let limits = session.read_rate_limits().await.ok();
-    let windows = limits
+    let window = [limits.primary, limits.secondary]
         .into_iter()
-        .flat_map(|limits| [limits.primary, limits.secondary])
         .flatten()
         .filter(|window| window.resets_at.is_some())
         .max_by_key(|window| window.used_percent);
-    Ok(windows
+    Ok(window
         .and_then(|window| window.resets_at)
         .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0)))
 }
@@ -1621,7 +1633,7 @@ pub(crate) async fn launch_tasks(
             .await?
             .ok_or(AppError::ExecutionProfileRequired)?;
             Some(
-                window_reset(state, &account)
+                window_reset(state, defaults.organization_id, &account)
                     .await?
                     .ok_or(AppError::Invalid(
                         "that account doesn't say when its usage resets; pick a time instead",

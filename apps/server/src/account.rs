@@ -334,9 +334,7 @@ async fn account_view(
     harnesses: &Harnesses,
     row: AccountRow,
 ) -> ProviderAccountView {
-    let health = state
-        .supervisors
-        .health(&row.adapter_kind, row.id)
+    let health = host_accounts::health(state, &row.adapter_kind, row.id)
         .await
         .unwrap_or_default();
     let harness_name = harnesses

@@ -23,15 +23,17 @@ use serde_json::{Value, json};
 use sqlx::{FromRow, PgExecutor};
 use uuid::Uuid;
 
+use agent_workspace_host_protocol::account::{AccountAnswer, AccountQuestion};
+
 use crate::harness_catalog::Harnesses;
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
     harness::manifest::RunLocation,
+    hosts::builtin::accounts::{Asked, ProfileAccount},
     memory,
     policy::{Action, ActorKind},
-    provider::ProfileAccount,
     settings,
 };
 
@@ -894,29 +896,33 @@ pub(crate) async fn check_in(
                 .provider_environment_id
                 .clone()
                 .unwrap_or_default();
-            if environment.harness == crate::provider::CODEX_CLOUD_KIND {
-                match state
-                    .supervisors
-                    .codex_cloud()
-                    .check_environment(&account.handle(), &provider_environment)
-                    .await
-                {
-                    Ok(()) => (
-                        true,
-                        format!("Codex Cloud found {provider_environment} for your account."),
-                    ),
-                    Err(_) => (
-                        false,
-                        format!(
-                            "Codex Cloud couldn't find {provider_environment} for your account. Check the ID or label in Codex Cloud's environment settings."
-                        ),
-                    ),
-                }
-            } else {
-                (
+            let asked = crate::hosts::builtin::accounts::ask(
+                state,
+                organization_id,
+                account.ask(AccountQuestion::CheckEnvironment {
+                    environment: provider_environment.clone(),
+                }),
+            )
+            .await?;
+            let name = &manifest.display_name;
+            match asked {
+                Asked::Answered(AccountAnswer::Environment { found: true }) => (
                     true,
-                    format!("Your {} account is signed in.", manifest.display_name),
-                )
+                    format!("{name} found {provider_environment} for your account."),
+                ),
+                Asked::Answered(AccountAnswer::Environment { found: false }) => (
+                    false,
+                    format!(
+                        "{name} couldn't find {provider_environment} for your account. Check the ID or label in its environment settings."
+                    ),
+                ),
+                // A harness with no environments of its own: signing in is
+                // all it needs.
+                Asked::Unsupported => (true, format!("Your {name} account is signed in.")),
+                _ => (
+                    false,
+                    format!("{name} couldn't be asked about {provider_environment}; try again."),
+                ),
             }
         }
         (Some(manifest), Some(_)) => (

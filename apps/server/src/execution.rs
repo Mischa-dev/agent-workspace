@@ -8,16 +8,19 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
+use agent_workspace_host_protocol::account::{AccountAnswer, AccountQuestion};
+
 use crate::harness_catalog::Harnesses;
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
     harness::manifest::{AdapterManifest, ModelOverrides},
+    harness::report::ProfileHealth,
+    hosts::builtin::accounts::{self, Asked, ProfileAccount},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     model_catalog::{self as catalog, Catalog},
     policy::{Action, Permission, RoleGrant},
-    provider::{CODEX_KIND, ProfileHealth},
 };
 
 const MAX_EXECUTION_RESOURCES: i64 = 100;
@@ -441,10 +444,12 @@ async fn list_execution_profiles(
     let harnesses = Harnesses::visible_on(&state, &mut transaction).await?;
     let mut profiles = Vec::with_capacity(rows.len());
     for row in rows {
-        let health = state
-            .supervisors
-            .health(&row.account_adapter_kind, row.provider_account_id)
-            .await;
+        let health = crate::hosts::builtin::accounts::health(
+            &state,
+            &row.account_adapter_kind,
+            row.provider_account_id,
+        )
+        .await;
         profiles.push(execution_profile_view(
             &harnesses,
             row,
@@ -484,7 +489,7 @@ async fn register_personal_execution_profile(
         }
         (_, Some(account)) => account.adapter_kind.clone(),
         (Some(kind), None) => kind.clone(),
-        (None, None) => CODEX_KIND.to_owned(),
+        (None, None) => crate::hosts::builtin::DEFAULT_HARNESS.to_owned(),
     };
     let manifest = Harnesses::visible(&state)
         .await?
@@ -819,7 +824,7 @@ pub(crate) async fn refresh_in(
         transaction.commit().await?;
         return harness_view(state, organization_id, &manifest, true).await;
     }
-    let account = sqlx::query_as::<_, crate::provider::ProfileAccount>(
+    let account = sqlx::query_as::<_, ProfileAccount>(
         r#"
         SELECT account.id AS account_id, account.adapter_kind, account.home_path,
                account.max_concurrent_runs
@@ -842,16 +847,11 @@ pub(crate) async fn refresh_in(
     // Its own code, so the settings page can say to sign in first.
     .ok_or(AppError::ExecutionProfileRequired)?;
     transaction.rollback().await?;
-    let mut session = state
-        .supervisors
-        .acquire_control(&manifest.kind, account.handle())
-        .await
-        .map_err(|error| catalog_error(&manifest.kind, error))?;
-    let models = session
-        .list_models()
-        .await
-        .map_err(|error| catalog_error(&manifest.kind, error))?;
-    drop(session);
+    let models =
+        match accounts::ask(state, organization_id, account.ask(AccountQuestion::Models)).await? {
+            Asked::Answered(AccountAnswer::Models { models }) => models,
+            other => return Err(catalog_error(&manifest.kind, other.category())),
+        };
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let Some((scope, idempotency_key)) = idempotency else {
         catalog::store_refresh(&mut transaction, organization_id, &manifest.kind, &models).await?;
@@ -885,10 +885,10 @@ pub(crate) async fn refresh_in(
     harness_view(state, organization_id, &manifest, true).await
 }
 
-fn catalog_error(kind: &str, error: crate::provider::HarnessError) -> AppError {
+fn catalog_error(kind: &str, category: &str) -> AppError {
     tracing::warn!(
         adapter_kind = kind,
-        error_type = std::any::type_name_of_val(&error),
+        category,
         "harness model listing failed"
     );
     AppError::Conflict("harness", "the harness could not list its models")
@@ -1108,10 +1108,12 @@ async fn fetch_owned_execution_profile(
     .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("execution_profile"))?;
-    let health = state
-        .supervisors
-        .health(&row.account_adapter_kind, row.provider_account_id)
-        .await;
+    let health = crate::hosts::builtin::accounts::health(
+        state,
+        &row.account_adapter_kind,
+        row.provider_account_id,
+    )
+    .await;
     let harnesses = Harnesses::visible(state).await?;
     execution_profile_view(&harnesses, row, health, owner_actor_id)
 }

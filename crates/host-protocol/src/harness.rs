@@ -3,4 +3,5 @@
 //! sides read these: the host to run, the server to offer and check.
 pub mod manifest;
 pub mod registered;
+pub mod report;
 pub mod run_config;

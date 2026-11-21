@@ -1,5 +1,6 @@
 //! A1.17 step 4: model accounts are the built-in host's. The server asks
-//! about one (its status, a sign-in, a sign-out, a banked reset) with an
+//! about one (its status, a sign-in, a sign-out, a banked reset, its models,
+//! whether a cloud environment is there) with an
 //! `action` command to the workspace's built-in host row
 //! ([`agent_workspace_host_protocol::account`]), and the host carries it out
 //! with the account's harness and answers in its acknowledgement.
@@ -25,6 +26,7 @@ use agent_workspace_host_protocol::{
     },
 };
 use serde_json::{Value, json};
+use sqlx::FromRow;
 use uuid::Uuid;
 
 use crate::{
@@ -173,8 +175,7 @@ pub async fn ask_with_key(
 /// reset may already have happened): it is waited for as long as the
 /// harness may take, and its answer still lands if it comes later.
 async fn wait_for_answer(state: &AppState, command_id: Uuid) -> Result<Option<Ack>, AppError> {
-    let started = tokio::time::Instant::now();
-    let mut deadline = started + PICKUP_WAIT;
+    let mut deadline = tokio::time::Instant::now() + PICKUP_WAIT;
     let mut taken = false;
     loop {
         if let Some(ack) = commands::answer_of(&state.pool, command_id).await? {
@@ -185,7 +186,9 @@ async fn wait_for_answer(state: &AppState, command_id: Uuid) -> Result<Option<Ac
                 return commands::answer_of(&state.pool, command_id).await;
             }
             taken = true;
-            deadline = started
+            // The host took it during the pickup wait: its requests may
+            // have only just started, so their budget counts from now.
+            deadline = tokio::time::Instant::now()
                 + state.config.codex_request_timeout * REQUESTS_PER_QUESTION
                 + IN_FLIGHT_MARGIN;
         }
@@ -310,6 +313,20 @@ async fn carry_out(
             .shutdown_account(harness, account_id)
             .await;
     }
+    if let AccountQuestion::CheckEnvironment { environment } = &question {
+        // Only a cloud harness has environments of its own; it checks
+        // with its command line, not a control session.
+        if harness != crate::provider::CODEX_CLOUD_KIND {
+            return Err(HarnessError::Unsupported("environments").into());
+        }
+        let found = state
+            .supervisors
+            .codex_cloud()
+            .check_environment(&handle, environment)
+            .await
+            .is_ok();
+        return Ok(AccountAnswer::Environment { found });
+    }
     let mut session = state.supervisors.acquire_control(harness, handle).await?;
     let answer = match question {
         AccountQuestion::Status => {
@@ -379,6 +396,12 @@ async fn carry_out(
                 ResetOutcome::AlreadyRedeemed => ResetSpent::AlreadyRedeemed,
             },
         },
+        AccountQuestion::Models => AccountAnswer::Models {
+            models: session.list_models().await?,
+        },
+        AccountQuestion::CheckEnvironment { .. } => {
+            return Err(HarnessError::Unsupported("environments").into());
+        }
     };
     Ok(answer)
 }
@@ -443,4 +466,67 @@ pub async fn attach_secret(
         command.insert("apiKey".into(), Value::String(key.as_str().to_owned()));
     }
     Ok(())
+}
+
+/// The provider account behind an execution profile, and the adapter that
+/// runs it.
+#[derive(Clone, Debug, FromRow)]
+pub struct ProfileAccount {
+    pub account_id: Uuid,
+    pub adapter_kind: String,
+    pub home_path: String,
+    pub max_concurrent_runs: i16,
+}
+
+impl ProfileAccount {
+    /// A question for the built-in host about this account.
+    pub fn ask(&self, question: AccountQuestion) -> AccountAsk {
+        AccountAsk {
+            account_id: self.account_id,
+            harness: self.adapter_kind.clone(),
+            home: self.home_path.clone(),
+            max_concurrent_runs: u16::try_from(self.max_concurrent_runs).unwrap_or(1),
+            question,
+        }
+    }
+
+    pub(crate) fn handle(&self) -> AccountHandle {
+        AccountHandle {
+            id: self.account_id,
+            home: PathBuf::from(&self.home_path),
+            max_concurrent_runs: u16::try_from(self.max_concurrent_runs).unwrap_or(1),
+        }
+    }
+
+    pub(crate) async fn for_profile(
+        pool: &sqlx::PgPool,
+        execution_profile_id: Uuid,
+    ) -> Result<Self, AppError> {
+        Ok(sqlx::query_as::<_, Self>(
+            r#"
+            SELECT account.id AS account_id, account.adapter_kind, account.home_path,
+                   account.max_concurrent_runs
+            FROM execution_profiles profile
+            JOIN provider_accounts account ON account.id = profile.provider_account_id
+            WHERE profile.id = $1
+            "#,
+        )
+        .bind(execution_profile_id)
+        .fetch_one(crate::db::scoped(pool))
+        .await?)
+    }
+}
+
+/// How the harness process for an account is doing, when this process
+/// carries the built-in host; `None` from anywhere else, since a host
+/// elsewhere doesn't report its processes.
+pub async fn health(
+    state: &AppState,
+    harness: &str,
+    account_id: Uuid,
+) -> Option<crate::harness::report::ProfileHealth> {
+    if !host_is_here(state) {
+        return None;
+    }
+    state.supervisors.health(harness, account_id).await
 }

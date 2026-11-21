@@ -230,9 +230,10 @@ const LISTEN_OUTSIDE_WAKE_CEILING: usize = 0;
 // across the provider calls on purpose, so removal can't race attachment
 // (auth/workos/agents.rs); its owner is A2.
 const TRANSACTIONS_ACROSS_CALLS_CEILING: usize = 3;
-// A1.17 (G10): today's total, lowered as the server stops reaching the
-// harness layer itself.
-const SERVER_RUNS_AGENTS_CEILING: usize = 25;
+// A1.17 (G10): the harness layer is reached only from the built-in host;
+// what is left is the repository mirrors and worktree pushes, which move
+// behind the code-host seam (A1.18).
+const SERVER_RUNS_AGENTS_CEILING: usize = 7;
 
 /// The rules of `AGENTS.md` rules 1 and 2 (access and account kinds). Every
 /// allowance of theirs names the K1 slice that removes it and why it is

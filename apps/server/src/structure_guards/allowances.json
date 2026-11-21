@@ -48,7 +48,7 @@
   },
   "background_spawns": {
     "github.rs": 1,
-    "harnesses.rs": 1,
+    "hosts/builtin/custom.rs": 1,
     "hosts/builtin/worktrees.rs": 1,
     "provider.rs": 1,
     "repositories.rs": 1,
@@ -133,21 +133,12 @@
     "work_items.rs": 1
   },
   "server_runs_agents": {
-    "environments.rs": 3,
-    "execution.rs": 3,
+    "environments.rs": 1,
     "github.rs": 1,
-    "harness_host.rs": 1,
-    "harnesses.rs": 3,
-    "hosts/windows.rs": 1,
-    "launch.rs": 2,
-    "lib.rs": 2,
+    "lib.rs": 1,
     "migration_preflight.rs": 1,
-    "preflight.rs": 1,
     "repositories.rs": 1,
-    "run_log.rs": 1,
-    "seed.rs": 2,
-    "server.rs": 1,
-    "usage.rs": 1,
+    "seed.rs": 1,
     "workspace/lifecycle.rs": 1
   },
   "transactions_across_calls": {

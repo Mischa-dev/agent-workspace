@@ -84,7 +84,7 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
             "launch.rs",
             "runs/liveness.rs",
             "runs/usage.rs",
-            "harness_host.rs",
+            "hosts/builtin/harness_host.rs",
             "provider.rs",
             "hosts/commands.rs",
             "hosts/a2a.rs",
@@ -96,7 +96,7 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
     // in every workspace.
     ("replies.sweep", &["server.rs", "replies.rs"]),
     // Reloading every workspace's registered harnesses on each instance.
-    ("harnesses.reload", &["harnesses.rs"]),
+    ("harnesses.reload", &["hosts/builtin/custom.rs"]),
     // Commands an operator runs on the host, and the server's own start:
     // preflight before migrating, a password or master key rotation, the
     // default plan.

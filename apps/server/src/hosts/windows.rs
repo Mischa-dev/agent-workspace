@@ -18,7 +18,7 @@ use uuid::Uuid;
 use super::{HostRow, protocol::HostError};
 use crate::{
     AppState,
-    provider::adapter::{ResetCredit, ResetCredits, UsageReport, UsageWindow},
+    harness::report::{ResetCredit, ResetCredits, UsageReport, UsageWindow},
 };
 
 /// At most this many accounts per host.
