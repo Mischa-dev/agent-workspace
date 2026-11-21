@@ -507,6 +507,7 @@ pub fn new_push_secret(random: [u8; 32]) -> String {
     format!("whsec_{}", STANDARD.encode(random))
 }
 
+pub mod account;
 mod client;
 pub mod harness;
 mod model;

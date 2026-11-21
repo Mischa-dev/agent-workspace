@@ -1272,7 +1272,7 @@ async fn plan_for(
     let known = Harnesses::of(state, defaults.organization_id).await?;
     for manifest in known.manifests() {
         let catalog =
-            crate::provider::catalog::run_catalog(&state.pool, defaults.organization_id, manifest)
+            crate::model_catalog::run_catalog(&state.pool, defaults.organization_id, manifest)
                 .await?;
         let runner = known.runner_for(&manifest.kind);
         let runner_name = match runner {

@@ -20,7 +20,7 @@ pub mod history;
 pub mod ready;
 pub mod schedule;
 
-use std::{collections::BTreeSet, path::PathBuf, time::Duration as StdDuration};
+use std::{collections::BTreeSet, time::Duration as StdDuration};
 
 use axum::{
     Json, Router,
@@ -38,12 +38,14 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
+    harness_catalog::Harnesses,
+    hosts::builtin::accounts::{self as host_accounts, Asked},
     idempotency::IdempotencyKey,
     jobs::{self, JobError, JobRegistry, NewJob},
-    provider::{
-        AccountHandle, HarnessError,
-        adapter::{ResetOutcome, UsageReport},
-    },
+    provider::adapter::UsageReport,
+};
+use agent_workspace_host_protocol::account::{
+    AccountAnswer, AccountAsk, AccountQuestion, ResetSpent,
 };
 
 pub const POLL_DUE_KIND: &str = "usage.poll_due";
@@ -104,11 +106,14 @@ pub(crate) struct UsageAccount {
 }
 
 impl UsageAccount {
-    fn handle(&self) -> AccountHandle {
-        AccountHandle {
-            id: self.id,
-            home: PathBuf::from(self.home_path.as_deref().unwrap_or_default()),
+    /// A question for the built-in host about this account.
+    fn ask(&self, question: AccountQuestion) -> AccountAsk {
+        AccountAsk {
+            account_id: self.id,
+            harness: self.adapter_kind.clone(),
+            home: self.home_path.clone().unwrap_or_default(),
             max_concurrent_runs: u16::try_from(self.max_concurrent_runs).unwrap_or(1),
+            question,
         }
     }
 
@@ -167,35 +172,23 @@ pub(crate) async fn owned_account<'e, E: PgExecutor<'e>>(
 // ---------------------------------------------------------------------------
 // Reading and storing
 
-/// Read the account's usage through a control session and store it.
+/// Ask the built-in host to read the account's usage; it reports the
+/// windows through the host protocol, stored as any host's are (A1.17).
 /// Returns whether the harness answered.
 async fn read_and_store(state: &AppState, account: &UsageAccount) -> Result<bool, JobError> {
-    let result = async {
-        let mut session = state
-            .supervisors
-            .acquire_control(&account.adapter_kind, account.handle())
-            .await?;
-        session.read_usage().await
-    }
-    .await;
-    match result {
-        // A1.17: stored the way any host's windows are, through the host
-        // protocol.
-        Ok(report) => {
-            agent_workspace_builtin_host::runtime::windows::report(
-                &crate::hosts::builtin::transport::client(state),
-                account.id,
-                &report,
-                false,
-            )
-            .await
-            .map_err(|_| JobError::retry("plan windows not taken"))?;
-            Ok(true)
-        }
+    let asked = host_accounts::ask(
+        state,
+        account.organization_id,
+        account.ask(AccountQuestion::Usage),
+    )
+    .await?;
+    match asked {
+        Asked::Answered(_) => Ok(true),
         // Every control slot is busy with account pages: try again soon.
-        Err(HarnessError::ControlCapacity) => Err(JobError::retry("control sessions busy")),
-        Err(error) => {
-            let category = failure_category(&error);
+        Asked::Busy => Err(JobError::retry("control sessions busy")),
+        other if other.category() == "report" => Err(JobError::retry("plan windows not taken")),
+        other => {
+            let category = other.category();
             tracing::info!(account_id = %account.id, category, "usage read failed");
             sqlx::query(
                 r#"
@@ -212,20 +205,6 @@ async fn read_and_store(state: &AppState, account: &UsageAccount) -> Result<bool
             .await?;
             Ok(false)
         }
-    }
-}
-
-fn failure_category(error: &HarnessError) -> &'static str {
-    match error {
-        HarnessError::HostCapacity | HarnessError::AccountCapacity => "busy",
-        HarnessError::ControlCapacity => "busy",
-        HarnessError::ShuttingDown => "shutting_down",
-        HarnessError::CircuitOpen => "circuit_open",
-        HarnessError::ConfigurationChanged | HarnessError::InvalidConfiguration => "configuration",
-        HarnessError::Transport(_) => "transport",
-        HarnessError::MissingResult(_) | HarnessError::InvalidResponse => "invalid_response",
-        HarnessError::Unsupported(_) => "unsupported",
-        HarnessError::UnknownAdapter => "unknown_harness",
     }
 }
 
@@ -744,9 +723,9 @@ async fn account_view(
     };
     let harness_name = match &reporting_host {
         Some((name, _)) => name.clone(),
-        None => state
-            .supervisors
-            .manifest(&account.adapter_kind)
+        None => Harnesses::of(state, account.organization_id)
+            .await?
+            .known(&account.adapter_kind)
             .map_or_else(
                 || account.adapter_kind.clone(),
                 |manifest| manifest.display_name.clone(),
@@ -1087,7 +1066,7 @@ struct SpendRequest {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SpendResponse {
-    outcome: ResetOutcome,
+    outcome: ResetSpent,
     account: AccountUsageView,
 }
 
@@ -1119,29 +1098,32 @@ async fn spend_credit_http(
             "the account is signed out",
         ));
     }
-    let outcome = async {
-        let mut session = state
-            .supervisors
-            .acquire_control(&account.adapter_kind, account.handle())
-            .await?;
-        session
-            .spend_reset_credit(
-                request.credit_id.as_deref(),
-                &format!("aw-{}-{}", account.id.simple(), idempotency_key.as_str()),
-            )
-            .await
-    }
-    .await
-    .map_err(|error| match error {
-        HarnessError::Unsupported(_) => {
-            AppError::Conflict("provider_account", "this harness has no banked resets")
+    let asked = host_accounts::ask(
+        &state,
+        account.organization_id,
+        account.ask(AccountQuestion::SpendReset {
+            credit_id: request.credit_id.clone(),
+            attempt_key: format!("aw-{}-{}", account.id.simple(), idempotency_key.as_str()),
+        }),
+    )
+    .await?;
+    let outcome = match asked {
+        Asked::Answered(AccountAnswer::ResetSpent { outcome }) => outcome,
+        Asked::Unsupported => {
+            return Err(AppError::Conflict(
+                "provider_account",
+                "this harness has no banked resets",
+            ));
         }
-        HarnessError::ControlCapacity | HarnessError::HostCapacity => AppError::rate_limited(5),
+        Asked::Busy => return Err(AppError::rate_limited(5)),
         other => {
-            tracing::warn!(%account_id, category = failure_category(&other), "banked reset failed");
-            AppError::Conflict("provider", "the harness could not spend the reset")
+            tracing::warn!(%account_id, category = other.category(), "banked reset failed");
+            return Err(AppError::Conflict(
+                "provider",
+                "the harness could not spend the reset",
+            ));
         }
-    })?;
+    };
     tracing::info!(%account_id, ?outcome, "banked reset spent");
     // Read again so the refilled windows show at once.
     let _ = read_and_store(&state, &account).await;

@@ -2,6 +2,7 @@
 //! compiled and linked for tests once rather than once per file.
 
 mod a1_a2a_binding;
+mod a1_account_questions;
 mod a1_assistant;
 mod a1_builtin_requests;
 mod a1_example_host;

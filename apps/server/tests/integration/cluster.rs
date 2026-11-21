@@ -2177,10 +2177,10 @@ async fn one_stream_walks_several_workspaces_and_the_direct_scope() {
 /// start is refused, and a cancel there ends it for both.
 #[tokio::test]
 async fn provider_sign_in_started_on_one_instance_completes_on_the_other() {
-    use agent_workspace_server::provider::{
-        LoginCeremonyError, LoginReservation,
-        adapter::{LoginKind, LoginStart},
-        ceremonies,
+    use agent_workspace_host_protocol::account::LoginStarted as LoginStart;
+    use agent_workspace_server::{
+        harness::manifest::LoginKind,
+        sign_ins::{self as ceremonies, LoginCeremonyError, LoginReservation},
     };
 
     let Some(cluster) = cluster("k5_14_sign_in", 2).await else {

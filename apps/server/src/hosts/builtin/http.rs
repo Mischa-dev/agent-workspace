@@ -485,7 +485,7 @@ pub(crate) async fn retry_run_in(
         Some(predecessor_worker_id),
     )
     .await?;
-    let config = crate::provider::resolve_stored_run_config(
+    let config = crate::model_catalog::resolve_stored_run_config(
         state,
         setup.organization_id,
         &setup.adapter_kind,

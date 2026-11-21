@@ -172,6 +172,70 @@ pub async fn issue(
     Ok(row)
 }
 
+/// A command the process that wrote it carries out itself (the server
+/// asking its own built-in host, in process): taken at once, so no host
+/// loop lists it too.
+pub async fn take_here(
+    transaction: &mut Transaction<'_, Postgres>,
+    command_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE host_commands
+           SET state = 'fetched', attempts = 1,
+               ack_due_at = now() + make_interval(secs => $2::double precision),
+               updated_at = now()
+         WHERE id = $1 AND state = 'pending'
+        "#,
+    )
+    .bind(command_id)
+    .bind(ACK_SECONDS as f64)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+/// The host's acknowledgement of an action, once it has one.
+pub async fn answer_of(pool: &PgPool, command_id: Uuid) -> Result<Option<Ack>, AppError> {
+    let ack = sqlx::query_scalar::<_, Option<Value>>(
+        "SELECT ack FROM host_commands WHERE id = $1 AND state IN ('acked', 'refused')",
+    )
+    .bind(command_id)
+    .fetch_optional(crate::db::scoped(pool))
+    .await?
+    .flatten();
+    Ok(ack.and_then(|ack| serde_json::from_value(ack).ok()))
+}
+
+/// An action no host has taken up in time is closed: a host that comes to
+/// it later finds it gone. One a host has fetched is left to finish.
+/// Returns whether it was closed.
+pub async fn close_if_not_taken(pool: &PgPool, command_id: Uuid) -> Result<bool, AppError> {
+    let closed = sqlx::query(
+        "UPDATE host_commands SET state = 'expired', ack_due_at = NULL, updated_at = now() \
+         WHERE id = $1 AND state = 'pending'",
+    )
+    .bind(command_id)
+    .execute(crate::db::scoped(pool))
+    .await?;
+    Ok(closed.rows_affected() > 0)
+}
+
+/// Once its asker has read the answer, a built-in host's account question
+/// is gone: no row keeps what the account said, and usage polls don't pile
+/// up. (A question still in flight stays until its host answers it.)
+pub async fn forget_answered(pool: &PgPool, command_id: Uuid) -> Result<(), AppError> {
+    sqlx::query(
+        "DELETE FROM host_commands WHERE id = $1 AND kind = 'action' \
+           AND state IN ('acked', 'refused', 'expired') \
+           AND host_id IN (SELECT id FROM hosts WHERE builtin)",
+    )
+    .bind(command_id)
+    .execute(crate::db::scoped(pool))
+    .await?;
+    Ok(())
+}
+
 /// For a push host, a job that sends the host this command's thin event;
 /// for an A2A host, the job that makes the call.
 async fn push_later(
@@ -451,6 +515,17 @@ pub async fn fetch(state: &AppState, host: &HostRow, command_id: Uuid) -> Result
     }
     if let Some(start_key) = &row.start_key {
         command.insert("startKey".into(), json!(start_key));
+    }
+    if row.kind == "action" && host.builtin {
+        // An API key to sign in with is handed over now and kept in no
+        // command (A1.17).
+        crate::hosts::builtin::accounts::attach_secret(
+            state,
+            &mut transaction,
+            &row.body,
+            &mut command,
+        )
+        .await?;
     }
     command.insert("issuedAt".into(), json!(timestamp(row.created_at)));
     command.insert("expiresAt".into(), json!(timestamp(row.expires_at)));

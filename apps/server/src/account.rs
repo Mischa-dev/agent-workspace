@@ -6,8 +6,6 @@
 //! The older per-profile routes stay as thin aliases for the account behind
 //! the profile.
 
-use std::path::PathBuf;
-
 use axum::{
     Json, Router,
     extract::State,
@@ -24,14 +22,20 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
+    harness::{
+        manifest::{AdapterManifest, LoginKind},
+        run_config::RunConfig,
+    },
+    harness_catalog::Harnesses,
+    hosts::builtin::accounts::{self as host_accounts, Asked},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
+    model_catalog::run_catalog,
     policy::{Action, MembershipRole, RoleGrant},
     profile_runtime::prepare_private_profile_directory,
-    provider::{
-        AccountHandle, AccountSummary, HarnessError, LoginCeremonyError, LoginCeremonySnapshot,
-        LoginKind, LoginReservation, LoginStart, ProfileHealth, RateLimitSummary,
-        catalog::run_catalog, ceremonies, manifest::AdapterManifest, run_config::RunConfig,
-    },
+    sign_ins::{self as ceremonies, LoginCeremonyError, LoginCeremonySnapshot, LoginReservation},
+};
+use agent_workspace_host_protocol::account::{
+    AccountAnswer, AccountAsk, AccountQuestion, LoginStarted as LoginStart, RateLimits,
 };
 
 const MAX_ACCOUNTS_PER_OWNER: i64 = 50;
@@ -117,11 +121,14 @@ pub(crate) struct AccountAccess {
 }
 
 impl AccountAccess {
-    fn handle(&self) -> AccountHandle {
-        AccountHandle {
-            id: self.account_id,
-            home: PathBuf::from(&self.home_path),
+    /// A question for the built-in host about this account.
+    fn ask(&self, question: AccountQuestion) -> AccountAsk {
+        AccountAsk {
+            account_id: self.account_id,
+            harness: self.adapter_kind.clone(),
+            home: self.home_path.clone(),
             max_concurrent_runs: u16::try_from(self.max_concurrent_runs).unwrap_or(1),
+            question,
         }
     }
 
@@ -214,6 +221,7 @@ struct LoginCeremonyView {
 #[derive(Debug, FromRow)]
 struct AccountRow {
     id: Uuid,
+    organization_id: Uuid,
     adapter_kind: String,
     name: String,
     status: String,
@@ -290,9 +298,10 @@ async fn list_accounts(
     .bind(principal.actor_id)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
+    let harnesses = Harnesses::of(&state, project.organization_id).await?;
     let mut accounts = Vec::with_capacity(rows.len());
     for row in rows {
-        accounts.push(account_view(&state, row).await);
+        accounts.push(account_view(&state, &harnesses, row).await);
     }
     Ok(Json(ProviderAccountsResponse { accounts }))
 }
@@ -300,7 +309,8 @@ async fn list_accounts(
 fn account_select(filter: &str) -> String {
     format!(
         r#"
-        SELECT account.id, account.adapter_kind, account.name, account.status,
+        SELECT account.id, account.organization_id, account.adapter_kind, account.name,
+               account.status,
                account.account_state, account.max_concurrent_runs,
                account.run_defaults, account.last_health_at::text AS last_health_at,
                account.last_failure_category, account.version,
@@ -319,17 +329,21 @@ fn account_select(filter: &str) -> String {
     )
 }
 
-async fn account_view(state: &AppState, row: AccountRow) -> ProviderAccountView {
+async fn account_view(
+    state: &AppState,
+    harnesses: &Harnesses,
+    row: AccountRow,
+) -> ProviderAccountView {
     let health = state
         .supervisors
         .health(&row.adapter_kind, row.id)
         .await
-        .unwrap_or(ProfileHealth::default());
+        .unwrap_or_default();
+    let harness_name = harnesses
+        .known(&row.adapter_kind)
+        .map(|manifest| manifest.display_name.clone());
     ProviderAccountView {
-        harness_name: state
-            .supervisors
-            .manifest(&row.adapter_kind)
-            .map(|manifest| manifest.display_name.clone()),
+        harness_name,
         id: row.id,
         adapter_kind: row.adapter_kind,
         name: row.name,
@@ -362,7 +376,8 @@ async fn fetch_account_view(
         .fetch_optional(crate::db::scoped(&state.pool))
         .await?
         .ok_or(AppError::NotFound("provider_account"))?;
-    Ok(account_view(state, row).await)
+    let harnesses = Harnesses::of(state, row.organization_id).await?;
+    Ok(account_view(state, &harnesses, row).await)
 }
 
 /// Adds an account for a harness. It starts signed out; signing in happens
@@ -377,28 +392,22 @@ async fn create_account(
     require_authenticated_write(&state, &headers, &principal).await?;
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let request_hash = RequestHash::for_value(&request)?;
-    let manifest = state
-        .supervisors
+    if let Some(name) = request.name.as_deref().map(str::trim) {
+        valid_account_name(name)?;
+    }
+    let project = require_project_manager(&state, &principal, project_id).await?;
+    // Only a harness this workspace has (another workspace's registered
+    // harness is not one it can use), and not one a runner serves.
+    let harnesses = Harnesses::of(&state, project.organization_id).await?;
+    let manifest = harnesses
         .manifest(&request.adapter_kind)
-        .map(|manifest| (*manifest).clone())
+        .filter(|_| harnesses.runner_for(&request.adapter_kind).is_none())
+        .cloned()
         .ok_or(AppError::Validation("adapterKind"))?;
     let name = match request.name.as_deref().map(str::trim) {
         Some(name) => valid_account_name(name)?,
         None => manifest.display_name.clone(),
     };
-    let project = require_project_manager(&state, &principal, project_id).await?;
-    // Another workspace's registered harness is not one this one can use.
-    if state
-        .supervisors
-        .manifest_in(project.organization_id, &request.adapter_kind)
-        .is_none()
-        || state
-            .supervisors
-            .runner_for(&request.adapter_kind)
-            .is_some()
-    {
-        return Err(AppError::Validation("adapterKind"));
-    }
     let scope =
         idempotency::resource_bound_scope("project", project_id, "provider_account_create")?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
@@ -529,10 +538,10 @@ async fn update_account(
     let idempotency_key = IdempotencyKey::from_headers(&headers)?;
     let request_hash = RequestHash::for_value(&request)?;
     let access = require_account_owner(&state, &principal, project_id, account_id).await?;
-    let manifest = state
-        .supervisors
+    let manifest = Harnesses::of(&state, access.organization_id)
+        .await?
         .manifest(&access.adapter_kind)
-        .map(|manifest| (*manifest).clone())
+        .cloned()
         .ok_or(AppError::Conflict(
             "provider_account",
             "this harness is not installed",
@@ -692,7 +701,7 @@ async fn delete_account(
             .await?;
     }
     transaction.commit().await?;
-    let home = PathBuf::from(&access.home_path);
+    let home = std::path::PathBuf::from(&access.home_path);
     if let Err(error) = logout(&state, access).await {
         // A harness that's gone has nothing left to revoke; removing the
         // home below still drops the sign-in kept here.
@@ -824,10 +833,10 @@ pub(crate) async fn use_account_in_project(
     owner_handle: &str,
     account: &AccountAccess,
 ) -> Result<(Uuid, bool), AppError> {
-    let manifest = state
-        .supervisors
+    let manifest = Harnesses::of_on(state, transaction, account.organization_id)
+        .await?
         .manifest(&account.adapter_kind)
-        .map(|manifest| (*manifest).clone())
+        .cloned()
         .ok_or(AppError::Conflict(
             "provider_account",
             "this harness is not installed",
@@ -1166,34 +1175,31 @@ async fn account_status(
             ..status_response(&access, &access.account_state)
         }));
     }
-    let provider = state
-        .supervisors
-        .acquire_control(&access.adapter_kind, access.handle())
-        .await;
-    let mut provider = match provider {
-        Ok(provider) => provider,
+    let asked = host_accounts::ask(
+        state,
+        access.organization_id,
+        access.ask(AccountQuestion::Status),
+    )
+    .await?;
+    let (authenticated, account_type, email, rate_limits) = match asked {
+        Asked::Answered(AccountAnswer::Status {
+            authenticated,
+            account_type,
+            email,
+            rate_limits,
+        }) => (authenticated, account_type, email, rate_limits),
         // Every control slot is busy with other account pages: that says
         // nothing about this account, so its stored state stands.
-        Err(HarnessError::ControlCapacity) => {
+        Asked::Busy => {
             return Ok(Json(AccountStatusResponse {
                 ceremony,
                 ..status_response(&access, &access.account_state)
             }));
         }
-        Err(_) => {
-            persist_account_state(state, account_id, "unknown", "unavailable").await?;
-            return Ok(Json(AccountStatusResponse {
-                ceremony,
-                ..status_response(&access, "unknown")
-            }));
-        }
-    };
-    let account = match provider.read_account().await {
-        Ok(account) => account,
-        Err(error) => {
+        other => {
             tracing::warn!(
                 %account_id,
-                error_type = std::any::type_name_of_val(&error),
+                asked = other.category(),
                 "provider account status is unavailable"
             );
             persist_account_state(state, account_id, "unknown", "unavailable").await?;
@@ -1203,28 +1209,26 @@ async fn account_status(
             }));
         }
     };
-    let (account_state, account_status) = if account.authenticated {
+    let (account_state, account_status) = if authenticated {
         ("authenticated", "available")
     } else {
         ("authentication_required", "authentication_required")
     };
     persist_account_state(state, account_id, account_state, account_status).await?;
-    if account.authenticated {
+    if authenticated {
         ceremonies::clear_login(&state.pool, account_id, None).await?;
         ceremony = None;
     }
-    let rate_limits = if account.authenticated {
-        provider.read_rate_limits().await.ok().map(rate_limit_view)
-    } else {
-        None
-    };
     Ok(Json(AccountStatusResponse {
         account_id,
         profile_id: access.profile_id,
         account_state: account_state.to_owned(),
         provider_available: true,
-        account: identity_view(account),
-        rate_limits,
+        account: account_type.map(|account_type| AccountIdentityView {
+            account_type,
+            email,
+        }),
+        rate_limits: rate_limits.filter(|_| authenticated).map(rate_limit_view),
         ceremony,
     }))
 }
@@ -1245,8 +1249,8 @@ async fn start_login(
             "account is disabled",
         ));
     }
-    let supported = state
-        .supervisors
+    let supported = Harnesses::of(state, access.organization_id)
+        .await?
         .manifest(&access.adapter_kind)
         .is_some_and(|manifest| {
             manifest
@@ -1259,6 +1263,9 @@ async fn start_login(
             "provider_account",
             "this harness does not support that sign-in method",
         ));
+    }
+    if kind == LoginKind::ApiKey && api_key.is_none() {
+        return Err(AppError::Validation("apiKey"));
     }
     let reservation = ceremonies::reserve_login(
         &state.pool,
@@ -1274,31 +1281,28 @@ async fn start_login(
         LoginReservation::Replay(snapshot) => return Ok(Json(login_ceremony_view(snapshot))),
         LoginReservation::Reserved(ceremony_id) => ceremony_id,
     };
-
-    let provider = state
-        .supervisors
-        .acquire_control(&access.adapter_kind, access.handle())
-        .await;
-    let mut provider = match provider {
-        Ok(provider) => provider,
+    let question = match kind {
+        LoginKind::ApiKey => AccountQuestion::ApiKeyLogin { ceremony_id },
+        kind => AccountQuestion::Login { kind },
+    };
+    // An API key goes to the host in memory, or sealed beside the sign-in
+    // when the host runs elsewhere; never in the command that asks it.
+    let asked = host_accounts::ask_with_key(
+        state,
+        access.organization_id,
+        access.ask(question),
+        api_key.filter(|_| kind == LoginKind::ApiKey),
+    )
+    .await;
+    let response = match asked {
+        Ok(Asked::Answered(AccountAnswer::LoginStarted { start })) => start,
+        Ok(other) => {
+            ceremonies::clear_login(&state.pool, account_id, Some(ceremony_id)).await?;
+            return Err(provider_error(account_id, "start login", other.category()));
+        }
         Err(error) => {
             ceremonies::clear_login(&state.pool, account_id, Some(ceremony_id)).await?;
-            return Err(provider_error(account_id, "start login session", error));
-        }
-    };
-    let response = match (kind, api_key) {
-        (LoginKind::ApiKey, Some(api_key)) => provider.login_with_api_key(api_key).await,
-        (LoginKind::ApiKey, None) => {
-            ceremonies::clear_login(&state.pool, account_id, Some(ceremony_id)).await?;
-            return Err(AppError::Validation("apiKey"));
-        }
-        (kind, _) => provider.start_login(kind).await,
-    };
-    let response = match response {
-        Ok(response) => response,
-        Err(error) => {
-            ceremonies::clear_login(&state.pool, account_id, Some(ceremony_id)).await?;
-            return Err(provider_error(account_id, "start login", error));
+            return Err(error);
         }
     };
     let snapshot = ceremonies::complete_login(&state.pool, account_id, ceremony_id, response)
@@ -1346,15 +1350,18 @@ async fn cancel_login(
         None => return Err(AppError::Conflict("login_ceremony", "login is starting")),
     };
     if let Some(login_id) = login_id {
-        let mut provider = state
-            .supervisors
-            .acquire_control(&access.adapter_kind, access.handle())
-            .await
-            .map_err(|error| provider_error(account_id, "cancel login session", error))?;
-        provider
-            .cancel_login(&login_id)
-            .await
-            .map_err(|error| provider_error(account_id, "cancel login", error))?;
+        match host_accounts::ask(
+            state,
+            access.organization_id,
+            access.ask(AccountQuestion::CancelLogin { login_id }),
+        )
+        .await?
+        {
+            Asked::Answered(_) => {}
+            other => {
+                return Err(provider_error(account_id, "cancel login", other.category()));
+            }
+        }
     }
     ceremonies::clear_login(&state.pool, account_id, Some(ceremony.ceremony_id)).await?;
     persist_account_state(
@@ -1376,28 +1383,21 @@ async fn logout(
 ) -> Result<Json<AccountStatusResponse>, AppError> {
     let account_id = access.account_id;
     persist_account_state(state, account_id, "logged_out", "authentication_required").await?;
-    state
-        .supervisors
-        .shutdown_account(&access.adapter_kind, account_id)
-        .await;
     ceremonies::clear_login(&state.pool, account_id, None).await?;
     // Always tell the harness, even when the account already reads logged
     // out: a retry after a failed or lost first attempt must still revoke
-    // the harness's credentials.
-    let mut provider = state
-        .supervisors
-        .acquire_control(&access.adapter_kind, access.handle())
-        .await
-        .map_err(|error| provider_error(account_id, "logout session", error))?;
-    provider
-        .logout()
-        .await
-        .map_err(|error| provider_error(account_id, "logout", error))?;
-    drop(provider);
-    state
-        .supervisors
-        .shutdown_account(&access.adapter_kind, account_id)
-        .await;
+    // the harness's credentials. The host starts a fresh session for it and
+    // leaves none behind.
+    match host_accounts::ask(
+        state,
+        access.organization_id,
+        access.ask(AccountQuestion::Logout),
+    )
+    .await?
+    {
+        Asked::Answered(_) => {}
+        other => return Err(provider_error(account_id, "logout", other.category())),
+    }
     Ok(Json(status_response(&access, "logged_out")))
 }
 
@@ -1605,21 +1605,13 @@ async fn persist_account_state(
     Ok(())
 }
 
-fn identity_view(account: AccountSummary) -> Option<AccountIdentityView> {
-    account
-        .account_type
-        .map(|account_type| AccountIdentityView {
-            account_type,
-            email: account.email,
-        })
-}
-
-fn rate_limit_view(rate_limits: RateLimitSummary) -> RateLimitView {
-    let window = |value: crate::provider::RateLimitWindow| RateLimitWindowView {
-        used_percent: value.used_percent,
-        resets_at: value.resets_at,
-        window_duration_minutes: value.window_duration_minutes,
-    };
+fn rate_limit_view(rate_limits: RateLimits) -> RateLimitView {
+    let window =
+        |value: agent_workspace_host_protocol::account::RateLimitWindow| RateLimitWindowView {
+            used_percent: value.used_percent,
+            resets_at: value.resets_at,
+            window_duration_minutes: value.window_duration_minutes,
+        };
     RateLimitView {
         primary: rate_limits.primary.map(window),
         secondary: rate_limits.secondary.map(window),
@@ -1665,15 +1657,11 @@ fn login_ceremony_error(error: LoginCeremonyError) -> AppError {
     }
 }
 
-fn provider_error(
-    account_id: Uuid,
-    operation: &'static str,
-    error: impl std::fmt::Debug,
-) -> AppError {
+fn provider_error(account_id: Uuid, operation: &'static str, category: &str) -> AppError {
     tracing::error!(
         %account_id,
         operation,
-        error_type = std::any::type_name_of_val(&error),
+        category,
         "provider account operation failed"
     );
     AppError::Conflict("provider_account", "the provider account operation failed")
