@@ -230,10 +230,9 @@ const LISTEN_OUTSIDE_WAKE_CEILING: usize = 0;
 // across the provider calls on purpose, so removal can't race attachment
 // (auth/workos/agents.rs); its owner is A2.
 const TRANSACTIONS_ACROSS_CALLS_CEILING: usize = 3;
-// A1.17 (G10): the harness layer is reached only from the built-in host;
-// what is left is the repository mirrors and worktree pushes, which move
-// behind the code-host seam (A1.18).
-const SERVER_RUNS_AGENTS_CEILING: usize = 7;
+// A1.17 and A1.18 (G10): the harness layer and git are reached only from
+// the built-in host (`hosts/builtin/`), so nothing else may.
+const SERVER_RUNS_AGENTS_CEILING: usize = 0;
 
 /// The rules of `AGENTS.md` rules 1 and 2 (access and account kinds). Every
 /// allowance of theirs names the K1 slice that removes it and why it is
@@ -515,7 +514,9 @@ pub(crate) fn background_spawns(source: &str) -> usize {
 
 /// The server reaching into what runs agents (A1 guard G10): the harness
 /// layer (`crate::provider`, or a `provider::` path brought in by a `use`),
-/// the worktree code (`git_runtime`) or a child process (`Command::new`),
+/// git on the host's mirrors and worktrees (the built-in host's `git`
+/// module, once `git_runtime`, or a bare `git::` path brought in by a
+/// grouped `use`) or a child process (`Command::new`),
 /// unless its line says it runs no agent (`// g10: not an agent (<why>)`).
 /// The embedded host's spawn point (`hosts/builtin/`) and the harness layer
 /// itself are left out by [`counts`].
@@ -526,17 +527,23 @@ pub(crate) fn server_runs_agents(source: &str) -> usize {
         if line.contains("// g10: not an agent") {
             return 0;
         }
-        let bare_provider_paths = line
-            .match_indices("provider::")
-            .filter(|(index, _)| {
-                !line[..*index].bytes().next_back().is_some_and(|byte| {
-                    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b':'
+        // A path that starts at this name: brought in by a `use`, a
+        // grouped one (`{git}`) included.
+        let bare_paths = |name: &str| {
+            line.match_indices(name)
+                .filter(|(index, _)| {
+                    !line[..*index].bytes().next_back().is_some_and(|byte| {
+                        byte.is_ascii_alphanumeric() || byte == b'_' || byte == b':'
+                    })
                 })
-            })
-            .count();
+                .count()
+        };
         line.matches("crate::provider").count()
-            + bare_provider_paths
+            + bare_paths("provider::")
+            + bare_paths("git::")
             + line.matches("git_runtime").count()
+            + line.matches("builtin::git").count()
+            + line.matches("builtin_host::git").count()
             + line.matches("Command::new(").count()
     })
 }
@@ -1378,6 +1385,25 @@ async fn notify(pool: &PgPool, client: &reqwest::Client) -> Result<(), Error> {
             0
         );
         assert_eq!(server_runs_agents("let child = Command::new(binary);"), 1);
+        assert_eq!(
+            server_runs_agents("crate::hosts::builtin::git::remove_repository_data(root, id)"),
+            1
+        );
+        assert_eq!(
+            server_runs_agents("crate::hosts::builtin::repositories::remove(root, id)"),
+            0
+        );
+        assert_eq!(
+            server_runs_agents(
+                "use crate::hosts::builtin::{git};\ngit::prepare_repository(root, r)"
+            ),
+            1
+        );
+        assert_eq!(
+            server_runs_agents("use crate::hosts::builtin::{git::prepare_repository};"),
+            1
+        );
+        assert_eq!(server_runs_agents("let digit::x = 1; mygit::y();"), 0);
         assert_eq!(
             server_runs_agents(
                 "let tar = Command::new(\"tar\"); // g10: not an agent (backup archive)"

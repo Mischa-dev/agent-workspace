@@ -13,8 +13,10 @@ use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin, bootstrap_development_member},
     config::AppConfig,
-    git_runtime::{create_worktree, expected_repository_mirror_path, managed_worktree_path},
     github::webhook_router,
+    hosts::builtin::git::{
+        create_worktree, expected_repository_mirror_path, managed_worktree_path,
+    },
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,

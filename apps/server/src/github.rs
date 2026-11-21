@@ -34,10 +34,7 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     config::{GITHUB_API_VERSION, GitHubConfig},
     error::{ApiJson, ApiPath, AppError},
-    git_runtime::{
-        PublishPush, expected_repository_mirror_path, inspect_publishable_worktree,
-        managed_worktree_path, push_publishable_commit,
-    },
+    hosts::builtin::repositories::{Publication, PublicationCheck},
     idempotency::{
         IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
     },
@@ -1632,33 +1629,26 @@ pub(crate) async fn queue_publish_in(
         "github_installation",
         "repository_unavailable",
     ))?;
-    let expected_mirror =
-        expected_repository_mirror_path(&state.config.data_root, candidate.repository_id)?;
-    let expected_worktree = managed_worktree_path(
-        &state.config.data_root,
-        candidate.repository_id,
-        candidate.repository_workspace_id,
-    )?;
-    if Path::new(&candidate.mirror_path) != expected_mirror
-        || Path::new(&candidate.worktree_path) != expected_worktree
-    {
-        return Err(AppError::Conflict(
-            "repository_workspace",
-            "stored runtime path mismatch",
-        ));
-    }
-    let branch_name = candidate.branch_name.clone();
-    let base_commit = candidate.base_commit.clone();
-    let inspection = tokio::task::spawn_blocking(move || {
-        inspect_publishable_worktree(
-            &expected_mirror,
-            &expected_worktree,
-            &branch_name,
-            &base_commit,
-        )
+    let head_commit = match (Publication {
+        repository_id: candidate.repository_id,
+        repository_workspace_id: candidate.repository_workspace_id,
+        mirror_path: &candidate.mirror_path,
+        worktree_path: &candidate.worktree_path,
+        branch: &candidate.branch_name,
+        base_commit: &candidate.base_commit,
     })
-    .await
-    .map_err(|_| AppError::Internal("join Git publication inspection"))??;
+    .check(state)
+    .await?
+    {
+        PublicationCheck::At(commit) => commit,
+        PublicationCheck::Refused(error) => return Err(error),
+        PublicationCheck::Moved => {
+            return Err(AppError::Conflict(
+                "repository_workspace",
+                "stored runtime path mismatch",
+            ));
+        }
+    };
     sqlx::query(
         "UPDATE git_worktrees SET state = 'ready', dirty = false, last_inspected_at = now(), updated_at = now() WHERE repository_workspace_id = $1",
     )
@@ -1683,7 +1673,7 @@ pub(crate) async fn queue_publish_in(
     )
     .bind(project_id)
     .bind(candidate.repository_workspace_id)
-    .bind(&inspection.head_commit)
+    .bind(&head_commit)
     .fetch_optional(&mut **transaction)
     .await?
     {
@@ -1698,7 +1688,7 @@ pub(crate) async fn queue_publish_in(
         job_id,
         agent_run_id: candidate.agent_run_id,
         repository_workspace_id: candidate.repository_workspace_id,
-        intended_commit: inspection.head_commit,
+        intended_commit: head_commit,
         state: "queued".to_owned(),
         failure_category: None,
     };
@@ -2854,30 +2844,20 @@ async fn process_publish_job(state: &AppState, job: &ClaimedPublishJob) -> Resul
     if job.clone_url != expected_clone_url {
         return fail_publish_job(state, job, "repository_identity_invalid", true).await;
     }
-    let expected_mirror =
-        expected_repository_mirror_path(&state.config.data_root, job.repository_id)?;
-    let expected_worktree = managed_worktree_path(
-        &state.config.data_root,
-        job.repository_id,
-        job.repository_workspace_id,
-    )?;
-    if Path::new(&job.mirror_path) != expected_mirror
-        || Path::new(&job.worktree_path) != expected_worktree
-    {
-        return fail_publish_job(state, job, "runtime_path_mismatch", true).await;
-    }
-    let mirror = expected_mirror.clone();
-    let worktree = expected_worktree.clone();
-    let branch = job.branch_name.clone();
-    let base = job.base_commit.clone();
-    let inspection = tokio::task::spawn_blocking(move || {
-        inspect_publishable_worktree(&mirror, &worktree, &branch, &base)
-    })
-    .await
-    .map_err(|_| AppError::Internal("join Git publication reinspection"))?;
-    match inspection {
-        Ok(inspection) if inspection.head_commit == job.intended_commit => {}
-        Ok(_) | Err(_) => {
+    let publication = Publication {
+        repository_id: job.repository_id,
+        repository_workspace_id: job.repository_workspace_id,
+        mirror_path: &job.mirror_path,
+        worktree_path: &job.worktree_path,
+        branch: &job.branch_name,
+        base_commit: &job.base_commit,
+    };
+    match publication.check(state).await? {
+        PublicationCheck::At(commit) if commit == job.intended_commit => {}
+        PublicationCheck::Moved => {
+            return fail_publish_job(state, job, "runtime_path_mismatch", true).await;
+        }
+        PublicationCheck::At(_) | PublicationCheck::Refused(_) => {
             return fail_publish_job(state, job, "workspace_changed", true).await;
         }
     }
@@ -2918,30 +2898,16 @@ async fn process_publish_job(state: &AppState, job: &ClaimedPublishJob) -> Resul
         }
     }
 
-    let data_root = state.config.data_root.clone();
-    let mirror = expected_mirror;
-    let worktree = expected_worktree;
-    let branch = job.branch_name.clone();
-    let base = job.base_commit.clone();
-    let intended = job.intended_commit.clone();
-    let remote_url = job.clone_url.clone();
-    let remote_is_safe = crate::code_host::is_safe_remote(&remote_url);
-    let push_token = token.secret.clone();
-    let push = tokio::task::spawn_blocking(move || {
-        push_publishable_commit(PublishPush {
-            data_root: &data_root,
-            mirror: &mirror,
-            worktree: &worktree,
-            expected_branch: &branch,
-            base_commit: &base,
-            intended_commit: &intended,
-            remote_url: &remote_url,
+    let remote_is_safe = crate::code_host::is_safe_remote(&job.clone_url);
+    let pushed = publication
+        .push(
+            state,
+            &job.intended_commit,
+            &job.clone_url,
             remote_is_safe,
-            token: &push_token,
-        })
-    })
-    .await
-    .map_err(|_| AppError::Internal("join credentialed Git push"))?;
+            token.secret.clone(),
+        )
+        .await?;
     let remote = client
         .branch_commit(&token, &job.owner, &job.repository_name, &job.branch_name)
         .await;
@@ -2949,7 +2915,7 @@ async fn process_publish_job(state: &AppState, job: &ClaimedPublishJob) -> Resul
     match remote {
         Ok(Some(commit)) if commit == job.intended_commit => complete_publish_job(state, job).await,
         Ok(Some(_)) => fail_publish_job(state, job, "remote_branch_diverged", true).await,
-        Ok(None) if push.is_err() => fail_publish_job(state, job, "git_push_failed", false).await,
+        Ok(None) if !pushed => fail_publish_job(state, job, "git_push_failed", false).await,
         Ok(None) => fail_publish_job(state, job, "remote_ref_unconfirmed", false).await,
         Err(_) => fail_publish_job(state, job, "remote_ref_unavailable", false).await,
     }

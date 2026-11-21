@@ -89,9 +89,9 @@ async fn clean_worktrees_here(
         if !apply {
             let mirror = PathBuf::from(&candidate.mirror_path);
             let worktree = PathBuf::from(&candidate.worktree_path);
-            let inspection = crate::git_runtime::inspect_worktree(&mirror, &worktree);
+            let inspection = crate::hosts::builtin::git::inspect_worktree(&mirror, &worktree);
             if inspection.is_ok_and(|value| !value.dirty && value.branch == candidate.branch_name)
-                && crate::git_runtime::inspect_publishable_worktree(
+                && crate::hosts::builtin::git::inspect_publishable_worktree(
                     &mirror,
                     &worktree,
                     &candidate.branch_name,
@@ -115,7 +115,7 @@ async fn clean_worktrees_here(
         let branch_name = candidate.branch_name.clone();
         let published_commit = candidate.published_commit.clone();
         let removal = tokio::task::spawn_blocking(move || {
-            crate::git_runtime::remove_published_worktree(
+            crate::hosts::builtin::git::remove_published_worktree(
                 &mirror,
                 &worktree,
                 &branch_name,
@@ -205,12 +205,13 @@ fn candidate_query() -> String {
 }
 
 fn candidate_paths_match(data_root: &Path, candidate: &WorktreeCandidate) -> bool {
-    let Ok(expected_mirror) =
-        crate::git_runtime::expected_repository_mirror_path(data_root, candidate.repository_id)
-    else {
+    let Ok(expected_mirror) = crate::hosts::builtin::git::expected_repository_mirror_path(
+        data_root,
+        candidate.repository_id,
+    ) else {
         return false;
     };
-    let Ok(expected_worktree) = crate::git_runtime::managed_worktree_path(
+    let Ok(expected_worktree) = crate::hosts::builtin::git::managed_worktree_path(
         data_root,
         candidate.repository_id,
         candidate.workspace_id,
