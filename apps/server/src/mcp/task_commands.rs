@@ -350,11 +350,19 @@ pub(crate) async fn set_archived(
     )
 }
 
+/// A comment's words: text (where @handles and task keys become mentions
+/// and references) or structured content as the web composer writes it.
+/// Exactly one is given; the command refuses anything else.
+pub(crate) struct CommentText {
+    pub text: Option<String>,
+    pub content: Option<crate::message_content::MessageContent>,
+}
+
 pub(crate) async fn comment(
     state: &AppState,
     ctx: &OpContext,
     task_id: Uuid,
-    text: String,
+    body: CommentText,
     attachment_ids: Option<Vec<String>>,
     reply_to_comment_id: Option<String>,
 ) -> Result<TaskWritten, OpError> {
@@ -365,10 +373,11 @@ pub(crate) async fn comment(
             &principal,
             PostUpdateArguments {
                 work_item_id: task_id.to_string(),
-                update: text,
+                update: body.text,
                 client_request_id: request_id(ctx),
                 attachment_ids,
                 reply_to_comment_id,
+                content: body.content,
             },
         )
         .await,
@@ -380,7 +389,7 @@ pub(crate) async fn comment_edit(
     ctx: &OpContext,
     task_id: Uuid,
     comment_id: Uuid,
-    text: String,
+    body: CommentText,
     expected_revision: Option<i32>,
 ) -> Result<EditedComment, OpError> {
     let principal = principal_of(ctx);
@@ -391,8 +400,9 @@ pub(crate) async fn comment_edit(
             TaskCommentEditArguments {
                 task_id: task_id.to_string(),
                 comment_id: comment_id.to_string(),
-                text,
+                text: body.text,
                 expected_revision,
+                content: body.content,
             },
         )
         .await,

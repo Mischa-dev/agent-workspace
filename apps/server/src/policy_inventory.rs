@@ -671,12 +671,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     policy_route!(
         "execution",
-        Post,
-        "/api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
-        ExecutionProfileManage
-    ),
-    policy_route!(
-        "execution",
         Put,
         "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
         ProjectManage
@@ -980,12 +974,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     boundary_route!("later", Delete, "/api/v1/later/{id}", SessionAuthentication),
     // W21: scheduling, editing and sending run the send command's checks;
     // canceling is the author's own.
-    policy_route!(
-        "scheduled_messages",
-        Patch,
-        "/api/v1/scheduled-messages/{id}",
-        MessageSend
-    ),
     boundary_route!(
         "push",
         Post,
@@ -1066,12 +1054,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects/{project_id}/repositories/{repository_id}/archive",
         RepositoryManage
-    ),
-    policy_route!(
-        "github",
-        Post,
-        "/api/v1/projects/{project_id}/integrations/github/sync",
-        GithubIntegrationManage
     ),
     policy_route!(
         "github/connect",
@@ -1405,24 +1387,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
         WorkItemArchive
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
-        WorkItemComment
-    ),
-    policy_route!(
-        "work_items/comments",
-        Patch,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items/comments",
-        Delete,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
-        WorkItemEdit
     ),
     policy_route!(
         "work_items",

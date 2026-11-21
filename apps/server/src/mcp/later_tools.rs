@@ -645,8 +645,10 @@ pub(super) async fn message_schedule(
 pub(super) struct ScheduledUpdateArguments {
     /// The scheduled message's ID, from message_schedule or later_list.
     pub id: String,
-    /// New text.
+    /// New text. @handles of people in the project become mentions.
     pub text: Option<String>,
+    /// New structured content instead of text.
+    pub content: Option<MessageContent>,
     /// A new time, as RFC 3339.
     pub send_at: Option<String>,
     /// true: send it now.
@@ -715,9 +717,16 @@ pub(super) async fn scheduled_message_update(
                 Err(error) => Ok(schedule_refusal(error, "scheduled_message_update")),
             };
         }
-        let content = match arguments.text.as_deref() {
-            None => None,
-            Some(text) => {
+        let content = match (arguments.text.as_deref(), arguments.content.clone()) {
+            (None, None) => None,
+            (Some(_), Some(_)) => {
+                return Ok(ToolResult::invalid("text", "Pass either text or content."));
+            }
+            (None, Some(content)) => match serde_json::to_value(content) {
+                Ok(content) => Some(content),
+                Err(_) => return Ok(ToolResult::invalid("content", "The content isn't valid.")),
+            },
+            (Some(text), None) => {
                 let text = text.trim();
                 if text.is_empty() {
                     return Ok(ToolResult::invalid(

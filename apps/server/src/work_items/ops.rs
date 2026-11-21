@@ -20,6 +20,7 @@ use crate::{
             TaskWritten,
         },
     },
+    message_content::MessageContent,
     ops::{
         Idempotency, OpCall, OpError, OpKind, Operation, Perm, Registry, Target, Targeted,
         refs::IdRef,
@@ -725,8 +726,11 @@ pub struct TaskCommentCreateInput {
     pub task_id: IdRef,
     /// The comment or update. It may span several lines and use Markdown.
     /// @handles of people in the space become mentions and notify them.
-    #[serde(alias = "update")]
-    pub text: String,
+    #[serde(alias = "update", default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Structured content instead of text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<MessageContent>,
     /// Files to post with it: up to 10 fileIds from file_upload with taskId
     /// and forComment: true on this task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -767,7 +771,10 @@ impl Operation for TaskCommentCreate {
             call.state,
             call.ctx,
             input.task_id.id(),
-            input.text,
+            task_commands::CommentText {
+                text: input.text,
+                content: input.content,
+            },
             input.attachment_ids,
             input.reply_to_comment_id,
         )
@@ -792,7 +799,11 @@ pub struct TaskCommentUpdateInput {
     pub comment_id: IdRef,
     /// The new text, 1 to 20,000 characters. Line breaks and Markdown are
     /// kept.
-    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// New structured content instead of text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<MessageContent>,
     /// The revision you read (this returns it; a comment never edited is 1).
     /// Leave it out to edit whatever is there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -830,7 +841,10 @@ impl Operation for TaskCommentUpdate {
             call.ctx,
             input.task_id.id(),
             input.comment_id.id(),
-            input.text,
+            task_commands::CommentText {
+                text: input.text,
+                content: input.content,
+            },
             input.expected_revision,
         )
         .await?;

@@ -152945,6 +152945,17 @@
                       "null"
                     ]
                   },
+                  "content": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/MessageContent"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "New structured content instead of text."
+                  },
                   "id": {
                     "description": "The scheduled message, from message_schedule or later_list.",
                     "maxLength": 2048,
@@ -152965,7 +152976,7 @@
                     ]
                   },
                   "text": {
-                    "description": "New text.",
+                    "description": "New text. @handles of people in the space become mentions.",
                     "type": [
                       "string",
                       "null"
@@ -169877,6 +169888,17 @@
                       "null"
                     ]
                   },
+                  "content": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/MessageContent"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Structured content instead of text."
+                  },
                   "replyToCommentId": {
                     "description": "To answer one comment on this task, its id (task_open lists them): it\nshows quoted above yours, and its author is told.",
                     "type": [
@@ -169891,12 +169913,14 @@
                   },
                   "text": {
                     "description": "The comment or update. It may span several lines and use Markdown.\n@handles of people in the space become mentions and notify them.",
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
-                  "taskId",
-                  "text"
+                  "taskId"
                 ],
                 "title": "TaskCommentCreateInput",
                 "type": "object"
@@ -170758,6 +170782,17 @@
                     "maxLength": 2048,
                     "type": "string"
                   },
+                  "content": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/MessageContent"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "New structured content instead of text."
+                  },
                   "expectedRevision": {
                     "description": "The revision you read (this returns it; a comment never edited is 1).\nLeave it out to edit whatever is there.",
                     "format": "int32",
@@ -170773,13 +170808,15 @@
                   },
                   "text": {
                     "description": "The new text, 1 to 20,000 characters. Line breaks and Markdown are\nkept.",
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
                   "taskId",
-                  "commentId",
-                  "text"
+                  "commentId"
                 ],
                 "title": "TaskCommentUpdateInput",
                 "type": "object"

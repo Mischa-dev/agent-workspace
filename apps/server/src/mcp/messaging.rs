@@ -315,6 +315,7 @@ pub(crate) async fn schedule(
 /// What a change to a scheduled message does.
 pub(crate) struct ScheduledChange {
     pub text: Option<String>,
+    pub content: Option<crate::message_content::MessageContent>,
     pub send_at: Option<String>,
     pub send_now: Option<bool>,
     pub cancel: Option<bool>,
@@ -330,6 +331,7 @@ pub(crate) async fn scheduled_update(
     let arguments = ScheduledUpdateArguments {
         id: id.to_string(),
         text: change.text,
+        content: change.content,
         send_at: change.send_at,
         send_now: change.send_now,
         cancel: change.cancel,

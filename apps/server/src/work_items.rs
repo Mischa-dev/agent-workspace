@@ -19,7 +19,6 @@ use crate::{
     idempotency::{
         IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
     },
-    message_content::{MessageContent, MessageContentError},
     policy::{Action, Decision, Permission, RoleGrant},
     work_item_commands::{
         AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
@@ -224,10 +223,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/timeline",
             get(get_work_item_timeline),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
-            axum::routing::post(create_work_item_comment),
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
@@ -597,18 +592,6 @@ struct AcceptanceCriterionView {
     updated_at: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CreateCommentRequest {
-    content: serde_json::Value,
-    /// Files uploaded to the task for this comment (`?for=comment`), in order.
-    #[serde(default)]
-    attachments: Vec<Uuid>,
-    /// The comment on this task that this one answers: it shows quoted above.
-    #[serde(default)]
-    reply_to_comment_id: Option<Uuid>,
-}
-
 /// The comment a reply answers, read live: who wrote it and how it starts.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -676,14 +659,6 @@ struct CommentRemovalView {
     removed_at: String,
     /// Null when whoever deleted it has left the project.
     removed_by: Option<ActorView>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CommentAppendResponse {
-    work_item_id: Uuid,
-    sequence: i64,
-    comment: WorkItemCommentView,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2355,52 +2330,6 @@ async fn list_acceptance_criteria(
     ))
 }
 
-async fn create_work_item_comment(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<CreateCommentRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    MessageContent::from_json(request.content.clone()).map_err(message_content_error)?;
-    let key = IdempotencyKey::from_headers(&headers)?;
-    // Commenting takes "comment on tasks" on an open task in an active
-    // project (K1.16); the send pipeline checks the rest (C1.4).
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    authorize_task_comment(&mut transaction, &principal, project_id, work_item_id).await?;
-    transaction.commit().await?;
-    let (actor, creator) = comments::browser_poster(&principal, &headers)?;
-    let posted = comments::post(
-        &state,
-        actor,
-        creator,
-        work_item_id,
-        request.content,
-        &request.attachments,
-        request.reply_to_comment_id,
-        key,
-        (
-            &browser_actor(&headers, &principal, project_id)?,
-            "work_item.comment_created",
-        ),
-    )
-    .await?;
-    let body = CommentAppendResponse {
-        work_item_id,
-        sequence: posted.sequence,
-        comment: comments::comment_view(
-            &state.pool,
-            principal.actor_id,
-            project_id,
-            work_item_id,
-            posted.message_id,
-        )
-        .await?,
-    };
-    Ok((StatusCode::CREATED, Json(body)).into_response())
-}
-
 async fn get_work_item_timeline(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
@@ -2493,27 +2422,6 @@ pub(crate) async fn fetch_timeline_rows(
     Ok(TimelinePage { rows, has_more })
 }
 
-/// One comment's timeline row, for showing it again after a change.
-pub(crate) async fn fetch_comment_timeline_row(
-    pool: &PgPool,
-    project_id: Uuid,
-    work_item_id: Uuid,
-    comment_id: Uuid,
-) -> Result<Option<WorkItemTimelineRow>, AppError> {
-    Ok(sqlx::query_as::<_, WorkItemTimelineRow>(&format!(
-        r#"
-        {TIMELINE_SELECT}
-        WHERE entry.project_id = $1 AND entry.work_item_id = $2
-          AND entry.message_id = $3
-        "#
-    ))
-    .bind(project_id)
-    .bind(work_item_id)
-    .bind(comment_id)
-    .fetch_optional(crate::db::scoped(pool))
-    .await?)
-}
-
 /// What `WorkItemTimelineRow` reads, up to the WHERE clause.
 const TIMELINE_SELECT: &str = r#"
         SELECT entry.sequence, entry.kind, entry.created_at::text AS created_at,
@@ -2569,22 +2477,6 @@ fn work_item_reference_view(project_id: Uuid, row: WorkItemReferenceRow) -> Work
         status_category: row.status_category,
         archived_at: row.archived_at,
         href: crate::addresses::Target::task(project_id, row.id).href(),
-    }
-}
-
-/// For someone who may change tasks here but not see them: the tasks a
-/// comment references keep their id, key and link, without their title or
-/// status (the comment's text already names them by key).
-fn hide_reference_details(comment: &mut WorkItemCommentView) {
-    for reference in &mut comment.referenced_work_items {
-        reference.title = String::new();
-        reference.status_category = String::new();
-    }
-    // The comment it answers is someone else's words on the task: only its
-    // id stays, without who wrote it or what it says.
-    if let Some(quoted) = &mut comment.reply_to {
-        quoted.author_name = None;
-        quoted.text = None;
     }
 }
 
@@ -2879,24 +2771,6 @@ pub(crate) async fn authorize_task_change(
         project_id,
         work_item_id,
         Action::WorkItemEdit,
-    )
-    .await
-}
-
-/// `authorize_task_change` for commenting: "comment on tasks", not "edit
-/// tasks" (K1.16).
-pub(crate) async fn authorize_task_comment(
-    transaction: &mut Transaction<'_, Postgres>,
-    principal: &AuthenticatedActor,
-    project_id: Uuid,
-    work_item_id: Uuid,
-) -> Result<(), AppError> {
-    authorize_open_task(
-        transaction,
-        principal,
-        project_id,
-        work_item_id,
-        Action::WorkItemComment,
     )
     .await
 }
@@ -3814,10 +3688,6 @@ pub(crate) fn decode_work_item_timeline_cursor(
         return Err(AppError::Invalid("Work Item timeline cursor"));
     }
     Ok(sequence)
-}
-
-fn message_content_error(_error: MessageContentError) -> AppError {
-    AppError::Validation("comment content")
 }
 
 fn work_item_response(status: StatusCode, item: WorkItemView) -> Result<Response, AppError> {

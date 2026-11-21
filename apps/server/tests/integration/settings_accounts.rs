@@ -977,16 +977,14 @@ async fn github_installations_need_a_claim_and_the_state_needs_its_browser() {
         None,
     )
     .await;
-    let (status, body) = send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{project}/integrations/github/sync"),
-            None,
-            json!({ "installationId": 42, "repositoryIds": [repository] }),
-        ),
-    )
-    .await;
+    let (status, body) = setup
+        .browser
+        .op(
+            &setup.app,
+            "github_installation_link",
+            json!({ "projectId": project, "installationId": 42, "repositories": [repository] }),
+        )
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     let (_, connection) = get(
         &setup.app,

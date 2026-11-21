@@ -330,13 +330,13 @@ async fn a_comment_mention_reaches_the_person_and_the_attention_count() {
         &setup.app,
         setup.browser.request(
             "POST",
-            &format!("{base}/{task}/comments"),
+            "/api/v2/ops/task_comment_create",
             Some("comment-one"),
-            json!({"content": mention(ben, "Can you check the palette, ")}),
+            json!({"taskId": task, "content": mention(ben, "Can you check the palette, ")}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{comment}");
+    assert_eq!(status, StatusCode::OK, "{comment}");
     drain(&setup).await;
     let page = inbox(&setup, &ben_browser, "?category=mentions").await;
     assert_eq!(items(&page).len(), 1, "{page}");
@@ -379,13 +379,13 @@ async fn a_comment_mention_reaches_the_person_and_the_attention_count() {
         &setup.app,
         setup.browser.request(
             "POST",
-            &format!("{base}/{task}/comments"),
+            "/api/v2/ops/task_comment_create",
             Some("comment-two"),
-            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "Went with teal"}]}}),
+            json!({"taskId": task, "content": {"version": 1, "nodes": [{"type": "text", "text": "Went with teal"}]}}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{comment}");
+    assert_eq!(status, StatusCode::OK, "{comment}");
     drain(&setup).await;
     let page = inbox(&setup, &ben_browser, "").await;
     let watched = items(&page)
@@ -416,13 +416,13 @@ async fn a_comment_mention_reaches_the_person_and_the_attention_count() {
         &setup.app,
         setup.browser.request(
             "POST",
-            &format!("{base}/{task}/comments"),
+            "/api/v2/ops/task_comment_create",
             Some("comment-three"),
-            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "One more"}]}}),
+            json!({"taskId": task, "content": {"version": 1, "nodes": [{"type": "text", "text": "One more"}]}}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{comment}");
+    assert_eq!(status, StatusCode::OK, "{comment}");
     drain(&setup).await;
     assert!(items(&inbox(&setup, &ben_browser, "").await).is_empty());
 }

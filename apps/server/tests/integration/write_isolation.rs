@@ -175,7 +175,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{id}/archive",
     "POST /api/v1/projects/{id}/channels",
     "POST /api/v1/projects/{id}/execution-profiles",
-    "POST /api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
     "DELETE /api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
     "PUT /api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
     "PUT /api/v1/projects/{id}/navigation",
@@ -220,7 +219,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/imports/{import_id}/commit",
     "POST /api/v1/projects/{project_id}/integrations/github/connect",
     "POST /api/v1/projects/{project_id}/integrations/github/repositories",
-    "POST /api/v1/projects/{project_id}/integrations/github/sync",
     "POST /api/v1/projects/{project_id}/invitations",
     "POST /api/v1/projects/{project_id}/fields",
     "PATCH /api/v1/projects/{project_id}/fields/{field_id}",
@@ -265,9 +263,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/ai/summary",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/ai/triage",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/archive",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
-    "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
-    "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/files",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/move",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
@@ -278,7 +273,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/push/subscriptions",
     "DELETE /api/v1/push/subscriptions/{id}",
     "POST /api/v1/push/subscriptions/{id}/test",
-    "PATCH /api/v1/scheduled-messages/{id}",
     "POST /api/v1/settings/values/{key}/reset",
     "POST /api/v1/things/{kind}/{id}/files",
     "POST /api/v1/threads/{id}/agent-runs",
@@ -2643,15 +2637,14 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
 
     let mut comments = Vec::new();
     for text_value in ["Net spare comment one", "Net spare comment two"] {
-        let created = ok(
+        let created = ok_op(
             app,
             browser,
-            "POST",
-            &format!("/api/v1/projects/{project}/work-items/{}/comments", a.task),
-            json!({"content": text(text_value)}),
+            "/api/v2/ops/task_comment_create",
+            json!({"taskId": a.task, "content": text(text_value)}),
         )
         .await;
-        comments.push(Uuid::parse_str(&string_at(&created, "/comment/id")).expect("comment"));
+        comments.push(Uuid::parse_str(&string_at(&created, "/resultId")).expect("comment"));
     }
     let trashed = ok_op(
         app,
@@ -4448,11 +4441,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[id(sp.later, bx.later)],
             empty(),
         ),
-        path_case(
-            "PATCH /api/v1/scheduled-messages/{id}",
-            &[id(ax.scheduled, bx.scheduled)],
-            json_body(json!({"content": text("Net later, edited")})),
-        ),
         // Notification settings
         body_case(
             "PUT /api/v1/notification-settings/channels",
@@ -4824,12 +4812,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         )
         .rejecting(vec![json!({"providerAccountId": b.provider_account})]),
         path_case(
-            "POST /api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
-            &[project(), same("codex_app_server")],
-            empty(),
-        )
-        .own_reaches("execution_profile_required", NEEDS_ACCOUNT),
-        path_case(
             "PUT /api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
             &[project(), same("codex_app_server"), same("net-project-model")],
             json_body(json!({"displayName": "Net project model"})),
@@ -5139,18 +5121,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[project()],
             json_body(json!({"installationId": 1, "githubRepositoryId": 1})),
         )
-        .without_own(NEEDS_GITHUB),
-        path_case(
-            "POST /api/v1/projects/{project_id}/integrations/github/sync",
-            &[project()],
-            |values| {
-                Payload::Json(json!({
-                    "installationId": 1,
-                    "repositoryIds": [if is_a(values, &a.project) { a.repository } else { b.repository }],
-                }))
-            },
-        )
-        .rejecting(vec![json!({"installationId": 1, "repositoryIds": [b.repository]})])
         .without_own(NEEDS_GITHUB),
         // Invitations, labels, launches, members, milestones
         path_case(
@@ -5597,24 +5567,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
             &[project(), id(sp.task, b.task)],
             versioned("work_items", 1, json!({})),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
-            &[project(), task()],
-            json_body(json!({"content": text("Net comment"), "attachments": [ax.comment_upload]})),
-        )
-        .rejecting(vec![
-            json!({"content": text("Net comment"), "attachments": [bx.comment_upload]}),
-        ]),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
-            &[project(), task(), id(a.comment, b.comment)],
-            json_body(json!({"content": text("Launch comment, edited over HTTP")})),
-        ),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
-            &[project(), task(), id(sp.comments[0], b.comment)],
-            empty(),
         ),
         path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/files",

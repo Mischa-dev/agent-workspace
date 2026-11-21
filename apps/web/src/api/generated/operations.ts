@@ -2172,7 +2172,7 @@ export type ScheduleUpdateInput = { at?: string | null; cancel?: boolean | null;
 
 export type ScheduleUpdateOutput = { createdAt: string; everyMinutes?: number | null; id: string; lastDueAt?: string | null; nextDueAt?: string | null; note: string; state: string; thingId?: string | null; thingKind?: string | null; timesDue: number; version: number }
 
-export type ScheduledMessageUpdateInput = { cancel?: boolean | null; id: string; sendAt?: string | null; sendNow?: boolean | null; text?: string | null }
+export type ScheduledMessageUpdateInput = { cancel?: boolean | null; content?: MessageContent | null; id: string; sendAt?: string | null; sendNow?: boolean | null; text?: string | null }
 
 export type ScheduledMessageUpdateOutput = { canceled: boolean; scheduled?: ScheduledLine | null }
 
@@ -2332,7 +2332,7 @@ export type TaskClaimInput = { minutes?: number | null; note?: string | null; ta
 
 export type TaskClaimOutput = { claimedAt: string; claimedBy: string; expiresAt: string; handoff?: HandoffNote | null; note?: string | null; taskId: string }
 
-export type TaskCommentCreateInput = { attachmentIds?: string[] | null; replyToCommentId?: string | null; taskId: string; text: string }
+export type TaskCommentCreateInput = { attachmentIds?: string[] | null; content?: MessageContent | null; replyToCommentId?: string | null; taskId: string; text?: string | null }
 
 export type TaskCommentCreateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; proposalId?: string | null; proposed?: unknown[]; resultId: string; url?: string | null; version: number; workItemId: string }
 
@@ -2340,7 +2340,7 @@ export type TaskCommentDeleteInput = { commentId: string; taskId: string }
 
 export type TaskCommentDeleteOutput = { alreadyDeleted: boolean; commentId: string; note: string; taskId: string }
 
-export type TaskCommentUpdateInput = { commentId: string; expectedRevision?: number | null; taskId: string; text: string }
+export type TaskCommentUpdateInput = { commentId: string; content?: MessageContent | null; expectedRevision?: number | null; taskId: string; text?: string | null }
 
 export type TaskCommentUpdateOutput = { changed: boolean; commentId: string; revision: number; taskId: string }
 

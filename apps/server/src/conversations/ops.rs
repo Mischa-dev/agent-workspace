@@ -621,9 +621,12 @@ pub struct ScheduledMessageUpdate;
 pub struct ScheduledMessageUpdateInput {
     /// The scheduled message, from message_schedule or later_list.
     pub id: IdRef,
-    /// New text.
+    /// New text. @handles of people in the space become mentions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// New structured content instead of text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<MessageContent>,
     /// A new time, as RFC 3339.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub send_at: Option<String>,
@@ -670,6 +673,7 @@ impl Operation for ScheduledMessageUpdate {
             id,
             ScheduledChange {
                 text: input.text,
+                content: input.content,
                 send_at: input.send_at,
                 send_now: input.send_now,
                 cancel: input.cancel,

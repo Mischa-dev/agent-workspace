@@ -272,7 +272,8 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
     version = Number((changed.value as { version?: number }).version ?? version + 1)
   }
   for (const [index, text] of featuredTask.comments.entries()) {
-    await team[[2, 0, 3][index]].write('POST', `/api/v1/projects/${projectId}/work-items/${featuredId}/comments`, {
+    await team[[2, 0, 3][index]].write('POST', '/api/v2/ops/task_comment_create', {
+      taskId: featuredId,
       content: { version: 1, nodes: [{ type: 'text', text }] },
     })
   }

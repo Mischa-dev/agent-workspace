@@ -123,18 +123,15 @@ async fn fixing_a_failed_scheduled_message_keeps_it_until_it_gets_a_new_time() {
     let (status, fixed) = call(
         setup,
         &setup.browser,
-        "PATCH",
-        &format!("/api/v1/scheduled-messages/{id}"),
-        None,
-        json!({"content": text("Typo here")}),
+        "POST",
+        "/api/v2/ops/scheduled_message_update",
+        Some("fix-typo"),
+        json!({"id": id, "content": text("Typo here")}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{fixed}");
-    assert_eq!(fixed["scheduledMessage"]["status"], "failed", "{fixed}");
-    assert_eq!(
-        fixed["scheduledMessage"]["plainText"], "Typo here",
-        "{fixed}"
-    );
+    assert_eq!(fixed["value"]["scheduled"]["status"], "failed", "{fixed}");
+    assert_eq!(fixed["value"]["scheduled"]["text"], "Typo here", "{fixed}");
     let queued = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM background_jobs WHERE state = 'queued' AND payload::text LIKE '%' || $1 || '%'",
     )

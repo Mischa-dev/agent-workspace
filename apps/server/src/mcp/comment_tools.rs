@@ -36,10 +36,14 @@ pub(super) struct TaskCommentEditArguments {
     pub comment_id: String,
     /// The new text, 1 to 20,000 characters. Line breaks and Markdown are
     /// kept.
-    pub text: String,
+    pub text: Option<String>,
     /// The revision you read (this tool returns it; a comment never edited
     /// is 1). Leave it out to edit whatever is there.
     pub expected_revision: Option<i32>,
+    /// New structured content instead of text, as the web composer writes
+    /// it.
+    #[serde(default)]
+    pub content: Option<MessageContent>,
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -141,13 +145,26 @@ pub(super) async fn task_comment_edit(
         let Some(comment_id) = parse_id(&arguments.comment_id) else {
             return Ok(ToolResult::invalid("commentId", COMMENT_ID_MESSAGE));
         };
-        let Some(text) = normalize_comment(arguments.text.clone()) else {
-            return Ok(ToolResult::invalid("text", TEXT_MESSAGE));
-        };
-        let content =
-            super::common::comment_content_from_text(state, principal.project_id, &text).await?;
-        let Ok(validated) = MessageContent::from_json(content) else {
-            return Ok(ToolResult::invalid("text", TEXT_MESSAGE));
+        let validated = match (arguments.text.clone(), arguments.content.clone()) {
+            (Some(text), None) => {
+                let Some(text) = normalize_comment(text) else {
+                    return Ok(ToolResult::invalid("text", TEXT_MESSAGE));
+                };
+                let content =
+                    super::common::comment_content_from_text(state, principal.project_id, &text)
+                        .await?;
+                let Ok(validated) = MessageContent::from_json(content) else {
+                    return Ok(ToolResult::invalid("text", TEXT_MESSAGE));
+                };
+                validated
+            }
+            (None, Some(content)) => {
+                if content.validate_structure().is_err() {
+                    return Ok(ToolResult::invalid("content", "The content isn't valid."));
+                }
+                content
+            }
+            _ => return Ok(ToolResult::invalid("text", "Pass either text or content.")),
         };
         let Some(task_id) = task_in_scope(state, principal, &arguments.task_id).await? else {
             return Ok(ToolResult::invalid("taskId", TASK_ID_MESSAGE));

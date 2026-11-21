@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{
-    agent_interface::send,
-    mcp_admin::{create_project, setup},
+    agent_interface::{Browser, send},
+    mcp_admin::{Setup, create_project, setup},
     message_edits::{add_person, create_channel, get, remove},
     notifications::{drain, inbox},
 };
@@ -25,6 +25,22 @@ fn mention(actor: Uuid, value: &str) -> Value {
         "version": 1,
         "nodes": [{"type": "text", "text": value}, {"type": "mention", "actorId": actor}]
     })
+}
+
+async fn op(
+    setup: &Setup,
+    browser: &Browser,
+    name: &str,
+    key: Option<&str>,
+    input: Value,
+) -> (StatusCode, Value) {
+    let fresh = Uuid::now_v7().to_string();
+    let key = key.unwrap_or(&fresh);
+    send(
+        &setup.app,
+        browser.request("POST", &format!("/api/v2/ops/{name}"), Some(key), input),
+    )
+    .await
 }
 
 #[tokio::test]
@@ -48,64 +64,66 @@ async fn task_comments_are_edited_by_their_author_and_deleted_by_author_or_admin
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");
     let task = task["id"].as_str().expect("task").to_owned();
-    let (status, created) = send(
-        &setup.app,
-        mara_browser.request(
-            "POST",
-            &format!("{base}/{task}/comments"),
-            Some("comment"),
-            json!({"content": text("Teal, with the secret sk-test-123")}),
-        ),
+    let (status, created) = op(
+        &setup,
+        &mara_browser,
+        "task_comment_create",
+        Some("comment"),
+        json!({"taskId": task, "content": text("Teal, with the secret sk-test-123")}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{created}");
-    let comment = created["comment"]["id"]
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let comment = created["value"]["resultId"]
         .as_str()
         .expect("comment")
         .to_owned();
     let path = format!("{base}/{task}/comments/{comment}");
+    let edit = |content: Value| json!({"taskId": task, "commentId": comment, "content": content});
+    let delete = |id: &str| json!({"taskId": task, "commentId": id});
 
     // Ben is a member too, but it isn't his comment.
-    let (status, _) = send(
-        &setup.app,
-        ben_browser.request("PATCH", &path, None, json!({"content": text("Mine now")})),
+    let (status, refused) = op(
+        &setup,
+        &ben_browser,
+        "task_comment_update",
+        None,
+        edit(text("Mine now")),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    let (status, _) = send(
-        &setup.app,
-        ben_browser.request("DELETE", &path, None, Value::Null),
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    let (status, refused) = op(
+        &setup,
+        &ben_browser,
+        "task_comment_delete",
+        None,
+        delete(&comment),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
 
     // Mara edits hers; a stale revision is a conflict, and the newly
     // mentioned Ben hears about it.
-    let (status, edited) = send(
-        &setup.app,
-        mara_browser.request(
-            "PATCH",
-            &path,
-            None,
-            json!({"content": mention(ben, "Teal after all, "), "expectedRevision": 1}),
-        ),
-    )
-    .await;
+    let mut fresh = edit(mention(ben, "Teal after all, "));
+    fresh["expectedRevision"] = json!(1);
+    let (status, edited) = op(&setup, &mara_browser, "task_comment_update", None, fresh).await;
     assert_eq!(status, StatusCode::OK, "{edited}");
-    assert_eq!(edited["changed"], true);
-    assert_eq!(edited["comment"]["revision"], 2);
-    assert!(edited["comment"]["editedAt"].is_string(), "{edited}");
-    let (status, _) = send(
-        &setup.app,
-        mara_browser.request(
-            "PATCH",
-            &path,
-            None,
-            json!({"content": text("Late edit"), "expectedRevision": 1}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CONFLICT);
+    let mut stale = edit(text("Late edit"));
+    stale["expectedRevision"] = json!(1);
+    let (status, late) = op(&setup, &mara_browser, "task_comment_update", None, stale).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{late}");
+    let (status, timeline) = get(&setup, &ben_browser, &format!("{base}/{task}/timeline")).await;
+    assert_eq!(status, StatusCode::OK, "{timeline}");
+    let shown = |timeline: &Value| {
+        timeline["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .find(|entry| entry["comment"]["id"] == comment.as_str())
+            .map(|entry| entry["comment"].clone())
+            .unwrap_or_else(|| panic!("{timeline}"))
+    };
+    assert_eq!(shown(&timeline)["revision"], 2, "{timeline}");
+    assert!(shown(&timeline)["editedAt"].is_string(), "{timeline}");
     drain(&setup).await;
     let page = inbox(&setup, &ben_browser, "?category=mentions").await;
     assert_eq!(
@@ -125,22 +143,26 @@ async fn task_comments_are_edited_by_their_author_and_deleted_by_author_or_admin
 
     // The owner deletes it: the text and every version's text go, the
     // place in the history stays, and so does who deleted it.
-    let (status, removed) = send(
-        &setup.app,
-        setup.browser.request("DELETE", &path, None, Value::Null),
+    let (status, removed) = op(
+        &setup,
+        &setup.browser,
+        "task_comment_delete",
+        None,
+        delete(&comment),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{removed}");
-    assert_eq!(removed["comment"]["plainText"], "");
-    assert_eq!(
-        removed["comment"]["removed"]["removedBy"]["handle"],
-        "owner"
-    );
     let (status, history) = get(&setup, &ben_browser, &format!("{path}/revisions")).await;
     assert_eq!(status, StatusCode::OK, "{history}");
     assert_eq!(history["removed"], true);
     let (status, timeline) = get(&setup, &ben_browser, &format!("{base}/{task}/timeline")).await;
     assert_eq!(status, StatusCode::OK, "{timeline}");
+    assert_eq!(shown(&timeline)["plainText"], "", "{timeline}");
+    assert_eq!(
+        shown(&timeline)["removed"]["removedBy"]["handle"],
+        "owner",
+        "{timeline}"
+    );
     for leaked in [history.to_string(), timeline.to_string()] {
         assert!(!leaked.contains("sk-test-123"), "{leaked}");
         assert!(!leaked.contains("Teal"), "{leaked}");
@@ -172,71 +194,69 @@ async fn task_comments_are_edited_by_their_author_and_deleted_by_author_or_admin
 
     // Nothing changes a deleted comment, and a retry of its creation
     // doesn't post the text again.
-    let (status, _) = send(
-        &setup.app,
-        mara_browser.request("PATCH", &path, None, json!({"content": text("Back")})),
+    let (status, _) = op(
+        &setup,
+        &mara_browser,
+        "task_comment_update",
+        None,
+        edit(text("Back")),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    let (status, _) = send(
-        &setup.app,
-        mara_browser.request(
-            "POST",
-            &format!("{base}/{task}/comments"),
-            Some("comment"),
-            json!({"content": text("Teal, with the secret sk-test-123")}),
-        ),
+    let (status, retried) = op(
+        &setup,
+        &mara_browser,
+        "task_comment_create",
+        Some("comment"),
+        json!({"taskId": task, "content": text("Teal, with the secret sk-test-123")}),
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(status, StatusCode::CONFLICT, "{retried}");
+    let (_, timeline) = get(&setup, &ben_browser, &format!("{base}/{task}/timeline")).await;
+    assert!(!timeline.to_string().contains("sk-test-123"), "{timeline}");
 
     // Mara deletes her own; a member can't delete the owner's.
-    let (status, own) = send(
-        &setup.app,
-        mara_browser.request(
-            "POST",
-            &format!("{base}/{task}/comments"),
-            Some("comment-two"),
-            json!({"content": text("Second thoughts")}),
-        ),
+    let (status, own) = op(
+        &setup,
+        &mara_browser,
+        "task_comment_create",
+        Some("comment-two"),
+        json!({"taskId": task, "content": text("Second thoughts")}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{own}");
-    let own = own["comment"]["id"].as_str().expect("comment").to_owned();
-    let (status, _) = send(
-        &setup.app,
-        mara_browser.request(
-            "DELETE",
-            &format!("{base}/{task}/comments/{own}"),
-            None,
-            Value::Null,
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    let (status, owners) = send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("{base}/{task}/comments"),
-            Some("comment-three"),
-            json!({"content": text("Owner's note")}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{owners}");
-    let owners = owners["comment"]["id"]
+    assert_eq!(status, StatusCode::OK, "{own}");
+    let own = own["value"]["resultId"]
         .as_str()
         .expect("comment")
         .to_owned();
-    let (status, _) = send(
-        &setup.app,
-        mara_browser.request(
-            "DELETE",
-            &format!("{base}/{task}/comments/{owners}"),
-            None,
-            Value::Null,
-        ),
+    let (status, deleted) = op(
+        &setup,
+        &mara_browser,
+        "task_comment_delete",
+        None,
+        delete(&own),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{deleted}");
+    let (status, owners) = op(
+        &setup,
+        &setup.browser,
+        "task_comment_create",
+        Some("comment-three"),
+        json!({"taskId": task, "content": text("Owner's note")}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{owners}");
+    let owners = owners["value"]["resultId"]
+        .as_str()
+        .expect("comment")
+        .to_owned();
+    let (status, _) = op(
+        &setup,
+        &mara_browser,
+        "task_comment_delete",
+        None,
+        delete(&owners),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -246,14 +266,12 @@ async fn task_comments_are_edited_by_their_author_and_deleted_by_author_or_admin
     let (_, outsider) = add_person(&setup, &[&outsider_project], "otto").await;
     let (status, _) = get(&setup, &outsider, &format!("{path}/revisions")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    let (status, _) = send(
-        &setup.app,
-        outsider.request(
-            "DELETE",
-            &format!("{base}/{task}/comments/{owners}"),
-            None,
-            Value::Null,
-        ),
+    let (status, _) = op(
+        &setup,
+        &outsider,
+        "task_comment_delete",
+        None,
+        delete(&owners),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);

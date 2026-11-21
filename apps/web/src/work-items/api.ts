@@ -821,18 +821,16 @@ export async function createWorkItemComment(input: {
   /** The comment on this task it answers (`messageId` is the comment's id). */
   replyTo?: { messageId: string }
 }) {
-  return requestJson<unknown>(
-    `/api/v1/projects/${encodeURIComponent(input.projectId)}/work-items/${encodeURIComponent(input.workItemId)}/comments`,
+  return callOp(
+    'task_comment_create',
     {
-      method: 'POST',
-      idempotencyKey: input.idempotencyKey,
-      // JSON leaves out `attachments` and `replyToCommentId` when there are none.
-      json: {
-        content: input.content,
-        attachments: input.attachments?.length ? input.attachments.map((file) => file.id) : undefined,
-        replyToCommentId: input.replyTo?.messageId,
-      },
+      taskId: input.workItemId,
+      content: input.content,
+      // Left out when there are none.
+      attachmentIds: input.attachments?.length ? input.attachments.map((file) => file.id) : undefined,
+      replyToCommentId: input.replyTo?.messageId,
     },
+    { requestId: input.idempotencyKey },
   )
 }
 
@@ -870,9 +868,11 @@ export async function editWorkItemComment(input: {
   content: MessageContentV1
   expectedRevision: number
 }) {
-  return requestJson<unknown>(commentPath(input.projectId, input.workItemId, input.commentId), {
-    method: 'PATCH',
-    json: { content: input.content, expectedRevision: input.expectedRevision },
+  return callOp('task_comment_update', {
+    taskId: input.workItemId,
+    commentId: input.commentId,
+    content: input.content,
+    expectedRevision: input.expectedRevision,
   })
 }
 
