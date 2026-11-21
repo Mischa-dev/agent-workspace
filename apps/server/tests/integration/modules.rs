@@ -1562,6 +1562,8 @@ async fn an_off_module_s_routes_answer_turned_off_until_it_comes_back() {
     };
     let app = &setup.app;
     let work = create_project(&setup, "GATE", "Gate").await;
+    // Made now: with Projects off, nobody makes a project.
+    let elsewhere = create_project(&setup, "GATX", "Elsewhere").await;
     let tasks = format!("/api/v1/projects/{work}/work-items");
     let get = |path: &str| setup.browser.request("GET", path, None, Value::Null);
     let (status, body) = send(app, get(&tasks)).await;
@@ -1618,7 +1620,6 @@ async fn an_off_module_s_routes_answer_turned_off_until_it_comes_back() {
     };
     let (status, body) = send(app, signed_out.request("GET", &tasks, None, Value::Null)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
-    let elsewhere = create_project(&setup, "GATX", "Elsewhere").await;
     let (_, outsider) = add_person(&setup, &[elsewhere.as_str()], "awd97-outsider").await;
     let (status, body) = send(app, outsider.request("GET", &tasks, None, Value::Null)).await;
     assert_ne!(body["error"]["code"], "module_off", "{status}: {body}");
