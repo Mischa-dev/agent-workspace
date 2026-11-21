@@ -43,7 +43,19 @@ const STOP_TITLE: Partial<Record<RunView['state'], string>> = {
  * whether it is still reporting, what it waits on, its plan, what it did,
  * the requests it raised, what it produced and what it used.
  */
-export function ReportedRun({ now, onRefresh, run, usage }: { now: number; onRefresh: () => void; run: RunView; usage: boolean }) {
+export function ReportedRun({
+  files,
+  now,
+  onRefresh,
+  run,
+  usage,
+}: {
+  files: boolean
+  now: number
+  onRefresh: () => void
+  run: RunView
+  usage: boolean
+}) {
   const queryClient = useQueryClient()
   const status = runStatus(run.state)
   const live = isLiveRun(run.state)
@@ -201,7 +213,7 @@ export function ReportedRun({ now, onRefresh, run, usage }: { now: number; onRef
           </ul>
         </Section>
       ) : null}
-      {run.files !== null ? (
+      {files && run.files !== null ? (
         <Section id="run-files" title="Files changed">
           <RunDiff
             live={live}
