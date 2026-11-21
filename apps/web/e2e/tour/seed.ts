@@ -134,15 +134,12 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   })
 
   // Projects: the busy one, and a few others for the rail and Home.
-  const project = await me.write('POST', '/api/v1/projects', {
-    organizationId: context.organizationId,
-    key: tourProject.key,
-    name: tourProject.name,
-  })
+  const makeSpace = `/api/v2/w/${context.organizationId}/ops/space_create`
+  const project = (await me.write('POST', makeSpace, { key: tourProject.key, name: tourProject.name })).value as Json
   const projectId = String(project.id)
   const others: string[] = []
   for (const other of otherProjects) {
-    const created = await me.write('POST', '/api/v1/projects', { organizationId: context.organizationId, ...other })
+    const created = (await me.write('POST', makeSpace, other)).value as Json
     others.push(String(created.id))
   }
 

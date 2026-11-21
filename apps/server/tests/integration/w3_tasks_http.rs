@@ -588,11 +588,12 @@ async fn links_to_other_projects_respect_membership() {
     // A second project in the workspace that only the owner belongs to.
     let (status, side) = owner
         .post(
-            "/api/v1/projects",
-            json!({ "organizationId": fixture.organization_id, "key": "SIDE", "name": "Side" }),
+            &format!("/api/v2/w/{}/ops/space_create", fixture.organization_id),
+            json!({ "key": "SIDE", "name": "Side" }),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{side}");
+    assert_eq!(status, StatusCode::OK, "{side}");
+    let side = side["value"].clone();
     let side_id: Uuid = side["id"]
         .as_str()
         .expect("test value")

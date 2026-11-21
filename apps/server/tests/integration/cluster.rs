@@ -50,12 +50,13 @@ async fn write_on_one_read_on_the_other() {
     let (status, project) = a
         .send(browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", cluster.organization_id),
             Some("cluster-project"),
-            json!({"organizationId": cluster.organization_id, "key": "WORK", "name": "Work"}),
+            json!({"key": "WORK", "name": "Work"}),
         ))
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{project}");
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project = project["value"].clone();
     let project = project["id"].as_str().expect("project").to_owned();
     let (status, task) = a
         .send(browser.request(
@@ -296,12 +297,13 @@ async fn log_project(cluster: &crate::cluster_support::Cluster) -> Uuid {
     let (status, project) = a
         .send(browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", cluster.organization_id),
             Some("cluster-log"),
-            json!({"organizationId": cluster.organization_id, "key": "LOG", "name": "Log"}),
+            json!({"key": "LOG", "name": "Log"}),
         ))
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{project}");
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project = project["value"].clone();
     project["id"]
         .as_str()
         .expect("project")
@@ -653,12 +655,13 @@ async fn work_channel(
     let (status, project) = a
         .send(browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", cluster.organization_id),
             Some("k5-5-project"),
-            json!({"organizationId": cluster.organization_id, "key": "WORK", "name": "Work"}),
+            json!({"key": "WORK", "name": "Work"}),
         ))
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{project}");
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project = project["value"].clone();
     let project: Uuid = project["id"]
         .as_str()
         .expect("project")
@@ -1307,12 +1310,13 @@ async fn side_channel(
     let (status, project) = a
         .send(browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", cluster.organization_id),
             Some("k5-8-side"),
-            json!({"organizationId": cluster.organization_id, "key": "SIDE", "name": "Side"}),
+            json!({"key": "SIDE", "name": "Side"}),
         ))
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{project}");
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project = project["value"].clone();
     let project: Uuid = project["id"]
         .as_str()
         .expect("project")
@@ -1938,12 +1942,13 @@ async fn follow_catches_up_then_goes_live_without_gaps() {
     let (status, other) = a
         .send(browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", cluster.organization_id),
             Some("cluster-else"),
-            json!({"organizationId": cluster.organization_id, "key": "ELSE", "name": "Elsewhere"}),
+            json!({"key": "ELSE", "name": "Elsewhere"}),
         ))
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{other}");
+    assert_eq!(status, StatusCode::OK, "{other}");
+    let other = other["value"].clone();
     let elsewhere: Uuid = other["id"].as_str().expect("project").parse().expect("id");
     sqlx::query("UPDATE project_memberships SET enabled = false WHERE project_id = $1")
         .bind(elsewhere)

@@ -127,18 +127,16 @@ export async function createProject(input: {
   templateId?: string
   idempotencyKey: string
 }): Promise<Project> {
-  const payload = await requestJson<unknown>('/api/v1/projects', {
-    method: 'POST',
-    idempotencyKey: input.idempotencyKey,
-    json: {
-      organizationId: input.organizationId,
+  const space = await callOp(
+    'space_create',
+    {
       key: input.key,
       name: input.name,
       ...(input.templateId ? { templateId: input.templateId } : {}),
     },
-  })
-  const record = asRecord(payload)
-  return normalizeProject(record.project ?? payload)
+    { workspaceId: input.organizationId, requestId: input.idempotencyKey },
+  )
+  return getProject(space.id)
 }
 
 export async function getProject(projectId: string): Promise<Project> {

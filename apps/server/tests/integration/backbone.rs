@@ -1246,13 +1246,14 @@ async fn a_project_overrides_the_workspace_says_so_and_reset_falls_back() {
         app,
         setup.browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", organization),
             Some("settings-project"),
-            json!({"organizationId": organization, "key": "WORK", "name": "Work"}),
+            json!({"key": "WORK", "name": "Work"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{project}");
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project = project["value"].clone();
     let project = project["id"].as_str().expect("project").to_owned();
     let effective = |query: String| {
         let request = setup.browser.request(

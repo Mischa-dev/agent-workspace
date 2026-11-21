@@ -1180,12 +1180,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     boundary_route!("ops/web", Post, "/api/v2/ops/{name}", Operation),
     policy_route!(
         "projects",
-        Post,
-        "/api/v1/projects",
-        OrganizationProjectCreate
-    ),
-    policy_route!(
-        "projects",
         Put,
         "/api/v1/projects/rail-order",
         NavigationWrite

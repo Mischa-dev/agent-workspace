@@ -199,11 +199,13 @@ async function seed(password: string, databaseUrl: string) {
         what,
       )
     }
-    const project = await write(
-      '/api/v1/projects',
-      { organizationId, key: seeded.projectKey, name: seeded.projectName },
-      'create the Project',
-    )
+    const project = (
+      await write(
+        `/api/v2/w/${organizationId}/ops/space_create`,
+        { key: seeded.projectKey, name: seeded.projectName },
+        'create the Project',
+      )
+    ).value ?? {}
     const channel = await write(`/api/v1/projects/${project.id}/channels`, { name: seeded.channelName }, 'create a channel')
     const channelId = channel.conversation?.id ?? channel.channel?.id ?? channel.id
     if (!project.id || !channelId) throw new Error('Project or channel creation returned no id')
@@ -233,7 +235,7 @@ async function seed(password: string, databaseUrl: string) {
 }
 
 /** The few response fields the seeding reads. */
-type Wire = { id?: string; organizations?: Array<{ id?: string }>; conversation?: { id?: string }; channel?: { id?: string } }
+type Wire = { id?: string; organizations?: Array<{ id?: string }>; conversation?: { id?: string }; channel?: { id?: string }; value?: { id?: string } }
 
 async function expectOk(response: ReturnType<APIRequestContext['get']>, what: string): Promise<Wire> {
   const resolved = await response

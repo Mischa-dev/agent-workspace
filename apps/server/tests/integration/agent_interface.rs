@@ -74,13 +74,14 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         &app,
         browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", owner.organization_id),
             Some("interface-project"),
-            json!({"organizationId": owner.organization_id, "key": "WORK", "name": "Work"}),
+            json!({"key": "WORK", "name": "Work"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{project}");
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project = project["value"].clone();
     let project_id = project["id"].as_str().expect("project").to_owned();
 
     // The owner talks with Mara. Mara and Rook have a DM the owner isn't in.
@@ -520,13 +521,14 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         &app,
         browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", owner.organization_id),
             Some("interface-side-project"),
-            json!({"organizationId": owner.organization_id, "key": "SIDE", "name": "Side"}),
+            json!({"key": "SIDE", "name": "Side"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{side}");
+    assert_eq!(status, StatusCode::OK, "{side}");
+    let side = side["value"].clone();
     let side_page = tool(
         &app,
         &codex,

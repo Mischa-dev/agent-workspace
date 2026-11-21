@@ -241,13 +241,13 @@ async fn agent_dm_permissions_follow_role() {
             let (status, project) = call(
                 &app,
                 "POST",
-                "/api/v1/projects",
+                &format!("/api/v2/w/{organization_id}/ops/space_create"),
                 &headers,
-                json!({ "organizationId": organization_id, "key": key, "name": key }),
+                json!({ "key": key, "name": key }),
             )
             .await;
-            assert_eq!(status, StatusCode::CREATED, "{project}");
-            uuid(&project, "id")
+            assert_eq!(status, StatusCode::OK, "{project}");
+            uuid(&project["value"], "id")
         }
     };
     let connect = |project_id: Uuid, name: &'static str, role: &'static str| {

@@ -827,11 +827,12 @@ async fn a_new_project_starts_from_a_saved_setup() {
     let (status, project) = fixture
         .owner
         .post(
-            "/api/v1/projects",
-            json!({"organizationId": fixture.organization_id, "key": "NEXT", "name": "Next product", "templateId": template_id}),
+            &format!("/api/v2/w/{}/ops/space_create", fixture.organization_id),
+            json!({"key": "NEXT", "name": "Next product", "templateId": template_id}),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{project}");
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project = project["value"].clone();
     let new_project = project["id"].as_str().expect("project id").to_owned();
     let (status, templates) = fixture
         .owner
@@ -879,8 +880,8 @@ async fn a_new_project_starts_from_a_saved_setup() {
     let (status, _) = fixture
         .owner
         .post(
-            "/api/v1/projects",
-            json!({"organizationId": fixture.organization_id, "key": "LATER", "name": "Later", "templateId": template_id}),
+            &format!("/api/v2/w/{}/ops/space_create", fixture.organization_id),
+            json!({"key": "LATER", "name": "Later", "templateId": template_id}),
         )
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);

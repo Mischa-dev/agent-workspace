@@ -65,13 +65,14 @@ async fn task_and_board_tools_check_the_module_where_they_act() {
         app,
         setup.browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", second),
             Some("awd75-targets-bbb"),
-            json!({"organizationId": second, "key": "BBB", "name": "There"}),
+            json!({"key": "BBB", "name": "There"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{made}");
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let made = made["value"].clone();
     let there = made["id"].as_str().expect("project").to_owned();
     let mut tasks = Vec::new();
     for (project, title) in [

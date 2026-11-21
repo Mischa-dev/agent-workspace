@@ -230,14 +230,14 @@ async fn the_journey_across_two_workspaces() {
         &world.app,
         owner.browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", b),
             Some("journey-b-project"),
-            json!({"organizationId": b, "key": "SIDE", "name": "Side"}),
+            json!({"key": "SIDE", "name": "Side"}),
         ),
     )
     .await;
     assert!(status.is_success(), "{project}");
-    let b_space = project["id"].as_str().expect("project").to_owned();
+    let b_space = project["value"]["id"].as_str().expect("project").to_owned();
     sqlx::query(
         "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle) \
          VALUES ($1, $2, $3, 'member', 'Scout', 'scout')",

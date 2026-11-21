@@ -71,18 +71,20 @@ async fn concurrent_thread_create_is_linearizable_and_exactly_once() {
         .clone()
         .oneshot(request(
             "POST",
-            "/api/v1/projects",
+            &format!(
+                "/api/v2/w/{}/ops/space_create",
+                bootstrapped.organization_id
+            ),
             &write_headers(&cookie, &csrf, Some("m2-concurrent-project")),
             json!({
-                "organizationId": bootstrapped.organization_id,
                 "key": "m2c",
                 "name": "M2 Concurrent Commands"
             }),
         ))
         .await
         .expect("create Project");
-    assert_eq!(project_response.status(), StatusCode::CREATED);
-    let project_id = uuid_field(&response_json(project_response).await, "id");
+    assert_eq!(project_response.status(), StatusCode::OK);
+    let project_id = uuid_field(&response_json(project_response).await["value"], "id");
 
     let channel_response = app
         .clone()

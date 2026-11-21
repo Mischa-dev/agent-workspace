@@ -60,19 +60,33 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
         .clone()
         .oneshot(request(
             "POST",
-            "/api/v1/projects",
+            &format!(
+                "/api/v2/w/{}/ops/space_create",
+                bootstrapped.organization_id
+            ),
             &write_headers(&cookie, &csrf, Some("m2-project")),
             json!({
-                "organizationId": bootstrapped.organization_id,
                 "key": "m2",
                 "name": "M2 Conversations"
             }),
         ))
         .await
         .expect("create Project");
-    assert_eq!(project_response.status(), StatusCode::CREATED);
-    let project = response_json(project_response).await;
-    let project_id = uuid_field(&project, "id");
+    assert_eq!(project_response.status(), StatusCode::OK);
+    let project_id = uuid_field(&response_json(project_response).await["value"], "id");
+    // The page's view of the project, with where it last left you.
+    let project = response_json(
+        app.clone()
+            .oneshot(request(
+                "GET",
+                &format!("/api/v1/projects/{project_id}"),
+                &[("cookie", cookie.as_str())],
+                Value::Null,
+            ))
+            .await
+            .expect("read Project"),
+    )
+    .await;
 
     let worker_actor_id = Uuid::now_v7();
     sqlx::query(

@@ -160,14 +160,14 @@ async fn log_db(name: &str) -> Option<(super::support::db::Db, Uuid)> {
         &app,
         browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", owner.organization_id),
             Some("log-project"),
-            json!({"organizationId": owner.organization_id, "key": "LOG", "name": "Log"}),
+            json!({"key": "LOG", "name": "Log"}),
         ),
     )
     .await;
     assert!(status.is_success(), "{project}");
-    let project = project["id"]
+    let project = project["value"]["id"]
         .as_str()
         .expect("project")
         .parse()

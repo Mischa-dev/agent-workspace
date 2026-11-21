@@ -33,7 +33,7 @@ use crate::{
     error::{ApiJson, ApiPath, AppError},
     policy::{Permission, RoleGrant},
     settings::{self, SettingType, Target},
-    work_item_commands::{AuditAttribution, CommandActor},
+    work_item_commands::CommandActor,
     work_item_labels::{self, NewLabel},
     work_item_workflow::{
         StatusDraft, TransitionDraft, TransitionsDraft, TypeDraft, WorkflowDocument,
@@ -1017,22 +1017,6 @@ async fn workflow_document(
         types,
         transitions,
         replacements: Default::default(),
-    })
-}
-
-/// The command actor for setting up a new project as its creator.
-pub(crate) fn creator_actor(
-    principal: &AuthenticatedActor,
-    project_id: Uuid,
-) -> Result<CommandActor, AppError> {
-    Ok(CommandActor {
-        actor_id: principal.actor_id,
-        actor_kind: crate::accounts::actor_kind(&principal.actor_kind)?,
-        project_id,
-        audit: AuditAttribution::Browser {
-            session_id: principal.session_id,
-            request_id: None,
-        },
     })
 }
 

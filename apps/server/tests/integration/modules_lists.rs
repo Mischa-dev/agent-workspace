@@ -82,13 +82,14 @@ async fn account_lists_leave_out_a_workspace_where_their_module_is_off() {
         app,
         setup.browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", second),
             Some("create-BBB"),
-            json!({"organizationId": second, "key": "BBB", "name": "B work"}),
+            json!({"key": "BBB", "name": "B work"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{made}");
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let made = made["value"].clone();
     let there = made["id"].as_str().expect("project").to_owned();
     for (project, title) in [(&here, "A errand"), (&there, "B errand")] {
         let key = format!("awd75-{title}").replace(' ', "-");

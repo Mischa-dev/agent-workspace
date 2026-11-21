@@ -925,7 +925,6 @@ mod tests {
         ),
         (Post, "/api/v2/w/{workspace}/ops/{name}", Op),
         (Post, "/api/v2/ops/{name}", Op),
-        (Post, "/api/v1/projects", Tool("space_create")),
         (
             Put,
             "/api/v1/projects/rail-order",
@@ -1218,7 +1217,7 @@ mod tests {
     /// Hand-written web writes whose tool is already an operation: each is a
     /// second edge for something the generated route does (K2.22). The
     /// number only goes down; when you delete one, lower it.
-    const HAND_WRITTEN_OPERATION_ROUTES: usize = 95;
+    const HAND_WRITTEN_OPERATION_ROUTES: usize = 94;
 
     #[test]
     fn hand_written_routes_for_operations_only_go_down() {

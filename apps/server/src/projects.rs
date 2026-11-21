@@ -1,12 +1,10 @@
 use axum::{
     Json, Router,
     extract::State,
-    http::{HeaderMap, HeaderValue, StatusCode, header::LOCATION},
-    response::{IntoResponse, Response},
+    http::HeaderMap,
     routing::{get, post, put},
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
@@ -15,20 +13,18 @@ use crate::{
     addresses::{Place, Target},
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
-    policy::{Action, MembershipRole, RoleGrant},
-    spaces::{SpaceKind, SpaceVisibility, manage},
+    policy::{Action, RoleGrant},
+    spaces::SpaceKind,
 };
 
 const MAX_SEARCH_BYTES: usize = 120;
 const MAX_FILTER_BYTES: usize = 50_000;
-const MAX_IDEMPOTENCY_KEY_BYTES: usize = 200;
 /// Most projects one rail order places.
 const MAX_RAIL_PROJECTS: usize = 200;
-const PROJECT_CREATE_SCOPE: &str = "projects.create";
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/v1/projects", get(list_projects).post(create_project))
+        .route("/api/v1/projects", get(list_projects))
         .route("/api/v1/projects/rail-order", put(set_rail_order))
         .route("/api/v1/projects/{id}", get(get_project))
         .route(
@@ -153,17 +149,6 @@ struct ProjectListQuery {
     archived: Option<bool>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CreateProjectRequest {
-    organization_id: Uuid,
-    key: String,
-    name: String,
-    /// A project template in the same workspace to start from.
-    #[serde(default)]
-    template_id: Option<Uuid>,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct UpdateNavigationRequest {
@@ -195,12 +180,6 @@ struct RailOrderResponse {
 }
 
 #[derive(Debug, FromRow)]
-struct OrganizationMembershipRow {
-    role: String,
-    role_permissions: Option<Vec<String>>,
-}
-
-#[derive(Debug, FromRow)]
 struct ProjectMembershipRow {
     id: Uuid,
     role: String,
@@ -215,18 +194,6 @@ struct NavigationStateRow {
     filters: serde_json::Value,
     pinned: bool,
     version: i64,
-}
-
-#[derive(Debug, FromRow)]
-struct IdempotencyRow {
-    request_hash: Vec<u8>,
-    response_status: Option<i32>,
-    response_body: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct IdempotentProjectReference {
-    id: Uuid,
 }
 
 async fn list_projects(
@@ -364,227 +331,6 @@ async fn list_projects(
         view.modules_off = off_ids(modules.of(view.id));
     }
     Ok(Json(ProjectsResponse { projects }))
-}
-
-async fn create_project(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiJson(request): ApiJson<CreateProjectRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let idempotency_key = idempotency_key(&headers)?;
-    let key = manage::normalize_key(&request.key)?;
-    let name = manage::normalize_name(&request.name)?;
-    let request_hash: [u8; 32] = Sha256::digest(
-        serde_json::to_vec(&serde_json::json!({
-            "organizationId": request.organization_id,
-            "key": key,
-            "name": name,
-            "templateId": request.template_id,
-        }))
-        .map_err(|_| AppError::Internal("serialize Project command"))?,
-    )
-    .into();
-
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(format!(
-            "{}:{PROJECT_CREATE_SCOPE}:{idempotency_key}",
-            principal.actor_id
-        ))
-        .execute(&mut *transaction)
-        .await?;
-    sqlx::query(
-        "DELETE FROM idempotency_keys WHERE actor_id = $1 AND scope = $2 AND key = $3 AND expires_at <= now()",
-    )
-    .bind(principal.actor_id)
-    .bind(PROJECT_CREATE_SCOPE)
-    .bind(&idempotency_key)
-    .execute(&mut *transaction)
-    .await?;
-    let membership = sqlx::query_as::<_, OrganizationMembershipRow>(
-        r#"
-        SELECT role, workspace_role_permissions(role_id) AS role_permissions
-        FROM organization_memberships
-        WHERE organization_id = $1 AND actor_id = $2 AND enabled
-        FOR UPDATE
-        "#,
-    )
-    .bind(request.organization_id)
-    .bind(principal.actor_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AppError::NotFound("organization"))?;
-    authorize_organization_create(
-        &principal,
-        request.organization_id,
-        &membership.role,
-        membership.role_permissions.as_deref(),
-    )?;
-
-    if let Some(existing) = sqlx::query_as::<_, IdempotencyRow>(
-        r#"
-        SELECT request_hash, response_status, response_body
-        FROM idempotency_keys
-        WHERE actor_id = $1 AND scope = $2 AND key = $3
-          AND expires_at > now()
-        FOR UPDATE
-        "#,
-    )
-    .bind(principal.actor_id)
-    .bind(PROJECT_CREATE_SCOPE)
-    .bind(&idempotency_key)
-    .fetch_optional(&mut *transaction)
-    .await?
-    {
-        if existing.request_hash != request_hash {
-            return Err(AppError::Conflict("idempotency_key", "payload mismatch"));
-        }
-        let status = existing
-            .response_status
-            .and_then(|value| u16::try_from(value).ok())
-            .and_then(|value| StatusCode::from_u16(value).ok())
-            .ok_or(AppError::Conflict("idempotency_key", "command in progress"))?;
-        let reference: IdempotentProjectReference = serde_json::from_value(
-            existing
-                .response_body
-                .ok_or(AppError::Conflict("idempotency_key", "command in progress"))?,
-        )
-        .map_err(|_| AppError::Internal("stored idempotent Project reference"))?;
-        let row =
-            fetch_project_row_in_transaction(&mut transaction, principal.actor_id, reference.id)
-                .await?
-                .ok_or(AppError::NotFound("project"))?;
-        if let Err(error) = authorize_project_action(&principal, &row, Action::ProjectView) {
-            return match error {
-                AppError::Forbidden => Err(AppError::NotFound("project")),
-                error => Err(error),
-            };
-        }
-        let project = project_view(row)?;
-        transaction.commit().await?;
-        return project_response(status, project);
-    }
-
-    sqlx::query(
-        r#"
-        INSERT INTO idempotency_keys (
-            id, actor_id, scope, key, request_hash, expires_at
-        )
-        VALUES ($1, $2, $3, $4, $5, now() + interval '24 hours')
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(principal.actor_id)
-    .bind(PROJECT_CREATE_SCOPE)
-    .bind(&idempotency_key)
-    .bind(request_hash.to_vec())
-    .execute(&mut *transaction)
-    .await?;
-
-    let project_id = manage::create(
-        &mut transaction,
-        manage::NewSpace {
-            workspace_id: request.organization_id,
-            kind: SpaceKind::Project,
-            key: &key,
-            name: &name,
-            description: "",
-            visibility: SpaceVisibility::Members,
-            icon: None,
-            owner: manage::Owner {
-                account_id: principal.actor_id,
-                display_name: &principal.display_name,
-                login_name: &principal.login_name,
-            },
-        },
-    )
-    .await?;
-    let applied_template = match request.template_id {
-        Some(template_id) => Some(
-            crate::work_items::project_templates::apply_to_new_project(
-                &mut transaction,
-                crate::work_items::project_templates::creator_actor(&principal, project_id)?,
-                request.organization_id,
-                template_id,
-            )
-            .await?,
-        ),
-        None => None,
-    };
-
-    let project = ProjectView {
-        id: project_id,
-        organization_id: request.organization_id,
-        key,
-        name,
-        icon: None,
-        archived_at: None,
-        role: MembershipRole::Owner.key().to_owned(),
-        permissions: RoleGrant::built_in(MembershipRole::Owner)
-            .permissions()
-            .keys()
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
-        version: 1,
-        capabilities: ProjectCapabilities {
-            view: true,
-            manage: true,
-            archive: true,
-            navigation_write: true,
-        },
-        navigation: NavigationView {
-            location: NavigationLocation {
-                kind: "project_overview".to_owned(),
-                conversation_id: None,
-                page_id: None,
-            },
-            href: Target::space(project_id, Place::Home).href(),
-            context_drawer_open: false,
-            filters: serde_json::json!({}),
-            pinned: false,
-            rail_position: None,
-            last_opened_at: None,
-            version: 1,
-        },
-        attention_count: 0,
-        modules_off: Vec::new(),
-        kind: SpaceKind::Project,
-    };
-    insert_audit_event(
-        &mut transaction,
-        &headers,
-        &principal,
-        Some(project_id),
-        "project.created",
-        "project",
-        project_id,
-        serde_json::json!({
-            "organization_id": request.organization_id,
-            "project_key": project.key,
-            "template": applied_template,
-        }),
-    )
-    .await?;
-    let response_body = serde_json::to_value(&project)
-        .map_err(|_| AppError::Internal("serialize Project response"))?;
-    sqlx::query(
-        r#"
-        UPDATE idempotency_keys
-        SET response_status = 201, response_body = $4
-        WHERE actor_id = $1 AND scope = $2 AND key = $3
-        "#,
-    )
-    .bind(principal.actor_id)
-    .bind(PROJECT_CREATE_SCOPE)
-    .bind(&idempotency_key)
-    .bind(response_body)
-    .execute(&mut *transaction)
-    .await?;
-    transaction.commit().await?;
-    project_response(StatusCode::CREATED, project)
 }
 
 async fn get_project(
@@ -1016,76 +762,6 @@ async fn fetch_project_row(
     .await?)
 }
 
-async fn fetch_project_row_in_transaction(
-    transaction: &mut Transaction<'_, Postgres>,
-    actor_id: Uuid,
-    project_id: Uuid,
-) -> Result<Option<ProjectRow>, AppError> {
-    Ok(sqlx::query_as::<_, ProjectRow>(
-        r#"
-        SELECT
-            p.id,
-            p.organization_id,
-            p.project_key,
-            p.icon,
-            p.name,
-            p.kind,
-            pm.role,
-            workspace_role_permissions(pm.role_id) AS role_permissions,
-            space_group_permissions(pm.actor_id, pm.project_id) AS group_permissions,
-            p.version,
-            p.archived_at::text AS archived_at,
-            CASE
-                WHEN p.archived_at IS NOT NULL
-                  OR (pns.location_kind IN ('channel', 'thread') AND navc.id IS NULL)
-                THEN 'project_overview'
-                -- A page that was archived since falls back to the pages list.
-                WHEN pns.location_kind = 'page' AND navp.id IS NULL THEN 'pages'
-                ELSE pns.location_kind
-            END AS location_kind,
-            CASE
-                WHEN p.archived_at IS NOT NULL
-                  OR (pns.location_kind IN ('channel', 'thread') AND navc.id IS NULL)
-                THEN NULL
-                ELSE pns.conversation_id
-            END AS conversation_id,
-            CASE WHEN p.archived_at IS NULL THEN navp.id END AS page_id,
-            pns.context_drawer_open,
-            pns.filters,
-            pns.pinned_at::text AS pinned_at,
-            pns.rail_position,
-            pns.last_opened_at::text AS last_opened_at,
-            pns.version AS navigation_version
-        FROM projects p
-        JOIN project_memberships pm
-          ON pm.project_id = p.id AND pm.actor_id = $2 AND pm.enabled
-        JOIN organization_memberships om
-          ON om.organization_id = p.organization_id
-         AND om.actor_id = $2
-         AND om.enabled
-        LEFT JOIN project_navigation_states pns
-          ON pns.project_id = p.id AND pns.actor_id = $2
-        LEFT JOIN project_pages navp
-          ON navp.project_id = p.id
-         AND navp.id = pns.page_id
-         AND pns.location_kind = 'page'
-         AND navp.archived_at IS NULL
-        LEFT JOIN conversations navc
-          ON navc.project_id = p.id
-         AND navc.id = pns.conversation_id
-         AND navc.kind = pns.location_kind
-         AND pns.location_kind IN ('channel', 'thread')
-         AND navc.archived_at IS NULL
-        WHERE p.id = $1
-        FOR SHARE OF p, pm, om
-        "#,
-    )
-    .bind(project_id)
-    .bind(actor_id)
-    .fetch_optional(&mut **transaction)
-    .await?)
-}
-
 async fn lock_project_membership(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
@@ -1285,15 +961,6 @@ async fn validate_navigation_location(
     }
 }
 
-fn authorize_organization_create(
-    principal: &AuthenticatedActor,
-    organization_id: Uuid,
-    role: &str,
-    role_permissions: Option<&[String]>,
-) -> Result<(), AppError> {
-    authorize_project_create(principal.actor_id, organization_id, role, role_permissions)
-}
-
 /// Whether this actor, with this role in the workspace, may create Projects
 /// there.
 pub(crate) fn authorize_project_create(
@@ -1378,69 +1045,6 @@ impl ProjectMembership for ProjectMembershipRow {
     fn group_permissions(&self) -> Option<&[String]> {
         self.group_permissions.as_deref()
     }
-}
-
-fn idempotency_key(headers: &HeaderMap) -> Result<String, AppError> {
-    let value = headers
-        .get("idempotency-key")
-        .and_then(|header| header.to_str().ok())
-        .map(str::trim)
-        .filter(|value| {
-            !value.is_empty()
-                && value.len() <= MAX_IDEMPOTENCY_KEY_BYTES
-                && value.chars().all(|character| {
-                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
-                })
-        })
-        .ok_or(AppError::Validation("Idempotency-Key"))?;
-    Ok(value.to_owned())
-}
-
-fn project_response(status: StatusCode, project: ProjectView) -> Result<Response, AppError> {
-    let location = HeaderValue::from_str(&format!("/api/v1/projects/{}", project.id))
-        .map_err(|_| AppError::Internal("construct Project Location header"))?;
-    Ok((status, [(LOCATION, location)], Json(project)).into_response())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn insert_audit_event(
-    transaction: &mut Transaction<'_, Postgres>,
-    headers: &HeaderMap,
-    principal: &AuthenticatedActor,
-    project_id: Option<Uuid>,
-    action: &'static str,
-    target_kind: &'static str,
-    target_id: Uuid,
-    metadata: serde_json::Value,
-) -> Result<(), AppError> {
-    let request_id = headers
-        .get(crate::REQUEST_ID_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| value.len() <= 128);
-    sqlx::query(
-        r#"
-        INSERT INTO audit_events (
-            id, actor_id, project_id, session_id, authentication_class,
-            action, target_kind, target_id, outcome, request_id, metadata
-        )
-        VALUES (
-            $1, $2, $3, $4, 'password_session',
-            $5, $6, $7, 'succeeded', $8, $9
-        )
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(principal.actor_id)
-    .bind(project_id)
-    .bind(principal.session_id)
-    .bind(action)
-    .bind(target_kind)
-    .bind(target_id)
-    .bind(request_id)
-    .bind(metadata)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(())
 }
 
 #[cfg(test)]

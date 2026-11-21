@@ -38,13 +38,14 @@ async fn second_workspace(setup: &Setup, key: &str) -> (Uuid, String) {
         &setup.app,
         setup.browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", elsewhere),
             Some(&format!("create-elsewhere-{key}")),
-            json!({"organizationId": elsewhere, "key": key, "name": "Theirs"}),
+            json!({"key": key, "name": "Theirs"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{project}");
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project = project["value"].clone();
     (
         elsewhere,
         project["id"].as_str().expect("project").to_owned(),
@@ -170,13 +171,14 @@ async fn historical_aliases_cannot_hide_a_conflicting_task_key() {
         &setup.app,
         setup.browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", elsewhere),
             Some("foreign-source"),
-            json!({"organizationId": elsewhere, "key": "FROMSRC", "name": "Foreign source"}),
+            json!({"key": "FROMSRC", "name": "Foreign source"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{foreign_source}");
+    assert_eq!(status, StatusCode::OK, "{foreign_source}");
+    let foreign_source = foreign_source["value"].clone();
     let foreign_source = foreign_source["id"].as_str().expect("source");
     let token = connect_app(&setup.app, &setup.browser, "Codex", "full").await;
     let session = initialize(&setup.app, &token).await.expect("MCP");

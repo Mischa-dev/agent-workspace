@@ -2398,8 +2398,8 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
             app,
             browser,
             "POST",
-            "/api/v1/projects",
-            json!({"organizationId": a.organization, "key": key, "name": format!("Net {key}")}),
+            &format!("/api/v2/w/{}/ops/space_create", a.organization),
+            json!({"key": key, "name": format!("Net {key}")}),
         )
         .await;
         projects.push(

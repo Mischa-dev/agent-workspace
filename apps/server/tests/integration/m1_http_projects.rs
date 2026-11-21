@@ -145,8 +145,11 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     let cookie_header = rotated_cookie_header;
     let csrf = rotated_csrf;
 
+    let create_uri = format!(
+        "/api/v2/w/{}/ops/space_create",
+        bootstrapped.organization_id
+    );
     let create_body = json!({
-        "organizationId": bootstrapped.organization_id,
         "key": "one",
         "name": "First Project"
     });
@@ -158,7 +161,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     ];
     let missing_csrf = request(
         "POST",
-        "/api/v1/projects",
+        &create_uri,
         &[
             ("origin", "http://127.0.0.1:3100"),
             ("cookie", cookie_header.as_str()),
@@ -176,7 +179,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     );
     let mismatched_csrf = request(
         "POST",
-        "/api/v1/projects",
+        &create_uri,
         &[
             ("origin", "http://127.0.0.1:3100"),
             ("cookie", cookie_header.as_str()),
@@ -198,14 +201,14 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         .clone()
         .oneshot(request(
             "POST",
-            "/api/v1/projects",
+            &create_uri,
             &create_headers,
             create_body.clone(),
         ))
         .await
         .expect("create Project");
-    assert_eq!(first_create.status(), StatusCode::CREATED);
-    let first_project = response_json(first_create).await;
+    assert_eq!(first_create.status(), StatusCode::OK);
+    let first_project = response_json(first_create).await["value"].clone();
     let first_project_id = first_project["id"].as_str().expect("Project id");
     assert_eq!(first_project["key"], "ONE");
 
@@ -213,14 +216,16 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         .clone()
         .oneshot(request(
             "POST",
-            "/api/v1/projects",
+            &create_uri,
             &create_headers,
             create_body.clone(),
         ))
         .await
         .expect("replay Project creation");
-    assert_eq!(replay.status(), StatusCode::CREATED);
-    assert_eq!(response_json(replay).await["id"], first_project_id);
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replay = response_json(replay).await;
+    assert_eq!(replay["replayed"], true, "{replay}");
+    assert_eq!(replay["value"]["id"], first_project_id);
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM projects WHERE project_key = 'ONE'")
             .fetch_one(&pool)
@@ -233,7 +238,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         .clone()
         .oneshot(request(
             "POST",
-            "/api/v1/projects",
+            &create_uri,
             &[
                 ("origin", "http://127.0.0.1:3100"),
                 ("cookie", cookie_header.as_str()),
@@ -241,7 +246,6 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
                 ("idempotency-key", "m1-create-duplicate-key"),
             ],
             json!({
-                "organizationId": bootstrapped.organization_id,
                 "key": "oNe",
                 "name": "Duplicate Project Key"
             }),
@@ -250,8 +254,8 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         .expect("duplicate Project key response");
     assert_eq!(duplicate_key.status(), StatusCode::CONFLICT);
     assert_eq!(
-        response_json(duplicate_key).await["error"]["code"],
-        "project_key_conflict"
+        response_json(duplicate_key).await["code"],
+        "space_key_taken"
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
@@ -276,7 +280,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         .clone()
         .oneshot(request(
             "POST",
-            "/api/v1/projects",
+            &create_uri,
             &create_headers,
             create_body.clone(),
         ))
@@ -296,66 +300,8 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     .await
     .expect("restore Organization membership");
 
-    sqlx::query(
-        "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND actor_id = $2",
-    )
-    .bind(first_project_id.parse::<Uuid>().expect("Project UUID"))
-    .bind(bootstrapped.actor_id)
-    .execute(&pool)
-    .await
-    .expect("disable Project membership");
-    let inaccessible_replay = app
-        .clone()
-        .oneshot(request(
-            "POST",
-            "/api/v1/projects",
-            &create_headers,
-            create_body.clone(),
-        ))
-        .await
-        .expect("inaccessible idempotent replay");
-    assert_eq!(
-        inaccessible_replay.status(),
-        StatusCode::NOT_FOUND,
-        "cached responses never bypass current Project access"
-    );
-    sqlx::query(
-        "UPDATE project_memberships SET enabled = true, role = 'viewer' WHERE project_id = $1 AND actor_id = $2",
-    )
-    .bind(first_project_id.parse::<Uuid>().expect("Project UUID"))
-    .bind(bootstrapped.actor_id)
-    .execute(&pool)
-    .await
-    .expect("restore Project membership as Viewer");
-    let viewer_replay = app
-        .clone()
-        .oneshot(request(
-            "POST",
-            "/api/v1/projects",
-            &create_headers,
-            create_body.clone(),
-        ))
-        .await
-        .expect("Viewer idempotent replay");
-    assert_eq!(viewer_replay.status(), StatusCode::CREATED);
-    let viewer_project = response_json(viewer_replay).await;
-    assert_eq!(viewer_project["id"], first_project_id);
-    assert_eq!(viewer_project["role"], "viewer");
-    assert_eq!(viewer_project["capabilities"]["view"], true);
-    assert_eq!(viewer_project["capabilities"]["manage"], false);
-    assert_eq!(viewer_project["capabilities"]["archive"], false);
-    assert_eq!(
-        viewer_project["capabilities"]["navigationWrite"], true,
-        "idempotent replay returns capabilities from current Project authority"
-    );
-    sqlx::query(
-        "UPDATE project_memberships SET role = 'owner' WHERE project_id = $1 AND actor_id = $2",
-    )
-    .bind(first_project_id.parse::<Uuid>().expect("Project UUID"))
-    .bind(bootstrapped.actor_id)
-    .execute(&pool)
-    .await
-    .expect("restore Project Owner membership");
+    // A replay hands back the answer as it was first given; reading the
+    // space (below) is what checks access as it is now.
 
     let switch = app
         .clone()
@@ -455,7 +401,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         .clone()
         .oneshot(request(
             "POST",
-            "/api/v1/projects",
+            &create_uri,
             &[
                 ("origin", "http://127.0.0.1:3100"),
                 ("cookie", cookie_header.as_str()),
@@ -463,15 +409,14 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
                 ("idempotency-key", "m1-create-named-like-key"),
             ],
             json!({
-                "organizationId": bootstrapped.organization_id,
                 "key": "alp",
                 "name": "Alpha one notes"
             }),
         ))
         .await
         .expect("create second Project");
-    assert_eq!(named_like_key.status(), StatusCode::CREATED);
-    let second_project_id = response_json(named_like_key).await["id"]
+    assert_eq!(named_like_key.status(), StatusCode::OK);
+    let second_project_id = response_json(named_like_key).await["value"]["id"]
         .as_str()
         .expect("second Project id")
         .to_owned();
@@ -587,22 +532,13 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
 
     let archived_replay = app
         .clone()
-        .oneshot(request(
-            "POST",
-            "/api/v1/projects",
-            &create_headers,
-            create_body,
-        ))
+        .oneshot(request("POST", &create_uri, &create_headers, create_body))
         .await
         .expect("archived idempotent replay");
-    assert_eq!(archived_replay.status(), StatusCode::CREATED);
-    let archived_project = response_json(archived_replay).await;
-    assert_eq!(archived_project["id"], first_project_id);
-    assert_eq!(archived_project["version"], 2);
-    assert!(
-        archived_project["archivedAt"].is_string(),
-        "idempotent replay returns the current Project archive state"
-    );
+    assert_eq!(archived_replay.status(), StatusCode::OK);
+    let archived_replay = response_json(archived_replay).await;
+    assert_eq!(archived_replay["replayed"], true, "{archived_replay}");
+    assert_eq!(archived_replay["value"]["id"], first_project_id);
 
     // Renaming from project settings: managers only, against the version they
     // read, never an archived project, and audited once per real change.

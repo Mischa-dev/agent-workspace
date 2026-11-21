@@ -1949,12 +1949,13 @@ impl Owner {
             .call(
                 app,
                 "POST",
-                "/api/v1/projects",
+                &format!("/api/v2/w/{}/ops/space_create", organization_id),
                 Some(&format!("project-{key}")),
-                json!({ "organizationId": organization_id, "key": key, "name": key }),
+                json!({"key": key, "name": key }),
             )
             .await;
-        assert_eq!(status, StatusCode::CREATED, "{project}");
+        assert_eq!(status, StatusCode::OK, "{project}");
+        let project = project["value"].clone();
         project["id"].as_str().expect("project").to_owned()
     }
 

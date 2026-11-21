@@ -176,7 +176,7 @@ describe('App Thread runs, approvals and GitHub', () => {
         }, 202)
       }
       if (path.endsWith('/ops/run_failure_hide')) {
-        return jsonResponse({ outcome: 'ok', value: { runId: 'run-1', hidden: true } })
+        return jsonResponse({ outcome: 'ok', value: { ...terminalRun, id: 'run-1' } })
       }
       return standardImplementation?.(input, init) ?? Promise.reject()
     })

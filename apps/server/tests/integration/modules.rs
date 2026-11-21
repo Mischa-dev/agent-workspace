@@ -1162,13 +1162,14 @@ async fn task_lists_count_and_page_only_workspaces_with_tasks_on() {
         app,
         setup.browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", second),
             Some("create-BBB"),
-            json!({"organizationId": second, "key": "BBB", "name": "B work"}),
+            json!({"key": "BBB", "name": "B work"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{made}");
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let made = made["value"].clone();
     let second_project = made["id"].as_str().expect("project").to_owned();
     let mut first_tasks = Vec::new();
     for (project, title) in [
