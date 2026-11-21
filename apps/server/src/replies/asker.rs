@@ -51,6 +51,8 @@ pub fn schema() -> Value {
             },
         },
         "additionalProperties": false,
+        "minProperties": 1,
+        "maxProperties": 1,
     })
 }
 
