@@ -6418,6 +6418,18 @@ async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    // Commenting is enough to fix his own comment.
+    let (status, fixed) = send(
+        app,
+        alex_browser.request(
+            "POST",
+            "/api/v2/ops/task_comment_update",
+            Some("k116-alex-fix"),
+            json!({"taskId": task, "commentId": said["value"]["resultId"], "content": text("Looks great")}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{fixed}");
 
     // Mara comments through her tools.
     let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");

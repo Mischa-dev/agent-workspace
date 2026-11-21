@@ -251,6 +251,11 @@ fn answer<T>(result: ToolResult<T>) -> Result<T, OpError> {
         ToolResult::Conflict { message } => Err(OpError::Conflict {
             reason: if message.contains("clientRequestId") {
                 ConflictReason::RequestIdReused
+            } else if message.contains("changed since you read it") {
+                // A comment edited elsewhere: the editor asks to reopen it.
+                ConflictReason::State {
+                    code: "version_conflict",
+                }
             } else {
                 ConflictReason::State { code: "state" }
             },

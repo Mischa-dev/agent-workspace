@@ -132,6 +132,15 @@ async fn fixing_a_failed_scheduled_message_keeps_it_until_it_gets_a_new_time() {
     assert_eq!(status, StatusCode::OK, "{fixed}");
     assert_eq!(fixed["value"]["scheduled"]["status"], "failed", "{fixed}");
     assert_eq!(fixed["value"]["scheduled"]["text"], "Typo here", "{fixed}");
+    // Fixed in the browser, it isn't counted as an app's message.
+    let through_app = sqlx::query_scalar::<_, bool>(
+        "SELECT made_through_app FROM scheduled_messages WHERE id = $1",
+    )
+    .bind(id.parse::<Uuid>().expect("id"))
+    .fetch_one(&setup.pool)
+    .await
+    .expect("scheduled");
+    assert!(!through_app);
     let queued = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM background_jobs WHERE state = 'queued' AND payload::text LIKE '%' || $1 || '%'",
     )

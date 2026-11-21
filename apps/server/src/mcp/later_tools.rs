@@ -130,9 +130,11 @@ fn scheduled_line(state: &AppState, message: ScheduledMessageView) -> ScheduledL
     }
 }
 
-/// Whether a person's app made this call (its limit then applies).
+/// Whether a person's app made this call (its limit then applies): not the
+/// person's own browser, which reaches this through its operation.
 fn through_app(principal: &McpPrincipal) -> bool {
     principal.actor_kind == ActorKind::Human // kind-check: mechanical (an app acts as the person who connected it)
+        && principal.authentication_class != "password_session"
 }
 
 /// The projects this call reads in: the one it's confined to, or (for an

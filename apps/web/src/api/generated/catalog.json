@@ -5710,7 +5710,7 @@
     "long": false,
     "module": "tasks",
     "name": "task_comment_delete",
-    "permission": "tasks.edit",
+    "permission": "tasks.comment",
     "preview": false,
     "proposable": false,
     "title": "Delete task comment"
@@ -5726,7 +5726,7 @@
     "long": false,
     "module": "tasks",
     "name": "task_comment_update",
-    "permission": "tasks.edit",
+    "permission": "tasks.comment",
     "preview": false,
     "proposable": false,
     "title": "Edit task comment"

@@ -820,7 +820,7 @@ impl Operation for TaskCommentUpdate {
     const NAME: &'static str = "task_comment_update";
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "tasks";
-    const PERMISSION: Option<Perm> = Some(Perm::TasksEdit);
+    const PERMISSION: Option<Perm> = Some(Perm::TasksComment);
     const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const TITLE: &'static str = "Edit task comment";
     const DESCRIPTION: &'static str = "Edit your own comment on a task. Earlier versions stay in \
@@ -877,7 +877,7 @@ impl Operation for TaskCommentDelete {
     const NAME: &'static str = "task_comment_delete";
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "tasks";
-    const PERMISSION: Option<Perm> = Some(Perm::TasksEdit);
+    const PERMISSION: Option<Perm> = Some(Perm::TasksComment);
     const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const DESTRUCTIVE: bool = true;
     const TITLE: &'static str = "Delete task comment";

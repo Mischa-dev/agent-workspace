@@ -170376,7 +170376,7 @@
     },
     "/api/v2/w/{workspace}/ops/task_comment_delete": {
       "post": {
-        "description": "Delete a comment on a task for everyone, leaving \"comment deleted\" in the task's history. Its text and every earlier version are deleted, with its files. You can delete your own comments; space owners and admins can delete anyone's. This can't be undone. Rotate any secret it held. Needs \"Edit tasks\" where it acts.",
+        "description": "Delete a comment on a task for everyone, leaving \"comment deleted\" in the task's history. Its text and every earlier version are deleted, with its files. You can delete your own comments; space owners and admins can delete anyone's. This can't be undone. Rotate any secret it held. Needs \"Comment on tasks\" where it acts.",
         "operationId": "task_comment_delete",
         "parameters": [
           {
@@ -170748,7 +170748,7 @@
     },
     "/api/v2/w/{workspace}/ops/task_comment_update": {
       "post": {
-        "description": "Edit your own comment on a task. Earlier versions stay in the comment's history for everyone who can see the task, and it shows (edited). To take down a secret, use task_comment_delete instead: editing keeps the old text in the history. Needs \"Edit tasks\" where it acts.",
+        "description": "Edit your own comment on a task. Earlier versions stay in the comment's history for everyone who can see the task, and it shows (edited). To take down a secret, use task_comment_delete instead: editing keeps the old text in the history. Needs \"Comment on tasks\" where it acts.",
         "operationId": "task_comment_update",
         "parameters": [
           {

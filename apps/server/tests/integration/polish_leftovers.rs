@@ -111,6 +111,7 @@ async fn task_comments_are_edited_by_their_author_and_deleted_by_author_or_admin
     stale["expectedRevision"] = json!(1);
     let (status, late) = op(&setup, &mara_browser, "task_comment_update", None, stale).await;
     assert_eq!(status, StatusCode::CONFLICT, "{late}");
+    assert_eq!(late["code"], "version_conflict", "{late}");
     let (status, timeline) = get(&setup, &ben_browser, &format!("{base}/{task}/timeline")).await;
     assert_eq!(status, StatusCode::OK, "{timeline}");
     let shown = |timeline: &Value| {

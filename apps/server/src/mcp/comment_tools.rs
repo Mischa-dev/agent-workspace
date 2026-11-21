@@ -10,12 +10,13 @@ use uuid::Uuid;
 use super::{
     McpPrincipal,
     common::{ToolResult, parse_id},
-    writes::{WriteAccess, check_write_access, normalize_comment},
+    writes::{WriteAccess, check_access_for, normalize_comment},
 };
 use crate::{
     AppState,
     error::AppError,
     message_content::MessageContent,
+    policy::Action,
     work_items::comments::{self, CommentRefusal},
 };
 
@@ -170,8 +171,11 @@ pub(super) async fn task_comment_edit(
             return Ok(ToolResult::invalid("taskId", TASK_ID_MESSAGE));
         };
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        if let Some(result) = access_result(check_write_access(&mut transaction, principal).await?)
-        {
+        // Editing or deleting a comment needs "comment on tasks", as
+        // writing one does; whose comment it is is checked below.
+        if let Some(result) = access_result(
+            check_access_for(&mut transaction, principal, Action::WorkItemComment).await?,
+        ) {
             return Ok(result);
         }
         let actor = match super::talk::message_actor(principal) {
@@ -219,8 +223,11 @@ pub(super) async fn task_comment_delete(
             return Ok(ToolResult::invalid("taskId", TASK_ID_MESSAGE));
         };
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        if let Some(result) = access_result(check_write_access(&mut transaction, principal).await?)
-        {
+        // Editing or deleting a comment needs "comment on tasks", as
+        // writing one does; whose comment it is is checked below.
+        if let Some(result) = access_result(
+            check_access_for(&mut transaction, principal, Action::WorkItemComment).await?,
+        ) {
             return Ok(result);
         }
         let actor = match super::talk::message_actor(principal) {

@@ -77,7 +77,9 @@ impl GuardRow {
 }
 
 /// Every string in a call's input, lower case, one per line: what a
-/// guard's terms are looked for in.
+/// guard's terms are looked for in. Structured content's text nodes are
+/// also read joined, as readers see them, so a term split across nodes is
+/// still found.
 fn text_of(input: &Value) -> String {
     fn walk(value: &Value, out: &mut String) {
         match value {
@@ -86,7 +88,17 @@ fn text_of(input: &Value) -> String {
                 out.push('\n');
             }
             Value::Array(items) => items.iter().for_each(|item| walk(item, out)),
-            Value::Object(fields) => fields.values().for_each(|item| walk(item, out)),
+            Value::Object(fields) => {
+                if let Some(Value::Array(nodes)) = fields.get("nodes") {
+                    let joined = nodes
+                        .iter()
+                        .filter_map(|node| node.get("text").and_then(Value::as_str))
+                        .collect::<String>();
+                    out.push_str(&joined.to_lowercase());
+                    out.push('\n');
+                }
+                fields.values().for_each(|item| walk(item, out));
+            }
             _ => {}
         }
     }
@@ -570,6 +582,17 @@ pub async fn give_back_hold(
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    #[test]
+    fn a_term_split_across_text_nodes_is_still_found() {
+        let text = super::text_of(&json!({
+            "content": {"version": 1, "nodes": [
+                {"type": "text", "text": "rel"},
+                {"type": "text", "text": "ease now"},
+            ]},
+        }));
+        assert!(text.contains("release now"), "{text}");
+    }
 
     #[test]
     fn reviewers_never_see_a_calls_secrets() {
