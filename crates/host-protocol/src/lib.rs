@@ -329,6 +329,19 @@ pub struct DescribedAccount {
     pub name: String,
 }
 
+/// `PUT /api/v1/host/builtin/harnesses`: the harnesses the built-in host
+/// runs, sent when it takes its lease. A full list: a kind no longer listed
+/// is gone. Only the built-in host may send it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuiltinHarnesses {
+    pub harnesses: Vec<harness::manifest::AdapterManifest>,
+    /// The fencing token of the lease the host holds while it sends this:
+    /// a host that has lost its lease can't replace the list its successor
+    /// sent.
+    pub lease_token: i64,
+}
+
 /// `POST /api/v1/host/windows`: the plan windows of described accounts.
 /// A full report: windows an account no longer lists are gone. A `partial`
 /// one (what a run hears mid-turn) only updates the windows it lists, and
@@ -495,6 +508,7 @@ pub fn new_push_secret(random: [u8; 32]) -> String {
 }
 
 mod client;
+pub mod harness;
 mod model;
 pub use client::{
     ClientError, HostClient, HttpRequest, HttpResponse, ReqwestTransport, RunReporter, Transport,

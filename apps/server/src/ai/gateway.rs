@@ -33,7 +33,7 @@ use crate::{
     AppState,
     config::Environment,
     error::AppError,
-    provider::manifest::ModelPrices,
+    harness::manifest::ModelPrices,
     secrets::{self, SecretOwner},
     settings::{self, SettingsContext},
 };

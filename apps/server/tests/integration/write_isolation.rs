@@ -370,6 +370,12 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
          (tests/integration/a1_host_program.rs)",
     ),
     (
+        "PUT /api/v1/host/builtin/harnesses",
+        "the install's built-in host describing the harnesses it runs, for every workspace \
+         at once; only its own token or in-process call is taken, a person's or an agent's \
+         is refused (tests/integration/a1_harness_catalog.rs)",
+    ),
+    (
         "POST /api/v1/host/commands/{command_id}/ack",
         "a host answering one of its own commands with its own token; another host's \
          command is not found (tests/integration/a1_host_protocol.rs)",

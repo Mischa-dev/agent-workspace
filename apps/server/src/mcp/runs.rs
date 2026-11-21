@@ -340,7 +340,7 @@ pub(crate) async fn run_start(
             StartRunRequest {
                 prompt: arguments.prompt.clone(),
                 repository_id,
-                config: Some(crate::provider::run_config::RunConfig {
+                config: Some(crate::harness::run_config::RunConfig {
                     harness: arguments.harness.clone(),
                     model: arguments.model.clone(),
                     reasoning: arguments.reasoning.clone(),

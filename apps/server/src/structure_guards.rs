@@ -230,8 +230,9 @@ const LISTEN_OUTSIDE_WAKE_CEILING: usize = 0;
 // across the provider calls on purpose, so removal can't race attachment
 // (auth/workos/agents.rs); its owner is A2.
 const TRANSACTIONS_ACROSS_CALLS_CEILING: usize = 3;
-// A1.17 (G10): set to today's total when the guard landed.
-const SERVER_RUNS_AGENTS_CEILING: usize = 45;
+// A1.17 (G10): today's total, lowered as the server stops reaching the
+// harness layer itself.
+const SERVER_RUNS_AGENTS_CEILING: usize = 28;
 
 /// The rules of `AGENTS.md` rules 1 and 2 (access and account kinds). Every
 /// allowance of theirs names the K1 slice that removes it and why it is

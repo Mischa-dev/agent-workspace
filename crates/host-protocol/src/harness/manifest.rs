@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdapterManifest {
     pub kind: String,
@@ -29,7 +29,7 @@ pub struct AdapterManifest {
     pub default_models: Vec<ModelEntry>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VersionRange {
     pub minimum: String,
@@ -71,7 +71,7 @@ fn parse_version(value: &str) -> Option<Vec<u64>> {
     Some(padded)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunLocation {
     /// Runs on this server, so the host-wide run limit applies.
@@ -90,7 +90,7 @@ impl RunLocation {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdapterFeatures {
     pub streaming: bool,
@@ -107,21 +107,21 @@ pub struct AdapterFeatures {
     pub pull_request_creation: bool,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConcurrencyLimits {
     pub default_per_account: u16,
     pub max_per_account: u16,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginMethod {
-    pub kind: super::adapter::LoginKind,
+    pub kind: LoginKind,
     pub label: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunOptionSupport {
     pub sandbox_modes: Vec<String>,
@@ -391,6 +391,15 @@ pub fn validate_options(schema: &Value, options: &Map<String, Value>) -> Result<
         }
     }
     Ok(())
+}
+
+/// How a person signs a harness account in.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoginKind {
+    Browser,
+    DeviceCode,
+    ApiKey,
 }
 
 #[cfg(test)]

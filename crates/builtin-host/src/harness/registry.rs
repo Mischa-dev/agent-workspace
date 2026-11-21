@@ -200,6 +200,16 @@ impl SupervisorRegistry {
             .map(|custom| ManifestRef(Arc::clone(&custom.adapter)))
     }
 
+    /// The built-in harnesses' manifests, as the host describes them to the
+    /// server.
+    pub fn builtin_manifests(&self) -> Vec<AdapterManifest> {
+        self.inner
+            .adapters
+            .values()
+            .map(|adapter| adapter.manifest().clone())
+            .collect()
+    }
+
     /// The built-in harnesses and every registered one, for server-wide
     /// questions (which kinds run in the cloud). Never shown to people.
     pub fn manifests(&self) -> Vec<ManifestRef> {
