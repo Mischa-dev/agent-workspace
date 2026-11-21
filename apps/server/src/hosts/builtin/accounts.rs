@@ -1,5 +1,6 @@
 //! A1.17 step 4: model accounts are the built-in host's. The server asks
-//! about one (its status, a sign-in, a sign-out, a banked reset) with an
+//! about one (its status, a sign-in, a sign-out, a banked reset, its models,
+//! whether a cloud environment is there) with an
 //! `action` command to the workspace's built-in host row
 //! ([`agent_workspace_host_protocol::account`]), and the host carries it out
 //! with the account's harness and answers in its acknowledgement.
