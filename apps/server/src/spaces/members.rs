@@ -224,6 +224,10 @@ pub struct SpaceMemberAddInput {
     /// a guest or anyone here for a while.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,
+    /// For someone removed: their membership's version, as you read it, so
+    /// a change made since refuses this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<i64>,
 }
 
 impl Targeted for SpaceMemberAddInput {
@@ -281,7 +285,7 @@ impl Operation for SpaceMemberAdd {
                 role.as_deref(),
                 role_id,
                 Some(true),
-                None,
+                input.expected_version,
             )
             .await
             .map_err(refused)?;
@@ -303,6 +307,19 @@ impl Operation for SpaceMemberAdd {
         }
         if let Some(expires_at) = input.expires_at.as_deref() {
             set_expiry(tx, space, account, expiry(expires_at)?).await?;
+        } else if removed {
+            // A deadline that already passed would end the restored
+            // membership again at once: bringing someone back clears it.
+            sqlx::query(
+                "UPDATE project_memberships SET expires_at = NULL \
+                 WHERE project_id = $1 AND actor_id = $2 AND NOT via_group \
+                   AND expires_at <= now()",
+            )
+            .bind(space)
+            .bind(account)
+            .execute(&mut **tx)
+            .await
+            .map_err(AppError::from)?;
         }
         let view = member(tx, space, account).await?;
         call.audit_target(

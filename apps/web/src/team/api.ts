@@ -73,7 +73,7 @@ export async function updateMember(
 ): Promise<MemberChange> {
   const who = { spaceId: projectId, account: actorId }
   if (input.enabled === false) return changed(await callOp('space_member_remove', { ...who, expectedVersion: input.expectedVersion }))
-  if (input.enabled === true) return changed(await callOp('space_member_add', who))
+  if (input.enabled === true) return changed(await callOp('space_member_add', { ...who, expectedVersion: input.expectedVersion }))
   const role = input.roleId ?? input.role ?? 'member'
   return changed(await callOp('space_member_update', { ...who, role, expectedVersion: input.expectedVersion }))
 }
@@ -84,6 +84,15 @@ export function listInvitations(projectId: string) {
   )
 }
 
+/**
+ * An invitation's link is shown once: a retried request the server had
+ * already done answers without it. Say so rather than offer an empty link.
+ */
+function joinUrl(url: string | null | undefined): string {
+  if (!url) throw new Error("Its link didn't arrive. Replace the invitation from the list to get a new one.")
+  return url
+}
+
 export async function issueInvitation(
   projectId: string,
   role: Exclude<TeamRole, 'owner'>,
@@ -91,7 +100,7 @@ export async function issueInvitation(
   roleId?: string,
 ): Promise<IssuedInvitation> {
   const issued = await callOp('invitation_create', { projectId, role: roleId ?? role, expiresInHours })
-  return { invitationUrl: issued.joinUrl ?? '' }
+  return { invitationUrl: joinUrl(issued.joinUrl) }
 }
 
 export async function revokeInvitation(projectId: string, invitationId: string, expectedVersion: number) {
@@ -105,7 +114,7 @@ export async function replaceInvitation(
   expiresInHours = 24,
 ): Promise<IssuedInvitation> {
   const issued = await callOp('invitation_update', { projectId, invitation: invitationId, replace: true, expectedVersion, expiresInHours })
-  return { invitationUrl: issued.joinUrl ?? '' }
+  return { invitationUrl: joinUrl(issued.joinUrl) }
 }
 
 export type MemberCandidate = { actorId: string; actorKind: string; displayName: string; handle: string }

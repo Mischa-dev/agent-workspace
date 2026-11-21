@@ -139,11 +139,10 @@ export function TeamSettings({ organizationId, projectId }: { organizationId?: s
   const issueMutation = useMutation({
     mutationFn: ({ choice, hours }: { choice: RoleChoice; hours: number }) =>
       issueInvitation(projectId, (choice.role ?? 'member') as Exclude<TeamRole, 'owner'>, hours, choice.roleId),
-    onSuccess: async (issued) => {
-      setOneShot(issued)
-      await refresh()
-    },
+    onSuccess: (issued) => setOneShot(issued),
     onError: mutationError('The invitation wasn’t created.'),
+    // One made on an earlier try can answer without its link: list it either way.
+    onSettled: () => refresh(),
   })
   const revokeMutation = useMutation({
     mutationFn: (invitation: Invitation) => revokeInvitation(projectId, invitation.id, invitation.version),
@@ -155,11 +154,10 @@ export function TeamSettings({ organizationId, projectId }: { organizationId?: s
   })
   const replaceMutation = useMutation({
     mutationFn: (invitation: Invitation) => replaceInvitation(projectId, invitation.id, invitation.version, DEFAULT_INVITATION_HOURS),
-    onSuccess: async (issued) => {
-      setOneShot(issued)
-      await refresh()
-    },
+    onSuccess: (issued) => setOneShot(issued),
     onError: mutationError('The link wasn’t replaced.'),
+    // One made on an earlier try can answer without its link: list it either way.
+    onSettled: () => refresh(),
   })
 
   if (members.isPending || invitations.isPending) {

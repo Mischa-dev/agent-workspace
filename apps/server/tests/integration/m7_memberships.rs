@@ -221,6 +221,30 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
         .await
         .expect("stale member response");
     assert_eq!(stale.status(), StatusCode::CONFLICT);
+    // Bringing them back keeps the same check: as read before the removal,
+    // it is refused.
+    let stale = application
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v2/ops/space_member_add",
+            &write_headers(&owner_cookie, &owner_csrf, "stale-member-restore"),
+            json!({"spaceId": seed.project_id, "account": member_actor_id, "expectedVersion": 1}),
+        ))
+        .await
+        .expect("stale restore response");
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    // A deadline that passed while they were away doesn't end the
+    // membership again the moment they come back.
+    sqlx::query(
+        "UPDATE project_memberships SET expires_at = now() - interval '1 hour' \
+         WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.project_id)
+    .bind(member_actor_id)
+    .execute(&pool)
+    .await
+    .expect("lapse the deadline");
 
     let enabled = application
         .clone()
@@ -228,7 +252,7 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
             "POST",
             "/api/v2/ops/space_member_add",
             &write_headers(&owner_cookie, &owner_csrf, "enable-member-once"),
-            json!({"spaceId": seed.project_id, "account": member_actor_id, "role": "viewer"}),
+            json!({"spaceId": seed.project_id, "account": member_actor_id, "role": "viewer", "expectedVersion": 2}),
         ))
         .await
         .expect("enable member response");
@@ -237,6 +261,7 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
     assert_eq!(enabled["value"]["active"], true);
     assert_eq!(enabled["value"]["role"], "viewer");
     assert_eq!(enabled["value"]["version"], 3);
+    assert_eq!(enabled["value"]["expiresAt"], serde_json::Value::Null);
     assert_eq!(
         sqlx::query_scalar::<_, String>("SELECT status FROM account_credentials WHERE id = $1",)
             .bind(credential_id)

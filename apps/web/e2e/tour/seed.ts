@@ -53,6 +53,13 @@ class Session {
     return this.send(method, url, data)
   }
 
+  /** An operation: its answer's value (`/api/v2/ops/{name}`). */
+  async op(name: string, input: unknown): Promise<Json> {
+    const answer = await this.send('POST', `/api/v2/ops/${name}`, input)
+    if (answer.outcome !== 'ok') throw new Error(`${name}: ${JSON.stringify(answer)}`)
+    return answer.value as Json
+  }
+
   private async send(method: string, url: string, data?: unknown): Promise<Json> {
     for (let attempt = 0; ; attempt += 1) {
       const state = await this.api.storageState()
@@ -142,11 +149,8 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   // People join by invitation and sign in as themselves.
   const team: Session[] = []
   for (const person of people) {
-    const invitation = await me.write('POST', `/api/v1/projects/${projectId}/invitations`, {
-      role: 'member',
-      expiresInHours: 24,
-    })
-    const token = String(invitation.invitationUrl ?? '').split('#token=')[1]
+    const invitation = await me.op('invitation_create', { projectId, role: 'member', expiresInHours: 24 })
+    const token = String(invitation.joinUrl ?? '').split('#token=')[1]
     if (!token) throw new Error('The invitation came back without a token')
     const api = await request.newContext({ baseURL: serverOrigin, extraHTTPHeaders: { origin: webOrigin } })
     const response = await api.post('/api/v1/project-invitations/accept-new', {
@@ -167,7 +171,7 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   }
   for (const [index, other] of others.entries()) {
     for (const member of team.filter((_, i) => (i + index) % 2 === 0)) {
-      await me.write('POST', `/api/v1/projects/${other}/members`, { actorId: member.actorId, role: 'member' })
+      await me.op('space_member_add', { spaceId: other, account: member.actorId, role: 'member' })
     }
   }
 
