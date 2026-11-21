@@ -585,7 +585,9 @@ async fn a_report_past_a_hard_budget_tells_whoever_set_it() {
     .execute(&world.pool)
     .await
     .expect("a budget");
-    for tokens in [50, 60, 10] {
+    // 90 warns that it is nearly used; 20 more takes it past the limit,
+    // which updates that warning, once.
+    for tokens in [90, 20, 10] {
         agent_workspace_server::tenancy::system("runs.host", async {
             let mut transaction = agent_workspace_server::db::scoped_tx(&world.pool)
                 .await
@@ -620,12 +622,17 @@ async fn a_report_past_a_hard_budget_tells_whoever_set_it() {
     assert_eq!(used, Some(120), "spent usage is recorded past the limit");
     let titles = sqlx::query_scalar::<_, String>(
         "SELECT detail->>'level' FROM notifications \
-         WHERE recipient_actor_id = $1 AND kind = 'budget_warning'",
+         WHERE recipient_actor_id = $1 AND kind = 'budget_warning' ORDER BY created_at",
     )
     .bind(account)
     .fetch_all(&world.pool)
     .await
     .expect("warnings");
-    assert_eq!(titles, ["hard"], "told once a day that it is used up");
+    // One inbox item per budget: the warning becomes "used up".
+    assert_eq!(
+        titles,
+        ["hard"],
+        "the warning's item now says it is used up"
+    );
     world.finish().await;
 }

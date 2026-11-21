@@ -343,7 +343,7 @@ async fn warn(
             "budgetId": budget,
         }),
         group_key: format!("budget:{budget}"),
-        dedupe_key: format!("budget:{budget}:{day}"),
+        dedupe_key: format!("budget:{budget}:{day}:{}", notice.level),
     };
     if crate::notifications::deliver(transaction, &notification).await? {
         crate::notifications::announce(transaction, space, owner).await?;
