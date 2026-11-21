@@ -81,7 +81,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/projects/{project_id}/integrations/github/automation",
-            get(github_automation_settings).put(update_github_automation_settings),
+            get(github_automation_settings),
         )
         .route(
             "/api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
@@ -94,10 +94,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
             post(refresh_pull_request),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/merge",
-            post(merge_pull_request),
         )
 }
 
@@ -265,14 +261,6 @@ pub(crate) struct GitHubAutomationSettingsView {
     pub pull_request_merge_enabled: bool,
     pub version: i64,
     pub updated_at: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct UpdateGitHubAutomationSettingsRequest {
-    expected_version: i64,
-    pull_request_open_enabled: bool,
-    pull_request_merge_enabled: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, FromRow)]
@@ -1305,89 +1293,6 @@ async fn github_automation_settings(
     let settings = fetch_github_automation_settings(&mut transaction, project_id).await?;
     transaction.commit().await?;
     Ok(Json(settings))
-}
-
-async fn update_github_automation_settings(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<UpdateGitHubAutomationSettingsRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    if request.expected_version < 1 {
-        return Err(AppError::Validation("expectedVersion"));
-    }
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let scope = resource_bound_scope("projects", project_id, "github_automation")?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::GithubIntegrationManage,
-    )
-    .await?;
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let settings: GitHubAutomationSettingsView = replay.decode()?;
-            transaction.commit().await?;
-            return Ok((replay.status(), Json(settings)).into_response());
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let settings = set_automation_in(
-        &mut transaction,
-        project_id,
-        Some(request.expected_version),
-        Some(request.pull_request_open_enabled),
-        Some(request.pull_request_merge_enabled),
-    )
-    .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO audit_events (
-            id, actor_id, project_id, session_id, authentication_class,
-            action, target_kind, target_id, outcome, request_id, metadata
-        ) VALUES (
-            $1, $2, $3, $4, 'password_session',
-            'github.automation_settings_update', 'project', $3,
-            'succeeded', $5,
-            jsonb_build_object(
-                'pull_request_open_enabled', $6::boolean,
-                'pull_request_merge_enabled', $7::boolean,
-                'version', $8::bigint
-            )
-        )
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(principal.actor_id)
-    .bind(project_id)
-    .bind(principal.session_id)
-    .bind(
-        headers
-            .get(crate::REQUEST_ID_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .filter(|value| value.len() <= 128),
-    )
-    .bind(settings.pull_request_open_enabled)
-    .bind(settings.pull_request_merge_enabled)
-    .bind(settings.version)
-    .execute(&mut *transaction)
-    .await?;
-    complete(&mut transaction, &reservation, StatusCode::OK, &settings).await?;
-    transaction.commit().await?;
-    Ok((StatusCode::OK, Json(settings)).into_response())
 }
 
 /// Turns the project's pull request automation on or off, for a caller
@@ -6275,42 +6180,6 @@ pub(crate) async fn merge_pull_request_as(
         already_merged,
         refresh,
     })
-}
-
-async fn merge_pull_request(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, pull_request_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<MergePullRequestRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let actor = CommandActor {
-        actor_id: principal.actor_id,
-        actor_kind: crate::accounts::actor_kind(&principal.actor_kind)?,
-        project_id,
-        audit: AuditAttribution::Browser {
-            session_id: principal.session_id,
-            request_id: headers
-                .get(crate::REQUEST_ID_HEADER)
-                .and_then(|value| value.to_str().ok())
-                .filter(|value| value.len() <= 128)
-                .map(str::to_owned),
-        },
-    };
-    let view = merge_pull_request_as(&state, &actor, pull_request_id, &request)
-        .await
-        .map_err(|error| match error {
-            AppError::Conflict(what, why) => match merge_refusal(what, why) {
-                Some(message) => AppError::Refused {
-                    field: "pullRequest",
-                    message,
-                },
-                None => AppError::Conflict(what, why),
-            },
-            error => error,
-        })?;
-    Ok((StatusCode::OK, Json(view)).into_response())
 }
 
 /// Why a merge didn't go ahead, for the person or agent who asked.

@@ -23,13 +23,11 @@ use crate::{
     policy::{Action, Decision, Permission, RoleGrant},
     work_item_commands::{
         AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
-        AuditVersionMetadata, BoardPlacement, ChangeFinalization, CommandActor, ConflictKind,
-        CreateWorkItemCommand, CreateWorkItemOutcome, CriteriaCommand, CriteriaOperation,
-        CriteriaOutcome, CriteriaPlanError, CriterionTarget, LinkWording,
-        MAX_BLOCKED_REASON_CHARACTERS, NewTaskFields, PlacementProblem, ProjectMembership,
-        PullRequestLinkChange, RepositoryLinkOutcome, TaskFieldChanges, ThreadLinkOutcome,
-        UpdateWorkItemCommand, UpdateWorkItemOutcome, authorize_mutation, change_criteria,
-        change_pull_request_link, change_repository_link, change_thread_link, conflict_kind,
+        AuditVersionMetadata, BoardPlacement, ChangeFinalization, CommandActor,
+        CreateWorkItemCommand, CreateWorkItemOutcome, LinkWording, MAX_BLOCKED_REASON_CHARACTERS,
+        NewTaskFields, PlacementProblem, ProjectMembership, RepositoryLinkOutcome,
+        TaskFieldChanges, ThreadLinkOutcome, UpdateWorkItemCommand, UpdateWorkItemOutcome,
+        authorize_mutation, change_repository_link, change_thread_link,
         create_work_item as execute_create_work_item, finalize_change, lock_membership,
         lock_work_item, set_archived, update_locked_work_item, update_work_item_by_id,
         valid_estimate,
@@ -159,28 +157,8 @@ pub fn router() -> Router<AppState> {
             axum::routing::post(planning::bulk_update),
         )
         .route(
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
-            axum::routing::post(planning::change_dependencies),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
-            axum::routing::post(planning::change_relation),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/watch",
-            axum::routing::post(planning::watch),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/release-claim",
-            axum::routing::post(planning::release_claim),
-        )
-        .route(
             "/api/v1/projects/{project_id}/labels",
-            get(planning::list_labels).post(planning::create_label),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/labels/{label_id}",
-            axum::routing::patch(planning::update_label),
+            get(planning::list_labels),
         )
         .route(
             "/api/v1/projects/{project_id}/fields",
@@ -192,19 +170,11 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/projects/{project_id}/milestones",
-            get(planning::list_milestones).post(planning::create_milestone),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/milestones/{milestone_id}",
-            axum::routing::patch(planning::update_milestone),
+            get(planning::list_milestones),
         )
         .route(
             "/api/v1/projects/{project_id}/task-templates",
             get(templates::get_templates).post(templates::create_template),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/task-templates/{template_id}",
-            axum::routing::patch(templates::update_template),
         )
         .route(
             "/api/v1/projects/{project_id}/task-templates/{template_id}/apply",
@@ -212,9 +182,11 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/projects/{project_id}/imports",
-            get(imports::list_imports).post(imports::create_import).layer(
-                axum::extract::DefaultBodyLimit::max(imports::MAX_IMPORT_BODY_BYTES),
-            ),
+            get(imports::list_imports)
+                .post(imports::create_import)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    imports::MAX_IMPORT_BODY_BYTES,
+                )),
         )
         .route(
             "/api/v1/projects/{project_id}/imports/{import_id}",
@@ -240,14 +212,6 @@ pub fn router() -> Router<AppState> {
             "/api/v1/organizations/{organization_id}/project-templates/{template_id}",
             axum::routing::patch(project_templates::update_project_template),
         )
-        .route(
-            "/api/v1/projects/{project_id}/recurring-tasks",
-            axum::routing::post(templates::create_recurring),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-            axum::routing::patch(templates::update_recurring).delete(templates::delete_recurring),
-        )
         .route("/api/v1/my-work", get(views::get_my_work))
         .route(
             "/api/v1/projects/{project_id}/timeline",
@@ -255,12 +219,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
-            get(list_acceptance_criteria).post(create_acceptance_criterion),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
-            axum::routing::patch(update_acceptance_criterion)
-                .delete(remove_acceptance_criterion),
+            get(list_acceptance_criteria),
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/timeline",
@@ -272,21 +231,11 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
-            axum::routing::post(link_work_item_thread).delete(unlink_work_item_thread),
+            axum::routing::post(link_work_item_thread),
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-            axum::routing::post(link_work_item_repository)
-                .delete(unlink_work_item_repository),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}/primary",
-            axum::routing::post(set_primary_work_item_repository),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
-            axum::routing::post(link_work_item_pull_request)
-                .delete(unlink_work_item_pull_request),
+            axum::routing::post(link_work_item_repository),
         )
 }
 
@@ -646,28 +595,6 @@ struct AcceptanceCriterionView {
     completed_at: Option<String>,
     created_at: String,
     updated_at: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CreateCriterionRequest {
-    expected_version: i64,
-    text: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct UpdateCriterionRequest {
-    expected_version: i64,
-    text: Option<String>,
-    position: Option<i32>,
-    completed: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RemoveCriterionRequest {
-    expected_version: i64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1735,26 +1662,6 @@ pub(crate) fn worker_thread_name(key: &str, title: &str, thread_id: Uuid) -> Str
     format!("{prefix}{title}{suffix}")
 }
 
-async fn unlink_work_item_thread(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, work_item_id, conversation_id)): ApiPath<(Uuid, Uuid, Uuid)>,
-    ApiJson(request): ApiJson<EmptyLinkRequest>,
-) -> Result<Response, AppError> {
-    change_work_item_thread_link(
-        &state,
-        &headers,
-        &principal,
-        project_id,
-        work_item_id,
-        conversation_id,
-        request,
-        false,
-    )
-    .await
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn change_work_item_thread_link(
     state: &AppState,
@@ -1869,48 +1776,6 @@ async fn link_work_item_repository(
     .await
 }
 
-async fn unlink_work_item_repository(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, work_item_id, repository_id)): ApiPath<(Uuid, Uuid, Uuid)>,
-    ApiJson(request): ApiJson<WorkItemVersionRequest>,
-) -> Result<Response, AppError> {
-    change_work_item_repository_link(
-        &state,
-        &headers,
-        &principal,
-        project_id,
-        work_item_id,
-        repository_id,
-        request.expected_version,
-        None,
-        "repository_unlink",
-    )
-    .await
-}
-
-async fn set_primary_work_item_repository(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, work_item_id, repository_id)): ApiPath<(Uuid, Uuid, Uuid)>,
-    ApiJson(request): ApiJson<WorkItemVersionRequest>,
-) -> Result<Response, AppError> {
-    change_work_item_repository_link(
-        &state,
-        &headers,
-        &principal,
-        project_id,
-        work_item_id,
-        repository_id,
-        request.expected_version,
-        Some("primary".to_owned()),
-        "repository_primary",
-    )
-    .await
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn change_work_item_repository_link(
     state: &AppState,
@@ -2004,166 +1869,6 @@ async fn change_work_item_repository_link(
             return Err(AppError::Internal("repository link checked its version"));
         }
         RepositoryLinkOutcome::Unchanged | RepositoryLinkOutcome::Changed { .. } => {}
-    }
-    let item = current_work_item_view(
-        &mut transaction,
-        project_id,
-        work_item_id,
-        principal.actor_id,
-        caps,
-    )
-    .await?;
-    complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
-    transaction.commit().await?;
-    work_item_response(StatusCode::OK, item)
-}
-
-/// Links a pull request to a task (confirming one suggested because it names
-/// the task's key), the same as task_link with pullRequestId (AWD-59).
-async fn link_work_item_pull_request(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, work_item_id, pull_request_id)): ApiPath<(Uuid, Uuid, Uuid)>,
-    ApiJson(request): ApiJson<WorkItemVersionRequest>,
-) -> Result<Response, AppError> {
-    change_work_item_pull_request_link(
-        &state,
-        &headers,
-        &principal,
-        (project_id, work_item_id, pull_request_id),
-        request.expected_version,
-        true,
-    )
-    .await
-}
-
-/// Unlinks a pull request from a task, or dismisses a suggested one so it
-/// isn't suggested there again.
-async fn unlink_work_item_pull_request(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, work_item_id, pull_request_id)): ApiPath<(Uuid, Uuid, Uuid)>,
-    ApiJson(request): ApiJson<WorkItemVersionRequest>,
-) -> Result<Response, AppError> {
-    change_work_item_pull_request_link(
-        &state,
-        &headers,
-        &principal,
-        (project_id, work_item_id, pull_request_id),
-        request.expected_version,
-        false,
-    )
-    .await
-}
-
-async fn change_work_item_pull_request_link(
-    state: &AppState,
-    headers: &HeaderMap,
-    principal: &AuthenticatedActor,
-    (project_id, work_item_id, pull_request_id): (Uuid, Uuid, Uuid),
-    expected_version: i64,
-    linked: bool,
-) -> Result<Response, AppError> {
-    require_authenticated_write(state, headers, principal).await?;
-    let key = IdempotencyKey::from_headers(headers)?;
-    let scope = resource_bound_scope(
-        "work_items",
-        work_item_id,
-        if linked {
-            "pull_request_link"
-        } else {
-            "pull_request_unlink"
-        },
-    )?;
-    let request_hash = RequestHash::for_value(&(pull_request_id, expected_version))?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
-    authorize_work_item(
-        principal,
-        &membership,
-        Action::WorkItemEdit,
-        Some(work_item_id),
-    )?;
-    if membership.project_archived_at.is_some() {
-        return Err(AppError::ProjectArchived);
-    }
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let item: WorkItemView = replay.decode()?;
-            transaction.commit().await?;
-            return work_item_response(replay.status(), item);
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let current = lock_work_item(&mut transaction, project_id, work_item_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
-    let caps = capabilities(&membership)?;
-    if current.archived && linked {
-        return Err(AppError::Conflict("work_item", "archived"));
-    }
-    match change_pull_request_link(
-        &mut transaction,
-        project_id,
-        work_item_id,
-        current.version,
-        Some(expected_version),
-        pull_request_id,
-        principal.actor_id,
-        linked,
-        if linked {
-            "Pull request linked"
-        } else {
-            "Pull request unlinked"
-        },
-    )
-    .await?
-    {
-        PullRequestLinkChange::NotInProject => {
-            return Err(AppError::NotFound("github_pull_request"));
-        }
-        PullRequestLinkChange::VersionConflict => {
-            let row = fetch_work_item_in_transaction(
-                &mut transaction,
-                project_id,
-                work_item_id,
-                principal.actor_id,
-            )
-            .await?
-            .ok_or(AppError::NotFound("work_item"))?;
-            return work_item_version_conflict_response(work_item_view(row, caps)?);
-        }
-        PullRequestLinkChange::Unchanged => {}
-        PullRequestLinkChange::Changed { version, .. } => {
-            crate::work_item_commands::record_audit(
-                &mut transaction,
-                &browser_actor(headers, principal, project_id)?,
-                if linked {
-                    "work_item.pull_request_linked"
-                } else {
-                    "work_item.pull_request_unlinked"
-                },
-                work_item_id,
-                serde_json::json!({
-                    "pullRequestId": pull_request_id,
-                    "linked": linked,
-                    "version": version,
-                }),
-            )
-            .await?;
-        }
     }
     let item = current_work_item_view(
         &mut transaction,
@@ -2648,359 +2353,6 @@ async fn list_acceptance_criteria(
     Ok(Json(
         work_item_view(row, capabilities(&membership)?)?.acceptance_criteria,
     ))
-}
-
-async fn create_acceptance_criterion(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(mut request): ApiJson<CreateCriterionRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    request.text = normalize_criterion_text(&request.text)?;
-    if request.expected_version < 1 {
-        return Err(AppError::Validation("expectedVersion"));
-    }
-    let key = IdempotencyKey::from_headers(&headers)?;
-    let scope = resource_bound_scope("work_items", work_item_id, "criterion_create")?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
-    authorize_work_item(
-        &principal,
-        &membership,
-        Action::WorkItemEdit,
-        Some(work_item_id),
-    )?;
-    if membership.project_archived_at.is_some() {
-        return Err(AppError::ProjectArchived);
-    }
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let item: WorkItemView = replay.decode()?;
-            transaction.commit().await?;
-            return work_item_response(replay.status(), item);
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let current = fetch_work_item_for_update(
-        &mut transaction,
-        project_id,
-        work_item_id,
-        principal.actor_id,
-    )
-    .await?
-    .ok_or(AppError::NotFound("work_item"))?;
-    let item_capabilities = capabilities(&membership)?;
-    if current.version != request.expected_version {
-        return work_item_version_conflict_response(work_item_view(current, item_capabilities)?);
-    }
-    if current.archived_at.is_some() {
-        return Err(AppError::Conflict("work_item", "archived"));
-    }
-    let operations = [CriteriaOperation::Add {
-        text: request.text.clone(),
-        position: None,
-        completed: false,
-    }];
-    let outcome = change_criteria(
-        &mut transaction,
-        &browser_actor(&headers, &principal, project_id)?,
-        work_item_id,
-        CriteriaCommand {
-            expected_version: request.expected_version,
-            operations: &operations,
-            audit_action: "work_item.criterion_created",
-        },
-    )
-    .await?;
-    if !matches!(outcome, CriteriaOutcome::Applied { .. }) {
-        return criteria_refusal(
-            &mut transaction,
-            project_id,
-            work_item_id,
-            principal.actor_id,
-            request.expected_version,
-            outcome,
-            item_capabilities,
-        )
-        .await;
-    }
-    let item = current_work_item_view(
-        &mut transaction,
-        project_id,
-        work_item_id,
-        principal.actor_id,
-        item_capabilities,
-    )
-    .await?;
-    complete(&mut transaction, &reservation, StatusCode::CREATED, &item).await?;
-    transaction.commit().await?;
-    work_item_response(StatusCode::CREATED, item)
-}
-
-async fn update_acceptance_criterion(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, work_item_id, criterion_id)): ApiPath<(Uuid, Uuid, Uuid)>,
-    ApiJson(mut request): ApiJson<UpdateCriterionRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    if request.expected_version < 1
-        || (request.text.is_none() && request.position.is_none() && request.completed.is_none())
-    {
-        return Err(AppError::Validation("acceptance criterion update"));
-    }
-    request.text = request
-        .text
-        .as_deref()
-        .map(normalize_criterion_text)
-        .transpose()?;
-    let key = IdempotencyKey::from_headers(&headers)?;
-    let scope = resource_bound_scope("criteria", criterion_id, "update")?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
-    authorize_work_item(
-        &principal,
-        &membership,
-        Action::WorkItemEdit,
-        Some(work_item_id),
-    )?;
-    if membership.project_archived_at.is_some() {
-        return Err(AppError::ProjectArchived);
-    }
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let item: WorkItemView = replay.decode()?;
-            transaction.commit().await?;
-            return work_item_response(replay.status(), item);
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let current = fetch_work_item_for_update(
-        &mut transaction,
-        project_id,
-        work_item_id,
-        principal.actor_id,
-    )
-    .await?
-    .ok_or(AppError::NotFound("work_item"))?;
-    let item_capabilities = capabilities(&membership)?;
-    if current.version != request.expected_version {
-        return work_item_version_conflict_response(work_item_view(current, item_capabilities)?);
-    }
-    if current.archived_at.is_some() {
-        return Err(AppError::Conflict("work_item", "archived"));
-    }
-    let operations = [CriteriaOperation::Update {
-        target: CriterionTarget::Id(criterion_id),
-        text: request.text.clone(),
-        position: request.position,
-        completed: request.completed,
-    }];
-    let outcome = change_criteria(
-        &mut transaction,
-        &browser_actor(&headers, &principal, project_id)?,
-        work_item_id,
-        CriteriaCommand {
-            expected_version: request.expected_version,
-            operations: &operations,
-            audit_action: "work_item.criterion_updated",
-        },
-    )
-    .await?;
-    if !matches!(
-        outcome,
-        CriteriaOutcome::Applied { .. } | CriteriaOutcome::Unchanged { .. }
-    ) {
-        return criteria_refusal(
-            &mut transaction,
-            project_id,
-            work_item_id,
-            principal.actor_id,
-            request.expected_version,
-            outcome,
-            item_capabilities,
-        )
-        .await;
-    }
-    // Unchanged answers 200 with the item as it is, without a version bump.
-    let item = current_work_item_view(
-        &mut transaction,
-        project_id,
-        work_item_id,
-        principal.actor_id,
-        item_capabilities,
-    )
-    .await?;
-    complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
-    transaction.commit().await?;
-    work_item_response(StatusCode::OK, item)
-}
-
-async fn remove_acceptance_criterion(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, work_item_id, criterion_id)): ApiPath<(Uuid, Uuid, Uuid)>,
-    ApiJson(request): ApiJson<RemoveCriterionRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    if request.expected_version < 1 {
-        return Err(AppError::Validation("expectedVersion"));
-    }
-    let key = IdempotencyKey::from_headers(&headers)?;
-    let scope = resource_bound_scope("criteria", criterion_id, "remove")?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
-    authorize_work_item(
-        &principal,
-        &membership,
-        Action::WorkItemEdit,
-        Some(work_item_id),
-    )?;
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let item: WorkItemView = replay.decode()?;
-            transaction.commit().await?;
-            return work_item_response(replay.status(), item);
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let current = fetch_work_item_for_update(
-        &mut transaction,
-        project_id,
-        work_item_id,
-        principal.actor_id,
-    )
-    .await?
-    .ok_or(AppError::NotFound("work_item"))?;
-    let item_capabilities = capabilities(&membership)?;
-    if current.version != request.expected_version {
-        return work_item_version_conflict_response(work_item_view(current, item_capabilities)?);
-    }
-    if current.archived_at.is_some() || membership.project_archived_at.is_some() {
-        return Err(AppError::Conflict("work_item", "archived"));
-    }
-    let operations = [CriteriaOperation::Remove {
-        target: CriterionTarget::Id(criterion_id),
-    }];
-    let outcome = change_criteria(
-        &mut transaction,
-        &browser_actor(&headers, &principal, project_id)?,
-        work_item_id,
-        CriteriaCommand {
-            expected_version: request.expected_version,
-            operations: &operations,
-            audit_action: "work_item.criterion_removed",
-        },
-    )
-    .await?;
-    if !matches!(outcome, CriteriaOutcome::Applied { .. }) {
-        return criteria_refusal(
-            &mut transaction,
-            project_id,
-            work_item_id,
-            principal.actor_id,
-            request.expected_version,
-            outcome,
-            item_capabilities,
-        )
-        .await;
-    }
-    let item = current_work_item_view(
-        &mut transaction,
-        project_id,
-        work_item_id,
-        principal.actor_id,
-        item_capabilities,
-    )
-    .await?;
-    complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
-    transaction.commit().await?;
-    work_item_response(StatusCode::OK, item)
-}
-
-/// The response for a criteria change the shared command didn't apply, in
-/// the shapes the web app has always had. The handlers check the version and
-/// archive state under the same lock first, so a conflict here is rare.
-async fn criteria_refusal(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    work_item_id: Uuid,
-    viewer: Uuid,
-    expected_version: i64,
-    outcome: CriteriaOutcome,
-    item_capabilities: WorkItemCapabilities,
-) -> Result<Response, AppError> {
-    match outcome {
-        CriteriaOutcome::Conflict(current)
-            if conflict_kind(&current, expected_version) == Some(ConflictKind::Version) =>
-        {
-            work_item_version_conflict_response(
-                current_work_item_view(
-                    transaction,
-                    project_id,
-                    work_item_id,
-                    viewer,
-                    item_capabilities,
-                )
-                .await?,
-            )
-        }
-        CriteriaOutcome::Conflict(_) => Err(AppError::Conflict("work_item", "archived")),
-        CriteriaOutcome::NotFound => Err(AppError::NotFound("work_item")),
-        CriteriaOutcome::Plan {
-            error: CriteriaPlanError::TooMany { .. },
-            ..
-        } => Err(AppError::Validation("acceptanceCriteria")),
-        CriteriaOutcome::Plan {
-            error: CriteriaPlanError::Position { .. },
-            ..
-        } => Err(AppError::Validation("position")),
-        CriteriaOutcome::Plan {
-            error:
-                CriteriaPlanError::UnknownCriterion { .. } | CriteriaPlanError::RemovedEarlier { .. },
-            ..
-        } => Err(AppError::NotFound("acceptance_criterion")),
-        CriteriaOutcome::Applied { .. } | CriteriaOutcome::Unchanged { .. } => Err(
-            AppError::Internal("an applied criteria change has no refusal"),
-        ),
-    }
 }
 
 async fn create_work_item_comment(

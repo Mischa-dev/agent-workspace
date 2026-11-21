@@ -165,13 +165,14 @@ async fn a_task_made_any_way_is_one_task_created_by_its_maker() {
         &world.app,
         lena.browser.request(
             "POST",
-            &format!("{base}/recurring-tasks"),
+            "/api/v2/ops/recurring_create",
             Some("k3-7-recurring"),
-            json!({"templateId": template["id"], "frequency": "daily", "timezone": "UTC"}),
+            json!({"projectId": project, "template": template["id"], "frequency": "daily", "timezone": "UTC"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{recurring}");
+    assert_eq!(status, StatusCode::OK, "{recurring}");
+    let recurring = &recurring["value"]["recurring"];
     sqlx::query(
         "UPDATE recurring_tasks SET next_run_at = now() - interval '1 minute' WHERE id = $1::uuid",
     )

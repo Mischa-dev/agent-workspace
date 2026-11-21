@@ -272,15 +272,16 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
     let viewer_automation = get_json(&application, &viewer_cookie, &automation_uri).await;
     assert_eq!(viewer_automation.0, StatusCode::FORBIDDEN);
     let update_body = serde_json::to_vec(&json!({
+        "projectId": seed.project_id,
         "expectedVersion": 1,
-        "pullRequestOpenEnabled": true,
-        "pullRequestMergeEnabled": true
+        "pullRequestOpen": true,
+        "pullRequestMerge": true
     }))
     .expect("serialize automation settings update");
     let update_automation = || {
         Request::builder()
-            .method("PUT")
-            .uri(&automation_uri)
+            .method("POST")
+            .uri("/api/v2/ops/github_automation_update")
             .header("origin", "http://127.0.0.1:3100")
             .header(header::COOKIE, &owner_cookie)
             .header("x-csrf-token", csrf_from_cookie(&owner_cookie))
@@ -297,10 +298,11 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
             .expect("automation settings update response"),
     )
     .await;
-    assert_eq!(updated.0, StatusCode::OK);
-    assert_eq!(updated.1["pullRequestOpenEnabled"], true);
-    assert_eq!(updated.1["pullRequestMergeEnabled"], true);
-    assert_eq!(updated.1["version"], 2);
+    assert_eq!(updated.0, StatusCode::OK, "{}", updated.1);
+    let automation = &updated.1["value"]["automation"];
+    assert_eq!(automation["pullRequestOpenEnabled"], true, "{}", updated.1);
+    assert_eq!(automation["pullRequestMergeEnabled"], true);
+    assert_eq!(automation["version"], 2);
     let replayed = response_json(
         application
             .clone()
@@ -309,7 +311,9 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
             .expect("automation settings replay response"),
     )
     .await;
-    assert_eq!(replayed, updated);
+    assert_eq!(replayed.0, updated.0);
+    assert_eq!(replayed.1["value"], updated.1["value"]);
+    assert_eq!(replayed.1["replayed"], true, "{}", replayed.1);
     let settings_audits = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM audit_events WHERE action = 'github.automation_settings_update'",
     )

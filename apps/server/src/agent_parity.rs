@@ -805,11 +805,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/repositories/{repository_id}/prepare",
-            Tool("repository_prepare"),
-        ),
-        (
-            Post,
             "/api/v1/projects/{project_id}/repositories/{repository_id}/archive",
             Tool("repository_archive"),
         ),
@@ -829,11 +824,6 @@ mod tests {
             Tool("repository_create"),
         ),
         (
-            Put,
-            "/api/v1/projects/{project_id}/integrations/github/automation",
-            Tool("github_automation_update"),
-        ),
-        (
             Post,
             "/api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
             Tool("run_publish"),
@@ -847,11 +837,6 @@ mod tests {
             Post,
             "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
             Tool("pull_request_refresh"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/merge",
-            Tool("pull_request_merge"),
         ),
         (
             Post,
@@ -1115,21 +1100,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
-            Tool("task_criteria_update"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
-            Tool("task_criteria_update"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
-            Tool("task_criteria_update"),
-        ),
-        (
-            Post,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
             Tool("task_comment_create"),
         ),
@@ -1149,69 +1119,14 @@ mod tests {
             Tool("task_link"),
         ),
         (
-            Delete,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
-            Tool("task_link"),
-        ),
-        (
             Post,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-            Tool("task_link"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-            Tool("task_link"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}/primary",
-            Tool("task_link"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
-            Tool("task_link"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
             Tool("task_link"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/work-items/bulk",
             Tool("task_update_many"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
-            Tool("task_link"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
-            Tool("task_link"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/watch",
-            Tool("task_watch_set"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/release-claim",
-            Tool("task_release"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/labels",
-            Tool("label_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/labels/{label_id}",
-            Tool("label_update"),
         ),
         (
             Post,
@@ -1272,16 +1187,6 @@ mod tests {
             Post,
             "/api/v1/projects/{project_id}/sheets/{sheet_id}/changes",
             Tool("sheet_update"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/milestones",
-            Tool("milestone_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/milestones/{milestone_id}",
-            Tool("milestone_update"),
         ),
         (
             Post,
@@ -1349,11 +1254,6 @@ mod tests {
             Tool("template_create"),
         ),
         (
-            Patch,
-            "/api/v1/projects/{project_id}/task-templates/{template_id}",
-            Tool("template_update"),
-        ),
-        (
             Post,
             "/api/v1/projects/{project_id}/task-templates/{template_id}/apply",
             Tool("task_from_template"),
@@ -1382,21 +1282,6 @@ mod tests {
             Patch,
             "/api/v1/organizations/{organization_id}/project-templates/{template_id}",
             Tool("project_template_update"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/recurring-tasks",
-            Tool("recurring_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-            Tool("recurring_update"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-            Tool("recurring_update"),
         ),
         (
             Put,
@@ -1475,7 +1360,7 @@ mod tests {
     /// Hand-written web writes whose tool is already an operation: each is a
     /// second edge for something the generated route does (K2.22). The
     /// number only goes down; when you delete one, lower it.
-    const HAND_WRITTEN_OPERATION_ROUTES: usize = 153;
+    const HAND_WRITTEN_OPERATION_ROUTES: usize = 130;
 
     #[test]
     fn hand_written_routes_for_operations_only_go_down() {

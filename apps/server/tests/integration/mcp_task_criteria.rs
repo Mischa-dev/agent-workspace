@@ -357,15 +357,18 @@ async fn criteria_change_all_together_and_retry_safely() {
     let (status, patched) = send(
         app,
         setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/work-items/{task}/acceptance-criteria/{tests_pass}"),
+            "POST",
+            "/api/v2/ops/task_criteria_update",
             Some("web-uncheck"),
-            json!({"expectedVersion": 3, "completed": false}),
+            json!({
+                "taskId": task, "expectedVersion": 3,
+                "operations": [{"op": "uncheck", "criterion": tests_pass}]
+            }),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{patched}");
-    assert_eq!(patched["version"], 4);
+    assert_eq!(patched["value"]["version"], 4, "{patched}");
     let opened = call("task_open", json!({"taskId": "WORK-1"})).await;
     let criteria = &opened["value"]["task"]["acceptanceCriteria"];
     assert_eq!(criteria[1]["text"], "Tests pass", "{opened}");

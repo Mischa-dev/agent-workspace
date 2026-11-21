@@ -3414,7 +3414,25 @@ async fn task_link_inner(
     let Some(current) = lock_work_item(&mut transaction, project_id, task_id).await? else {
         return Ok(ToolResult::not_found("That task"));
     };
-    if current.archived {
+    let thread = match &target {
+        LinkTarget::Record {
+            kind: "conversation",
+            id,
+        } => {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (SELECT 1 FROM conversations WHERE project_id = $1 AND id = $2 AND kind = 'thread')",
+            )
+            .bind(project_id)
+            .bind(*id)
+            .fetch_one(&mut *transaction)
+            .await?
+        }
+        _ => false,
+    };
+    // An archived task takes no link changes, except unlinking a thread:
+    // the thread page offers Unlink on every task linked to it, archived
+    // ones included.
+    if current.archived && !(thread && request.remove) {
         return Ok(ToolResult::conflict(archived_task_message(&key)));
     }
     let stale = || ToolResult::conflict(version_conflict_message(&key, current.version));
@@ -3570,14 +3588,6 @@ async fn task_link_inner(
             {
                 return Ok(ToolResult::not_found(&format!("That {kind}")));
             }
-            let thread = kind == "conversation"
-                && sqlx::query_scalar::<_, bool>(
-                    "SELECT EXISTS (SELECT 1 FROM conversations WHERE project_id = $1 AND id = $2 AND kind = 'thread')",
-                )
-                .bind(project_id)
-                .bind(id)
-                .fetch_one(&mut *transaction)
-                .await?;
             let version = if thread {
                 // Threads in the task's own project use the link the web app
                 // shows, with the same version bump, activity and audit.

@@ -59,9 +59,9 @@ async fn ready_task(setup: &Setup, project: &str, title: &str, priority: &str) -
         setup,
         &setup.browser,
         "POST",
-        &format!("/api/v1/projects/{project}/work-items/{id}/acceptance-criteria"),
+        "/api/v2/ops/task_criteria_update",
         Some(&format!("criterion-{}", title.replace(' ', "-"))),
-        json!({"expectedVersion": task["version"], "text": "It works"}),
+        json!({"taskId": id, "expectedVersion": task["version"], "operations": [{"op": "add", "text": "It works"}]}),
     )
     .await;
     assert!(status.is_success(), "{criterion}");

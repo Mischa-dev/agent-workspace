@@ -408,31 +408,19 @@ async fn a_suggested_pull_request_is_confirmed_or_dismissed_on_the_task() {
             .await
             .expect("version")
     };
-    let path = format!("/api/v1/projects/{aw}/work-items/{task}/pull-requests/{pull_request}");
+    let dismiss = |version: i64| {
+        setup.browser.op(
+            app,
+            "task_link",
+            json!({"taskId": task, "pullRequestId": pull_request, "remove": true, "expectedVersion": version}),
+        )
+    };
     // A stale version is refused.
-    let (status, _) = send(
-        app,
-        setup.browser.request(
-            "DELETE",
-            &path,
-            Some("dismiss-stale"),
-            json!({"expectedVersion": 0}),
-        ),
-    )
-    .await;
-    assert_eq!(status, 409);
+    let (status, refused) = dismiss(version(pool.clone()).await + 1).await;
+    assert_eq!(status, 409, "{refused}");
 
     // Dismissing it from the task page keeps it off on the next sync.
-    let (status, read) = send(
-        app,
-        setup.browser.request(
-            "DELETE",
-            &path,
-            Some("dismiss"),
-            json!({"expectedVersion": version(pool.clone()).await}),
-        ),
-    )
-    .await;
+    let (status, read) = dismiss(version(pool.clone()).await).await;
     assert_eq!(status, 200, "{read}");
     assert!(links(pool, pull_request).await.is_empty());
     assert_eq!(
@@ -450,21 +438,30 @@ async fn a_suggested_pull_request_is_confirmed_or_dismissed_on_the_task() {
 
     // Linking it from the task page confirms it, so automation can move the
     // task when it merges.
-    let (status, read) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &path,
-            Some("confirm"),
-            json!({"expectedVersion": version(pool.clone()).await}),
-        ),
-    )
-    .await;
-    assert_eq!(status, 200, "{read}");
+    let (status, linked) = setup
+        .browser
+        .op(
+            app,
+            "task_link",
+            json!({"taskId": task, "pullRequestId": pull_request, "expectedVersion": version(pool.clone()).await}),
+        )
+        .await;
+    assert_eq!(status, 200, "{linked}");
     assert_eq!(
         links(pool, pull_request).await,
         vec![(task, "explicit".to_owned(), true)]
     );
+    let (status, read) = send(
+        app,
+        setup.browser.request(
+            "GET",
+            &format!("/api/v1/projects/{aw}/work-items/{task}"),
+            None,
+            serde_json::Value::Null,
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{read}");
     let confirmed = read["linkedPullRequests"]
         .as_array()
         .and_then(|lines| lines.iter().find(|line| line["number"] == 59))
@@ -516,7 +513,7 @@ async fn a_suggested_pull_request_is_confirmed_or_dismissed_on_the_task() {
     assert_eq!(card["headRef"], "feature", "{card}");
 
     let audited = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM audit_events WHERE target_id = $1 AND action IN ('work_item.pull_request_linked', 'work_item.pull_request_unlinked')",
+        "SELECT count(*) FROM audit_events WHERE target_id = $1 AND action IN ('work_item.mcp_pull_request_linked', 'work_item.mcp_pull_request_unlinked')",
     )
     .bind(task)
     .fetch_one(pool)
@@ -534,10 +531,9 @@ async fn merging_checks_the_pull_request_before_it_asks_github() {
     let pool = &setup.pool;
     let aw = seed.project_id.to_string();
     let (pull_request, _) = seed_pull_request(&setup, &aw, seed.repository_id, 61).await;
-    let path = format!("/api/v1/projects/{aw}/pull-requests/{pull_request}/merge");
-    let merge = |body: serde_json::Value| {
-        let request = setup.browser.request("POST", &path, Some("merge"), body);
-        send(app, request)
+    let merge = |mut body: serde_json::Value| {
+        body["pullRequestId"] = json!(pull_request);
+        setup.browser.op(app, "pull_request_merge", body)
     };
     let set = |sql: &'static str| async move {
         sqlx::query(sql)
@@ -548,13 +544,13 @@ async fn merging_checks_the_pull_request_before_it_asks_github() {
     };
 
     let (status, read) = merge(json!({"method": "octopus"})).await;
-    assert_eq!(status, 400, "{read}");
+    assert!(status.is_client_error(), "{status}: {read}");
     let (status, read) = merge(json!({"expectedHeadSha": "abc"})).await;
-    assert_eq!(status, 400, "{read}");
+    assert!(status.is_client_error(), "{status}: {read}");
 
     // The installation doesn't reach the repository yet.
     let (status, read) = merge(json!({})).await;
-    assert_eq!(status, 400, "{read}");
+    assert!(status.is_client_error(), "{status}: {read}");
     assert!(
         read.to_string().contains("doesn't reach that repository"),
         "{read}"
@@ -569,16 +565,16 @@ async fn merging_checks_the_pull_request_before_it_asks_github() {
 
     // A head that moved since the caller looked is never merged.
     let (status, read) = merge(json!({"expectedHeadSha": "b".repeat(40)})).await;
-    assert_eq!(status, 400, "{read}");
+    assert!(status.is_client_error(), "{status}: {read}");
     assert!(read.to_string().contains("head moved"), "{read}");
 
     set("UPDATE github_pull_requests SET draft = true WHERE id = $1").await;
     let (status, read) = merge(json!({})).await;
-    assert_eq!(status, 400, "{read}");
+    assert!(status.is_client_error(), "{status}: {read}");
     assert!(read.to_string().contains("is a draft"), "{read}");
     set("UPDATE github_pull_requests SET draft = false, state = 'closed' WHERE id = $1").await;
     let (status, read) = merge(json!({})).await;
-    assert_eq!(status, 400, "{read}");
+    assert!(status.is_client_error(), "{status}: {read}");
     assert!(read.to_string().contains("isn't open"), "{read}");
 
     // Merged already (say an earlier try's answer was lost): asking again at
@@ -589,7 +585,7 @@ async fn merging_checks_the_pull_request_before_it_asks_github() {
     assert_eq!(read["alreadyMerged"], true, "{read}");
     assert_eq!(read["mergeCommitSha"], "d".repeat(40), "{read}");
     let (status, read) = merge(json!({"expectedHeadSha": "b".repeat(40)})).await;
-    assert_eq!(status, 400, "{read}");
+    assert!(status.is_client_error(), "{status}: {read}");
     assert!(read.to_string().contains("head moved"), "{read}");
     set("UPDATE github_pull_requests SET state = 'closed', merged_at = NULL, merge_commit_sha = NULL WHERE id = $1")
         .await;
@@ -599,7 +595,7 @@ async fn merging_checks_the_pull_request_before_it_asks_github() {
     set("UPDATE github_pull_requests SET state = 'open' WHERE id = $1").await;
     let (status, read) =
         merge(json!({"expectedHeadSha": "a".repeat(40), "method": "squash"})).await;
-    assert_eq!(status, 400, "{read}");
+    assert!(status.is_client_error(), "{status}: {read}");
     assert!(read.to_string().contains("isn't set up"), "{read}");
 
     // The task page offers Merge to those who manage the project's code.

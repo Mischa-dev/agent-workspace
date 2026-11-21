@@ -671,9 +671,13 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
         app,
         setup.browser.request(
             "POST",
-            &format!("/api/v1/projects/{old}/work-items/{task}/acceptance-criteria"),
+            "/api/v2/ops/task_criteria_update",
             Some("criterion-1"),
-            json!({"expectedVersion": started["value"]["version"], "text": "Mirrors prepare with a token"}),
+            json!({
+                "taskId": task,
+                "expectedVersion": started["value"]["version"],
+                "operations": [{"op": "add", "text": "Mirrors prepare with a token"}]
+            }),
         ),
     )
     .await;
