@@ -157,6 +157,12 @@ impl Harnesses {
             .map(|entry| &entry.manifest)
     }
 
+    /// The harness of `kind`, even switched off: for what a run that started
+    /// before it was switched off still reports (its prices).
+    pub fn known(&self, kind: &str) -> Option<&AdapterManifest> {
+        self.entries.get(kind).map(|entry| &entry.manifest)
+    }
+
     /// Every harness that can run, built-in ones first.
     pub fn manifests(&self) -> impl Iterator<Item = &AdapterManifest> {
         self.order
@@ -364,5 +370,10 @@ mod tests {
         let catalog = Harnesses::default();
         assert_eq!(catalog.name("night_runner"), "Night Runner");
         assert!(catalog.manifest("night_runner").is_none());
+        let mut catalog = Harnesses::default();
+        catalog.insert(manifest("x_off"), false, None);
+        assert!(catalog.manifest("x_off").is_none());
+        assert!(catalog.known("x_off").is_some());
+        assert_eq!(catalog.name("x_off"), "A harness");
     }
 }

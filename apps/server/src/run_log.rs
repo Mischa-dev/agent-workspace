@@ -68,7 +68,8 @@ pub async fn builtin_estimate(
         return Ok(None);
     };
     let harnesses = crate::harness_catalog::Harnesses::of(state, scope.workspace_id).await?;
-    let Some(manifest) = harnesses.manifest(&scope.adapter_kind) else {
+    // A registered harness switched off mid-run still prices that run.
+    let Some(manifest) = harnesses.known(&scope.adapter_kind) else {
         return Ok(None);
     };
     let prices = catalog::run_catalog(&state.pool, scope.workspace_id, manifest)
