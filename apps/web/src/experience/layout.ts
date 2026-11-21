@@ -87,7 +87,8 @@ export function normalizeEffective(value: unknown): EffectiveLayout {
             removed: preset.removed === true,
           }
         : null,
-    hidden: strings(raw.hidden),
+    // Built modules' own parts (`module.<key>`) come apart from the registry's.
+    hidden: [...strings(raw.hidden), ...strings(raw.hiddenModules)],
     layoutHidden: strings(raw.layoutHidden),
     words,
     lead: strings(raw.lead),

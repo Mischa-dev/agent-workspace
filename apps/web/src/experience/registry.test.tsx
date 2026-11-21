@@ -156,12 +156,13 @@ describe('layout registry', () => {
   it('shows a built module’s sidebar entries in their space, and hides them with the module’s part', async () => {
     const builtModule = {
       id: '019fb600-0000-7000-8000-000000000020',
-      key: 'built.crm',
+      key: 'local.crm',
       name: 'CRM',
       description: '',
       on: true,
       parts: 2,
-      spaceId: projectId,
+      // A workspace-wide module: each entry shows in the space it points into.
+      spaceId: null,
       nav: [
         { id: '019fb600-0000-7000-8000-000000000021', label: 'Leads', icon: 'table', target: { kind: 'collection', collection: '019fb600-0000-7000-8000-000000000022' }, spaceId: projectId },
         // In another space: shown there, not here.

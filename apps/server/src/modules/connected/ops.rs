@@ -130,17 +130,29 @@ impl Operation for ConnectedModuleInstall {
                 }
             }
         }
+        // A preview that chose nothing asks only for what the app needs, so
+        // someone who couldn't grant an optional scope still sees what it
+        // asks for and can leave that scope out of the install.
+        let scopes = match (&input.scopes, call.ctx.preview) {
+            (None, true) => Some(
+                fetched
+                    .checked
+                    .manifest
+                    .scopes
+                    .iter()
+                    .filter(|request| {
+                        request.required
+                            && super::Scope::read(&request.scope) != super::Scope::Unknown
+                    })
+                    .map(|request| request.scope.clone())
+                    .collect::<Vec<_>>(),
+            ),
+            (scopes, _) => scopes.clone(),
+        };
         let state = call.state;
         let tx = call.tx().await?;
-        let module_id = super::install(
-            state,
-            tx,
-            workspace,
-            actor,
-            &fetched,
-            input.scopes.as_deref(),
-        )
-        .await?;
+        let module_id =
+            super::install(state, tx, workspace, actor, &fetched, scopes.as_deref()).await?;
         let view = super::get(tx, workspace, module_id, false)
             .await?
             .ok_or(OpError::not_found(THE_MODULE))?

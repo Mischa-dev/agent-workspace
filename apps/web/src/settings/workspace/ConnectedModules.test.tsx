@@ -88,14 +88,17 @@ describe('ConnectedModules', () => {
     expect(await screen.findByText('Helpdesk')).toBeInTheDocument()
   })
 
-  it('offers a review where an app’s new manifest asks for more', async () => {
+  it('offers a review where an app’s new manifest asks for more, keeping what was declined off', async () => {
+    const declined = manifest.scopes.map((scope) => (scope.scope === 'tasks.edit' ? { ...scope, approved: false } : scope))
     callOp.mockImplementation(async (name: string) =>
       name === 'connected_module_list'
         ? {
             modules: [
               {
                 ...installed,
-                pending: { ...manifest, version: '2.0.0', digest: 'd2', scopes: [...manifest.scopes, { scope: 'pages.edit', label: 'Change pages', why: 'Notes.', required: false, known: true, approved: false }] },
+                // Change tasks was declined at the install.
+                scopes: declined,
+                pending: { ...manifest, version: '2.0.0', digest: 'd2', scopes: [...declined, { scope: 'pages.edit', label: 'Change pages', why: 'Notes.', required: false, known: true, approved: false }] },
               },
             ],
           }
@@ -105,5 +108,6 @@ describe('ConnectedModules', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Review changes' }))
     expect(await screen.findByText(/New: Change pages/)).toBeInTheDocument()
     expect(screen.getByLabelText('Change pages')).toBeChecked()
+    expect(screen.getByLabelText('Change tasks')).not.toBeChecked()
   })
 })

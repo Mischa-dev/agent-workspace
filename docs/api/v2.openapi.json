@@ -2511,6 +2511,11 @@
               "null"
             ]
           },
+          "fileSource": {
+            "default": false,
+            "description": "It serves files (a file source), which `connected_module_test`\nchecks.",
+            "type": "boolean"
+          },
           "frameOrigins": {
             "items": {
               "type": "string"
@@ -7451,6 +7456,11 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "fileSource": {
+            "default": false,
+            "description": "It serves files (a file source), which `connected_module_test`\nchecks.",
+            "type": "boolean"
           },
           "frameOrigins": {
             "items": {
@@ -39452,6 +39462,11 @@
                                 "null"
                               ]
                             },
+                            "fileSource": {
+                              "default": false,
+                              "description": "It serves files (a file source), which `connected_module_test`\nchecks.",
+                              "type": "boolean"
+                            },
                             "frameOrigins": {
                               "items": {
                                 "type": "string"
@@ -39730,6 +39745,11 @@
                                 "object",
                                 "null"
                               ]
+                            },
+                            "fileSource": {
+                              "default": false,
+                              "description": "It serves files (a file source), which `connected_module_test`\nchecks.",
+                              "type": "boolean"
                             },
                             "frameOrigins": {
                               "items": {
@@ -40091,6 +40111,11 @@
                                 "null"
                               ]
                             },
+                            "fileSource": {
+                              "default": false,
+                              "description": "It serves files (a file source), which `connected_module_test`\nchecks.",
+                              "type": "boolean"
+                            },
                             "frameOrigins": {
                               "items": {
                                 "type": "string"
@@ -40369,6 +40394,11 @@
                                 "object",
                                 "null"
                               ]
+                            },
+                            "fileSource": {
+                              "default": false,
+                              "description": "It serves files (a file source), which `connected_module_test`\nchecks.",
+                              "type": "boolean"
                             },
                             "frameOrigins": {
                               "items": {
@@ -41395,6 +41425,11 @@
                                 "null"
                               ]
                             },
+                            "fileSource": {
+                              "default": false,
+                              "description": "It serves files (a file source), which `connected_module_test`\nchecks.",
+                              "type": "boolean"
+                            },
                             "frameOrigins": {
                               "items": {
                                 "type": "string"
@@ -41673,6 +41708,11 @@
                                 "object",
                                 "null"
                               ]
+                            },
+                            "fileSource": {
+                              "default": false,
+                              "description": "It serves files (a file source), which `connected_module_test`\nchecks.",
+                              "type": "boolean"
                             },
                             "frameOrigins": {
                               "items": {

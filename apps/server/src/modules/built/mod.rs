@@ -560,6 +560,8 @@ pub async fn nav(
         r#"
         SELECT nav.id, nav.label, nav.icon, nav.target, goes.project_id AS space_id
         FROM module_nav nav
+        -- Where it shows: the space of what it points at. Every target
+        -- named must be one the reader reaches (below), not only this one.
         LEFT JOIN LATERAL (
             SELECT project_id FROM collections
             WHERE id::text = nav.target->>'collection'
@@ -570,7 +572,16 @@ pub async fn nav(
             LIMIT 1
         ) goes ON true
         WHERE nav.module_id = $1
-          AND (goes.project_id IS NULL OR {reaches})
+          AND NOT EXISTS (
+              SELECT 1 FROM (
+                  SELECT project_id FROM collections
+                  WHERE id::text = nav.target->>'collection'
+                  UNION ALL
+                  SELECT project_id FROM project_pages WHERE id::text = nav.target->>'page'
+                  UNION ALL
+                  SELECT project_id FROM bug_report_links WHERE id::text = nav.target->>'form'
+              ) goes
+              WHERE NOT {reaches})
         ORDER BY nav.position, nav.id
         "#,
         reaches = Reader::reaches_sql("goes.project_id", 2)

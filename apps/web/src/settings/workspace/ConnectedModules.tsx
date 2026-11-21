@@ -54,12 +54,9 @@ function host(address: string) {
   }
 }
 
-/**
- * The scopes ticked to start with: of the ones this server has, what is
- * approved already (a preview marks all it would approve), or every one.
- */
-function startingScopes(manifest: Manifest, everything = false) {
-  return new Set(manifest.scopes.filter((scope) => scope.known && (everything || scope.required || scope.approved)).map((scope) => scope.scope))
+/** The scopes ticked to start a connection: every one this server has. */
+function startingScopes(manifest: Manifest) {
+  return new Set(manifest.scopes.filter((scope) => scope.known).map((scope) => scope.scope))
 }
 
 export function ConnectedModules({ workspaceId }: { workspaceId: string }) {
@@ -154,7 +151,7 @@ export function ConnectedModules({ workspaceId }: { workspaceId: string }) {
                         ? [{ label: 'Review changes…', icon: 'checklist' as const, onSelect: () => window.requestAnimationFrame(() => setReviewing(module)) }]
                         : []),
                       { label: 'Check for changes', icon: 'retry' as const, onSelect: () => refresh.mutate({ moduleId: module.moduleId }) },
-                      ...(check ? [{ label: 'Check its files', icon: 'check' as const, onSelect: () => test.mutate({ moduleId: module.moduleId }) }] : []),
+                      ...(module.fileSource ? [{ label: 'Check its files', icon: 'check' as const, onSelect: () => test.mutate({ moduleId: module.moduleId }) }] : []),
                       { separator: true as const },
                       {
                         label: 'Disconnect…',
@@ -283,7 +280,7 @@ function ManifestDetails({
         ) : null}
         {manifest.events.length ? (
           <>
-            <dt>Hears about</dt>
+            <dt>Sends events</dt>
             <dd>{manifest.events.join(', ')}</dd>
           </>
         ) : null}
@@ -298,8 +295,8 @@ function ManifestDetails({
   )
 }
 
-function useScopeChoice(manifest: Manifest | null) {
-  const [chosen, setChosen] = useState<Set<string>>(() => (manifest ? startingScopes(manifest, true) : new Set()))
+function useScopeChoice(start: () => Set<string>) {
+  const [chosen, setChosen] = useState<Set<string>>(start)
   const choose = (scope: string, on: boolean) =>
     setChosen((current) => {
       const next = new Set(current)
@@ -316,7 +313,7 @@ function ConnectDialog({ onClose, onConnected, workspaceId }: { onClose: () => v
   const [preview, setPreview] = useState<Connected | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const { chosen, setChosen, choose } = useScopeChoice(null)
+  const { chosen, setChosen, choose } = useScopeChoice(() => new Set())
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -331,6 +328,7 @@ function ConnectDialog({ onClose, onConnected, workspaceId }: { onClose: () => v
       if (!preview) {
         const shown = await callOp('connected_module_install', { url: address }, { workspaceId, preview: true })
         setPreview(shown)
+        // The preview approves only what the app needs; start from all it asks for.
         setChosen(startingScopes(shown))
       } else {
         const module = await callOp('connected_module_install', { url: address, digest: preview.digest, scopes: [...chosen] }, { workspaceId })
@@ -417,7 +415,17 @@ function ReviewDialog({
   pending: NonNullable<Connected['pending']>
   workspaceId: string
 }) {
-  const { chosen, choose } = useScopeChoice(pending)
+  // What it asked for before: a scope declined then stays off; one it
+  // newly asks for starts on, as at an install.
+  const asked = new Set(module.scopes.map((scope) => scope.scope))
+  const { chosen, choose } = useScopeChoice(
+    () =>
+      new Set(
+        pending.scopes
+          .filter((scope) => scope.known && (scope.required || scope.approved || !asked.has(scope.scope)))
+          .map((scope) => scope.scope),
+      ),
+  )
   const approve = useOp('connected_module_approve', {
     workspaceId,
     invalidates: [...LIST],
@@ -426,8 +434,7 @@ function ReviewDialog({
       onApproved()
     },
   })
-  const had = new Set(module.scopes.filter((scope) => scope.approved).map((scope) => scope.scope))
-  const added = pending.scopes.filter((scope) => scope.known && !had.has(scope.scope))
+  const added = pending.scopes.filter((scope) => scope.known && !asked.has(scope.scope))
   return (
     <Dialog
       description={`${module.name} changed its manifest${pending.version !== module.version ? ` to version ${pending.version}` : ''} and asks for more than you approved. Until you approve, it keeps working as it did.`}

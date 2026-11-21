@@ -21,9 +21,9 @@ function entryHref(target: unknown, spaceId: string): string | null {
   return null
 }
 
-/** A built module's layout part: `module.<key>`, its key without the `built.` every built key starts with. */
+/** A built module's layout part: `module.<name>`, its key without the `local.` every built key starts with. */
 function modulePart(key: string): PartId {
-  return `module.${key.replace(/^built\./, '')}` as PartId
+  return `module.${key.replace(/^[a-z]+\./, '')}` as PartId
 }
 
 export default function BuiltModuleRows({ onNavigate, project }: { onNavigate: () => void; project: Project }) {
@@ -33,7 +33,10 @@ export default function BuiltModuleRows({ onNavigate, project }: { onNavigate: (
     .filter((module) => module.on && experience.shows(modulePart(module.key)))
     .flatMap((module) =>
       (module.nav ?? []).flatMap((entry) => {
-        const to = entry.spaceId === project.id ? entryHref(entry.target, project.id) : null
+        // An entry shows in the space it points into, and in its module's own
+        // space even after what it points at moved elsewhere.
+        const here = entry.spaceId === project.id || (module.spaceId === project.id && Boolean(entry.spaceId))
+        const to = here && entry.spaceId ? entryHref(entry.target, entry.spaceId) : null
         // A page's entry carries no icon of its own: it wears a page's.
         const icon = entry.icon ? moduleIcon(entry.icon) : (entry.target as { kind?: string } | null)?.kind === 'page' ? 'list' : moduleIcon(module.icon)
         return to ? [{ key: `${module.id}:${entry.id}`, label: entry.label, icon, to }] : []
