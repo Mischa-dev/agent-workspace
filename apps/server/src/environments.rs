@@ -259,7 +259,7 @@ pub(crate) async fn list_for(
         default_environment(state, organization_id, project_id, actor_id).await?;
     let rows = active_environments(&state.pool, project_id).await?;
     let default = default.filter(|id| rows.iter().any(|row| row.id == *id));
-    let catalog = Harnesses::of(&state, organization_id).await?;
+    let catalog = Harnesses::of(state, organization_id).await?;
     Ok(EnvironmentList {
         environments: rows
             .into_iter()
@@ -332,7 +332,7 @@ async fn clean(
             .bind(project_id)
             .fetch_one(crate::db::scoped(&state.pool))
             .await?;
-    let catalog = Harnesses::of(&state, organization_id).await?;
+    let catalog = Harnesses::of(state, organization_id).await?;
     let manifest = catalog
         .manifest(&request.harness)
         .ok_or(AppError::Validation("harness"))?;
@@ -875,7 +875,7 @@ pub(crate) async fn check_in(
         .await?
         .ok_or(AppError::NotFound("environment"))?;
     let account = own_account(&state.pool, organization_id, actor_id, &environment.harness).await?;
-    let catalog = Harnesses::of(&state, organization_id).await?;
+    let catalog = Harnesses::of(state, organization_id).await?;
     let manifest = catalog.manifest(&environment.harness);
     let (ok, message) = match (manifest, account) {
         (None, _) => (

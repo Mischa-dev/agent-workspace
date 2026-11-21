@@ -320,7 +320,7 @@ pub(crate) async fn environment_write(
                 principal.actor_id,
             )
             .await?;
-            let catalog = crate::harness_catalog::Harnesses::of(&state, organization_id).await?;
+            let catalog = crate::harness_catalog::Harnesses::of(state, organization_id).await?;
             environments::active_environment(&state.pool, project_id, environment_id)
                 .await?
                 .map(|row| environment_value(environments::view(&catalog, row, default)))

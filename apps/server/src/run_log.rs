@@ -67,7 +67,7 @@ pub async fn builtin_estimate(
     else {
         return Ok(None);
     };
-    let harnesses = crate::harness_catalog::Harnesses::of(&state, scope.workspace_id).await?;
+    let harnesses = crate::harness_catalog::Harnesses::of(state, scope.workspace_id).await?;
     let Some(manifest) = harnesses.manifest(&scope.adapter_kind) else {
         return Ok(None);
     };

@@ -825,7 +825,7 @@ pub(crate) async fn refresh_in(
     idempotency: Option<(&str, &IdempotencyKey)>,
 ) -> Result<HarnessView, AppError> {
     let request_hash = RequestHash::for_value(&serde_json::json!({ "kind": kind }))?;
-    let manifest = Harnesses::of(&state, organization_id)
+    let manifest = Harnesses::of(state, organization_id)
         .await?
         .manifest(kind)
         .cloned()
@@ -1027,7 +1027,7 @@ pub(crate) async fn save_overrides_in(
     model_id: &str,
     overrides: &ModelOverrides,
 ) -> Result<HarnessView, AppError> {
-    let manifest = Harnesses::of(&state, organization_id)
+    let manifest = Harnesses::of(state, organization_id)
         .await?
         .manifest(kind)
         .cloned()
@@ -1080,7 +1080,7 @@ pub(crate) async fn remove_model_in(
     kind: &str,
     model_id: &str,
 ) -> Result<HarnessView, AppError> {
-    let manifest = Harnesses::of(&state, organization_id)
+    let manifest = Harnesses::of(state, organization_id)
         .await?
         .manifest(kind)
         .cloned()
@@ -1146,7 +1146,7 @@ async fn fetch_owned_execution_profile(
         .supervisors
         .health(&row.account_adapter_kind, row.provider_account_id)
         .await;
-    let harnesses = Harnesses::visible(&state).await?;
+    let harnesses = Harnesses::visible(state).await?;
     execution_profile_view(&harnesses, row, health, owner_actor_id)
 }
 

@@ -204,7 +204,7 @@ pub async fn list_profiles(
     .into_iter()
     .map(|profile| named(state, profile))
     .collect();
-    let catalog = Harnesses::of(&state, organization_id).await?;
+    let catalog = Harnesses::of(state, organization_id).await?;
     let harnesses = catalog
         .manifests()
         .filter(|manifest| catalog.runner_for(&manifest.kind).is_none())

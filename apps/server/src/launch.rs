@@ -1269,7 +1269,7 @@ async fn plan_for(
         .or_else(|| environment.map(|environment| environment.harness.clone()))
         .or_else(|| defaults.harness.clone());
     let mut harnesses = Vec::new();
-    let known = Harnesses::of(&state, defaults.organization_id).await?;
+    let known = Harnesses::of(state, defaults.organization_id).await?;
     for manifest in known.manifests() {
         let catalog =
             crate::provider::catalog::run_catalog(&state.pool, defaults.organization_id, manifest)
@@ -1601,7 +1601,7 @@ pub(crate) async fn launch_tasks(
             .map(|environment| environment.harness.clone())
     });
     if let Some(harness) = &harness
-        && Harnesses::of(&state, defaults.organization_id)
+        && Harnesses::of(state, defaults.organization_id)
             .await?
             .manifest(harness)
             .is_none()
@@ -2042,7 +2042,7 @@ async fn start_launch(
                 .as_ref()
                 .map(|environment| environment.harness.clone())
         });
-    let known = Harnesses::visible(&state).await?;
+    let known = Harnesses::visible(state).await?;
     let manifest = harness
         .as_deref()
         .and_then(|harness| known.manifest(harness));
@@ -2102,7 +2102,7 @@ async fn start_launch(
         return Err(AppError::Validation("prompt"));
     }
     let prompt = match &profile {
-        Some(profile) => profile.prompt(manifest.as_deref(), &prompt),
+        Some(profile) => profile.prompt(manifest, &prompt),
         None => prompt,
     };
     // A1.13: one path. The agent that does the work is the one the launch
@@ -2676,7 +2676,7 @@ async fn drain_here(state: &AppState) -> Result<usize, AppError> {
         };
         // A connected runner needs no account here: the task goes to it.
         let runner = match harness.as_deref() {
-            Some(harness) => Harnesses::visible(&state).await?.runner_for(harness),
+            Some(harness) => Harnesses::visible(state).await?.runner_for(harness),
             None => None,
         };
         if runner.is_some() {

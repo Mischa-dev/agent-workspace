@@ -219,7 +219,7 @@ async fn places(
             continue;
         };
         if environment.harness != account.adapter_kind {
-            let name = crate::harness_catalog::Harnesses::visible(&state)
+            let name = crate::harness_catalog::Harnesses::visible(state)
                 .await?
                 .name(&environment.harness);
             result.skipped.push(skip(format!(
@@ -425,7 +425,7 @@ pub(crate) async fn suggest_in(
         account_id: account.id,
         account_name: account.name.clone(),
         harness: account.adapter_kind.clone(),
-        harness_name: crate::harness_catalog::Harnesses::visible(&state)
+        harness_name: crate::harness_catalog::Harnesses::visible(state)
             .await?
             .name(&account.adapter_kind),
         capacity: Capacity {

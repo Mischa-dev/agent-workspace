@@ -77,7 +77,7 @@ pub async fn home_for(state: &AppState, viewer: Uuid) -> Result<Home, AppError> 
     .bind(viewer)
     .fetch_one(crate::db::scoped(&state.pool))
     .await?;
-    let harnesses = crate::harness_catalog::Harnesses::visible(&state).await?;
+    let harnesses = crate::harness_catalog::Harnesses::visible(state).await?;
     let working = rows
         .into_iter()
         .map(|row| {
