@@ -480,6 +480,8 @@ pub(crate) async fn file_upload(
     if !principal.can_write() {
         return ToolResult::read_only();
     }
+    // Named on the events this upload emits, with who made it.
+    let request_key = arguments.client_request_id.clone();
     let retry_key = match arguments.client_request_id.as_deref() {
         Some(value) => match parse_request_id(value) {
             Some(key) => Some(key),
@@ -558,6 +560,17 @@ pub(crate) async fn file_upload(
         let staged = files::stage_prepared(state, destination, prepared).await?;
         let reserved = async {
             let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+            crate::events::set_context(
+                &mut transaction,
+                &crate::events::EventContext {
+                    request_id: request_key.clone(),
+                    ..crate::events::EventContext::actor(
+                        principal.actor_id,
+                        principal.via_grant_id(),
+                    )
+                },
+            )
+            .await?;
             let reserved = reserve_create(
                 &mut transaction,
                 principal,

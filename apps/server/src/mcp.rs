@@ -1352,8 +1352,17 @@ async fn guard_hand_written(
         space_id: Some(principal.project_id),
         direct: None,
     };
+    let request_key = input
+        .get("clientRequestId")
+        .and_then(serde_json::Value::as_str);
     match Box::pin(crate::guards::check(
-        state, &caller, &located, name, target, &input,
+        state,
+        &caller,
+        &located,
+        name,
+        target,
+        &input,
+        request_key,
     ))
     .await?
     {
@@ -1364,7 +1373,7 @@ async fn guard_hand_written(
             let mut transaction = crate::db::scoped_tx(&state.pool)
                 .await
                 .map_err(|error| crate::ops::OpError::logged(name, &error.into()))?;
-            crate::guards::use_hold(&mut transaction, hold).await?;
+            crate::guards::use_hold(&mut transaction, hold, request_key).await?;
             transaction
                 .commit()
                 .await
@@ -3594,17 +3603,6 @@ async fn keys_to_ids(
             changed = true;
         }
     }
-    // K2.18: pull_request_get takes a pull request's link as well as its
-    // ID; the operation finds it by ID.
-    if tool == "pull_request_get"
-        && let Some(link) = unresolved(arguments, "identifier")
-        && !link.is_empty()
-        && link.len() <= 2048
-        && let Some(id) = pull_request_by_link(state, principal, &link).await?
-    {
-        arguments["identifier"] = serde_json::Value::String(id.to_string());
-        changed = true;
-    }
     if let Some(full_name) = unresolved(arguments, "repositoryId")
         && is_repository_name(&full_name)
         && let Some(within) = repository_scope(state, principal, arguments).await?
@@ -3615,31 +3613,6 @@ async fn keys_to_ids(
         changed = true;
     }
     Ok(changed)
-}
-
-/// The pull request at `link` the caller may see, preferring their home
-/// project's.
-async fn pull_request_by_link(
-    state: &AppState,
-    principal: &McpPrincipal,
-    link: &str,
-) -> Result<Option<Uuid>, AppError> {
-    Ok(sqlx::query_scalar::<_, Uuid>(
-        r#"
-        SELECT id FROM github_pull_requests
-        WHERE html_url = $1
-          AND (project_id = $2 OR actor_can_access_project($3, $4, project_id))
-          AND pull_request_visible_to(id, $3)
-        ORDER BY project_id = $2 DESC, project_id
-        LIMIT 1
-        "#,
-    )
-    .bind(link)
-    .bind(principal.project_id)
-    .bind(principal.actor_id)
-    .bind(principal.external_agent_connection_id)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await?)
 }
 
 /// "owner/name", as GitHub writes a repository.

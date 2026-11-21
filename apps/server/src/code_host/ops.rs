@@ -237,6 +237,58 @@ impl Operation for PullRequestGet {
     type Input = PullRequestGetInput;
     type Output = PullRequestProjection;
 
+    // K2.18: a pull request's link is found before the call is located and
+    // checked, on every edge, so a call by link is checked exactly as one by
+    // ID (its space's code switch and roles, a credential held to one
+    // space). Only a pull request the caller may see, in the workspace the
+    // call named; one the call's space holds first.
+    async fn resolve_refs(
+        state: &crate::AppState,
+        caller: &crate::ops::Caller,
+        workspace: Option<Uuid>,
+        input: &mut serde_json::Value,
+    ) -> Result<(), OpError> {
+        let Some(link) = input
+            .get("identifier")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|link| parse_id(link).is_none() && !link.is_empty() && link.len() <= 2048)
+            .map(str::to_owned)
+        else {
+            return Ok(());
+        };
+        let preferred = input
+            .get("projectId")
+            .and_then(serde_json::Value::as_str)
+            .and_then(parse_id);
+        let found = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT pull.id FROM github_pull_requests pull
+            JOIN projects project ON project.id = pull.project_id
+            WHERE pull.html_url = $1
+              AND actor_can_access_project($2, $3, pull.project_id)
+              AND pull_request_visible_to(pull.id, $2)
+              AND ($4::uuid IS NULL OR project.organization_id = $4)
+              AND ($5::uuid IS NULL OR pull.project_id = $5)
+            ORDER BY pull.project_id = $6 DESC, pull.project_id
+            LIMIT 1
+            "#,
+        )
+        .bind(&link)
+        .bind(caller.account_id)
+        .bind(caller.connection_id)
+        .bind(workspace)
+        .bind(caller.confined_space)
+        .bind(preferred)
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await
+        .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
+        if let Some(id) = found {
+            input["identifier"] = serde_json::Value::String(id.to_string());
+        }
+        Ok(())
+    }
+
     async fn run(
         call: &mut OpCall<'_>,
         input: PullRequestGetInput,
