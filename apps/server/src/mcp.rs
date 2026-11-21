@@ -2039,8 +2039,20 @@ async fn run_tool(
     answered
 }
 
-/// Whether a tool's answer says the change was made: no error, and an `ok`
-/// outcome when it gives one.
+/// The refusals of the shared result shape: nothing was changed. Any other
+/// outcome (`ok`, or a tool's own such as `requested`) counts as made, so a
+/// review is never handed back for a change that went through.
+const NOTHING_MADE: [&str; 6] = [
+    "not_found",
+    "invalid_request",
+    "permission_denied",
+    "conflict",
+    "temporarily_unavailable",
+    "limit_reached",
+];
+
+/// Whether a tool's answer says the change was made: no error, and no
+/// refusal outcome.
 fn made(answered: &Result<rmcp::model::CallToolResponse, ErrorData>) -> bool {
     match answered {
         Ok(rmcp::model::CallToolResponse::Complete(result)) => {
@@ -2050,7 +2062,7 @@ fn made(answered: &Result<rmcp::model::CallToolResponse, ErrorData>) -> bool {
                     .as_ref()
                     .and_then(|structured| structured.get("outcome"))
                     .and_then(serde_json::Value::as_str)
-                    .is_none_or(|outcome| outcome == "ok")
+                    .is_none_or(|outcome| !NOTHING_MADE.contains(&outcome))
         }
         Ok(_) => true,
         Err(_) => false,
@@ -4455,6 +4467,32 @@ async fn identifier_project(
 #[cfg(test)]
 mod tests {
     use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
+
+    /// A review is handed back only for a refusal: a tool's own success
+    /// (`requested`) keeps it spent.
+    #[test]
+    fn only_a_refusal_hands_a_review_back() {
+        use rmcp::model::{CallToolResponse, CallToolResult};
+        let answer = |value: serde_json::Value| {
+            Ok(CallToolResponse::Complete(CallToolResult::structured(
+                value,
+            )))
+        };
+        for outcome in ["ok", "requested", "scheduled"] {
+            assert!(super::made(&answer(
+                serde_json::json!({"outcome": outcome})
+            )));
+        }
+        assert!(super::made(&answer(serde_json::json!({"id": "x"}))));
+        for outcome in super::NOTHING_MADE {
+            assert!(!super::made(&answer(
+                serde_json::json!({"outcome": outcome})
+            )));
+        }
+        assert!(!super::made(&Ok(CallToolResponse::Complete(
+            CallToolResult::structured_error(serde_json::json!({"message": "no"}))
+        ))));
+    }
 
     use super::{
         HandshakeAnswer, HandshakeOutcome, HandshakeStep, MAX_LOGGED_ERROR_CHARACTERS,
