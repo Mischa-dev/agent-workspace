@@ -90331,7 +90331,7 @@
     },
     "/api/v2/w/{workspace}/ops/launch_cancel": {
       "post": {
-        "description": "Take a launch out of the queue before it starts, as the queue's Cancel button does: your own, or anyone's if you own or administer the project. Pass its launchId from launch_list. One that already started can't be cancelled; stop its run with run_stop. Needs \"Launch runs\" where it acts.",
+        "description": "Take a launch out of the queue before it starts, as the queue's Cancel button does: your own, or anyone's if you own or administer the project. Pass its launchId from launch_list. One that already started can't be cancelled; stop its run with run_stop.",
         "operationId": "launch_cancel",
         "parameters": [
           {

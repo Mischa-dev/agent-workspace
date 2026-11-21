@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { type FormEvent, useMemo, useState } from 'react'
 
 import { requestJson } from '../api/client'
-import { callOp } from '../api/ops'
+import { callOp, ranOrThrow } from '../api/ops'
 import { queryKeys } from '../api/queryKeys'
 import { useInstantMutation } from '../app/mutations'
 import { isSafeMessageText } from '../conversations/messageContentModel'
@@ -30,10 +30,13 @@ const threadApi = {
   // Stopping or dismissing twice changes nothing, so each try is its own request.
   interrupt: (runId: string) => callOp('run_stop', { runId }),
   retry: (runId: string) => post(`/api/v1/agent-runs/${encodeURIComponent(runId)}/retry`, `retry-${runId}`),
-  publish: (runId: string, key: string) => callOp('run_publish', { runId }, { requestId: key }),
-  createPullRequest: (runId: string, key: string, input: { title: string; body: string; taskIds: string[] }) =>
-    callOp('pull_request_create', { runId, ...input }, { requestId: key }),
-  refreshPullRequest: (pullRequestId: string) => callOp('pull_request_refresh', { pullRequestId }),
+  // A write a review guard holds hasn't run: it fails here, saying so.
+  publish: async (runId: string, key: string) =>
+    ranOrThrow(await callOp('run_publish', { runId }, { requestId: key }), 'Publishing the branch'),
+  createPullRequest: async (runId: string, key: string, input: { title: string; body: string; taskIds: string[] }) =>
+    ranOrThrow(await callOp('pull_request_create', { runId, ...input }, { requestId: key }), 'Opening the pull request'),
+  refreshPullRequest: async (pullRequestId: string) =>
+    ranOrThrow(await callOp('pull_request_refresh', { pullRequestId }), 'Refreshing the pull request'),
   acknowledgeFailure: (runId: string) => callOp('run_failure_hide', { runId }),
 }
 

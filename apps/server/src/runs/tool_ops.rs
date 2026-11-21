@@ -442,7 +442,9 @@ tool_op!(LaunchCancel {
     name: "launch_cancel",
     module: "runs",
     kind: Change,
-    permission: Some(Perm::RunsLaunch),
+    // Whoever asked for the launch, or manages the space: the command
+    // decides, as the queue offers it; starting runs isn't needed.
+    permission: None,
     idempotency: Dispatcher,
     destructive: true,
     audited: true,
