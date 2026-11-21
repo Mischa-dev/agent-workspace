@@ -26,6 +26,10 @@ const MAX_PAYLOAD_BYTES: usize = 60_000;
 const UNREACHABLE_FOR: Duration = Duration::from_secs(120);
 const FIRST_WAIT: Duration = Duration::from_millis(200);
 const LONGEST_WAIT: Duration = Duration::from_secs(5);
+/// How long a changes report waits out an unreachable server. What a run
+/// changed is shown, not needed: a turn or a stop never waits long on it,
+/// and the next report (or the last, at the run's end) says it again.
+const CHANGES_UNREACHABLE_FOR: Duration = Duration::from_secs(3);
 
 /// Whether a call may go through if tried again shortly: no answer at all,
 /// or a server that is starting or stopping.
@@ -38,12 +42,21 @@ fn passing(error: &ClientError) -> bool {
 
 /// Calls `call` until it is answered, or a passing failure has lasted
 /// [`UNREACHABLE_FOR`].
-async fn patiently<T, F, Fut>(mut call: F) -> Result<T, ClientError>
+async fn patiently<T, F, Fut>(call: F) -> Result<T, ClientError>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, ClientError>>,
 {
-    let deadline = Instant::now() + UNREACHABLE_FOR;
+    patiently_for(UNREACHABLE_FOR, call).await
+}
+
+/// [`patiently`], giving up once a passing failure has lasted `for_up_to`.
+async fn patiently_for<T, F, Fut>(for_up_to: Duration, mut call: F) -> Result<T, ClientError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, ClientError>>,
+{
+    let deadline = Instant::now() + for_up_to;
     let mut wait = FIRST_WAIT;
     loop {
         match call().await {
@@ -133,7 +146,8 @@ impl RunReports {
     /// One call on the run (its id added), with a fresh credential once if
     /// the one held ran out. Answers the operation's value.
     async fn call(&self, name: &str, input: Value, key: &str) -> Result<Value, AppError> {
-        self.call_with(name, input, key, true).await
+        self.call_with(name, input, key, true, UNREACHABLE_FOR)
+            .await
     }
 
     async fn call_with(
@@ -142,9 +156,10 @@ impl RunReports {
         input: Value,
         key: &str,
         on_run: bool,
+        patience: Duration,
     ) -> Result<Value, AppError> {
         let send = async |reporter: RunReporter, input: Value| {
-            patiently(|| {
+            patiently_for(patience, || {
                 let reporter = reporter.clone();
                 let input = input.clone();
                 async move {
@@ -240,6 +255,7 @@ impl RunReports {
                 json!({ "requestId": request_id }),
                 &format!("read-{}", request_id.simple()),
                 false,
+                UNREACHABLE_FOR,
             )
             .await?;
         Ok(super::requests::outcome_of(&read["request"]))
@@ -313,7 +329,14 @@ impl RunReports {
                 format!("{}-{}-{report}", self.run_id.simple(), self.opened.simple()).as_bytes()
             ))
         );
-        self.call("run_changes_report", fields, &key).await?;
+        self.call_with(
+            "run_changes_report",
+            fields,
+            &key,
+            true,
+            CHANGES_UNREACHABLE_FOR,
+        )
+        .await?;
         Ok(())
     }
 }

@@ -16,6 +16,7 @@ use crate::{
     AppState,
     auth::AuthenticatedActor,
     error::{ApiPath, AppError},
+    harness_catalog::Harnesses,
 };
 
 pub fn router() -> Router<AppState> {
@@ -63,33 +64,9 @@ const SESSION_SELECT: &str = r#"
     LEFT JOIN LATERAL place_profile(session.project_id, session.agent_actor_id) membership ON true
 "#;
 
-fn named(state: &AppState, mut session: SessionView) -> SessionView {
-    session.harness_name = harness_name(state, &session.harness);
+fn named(harnesses: &Harnesses, mut session: SessionView) -> SessionView {
+    session.harness_name = harnesses.name(&session.harness);
     session
-}
-
-/// A name people know a harness by: its manifest's, for ones the server
-/// knows, otherwise the runner's own word with each part capitalised
-/// (`night_runner` reads "Night Runner").
-pub(crate) fn harness_name(state: &AppState, harness: &str) -> String {
-    match state.supervisors.manifest(harness) {
-        Some(manifest) => manifest.display_name.clone(),
-        None => readable(harness),
-    }
-}
-
-fn readable(harness: &str) -> String {
-    harness
-        .split(['_', '-'])
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut characters = part.chars();
-            characters.next().map_or_else(String::new, |first| {
-                first.to_uppercase().chain(characters).collect()
-            })
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// The sessions in a conversation the caller can see, newest first.
@@ -110,7 +87,8 @@ pub(crate) async fn sessions_in(
     .bind(actor_id)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
-    Ok(rows.into_iter().map(|row| named(state, row)).collect())
+    let harnesses = Harnesses::visible(state).await?;
+    Ok(rows.into_iter().map(|row| named(&harnesses, row)).collect())
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -292,17 +270,4 @@ pub(crate) async fn cancel_for_request(
     .execute(&mut **transaction)
     .await?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::readable;
-
-    #[test]
-    fn harness_words_read_as_names() {
-        assert_eq!(readable("night_runner"), "Night Runner");
-        assert_eq!(readable("runner"), "Runner");
-        assert_eq!(readable("my-runner_2"), "My Runner 2");
-        assert_eq!(readable(""), "");
-    }
 }

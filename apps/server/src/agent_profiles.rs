@@ -169,11 +169,11 @@ pub struct ProfileList {
     pub ready: bool,
 }
 
-fn named(state: &AppState, mut profile: ProfileView) -> ProfileView {
+fn named(harnesses: &Harnesses, mut profile: ProfileView) -> ProfileView {
     profile.harness_name = profile
         .harness
         .as_deref()
-        .map(|harness| crate::agent_sessions::harness_name(state, harness));
+        .map(|harness| harnesses.name(harness));
     profile
 }
 
@@ -195,6 +195,7 @@ pub async fn list_profiles(
         crate::memory::project_access(&state.pool, viewer, project_id, Action::SettingsManage)
             .await
             .is_ok();
+    let catalog = Harnesses::of(state, organization_id).await?;
     let profiles = sqlx::query_as::<_, ProfileView>(&format!(
         "{PROFILE_SELECT} WHERE profile.project_id = $1 AND profile.hidden_at IS NULL ORDER BY profile.enabled DESC, membership.display_name, profile.id"
     ))
@@ -202,9 +203,8 @@ pub async fn list_profiles(
     .fetch_all(crate::db::scoped(&state.pool))
     .await?
     .into_iter()
-    .map(|profile| named(state, profile))
+    .map(|profile| named(&catalog, profile))
     .collect();
-    let catalog = Harnesses::of(state, organization_id).await?;
     let harnesses = catalog
         .manifests()
         .filter(|manifest| catalog.runner_for(&manifest.kind).is_none())
@@ -555,6 +555,7 @@ pub(crate) async fn load(
     project_id: Uuid,
     profile_id: Uuid,
 ) -> Result<ProfileView, AppError> {
+    let harnesses = Harnesses::visible(state).await?;
     sqlx::query_as::<_, ProfileView>(&format!(
         "{PROFILE_SELECT} WHERE profile.project_id = $1 AND profile.id = $2 AND profile.hidden_at IS NULL"
     ))
@@ -562,7 +563,7 @@ pub(crate) async fn load(
     .bind(profile_id)
     .fetch_optional(executor)
     .await?
-    .map(|profile| named(state, profile))
+    .map(|profile| named(&harnesses, profile))
     .ok_or(AppError::NotFound("agent_profile"))
 }
 
