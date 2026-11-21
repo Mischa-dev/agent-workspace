@@ -318,13 +318,13 @@ async fn every_edge_runs_the_same_operation() {
     assert_eq!(mcp["replaySafe"], true, "{mcp}");
 
     // An automation rule that runs it, run by hand.
-    let (status, rule) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{space}/automations"),
-            None,
+    let (status, rule) = setup
+        .browser
+        .op(
+            app,
+            "automation_create",
             json!({
+                "projectId": space,
                 "name": "Echo",
                 "trigger": {"kind": "task_created"},
                 "actions": [{
@@ -333,21 +333,18 @@ async fn every_edge_runs_the_same_operation() {
                     "input": { "space": space, "text": "rule {{rule.name}}" }
                 }],
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_success(), "{status}: {rule}");
     let rule_id = rule["id"].as_str().expect("rule");
-    let (status, run) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{space}/automations/{rule_id}/run"),
-            None,
-            json!({}),
-        ),
-    )
-    .await;
+    let (status, run) = setup
+        .browser
+        .op(
+            app,
+            "automation_run_start",
+            json!({ "projectId": space, "ruleId": rule_id }),
+        )
+        .await;
     assert!(status.is_success(), "{status}: {run}");
     let automated: i64 =
         sqlx::query_scalar("SELECT count(*) FROM ops_kernel_echo WHERE text = 'rule Echo'")
@@ -356,20 +353,19 @@ async fn every_edge_runs_the_same_operation() {
             .expect("automated row");
     assert_eq!(automated, 1, "{run}");
     // An operation no rule may run is refused when the rule is saved.
-    let (status, unknown) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{space}/automations"),
-            None,
+    let (status, unknown) = setup
+        .browser
+        .op(
+            app,
+            "automation_create",
             json!({
+                "projectId": space,
                 "name": "Nothing",
                 "trigger": {"kind": "task_created"},
                 "actions": [{ "kind": "run_operation", "operation": "no_such_op", "input": {} }],
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_client_error(), "{status}: {unknown}");
 
     // One audit row per write, each naming its edge.
@@ -622,17 +618,16 @@ async fn every_edge_runs_the_same_operation() {
         .expect("watcher")
         .parse()
         .expect("watcher id");
-    let (status, readers) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/organizations/{workspace}/roles"),
-            None,
+    let (status, readers) = setup
+        .browser
+        .op_in(
+            app,
+            workspace,
+            "role_create",
             json!({"name": "Readers", "baseRole": "member", "permissions": ["tasks.view"]}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{readers}");
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{readers}");
     let readers: Uuid = readers["id"]
         .as_str()
         .expect("role")

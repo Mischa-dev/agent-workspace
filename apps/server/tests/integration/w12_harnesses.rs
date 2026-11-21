@@ -385,14 +385,15 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
 
     // An automation launches as the agent; another project's agent, or one
     // that doesn't exist, is refused when the rule is saved.
-    let automations = format!("{project}/automations");
+    let automation_create = "/api/v2/ops/automation_create".to_owned();
     let unknown = send(
         &application,
         owner,
         "POST",
-        &automations,
+        &automation_create,
         "rule-unknown-agent",
         json!({
+            "projectId": seed.project_id,
             "name": "Review new tasks",
             "trigger": {"kind": "task_created"},
             "actions": [{"kind": "launch", "agentProfileId": Uuid::now_v7()}],
@@ -404,16 +405,18 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         &application,
         owner,
         "POST",
-        &automations,
+        &automation_create,
         "rule-reviewer",
         json!({
+            "projectId": seed.project_id,
             "name": "Review new tasks",
             "trigger": {"kind": "task_created"},
             "actions": [{"kind": "launch", "agentProfileId": profile_id}],
         }),
     )
     .await;
-    assert_eq!(rule.0, StatusCode::CREATED, "{}", rule.1);
+    assert_eq!(rule.0, StatusCode::OK, "{}", rule.1);
+    let rule = rule.2["value"].clone();
     let task = send(
         &application,
         owner,
@@ -447,10 +450,15 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
     let rule_off = send(
         &application,
         owner,
-        "PATCH",
-        &format!("{automations}/{}", uuid_field(&rule.2, "id")),
+        "POST",
+        "/api/v2/ops/automation_update",
         "rule-off",
-        json!({"expectedVersion": rule.2["version"], "enabled": false}),
+        json!({
+            "projectId": seed.project_id,
+            "ruleId": uuid_field(&rule, "id"),
+            "expectedVersion": rule["version"],
+            "enabled": false,
+        }),
     )
     .await;
     assert_eq!(rule_off.0, StatusCode::OK, "{}", rule_off.1);

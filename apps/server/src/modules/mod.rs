@@ -334,22 +334,9 @@ mod tests {
             .iter()
             .map(|info| info.key.to_owned())
             .collect::<BTreeSet<_>>();
+        // Each permission is claimed by exactly one manifest, which is the
+        // group the Roles page shows it under.
         each_named("permissions", &keys, |module| &module.permissions);
-        // The Roles page groups permissions by AWD-74's groups; each group is
-        // one module, and members and settings are the workspace's own.
-        for info in crate::policy::PERMISSIONS {
-            let owner =
-                manifest::owner_by(|module| &module.permissions, info.key).expect("claimed above");
-            let expected = match info.module {
-                "members" | "settings" => "workspace",
-                group => group,
-            };
-            assert_eq!(
-                owner.id, expected,
-                "{} is in the {} group on the Roles page but in the {} manifest",
-                info.key, info.module, owner.id
-            );
-        }
     }
 
     #[test]

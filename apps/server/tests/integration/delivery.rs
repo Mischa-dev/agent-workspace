@@ -1206,23 +1206,23 @@ async fn ask_an_agent_posts_as_the_maker_and_asks_them() {
     let rook = world.agents["rook"].actor;
     let work = world.project("WORK").to_owned();
     let triage = channel(&world, "triage").await;
-    let (status, rule) = send(
-        &world.app,
-        world.owner.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/automations"),
-            Some("ask-rule"),
+    let (status, rule) = world
+        .owner
+        .browser
+        .op(
+            &world.app,
+            "automation_create",
             json!({
+                "projectId": work,
                 "name": "Ask rook",
                 "trigger": {"kind": "task_created"},
                 "actions": [{"kind": "ask_agent", "accountId": rook,
                              "conversationId": triage,
                              "prompt": "Please triage {{task.title}}"}],
             }),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{rule}");
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{rule}");
     let (status, task) = send(
         &world.app,
         world.owner.browser.request(
@@ -1249,21 +1249,21 @@ async fn ask_an_agent_posts_as_the_maker_and_asks_them() {
     assert!(text.contains("Please triage Login is slow"), "{text}");
 
     // Asking someone who isn't in the space is refused when saved.
-    let (status, refused) = send(
-        &world.app,
-        world.owner.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/automations"),
-            Some("ask-nobody"),
+    let (status, refused) = world
+        .owner
+        .browser
+        .op(
+            &world.app,
+            "automation_create",
             json!({
+                "projectId": work,
                 "name": "Ask nobody",
                 "trigger": {"kind": "task_created"},
                 "actions": [{"kind": "ask_agent", "accountId": Uuid::now_v7(),
                              "prompt": "Hello"}],
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
     world.finish().await;
 }
@@ -1600,16 +1600,11 @@ async fn a_paused_agent_waits_and_an_unanswered_ask_shows() {
     .fetch_one(world.pool())
     .await
     .expect("second ask");
-    let (status, body) = send(
-        &world.app,
-        world.owner.browser.request(
-            "POST",
-            &format!("/api/v1/reply-requests/{stopped}/stop"),
-            Some("stop-paused"),
-            json!({}),
-        ),
-    )
-    .await;
+    let (status, body) = world
+        .owner
+        .browser
+        .op(&world.app, "reply_stop", json!({"requestId": stopped}))
+        .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let page = read(&world, rook, Some(&held_at)).await;
     let cancelled = of_type(&page, "reply.cancelled");

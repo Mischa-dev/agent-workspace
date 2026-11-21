@@ -3842,9 +3842,10 @@ async fn check_token(
         app,
         b.browser.request(
             "POST",
-            &format!("/api/v1/conversations/{}/scheduled-messages", b.dm),
-            None,
+            "/api/v2/ops/message_schedule",
+            Some("isolation-dm-schedule"),
             json!({
+                "conversationId": b.dm,
                 "content": {"version": 1, "nodes": [{"type": "text", "text": "Later in the DM"}]},
                 "sendAt": soon,
             }),

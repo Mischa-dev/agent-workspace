@@ -178,10 +178,6 @@ pub(crate) const ID_EXEMPT: &[(&str, &str)] = &[
         "an invitation is revoked or replaced from its project's members screen, whose routes the gate covers",
     ),
     (
-        "/api/v1/reply-requests/",
-        "reply requests belong to a conversation, checked by its handler",
-    ),
-    (
         "/api/v1/scheduled-messages/",
         "a person's own scheduled messages, checked with their conversation",
     ),

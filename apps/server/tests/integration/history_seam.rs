@@ -9,10 +9,7 @@ use uuid::Uuid;
 use super::{
     agent_interface::{connect_app, initialize, tool},
     mcp_admin::{create_project, setup},
-    support::{
-        app::{send, tool as support_tool},
-        world::WorldBuilder,
-    },
+    support::{app::tool as support_tool, world::WorldBuilder},
 };
 
 #[tokio::test]
@@ -294,16 +291,15 @@ async fn history_by_id_keeps_private_messages_and_finds_workspace_boards() {
     }
 
     // A workspace board (no space) is located and listed.
-    let (status, created) = send(
-        app,
-        world.owner.browser.request(
-            "POST",
-            "/api/v1/whiteboards",
-            None,
-            json!({"title": "Whole workspace", "organizationId": world.organization}),
-        ),
-    )
-    .await;
+    let (status, created) = world
+        .owner
+        .browser
+        .op(
+            app,
+            "whiteboard_create",
+            json!({"title": "Whole workspace", "workspaceId": world.organization}),
+        )
+        .await;
     assert!(status.is_success(), "{status} {created}");
     let board = created["whiteboard"]["id"].as_str().expect("board id");
     let listed = as_helper("history_list", json!({"thing": board})).await;

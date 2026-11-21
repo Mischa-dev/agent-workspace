@@ -2323,18 +2323,18 @@ async fn ticks_drive_work_with_the_loop_off() {
     let (status, scheduled) = a
         .send(browser.request(
             "POST",
-            &format!("/api/v1/conversations/{channel}/scheduled-messages"),
+            "/api/v2/ops/message_schedule",
             Some("k5-18-scheduled"),
             json!({
+                "conversationId": channel,
                 "content": {"version": 1, "nodes": [{"type": "text", "text": "Ticked"}]},
                 "sendAt": send_at,
             }),
         ))
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{scheduled}");
-    let scheduled: Uuid = scheduled["scheduledMessage"]["id"]
+    assert_eq!(status, StatusCode::OK, "{scheduled}");
+    let scheduled: Uuid = scheduled["value"]["scheduled"]["id"]
         .as_str()
-        .or_else(|| scheduled["id"].as_str())
         .expect("scheduled id")
         .parse()
         .expect("id");

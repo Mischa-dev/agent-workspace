@@ -1132,12 +1132,13 @@ async fn build_workspace(
     )
     .await;
     let task_template = string_at(&task_template, "/id");
-    post(
-        format!("/api/v1/projects/{project}/recurring-tasks"),
+    let recurring = post(
+        format!("/api/v2/w/{organization}/ops/recurring_create"),
         "recurring-1",
-        json!({"templateId": task_template, "frequency": "weekly", "weekdays": [1]}),
+        json!({"projectId": project, "template": task_template, "frequency": "weekly", "weekdays": [1]}),
     )
     .await;
+    assert_eq!(recurring["outcome"], "ok", "{label} recurring: {recurring}");
     post(
         format!("/api/v1/projects/{project}/save-as-template"),
         "project-template-1",
@@ -1391,15 +1392,16 @@ async fn build_workspace(
     } else {
         format!("{marker}_key")
     };
+    for input in [
+        json!({"key": "run.model", "scope": "workspace", "value": model}),
+        json!({"key": "run.model", "scope": "project", "spaceId": project, "value": format!("{model}-project")}),
+    ] {
+        let (status, written) = browser
+            .op_in(app, &organization, "setting_update", input)
+            .await;
+        assert!(status.is_success(), "{label} setting: {status} {written}");
+    }
     for (uri, body) in [
-        (
-            "/api/v1/settings/values/run.model".to_owned(),
-            json!({"scope": "workspace", "organizationId": organization, "value": model}),
-        ),
-        (
-            "/api/v1/settings/values/run.model".to_owned(),
-            json!({"scope": "project", "projectId": project, "value": format!("{model}-project")}),
-        ),
         (
             format!("/api/v1/organizations/{organization}/secrets/{secret_name}"),
             json!({"value": format!("value-{secret_name}"), "description": format!("Launch key{m}")}),
@@ -1581,14 +1583,6 @@ async fn build_workspace(
             json!({"note": format!("Call back{m}"), "remindAt": soon, "organizationId": organization}),
         ),
         (
-            "POST",
-            format!("/api/v1/conversations/{channel}/scheduled-messages"),
-            json!({
-                "content": {"version": 1, "nodes": [{"type": "text", "text": format!("Later{m}")}]},
-                "sendAt": soon,
-            }),
-        ),
-        (
             "PUT",
             format!("/api/v1/conversations/{channel}/notification-level"),
             json!({"level": "all"}),
@@ -1600,6 +1594,21 @@ async fn build_workspace(
             "{label} {method} {uri}: {status} {written}"
         );
     }
+    let (status, scheduled) = browser
+        .op(
+            app,
+            "message_schedule",
+            json!({
+                "conversationId": channel,
+                "content": {"version": 1, "nodes": [{"type": "text", "text": format!("Later{m}")}]},
+                "sendAt": soon,
+            }),
+        )
+        .await;
+    assert!(
+        status.is_success(),
+        "{label} scheduled message: {status} {scheduled}"
+    );
 
     // Webhooks and automations (W14, A2.6): the owner's webhook (a
     // connection with an address) on the whole workspace, and a rule that
@@ -1625,21 +1634,19 @@ async fn build_workspace(
     assert!(status.is_success(), "{label} webhook: {status} {created}");
     let webhook =
         Uuid::parse_str(&string_at(&created, "/value/connection/id")).expect("webhook id");
-    let (status, created) = send(
-        app,
-        browser.request(
-            "POST",
-            &format!("/api/v1/projects/{project}/automations"),
-            None,
+    let (status, created) = browser
+        .op(
+            app,
+            "automation_create",
             json!({
+                "projectId": project,
                 "name": format!("Rule{m}"),
                 "trigger": {"kind": "task_created"},
                 "actions": [{"kind": "notify", "recipients": "owner",
                              "message": format!("New task{m}")}],
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(
         status.is_success(),
         "{label} automation: {status} {created}"
@@ -1748,16 +1755,13 @@ async fn build_workspace(
 
     // Whiteboards: one for the whole workspace, drawn on and with an image,
     // and one in the project, linked to the task, the project and the page.
-    let (status, created) = send(
-        app,
-        browser.request(
-            "POST",
-            "/api/v1/whiteboards",
-            None,
-            json!({"title": format!("Sketch{m}"), "organizationId": organization}),
-        ),
-    )
-    .await;
+    let (status, created) = browser
+        .op(
+            app,
+            "whiteboard_create",
+            json!({"title": format!("Sketch{m}"), "workspaceId": organization}),
+        )
+        .await;
     assert!(
         status.is_success(),
         "{label} whiteboard: {status} {created}"
@@ -1796,20 +1800,17 @@ async fn build_workspace(
         status.is_success(),
         "{label} whiteboard file: {status} {stored}"
     );
-    let (status, created) = send(
-        app,
-        browser.request(
-            "POST",
-            "/api/v1/whiteboards",
-            None,
+    let (status, created) = browser
+        .op(
+            app,
+            "whiteboard_create",
             json!({
                 "title": format!("Plan{m}"),
                 "projectId": project,
-                "link": {"targetKind": "task", "targetId": task},
+                "linkTo": {"targetKind": "task", "targetId": task},
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(
         status.is_success(),
         "{label} project whiteboard: {status} {created}"
@@ -1820,16 +1821,13 @@ async fn build_workspace(
         (project_whiteboard, "page", page.clone()),
         (whiteboard, "project", project.clone()),
     ] {
-        let (status, linked) = send(
-            app,
-            browser.request(
-                "POST",
-                &format!("/api/v1/whiteboards/{board}/links"),
-                None,
-                json!({"targetKind": kind, "targetId": target}),
-            ),
-        )
-        .await;
+        let (status, linked) = browser
+            .op(
+                app,
+                "whiteboard_link",
+                json!({"whiteboardId": board, "targetKind": kind, "targetId": target}),
+            )
+            .await;
         assert!(
             status.is_success(),
             "{label} whiteboard link: {status} {linked}"

@@ -936,18 +936,16 @@ async fn marking_unread_brings_a_conversation_back_and_never_marks_anything_read
     assert!(timeline["readState"]["version"].as_i64().expect("version") > read_version);
 
     // The web's Mark unread shares the command.
-    let (status, body) = send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/conversations/{group}/mark-unread"),
-            None,
-            json!({ "messageId": sent[0] }),
-        ),
-    )
-    .await;
+    let (status, body) = setup
+        .browser
+        .op(
+            &setup.app,
+            "conversation_mark_read",
+            json!({ "conversationId": group, "unread": true, "fromMessageId": sent[0] }),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["highestSeenSequence"], 0);
+    assert_eq!(body["lastReadSequence"], 0);
 
     // Nothing else can move a mark backwards.
     sqlx::query(

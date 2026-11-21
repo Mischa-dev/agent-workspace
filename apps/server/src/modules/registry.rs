@@ -360,6 +360,21 @@ impl Registry {
         self.by_id.get(id).copied()
     }
 
+    /// The module that owns a permission: the one whose manifest lists it
+    /// (M1.3o). The Roles page groups the permission under it.
+    pub fn module_of_permission(&self, key: &str) -> Option<&Manifest> {
+        self.descriptions
+            .iter()
+            .find(|manifest| manifest.permissions.iter().any(|owned| owned == key))
+    }
+
+    /// The modules that own permissions, in order: the Roles page's groups.
+    pub fn permission_modules(&self) -> impl Iterator<Item = &Manifest> {
+        self.descriptions
+            .iter()
+            .filter(|manifest| !manifest.permissions.is_empty())
+    }
+
     pub fn module_of_tool(&self, tool: &str) -> Option<&Manifest> {
         self.tools.get(tool).map(|index| &self.descriptions[*index])
     }

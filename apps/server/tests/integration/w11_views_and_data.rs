@@ -716,11 +716,12 @@ async fn a_github_import_stops_when_its_committer_loses_see_code() {
     let (status, role) = fixture
         .owner
         .post(
-            &format!("/api/v1/organizations/{}/roles", fixture.organization_id),
+            &format!("/api/v2/w/{}/ops/role_create", fixture.organization_id),
             json!({"name": "Task makers", "baseRole": "member", "permissions": ["tasks.view", "tasks.create", "tasks.edit"]}),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{role}");
+    assert_eq!(status, StatusCode::OK, "{role}");
+    let role = role["value"].clone();
     let version: i64 = sqlx::query_scalar(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )

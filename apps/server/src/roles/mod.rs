@@ -34,12 +34,7 @@ pub mod ops;
 
 use std::collections::BTreeSet;
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    routing::{get, patch, put},
-};
+use axum::{Json, Router, extract::State, http::HeaderMap, routing::get};
 use chrono::{DateTime, Utc};
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
@@ -49,14 +44,14 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
-    error::{ApiJson, ApiPath, ApiQuery, AppError},
+    auth::AuthenticatedActor,
+    error::{ApiPath, ApiQuery, AppError},
     layouts,
     mcp::McpPrincipal,
     outbox::{OutboxEventPayload, ProjectMembershipUpdatedPayload, enqueue_typed},
     policy::{
-        Action, AgentLimits, MembershipRole, MembershipScope, PERMISSION_MODULES, PERMISSIONS,
-        Permission, PermissionSet, RoleGrant, current_agent_limit,
+        Action, AgentLimits, MembershipRole, MembershipScope, PERMISSIONS, Permission,
+        PermissionSet, RoleGrant, current_agent_limit,
     },
     views::definition::BUILTIN_VIEW_KEYS,
 };
@@ -69,19 +64,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/api/v1/organizations/{organization_id}/roles",
-            get(list_roles).post(create_role_route),
-        )
-        .route(
-            "/api/v1/organizations/{organization_id}/roles/{role_id}",
-            patch(change_role_route).delete(remove_role_route),
-        )
-        .route(
-            "/api/v1/organizations/{organization_id}/members/{actor_id}/role",
-            put(assign_role_route),
-        )
-        .route(
-            "/api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
-            put(set_agent_limit_route),
+            get(list_roles),
         )
         .route(
             "/api/v1/organizations/{organization_id}/permissions",
@@ -699,15 +682,22 @@ pub struct ModuleEntry {
 }
 
 pub(crate) fn catalogue() -> (Vec<ModuleEntry>, Vec<PermissionEntry>) {
-    let modules = PERMISSION_MODULES
-        .iter()
-        .map(|(key, name)| ModuleEntry { key, name })
+    // Grouped by the module that owns each permission (M1.3o).
+    let registry = crate::modules::registry::Registry::global();
+    let modules = registry
+        .permission_modules()
+        .map(|manifest| ModuleEntry {
+            key: manifest.id.as_str(),
+            name: manifest.name.as_str(),
+        })
         .collect();
     let permissions = PERMISSIONS
         .iter()
         .map(|info| PermissionEntry {
             key: info.key,
-            module: info.module,
+            module: registry
+                .module_of_permission(info.key)
+                .map_or("workspace", |manifest| manifest.id.as_str()),
             label: info.label,
             meaning: info.meaning,
             scope: info.scope.key(),
@@ -2257,151 +2247,6 @@ async fn list_roles(
     }))
 }
 
-async fn create_role_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(organization_id): ApiPath<Uuid>,
-    ApiJson(input): ApiJson<RoleInput>,
-) -> Result<(StatusCode, Json<RoleView>), AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
-    let auditor = Auditor::Browser {
-        headers: &headers,
-        principal: &principal,
-    };
-    let view = create(&mut transaction, &auditor, caller, organization_id, input).await?;
-    transaction.commit().await?;
-    Ok((StatusCode::CREATED, Json(view)))
-}
-
-async fn change_role_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((organization_id, role_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<RoleChange>,
-) -> Result<Json<RoleView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    if request.expected_version.is_none() {
-        return Err(AppError::Validation("expectedVersion"));
-    }
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
-    let auditor = Auditor::Browser {
-        headers: &headers,
-        principal: &principal,
-    };
-    let view = change(
-        &mut transaction,
-        &auditor,
-        caller,
-        organization_id,
-        role_id,
-        request,
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(view))
-}
-
-async fn remove_role_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((organization_id, role_id)): ApiPath<(Uuid, Uuid)>,
-) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
-    let auditor = Auditor::Browser {
-        headers: &headers,
-        principal: &principal,
-    };
-    remove(&mut transaction, &auditor, caller, organization_id, role_id).await?;
-    transaction.commit().await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AssignRequest {
-    role_id: Uuid,
-    #[serde(default)]
-    apply_to_projects: bool,
-    expected_version: i64,
-}
-
-async fn assign_role_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((organization_id, actor_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<AssignRequest>,
-) -> Result<Json<Assignment>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
-    let auditor = Auditor::Browser {
-        headers: &headers,
-        principal: &principal,
-    };
-    let assignment = assign(
-        &mut transaction,
-        &auditor,
-        caller,
-        organization_id,
-        actor_id,
-        request.role_id,
-        request.apply_to_projects,
-        Some(request.expected_version),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(assignment))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AgentLimitRequest {
-    /// `null`: their apps may do what they may.
-    permissions: Option<Vec<String>>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AgentLimitResponse {
-    permissions: Option<Vec<&'static str>>,
-}
-
-async fn set_agent_limit_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((organization_id, actor_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<AgentLimitRequest>,
-) -> Result<Json<AgentLimitResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let caller = standing(&mut transaction, organization_id, principal.actor_id).await?;
-    let auditor = Auditor::Browser {
-        headers: &headers,
-        principal: &principal,
-    };
-    let permissions = set_agent_limit(
-        &mut transaction,
-        &auditor,
-        caller,
-        organization_id,
-        actor_id,
-        request.permissions,
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(AgentLimitResponse { permissions }))
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PermissionsQuery {
@@ -2631,16 +2476,30 @@ mod tests {
         }
     }
 
+    /// The Roles page groups each permission under the module that owns it
+    /// (M1.3o); the web app's keys are generated from the same catalogue.
     #[test]
-    fn the_web_app_knows_every_permission() {
-        let web = include_str!("../../../web/src/settings/workspace/roles.ts");
-        for info in PERMISSIONS {
+    fn permissions_are_grouped_by_the_module_that_owns_them() {
+        let (modules, permissions) = catalogue();
+        let group = |key: &str| {
+            permissions
+                .iter()
+                .find(|entry| entry.key == key)
+                .map(|entry| entry.module)
+        };
+        assert_eq!(group("tasks.edit"), Some("tasks"));
+        assert_eq!(group("modules.manage"), Some("workspace"));
+        assert_eq!(group("direct.start"), Some("messages"));
+        for entry in &permissions {
             assert!(
-                web.contains(&format!("'{}'", info.key)),
-                "add '{}' to PERMISSION_KEYS in apps/web/src/settings/workspace/roles.ts",
-                info.key
+                modules.iter().any(|module| module.key == entry.module),
+                "{} is grouped under {}, which isn't listed",
+                entry.key,
+                entry.module
             );
         }
+        // The web's list is generated from PERMISSIONS (ops/codegen), and
+        // generated_files_are_current keeps it current.
     }
 
     #[test]

@@ -478,16 +478,14 @@ async fn removed_message_text_vanishes_everywhere() {
     }
     // Status changes on the board are audited without the thread's name.
     for thread in &threads {
-        let (status, updated) = send(
-            app,
-            setup.browser.request(
-                "PATCH",
-                &format!("/api/v1/threads/{thread}"),
-                None,
-                json!({ "status": "Done" }),
-            ),
-        )
-        .await;
+        let (status, updated) = setup
+            .browser
+            .op(
+                app,
+                "thread_update",
+                json!({ "threadId": thread, "status": "Done" }),
+            )
+            .await;
         assert_eq!(status, StatusCode::OK, "{updated}");
         let audit = sqlx::query_scalar::<_, Value>(
             "SELECT metadata FROM audit_events WHERE action = 'conversation.thread_updated' AND target_id = $1",
@@ -929,19 +927,14 @@ async fn removed_message_text_vanishes_everywhere() {
     assert_eq!(thread_again["value"]["id"], threads[0].as_str());
     assert_eq!(thread_again["value"]["name"], "New thread");
     // A withdrawn request can't be retried into asking about it again.
-    let (status, retried) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!(
-                "/api/v1/reply-requests/{}/retry",
-                nova_request.as_str().expect("Nova's request")
-            ),
-            None,
-            Value::Null,
-        ),
-    )
-    .await;
+    let (status, retried) = setup
+        .browser
+        .op(
+            app,
+            "reply_retry",
+            json!({"requestId": nova_request.as_str().expect("Nova's request")}),
+        )
+        .await;
     assert_eq!(status, StatusCode::CONFLICT, "{retried}");
 
     // Retries never bring it back.

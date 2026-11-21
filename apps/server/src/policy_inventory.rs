@@ -109,12 +109,6 @@ macro_rules! boundary_route {
 pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "settings",
-        Put,
-        "/api/v1/settings/values/{key}",
-        SettingsManage
-    ),
-    policy_route!(
-        "settings",
         Post,
         "/api/v1/settings/values/{key}/reset",
         SettingsManage
@@ -332,36 +326,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "workspace",
         Post,
         "/api/v1/organizations/{organization_id}/transfer-ownership",
-        MembershipManage
-    ),
-    policy_route!(
-        "roles",
-        Post,
-        "/api/v1/organizations/{organization_id}/roles",
-        RoleManage
-    ),
-    policy_route!(
-        "roles",
-        Patch,
-        "/api/v1/organizations/{organization_id}/roles/{role_id}",
-        RoleManage
-    ),
-    policy_route!(
-        "roles",
-        Delete,
-        "/api/v1/organizations/{organization_id}/roles/{role_id}",
-        RoleManage
-    ),
-    policy_route!(
-        "roles",
-        Put,
-        "/api/v1/organizations/{organization_id}/members/{actor_id}/role",
-        MembershipManage
-    ),
-    policy_route!(
-        "roles",
-        Put,
-        "/api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
         MembershipManage
     ),
     policy_route!(
@@ -798,12 +762,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "conversations",
         Post,
-        "/api/v1/conversations/{id}/mark-unread",
-        ReadStateUpdate
-    ),
-    policy_route!(
-        "conversations",
-        Post,
         "/api/v1/conversations/{id}/messages",
         MessageSend
     ),
@@ -813,7 +771,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/conversations/{id}/threads",
         ThreadCreate
     ),
-    policy_route!("conversations", Patch, "/api/v1/threads/{id}", ThreadCreate),
     policy_route!("memory", Post, "/api/v1/projects/{id}/pages", PageEdit),
     policy_route!(
         "memory",
@@ -856,18 +813,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     policy_route!(
         "whiteboards/http",
-        Post,
-        "/api/v1/whiteboards",
-        WhiteboardEdit
-    ),
-    policy_route!(
-        "whiteboards/http",
-        Patch,
-        "/api/v1/whiteboards/{id}",
-        WhiteboardEdit
-    ),
-    policy_route!(
-        "whiteboards/http",
         Delete,
         "/api/v1/whiteboards/{id}",
         WhiteboardEdit
@@ -876,12 +821,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "whiteboards/http",
         Post,
         "/api/v1/whiteboard-trash/empty",
-        WhiteboardEdit
-    ),
-    policy_route!(
-        "whiteboards/http",
-        Post,
-        "/api/v1/whiteboards/{id}/duplicate",
         WhiteboardEdit
     ),
     policy_route!(
@@ -908,19 +847,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/whiteboards/{id}/revisions/{revision}/restore",
         WhiteboardEdit
     ),
-    policy_route!(
-        "whiteboards/http",
-        Post,
-        "/api/v1/whiteboards/{id}/links",
-        WhiteboardEdit
-    ),
-    policy_route!(
-        "whiteboards/http",
-        Delete,
-        "/api/v1/whiteboards/{id}/links/{kind}/{target_id}",
-        WhiteboardEdit
-    ),
-    policy_route!("memory", Post, "/api/v1/projects/{id}/decisions", PageEdit),
     policy_route!(
         "memory",
         Post,
@@ -958,24 +884,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/conversations/{id}/members/{actor_id}/remove",
         ChannelCreate
-    ),
-    policy_route!(
-        "replies",
-        Post,
-        "/api/v1/conversations/{id}/continue",
-        MessageSend
-    ),
-    policy_route!(
-        "replies",
-        Post,
-        "/api/v1/reply-requests/{id}/retry",
-        MessageSend
-    ),
-    policy_route!(
-        "replies",
-        Post,
-        "/api/v1/reply-requests/{id}/stop",
-        MessageSend
     ),
     // Editing and removing your own message needs MessageSend. Removing
     // someone else's also needs MessageModerate, checked in the handler.
@@ -1074,32 +982,8 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     // canceling is the author's own.
     policy_route!(
         "scheduled_messages",
-        Post,
-        "/api/v1/conversations/{id}/scheduled-messages",
-        MessageSend
-    ),
-    policy_route!(
-        "scheduled_messages",
         Patch,
         "/api/v1/scheduled-messages/{id}",
-        MessageSend
-    ),
-    boundary_route!(
-        "scheduled_messages",
-        Delete,
-        "/api/v1/scheduled-messages/{id}",
-        SessionAuthentication
-    ),
-    policy_route!(
-        "scheduled_messages",
-        Post,
-        "/api/v1/scheduled-messages/{id}/send-now",
-        MessageSend
-    ),
-    policy_route!(
-        "forwarding",
-        Post,
-        "/api/v1/messages/{id}/forward",
         MessageSend
     ),
     boundary_route!(
@@ -1533,30 +1417,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects/{project_id}/launches/{launch_id}/cancel",
         WorkerInvoke
-    ),
-    policy_route!(
-        "automations",
-        Post,
-        "/api/v1/projects/{project_id}/automations",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "automations",
-        Patch,
-        "/api/v1/projects/{project_id}/automations/{rule_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "automations",
-        Delete,
-        "/api/v1/projects/{project_id}/automations/{rule_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "automations",
-        Post,
-        "/api/v1/projects/{project_id}/automations/{rule_id}/run",
-        WorkItemEdit
     ),
     policy_route!(
         "work_items",

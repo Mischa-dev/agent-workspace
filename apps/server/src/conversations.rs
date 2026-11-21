@@ -80,7 +80,6 @@ pub fn router() -> Router<AppState> {
             "/api/v1/conversations/{id}/threads",
             get(list_threads).post(create_thread),
         )
-        .route("/api/v1/threads/{id}", axum::routing::patch(patch_thread))
         .route("/api/v1/channels/{id}/archive", post(archive_channel))
         .route("/api/v1/threads/{id}/archive", post(archive_thread))
         .route("/api/v1/channels/{id}/restore", post(restore_channel))
@@ -92,10 +91,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/conversations/{id}/mark-seen",
             post(mark_conversation_seen),
-        )
-        .route(
-            "/api/v1/conversations/{id}/mark-unread",
-            post(mark_conversation_unread),
         )
         .layer(DefaultBodyLimit::max(MAX_HTTP_BODY_BYTES))
 }
@@ -342,13 +337,6 @@ struct ArchiveConversationRequest {
 struct MarkSeenRequest {
     highest_seen_sequence: i64,
     expected_version: Option<i64>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct MarkUnreadRequest {
-    /// The first message to show as unread; the newest when absent.
-    message_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1724,31 +1712,6 @@ pub(crate) async fn rename_conversation(
     Ok(view)
 }
 
-async fn patch_thread(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(thread_id): ApiPath<Uuid>,
-    ApiJson(patch): ApiJson<ThreadPatch>,
-) -> Result<Json<ConversationView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let view = update_thread(&mut transaction, principal.actor_id, thread_id, &patch).await?;
-    insert_audit_event(
-        &mut transaction,
-        &headers,
-        &principal,
-        view.project_id,
-        "conversation.thread_updated",
-        thread_id,
-        // No name: one suggested from a message must vanish with it.
-        serde_json::json!({ "status": view.thread_status }),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(view))
-}
-
 async fn send_channel_message(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3109,31 +3072,6 @@ async fn mark_conversation_seen(
     }))
 }
 
-async fn mark_conversation_unread(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(conversation_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<MarkUnreadRequest>,
-) -> Result<Json<ReadStateView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let change = mark_unread_from(
-        &mut transaction,
-        principal.actor_id,
-        conversation_id,
-        request
-            .message_id
-            .map_or(UnreadFrom::Newest, UnreadFrom::Message),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(ReadStateView {
-        highest_seen_sequence: change.highest_seen_sequence,
-        version: change.version,
-    }))
-}
-
 /// Where `mark_unread_from` makes a conversation unread from.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum UnreadFrom {
@@ -3145,7 +3083,6 @@ pub(crate) enum UnreadFrom {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ReadMarkChange {
     pub highest_seen_sequence: i64,
-    pub version: i64,
 }
 
 /// Make `from` and everything after it unread for this actor, to come back to
@@ -3220,7 +3157,6 @@ pub(crate) async fn mark_unread_from(
                 highest_seen_sequence: unchanged
                     .as_ref()
                     .map_or(0, |row| row.highest_seen_sequence),
-                version: unchanged.as_ref().map_or(0, |row| row.version),
             });
         }
     };
@@ -3260,7 +3196,6 @@ pub(crate) async fn mark_unread_from(
     .await?;
     Ok(ReadMarkChange {
         highest_seen_sequence: row.highest_seen_sequence,
-        version: row.version,
     })
 }
 

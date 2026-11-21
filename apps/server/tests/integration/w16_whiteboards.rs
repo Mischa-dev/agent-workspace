@@ -26,8 +26,13 @@ async fn request(
     send(&setup.app, browser.request(method, uri, None, body)).await
 }
 
+/// A whiteboard operation, as the web app runs it.
+async fn op(setup: &Setup, browser: &Browser, name: &str, input: Value) -> (StatusCode, Value) {
+    browser.op(&setup.app, name, input).await
+}
+
 async fn create_board(setup: &Setup, browser: &Browser, body: Value) -> String {
-    let (status, created) = request(setup, browser, "POST", "/api/v1/whiteboards", body).await;
+    let (status, created) = op(setup, browser, "whiteboard_create", body).await;
     assert_eq!(status, StatusCode::OK, "{created}");
     created["whiteboard"]["id"]
         .as_str()
@@ -107,7 +112,7 @@ async fn boards_live_in_a_workspace_or_project_and_links_never_copy_or_delete_th
     let open = create_board(
         &setup,
         owner,
-        json!({"title": "  Whole   team ", "organizationId": setup.organization_id}),
+        json!({"title": "  Whole   team ", "workspaceId": setup.organization_id}),
     )
     .await;
     // A project board, linked to a task as it's made.
@@ -127,7 +132,7 @@ async fn boards_live_in_a_workspace_or_project_and_links_never_copy_or_delete_th
         &setup,
         owner,
         json!({"title": "Sync design", "projectId": work,
-               "link": {"targetKind": "task", "targetId": task}}),
+               "linkTo": {"targetKind": "task", "targetId": task}}),
     )
     .await;
 
@@ -182,12 +187,11 @@ async fn boards_live_in_a_workspace_or_project_and_links_never_copy_or_delete_th
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    let (status, _) = request(
+    let (status, _) = op(
         &setup,
         &mara,
-        "POST",
-        &format!("/api/v1/whiteboards/{open}/links"),
-        json!({"targetKind": "task", "targetId": task}),
+        "whiteboard_link",
+        json!({"whiteboardId": open, "targetKind": "task", "targetId": task}),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -230,12 +234,11 @@ async fn boards_live_in_a_workspace_or_project_and_links_never_copy_or_delete_th
         ("page", page.as_str()),
         ("task", task.as_str()),
     ] {
-        let (status, linked) = request(
+        let (status, linked) = op(
             &setup,
             owner,
-            "POST",
-            &format!("/api/v1/whiteboards/{private}/links"),
-            json!({"targetKind": kind, "targetId": target}),
+            "whiteboard_link",
+            json!({"whiteboardId": private, "targetKind": kind, "targetId": target}),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{linked}");
@@ -291,21 +294,19 @@ async fn boards_live_in_a_workspace_or_project_and_links_never_copy_or_delete_th
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "bytes that aren't a PNG");
-    let (status, _) = request(
+    let (status, _) = op(
         &setup,
         owner,
-        "DELETE",
-        &format!("/api/v1/whiteboards/{private}/links/task/{task}"),
-        Value::Null,
+        "whiteboard_link",
+        json!({"whiteboardId": private, "targetKind": "task", "targetId": task, "remove": true}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (status, trashed) = request(
+    let (status, trashed) = op(
         &setup,
         owner,
-        "PATCH",
-        &format!("/api/v1/whiteboards/{private}"),
-        json!({"deleted": true, "title": "Sync design v2"}),
+        "whiteboard_update",
+        json!({"whiteboardId": private, "deleted": true, "title": "Sync design v2"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{trashed}");
@@ -319,12 +320,11 @@ async fn boards_live_in_a_workspace_or_project_and_links_never_copy_or_delete_th
     )
     .await;
     assert_eq!(trash["whiteboards"][0]["id"], private.as_str());
-    let (status, _) = request(
+    let (status, _) = op(
         &setup,
         owner,
-        "PATCH",
-        &format!("/api/v1/whiteboards/{private}"),
-        json!({"deleted": false}),
+        "whiteboard_update",
+        json!({"whiteboardId": private, "deleted": false}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -352,29 +352,35 @@ async fn boards_live_in_a_workspace_or_project_and_links_never_copy_or_delete_th
     assert_eq!(status, StatusCode::NOT_FOUND, "images follow the board");
 
     // A copy takes the drawing and images, not the links.
-    let (status, copy) = request(
+    let (status, copy) = op(
         &setup,
         owner,
-        "POST",
-        &format!("/api/v1/whiteboards/{private}/duplicate"),
-        json!({}),
+        "whiteboard_duplicate",
+        json!({"whiteboardId": private}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{copy}");
     assert_eq!(copy["whiteboard"]["title"], "Copy of Sync design v2");
-    assert_eq!(copy["links"], json!([]));
     let copy = copy["whiteboard"]["id"].as_str().expect("copy").to_owned();
+    let (_, copied) = request(
+        &setup,
+        owner,
+        "GET",
+        &format!("/api/v1/whiteboards/{copy}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(copied["links"], json!([]), "{copied}");
     let copied = scene(&setup, owner, &copy, None).await;
     assert!(element(&copied, "box").is_some(), "{copied}");
     assert_eq!(copied["files"][0]["id"], "photo1");
 
     // Moving the board to the whole workspace lets Mara in.
-    let (status, moved) = request(
+    let (status, moved) = op(
         &setup,
         owner,
-        "PATCH",
-        &format!("/api/v1/whiteboards/{private}"),
-        json!({"projectId": null}),
+        "whiteboard_update",
+        json!({"whiteboardId": private, "workspaceWide": true}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{moved}");
@@ -421,17 +427,22 @@ async fn trashed_boards_go_for_good_only_when_someone_who_can_edit_asks() {
     // Only from the trash.
     let (status, _) = request(&setup, owner, "DELETE", &path, Value::Null).await;
     assert_eq!(status, StatusCode::CONFLICT);
-    let (status, copy) = request(
+    let (status, copy) = op(
         &setup,
         owner,
-        "POST",
-        &format!("{path}/duplicate"),
-        json!({}),
+        "whiteboard_duplicate",
+        json!({"whiteboardId": board}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{copy}");
     let copy = copy["whiteboard"]["id"].as_str().expect("copy").to_owned();
-    let (status, _) = request(&setup, owner, "PATCH", &path, json!({"deleted": true})).await;
+    let (status, _) = op(
+        &setup,
+        owner,
+        "whiteboard_update",
+        json!({"whiteboardId": board, "deleted": true}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     // A viewer sees the project's trash but can't delete from it.
@@ -476,12 +487,11 @@ async fn trashed_boards_go_for_good_only_when_someone_who_can_edit_asks() {
     );
 
     // Emptying the trash takes what's left there, and nothing outside it.
-    let (status, _) = request(
+    let (status, _) = op(
         &setup,
         owner,
-        "PATCH",
-        &format!("/api/v1/whiteboards/{kept}"),
-        json!({"deleted": true}),
+        "whiteboard_update",
+        json!({"whiteboardId": kept, "deleted": true}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -533,12 +543,11 @@ async fn trashed_boards_go_for_good_only_when_someone_who_can_edit_asks() {
     .execute(&setup.pool)
     .await
     .expect("older trashed boards");
-    let (status, _) = request(
+    let (status, _) = op(
         &setup,
         &viewer,
-        "PATCH",
-        &format!("/api/v1/whiteboards/{own}"),
-        json!({"deleted": true}),
+        "whiteboard_update",
+        json!({"whiteboardId": own, "deleted": true}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -1137,12 +1146,11 @@ async fn workspace_boards_and_channels_live_in_the_workspace_space() {
     .await
     .expect("owner");
     // A board across the workspace, before any project exists.
-    let (status, workspace) = request(
+    let (status, workspace) = op(
         &setup,
         owner,
-        "POST",
-        "/api/v1/whiteboards",
-        json!({"title": "Whole team", "organizationId": setup.organization_id}),
+        "whiteboard_create",
+        json!({"title": "Whole team", "workspaceId": setup.organization_id}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{workspace}");
@@ -1283,12 +1291,11 @@ async fn workspace_boards_and_channels_live_in_the_workspace_space() {
         json!({"title": "Sync design", "projectId": work}),
     )
     .await;
-    let (status, moved) = request(
+    let (status, moved) = op(
         &setup,
         owner,
-        "PATCH",
-        &format!("/api/v1/whiteboards/{private}"),
-        json!({"projectId": null}),
+        "whiteboard_update",
+        json!({"whiteboardId": private, "workspaceWide": true}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{moved}");
@@ -1685,12 +1692,11 @@ async fn board_images_live_in_the_file_store() {
     assert_eq!(file["dataURL"], TINY_PNG);
 
     // A copy shows the image over the same stored bytes.
-    let (status, copy) = request(
+    let (status, copy) = op(
         &setup,
         owner,
-        "POST",
-        &format!("/api/v1/whiteboards/{board}/duplicate"),
-        json!({}),
+        "whiteboard_duplicate",
+        json!({"whiteboardId": board}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{copy}");
@@ -1765,7 +1771,13 @@ async fn board_images_live_in_the_file_store() {
 
     // Deleting the original for good keeps the bytes its copy shows.
     let path = format!("/api/v1/whiteboards/{board}");
-    let (status, _) = request(&setup, owner, "PATCH", &path, json!({"deleted": true})).await;
+    let (status, _) = op(
+        &setup,
+        owner,
+        "whiteboard_update",
+        json!({"whiteboardId": board, "deleted": true}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let (status, _) = request(&setup, owner, "DELETE", &path, Value::Null).await;
     assert_eq!(status, StatusCode::NO_CONTENT);

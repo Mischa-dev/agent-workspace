@@ -347,19 +347,7 @@ async fn only_people_who_manage_the_workspace_use_or_save_templates() {
     .execute(&setup.pool)
     .await
     .expect("make admin");
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea_id}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["settings.manage", "roles.manage", "projects.view", "projects.create"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup.browser.op_in(app, setup.organization_id, "app_limit_set", json!({"account": bea_id, "permissions": ["settings.manage", "roles.manage", "projects.view", "projects.create"]})).await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let bea_app = connect_app(app, &bea, "Bea's app", "full").await;
     let bea_session = initialize(app, &bea_app).await.expect("bea app");
@@ -384,19 +372,7 @@ async fn only_people_who_manage_the_workspace_use_or_save_templates() {
     );
     // With making channels and building collections in her limit, her app
     // uses it, in the project it makes.
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea_id}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["settings.manage", "roles.manage", "projects.view", "projects.create", "channels.create", "collections.build"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup.browser.op_in(app, setup.organization_id, "app_limit_set", json!({"account": bea_id, "permissions": ["settings.manage", "roles.manage", "projects.view", "projects.create", "channels.create", "collections.build"]})).await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let bea_session = initialize(app, &bea_app).await.expect("bea app");
     let used = tool(

@@ -1694,15 +1694,18 @@ pub(super) async fn message_forward(
     };
     let result = async {
         // The original, read as this connection may: in a project it can
-        // reach, in a conversation it may read. Anything else is "not found",
-        // the same as a message that doesn't exist.
+        // reach, or a DM or group (in no space) it may read, as
+        // `forwarding::forward` reads it. Anything else is "not found", the
+        // same as a message that doesn't exist.
         let source = sqlx::query_as::<_, (Uuid, Uuid)>(
             r#"
-            SELECT message.project_id, message.conversation_id
+            SELECT COALESCE(message.project_id, direct_scope_id()), message.conversation_id
             FROM messages message
             WHERE message.id = $1 AND message.removed_at IS NULL
               AND conversation_visible_to(message.conversation_id, $2)
-              AND actor_can_access_project($2, $3, message.project_id)
+              AND (CASE WHEN message.project_id IS NULL
+                        THEN $3::uuid IS NULL OR agent_connection_can_reach_direct($3::uuid)
+                        ELSE actor_can_access_project($2, $3, message.project_id) END)
             "#,
         )
         .bind(message_id)

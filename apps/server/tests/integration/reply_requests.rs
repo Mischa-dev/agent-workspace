@@ -246,9 +246,9 @@ async fn agents_are_asked_claim_and_answer_exactly_once() {
         .call(
             &app,
             "POST",
-            &format!("/api/v1/conversations/{group_id}/continue"),
-            None,
-            Value::Null,
+            "/api/v2/ops/conversation_continue",
+            Some(&Uuid::now_v7().to_string()),
+            json!({"conversationId": group_id}),
         )
         .await;
     assert_eq!(status, StatusCode::OK);
@@ -264,9 +264,9 @@ async fn agents_are_asked_claim_and_answer_exactly_once() {
         .call(
             &app,
             "POST",
-            &format!("/api/v1/conversations/{group_id}/continue"),
-            None,
-            Value::Null,
+            "/api/v2/ops/conversation_continue",
+            Some(&Uuid::now_v7().to_string()),
+            json!({"conversationId": group_id}),
         )
         .await;
     assert_eq!(status, StatusCode::OK);
@@ -475,9 +475,9 @@ async fn requests_of_agents_removed_from_a_group_are_withdrawn() {
         .call(
             &app,
             "POST",
-            &format!("/api/v1/reply-requests/{rook_first}/retry"),
-            None,
-            Value::Null,
+            "/api/v2/ops/reply_retry",
+            Some(&Uuid::now_v7().to_string()),
+            json!({"requestId": rook_first}),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{retried}");
@@ -619,9 +619,9 @@ async fn requests_of_agents_removed_from_a_group_are_withdrawn() {
         .call(
             &app,
             "POST",
-            &format!("/api/v1/reply-requests/{mara_second}/retry"),
-            None,
-            Value::Null,
+            "/api/v2/ops/reply_retry",
+            Some(&Uuid::now_v7().to_string()),
+            json!({"requestId": mara_second}),
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
@@ -650,9 +650,9 @@ async fn requests_of_agents_removed_from_a_group_are_withdrawn() {
         .call(
             &app,
             "POST",
-            &format!("/api/v1/reply-requests/{rook_second}/retry"),
-            None,
-            Value::Null,
+            "/api/v2/ops/reply_retry",
+            Some(&Uuid::now_v7().to_string()),
+            json!({"requestId": rook_second}),
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
@@ -1099,13 +1099,13 @@ async fn stop_cancels_the_claim_and_refuses_the_next_call() {
         .call(
             &app,
             "POST",
-            &format!("/api/v1/reply-requests/{request_id}/stop"),
-            None,
-            Value::Null,
+            "/api/v2/ops/reply_stop",
+            Some(&Uuid::now_v7().to_string()),
+            json!({"requestId": request_id}),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{stopped}");
-    assert_eq!(stopped["status"], "cancelled");
+    assert_eq!(stopped["value"]["status"], "cancelled", "{stopped}");
     let shown = latest_request(&owner, &app, &dm_id).await;
     assert_eq!(shown["status"], "cancelled", "{shown}");
     assert_eq!(shown["reason"], "Stopped by Owner.", "{shown}");
@@ -1148,9 +1148,9 @@ async fn stop_cancels_the_claim_and_refuses_the_next_call() {
         .call(
             &app,
             "POST",
-            &format!("/api/v1/reply-requests/{request_id}/stop"),
-            None,
-            Value::Null,
+            "/api/v2/ops/reply_stop",
+            Some(&Uuid::now_v7().to_string()),
+            json!({"requestId": request_id}),
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT);
@@ -1158,9 +1158,9 @@ async fn stop_cancels_the_claim_and_refuses_the_next_call() {
         .call(
             &app,
             "POST",
-            &format!("/api/v1/reply-requests/{request_id}/retry"),
-            None,
-            Value::Null,
+            "/api/v2/ops/reply_retry",
+            Some(&Uuid::now_v7().to_string()),
+            json!({"requestId": request_id}),
         )
         .await;
     assert_eq!(status, StatusCode::OK);
@@ -1441,9 +1441,9 @@ async fn webhooks_say_what_happened_without_message_text() {
         .call(
             &app,
             "POST",
-            &format!("/api/v1/reply-requests/{request_id}/stop"),
-            None,
-            Value::Null,
+            "/api/v2/ops/reply_stop",
+            Some(&Uuid::now_v7().to_string()),
+            json!({"requestId": request_id}),
         )
         .await;
     assert_eq!(status, StatusCode::OK);

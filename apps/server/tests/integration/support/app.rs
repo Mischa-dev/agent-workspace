@@ -53,6 +53,41 @@ impl Browser {
                 .expect("request")
         }
     }
+
+    /// Runs an operation the way the web app does (`POST /api/v2/ops/{name}`,
+    /// a fresh request id), answering the status and the operation's value,
+    /// or the whole envelope when it didn't succeed.
+    pub(crate) async fn op(
+        &self,
+        app: &axum::Router,
+        name: &str,
+        input: Value,
+    ) -> (StatusCode, Value) {
+        self.op_at(app, &format!("/api/v2/ops/{name}"), input).await
+    }
+
+    /// [`Browser::op`] in a named workspace (`POST /api/v2/w/{workspace}/ops/{name}`),
+    /// for an operation whose target doesn't say which.
+    pub(crate) async fn op_in(
+        &self,
+        app: &axum::Router,
+        workspace: impl std::fmt::Display,
+        name: &str,
+        input: Value,
+    ) -> (StatusCode, Value) {
+        self.op_at(app, &format!("/api/v2/w/{workspace}/ops/{name}"), input)
+            .await
+    }
+
+    async fn op_at(&self, app: &axum::Router, path: &str, input: Value) -> (StatusCode, Value) {
+        let key = Uuid::now_v7().to_string();
+        let (status, body) = send(app, self.request("POST", path, Some(&key), input)).await;
+        if body["outcome"] == "ok" {
+            (status, body["value"].clone())
+        } else {
+            (status, body)
+        }
+    }
 }
 
 pub(crate) async fn create_agent(

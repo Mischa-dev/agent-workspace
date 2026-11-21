@@ -365,7 +365,7 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   })) as { conversation?: { id?: string } }
   const threadId = String(thread.conversation?.id)
   await post(threadId, releasesThread.replies, () => `/api/v1/threads/${threadId}/messages`)
-  await me.write('PATCH', `/api/v1/threads/${threadId}`, { status: 'Done', outcome: 'Index added; CI now checks every partition has its parent\'s indexes.' })
+  await me.write('POST', '/api/v2/ops/thread_update', { threadId, status: 'Done', outcome: 'Index added; CI now checks every partition has its parent\'s indexes.' })
     .catch((error: unknown) => warn('thread status not set', error))
 
   // A DM with Amara (every message reaches the inbox), and a group DM.
@@ -395,7 +395,8 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
     if (writer) await writer.write('POST', `/api/v1/projects/${projectId}/pages`, page)
     else await bots.get('Muse')!.call('page_write', { projectId, title: page.title, body: page.body })
   }
-  await team[0].write('POST', `/api/v1/projects/${projectId}/decisions`, {
+  await team[0].write('POST', '/api/v2/ops/decision_record', {
+    spaceId: projectId,
     title: 'Ship 2026.11 without battery alerts',
     detail: 'The panel answers what support keeps asking; alerts follow in 2026.12.',
     sourceMessageId: releaseIds[5],
@@ -403,11 +404,11 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   }).catch((error: unknown) => warn('no decision recorded', error))
 
   // A whiteboard: the ingest pipeline.
-  const board = (await team[7].write('POST', '/api/v1/whiteboards', {
+  const board = (await team[7].write('POST', '/api/v2/ops/whiteboard_create', {
     title: 'Telemetry ingest: how a battery sample reaches the dashboard',
     projectId,
-  })) as { whiteboard?: { id?: string } }
-  const whiteboardId = String(board.whiteboard?.id)
+  })) as { value?: { whiteboard?: { id?: string } } }
+  const whiteboardId = String(board.value?.whiteboard?.id)
   const boxes = [
     ['robot', 'rectangle', 0, 0, 'Robot\nfirmware 4.12'],
     ['dock', 'rectangle', 0, 200, 'Charging dock'],

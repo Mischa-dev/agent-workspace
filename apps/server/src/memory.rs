@@ -104,10 +104,7 @@ pub fn router() -> Router<AppState> {
             "/api/v1/organizations/{organization_id}/pages-space",
             get(workspace_pages_space_http),
         )
-        .route(
-            "/api/v1/projects/{id}/decisions",
-            get(list_decisions_http).post(record_decision_http),
-        )
+        .route("/api/v1/projects/{id}/decisions", get(list_decisions_http))
         .route(
             "/api/v1/conversations/{id}/pins",
             get(list_pins_http).post(pin_http),
@@ -2063,32 +2060,6 @@ async fn list_decisions_http(
 
 /// A wrapper over `decision_record` (K2.5): the same body as before; a
 /// refusal answers with the operation's envelope.
-async fn record_decision_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(input): ApiJson<DecisionInput>,
-) -> axum::response::Response {
-    if let Err(error) = require_authenticated_write(&state, &headers, &principal).await {
-        return error.into_response();
-    }
-    let input = serde_json::json!({
-        "spaceId": project_id,
-        "title": input.title,
-        "detail": input.detail,
-        "sourceMessageId": input.source_message_id,
-        "sourceConversationId": input.source_conversation_id,
-        "supersedes": input.supersedes,
-    });
-    match crate::ops::web::run_for_session(&state, &headers, &principal, "decision_record", input)
-        .await
-    {
-        Ok(value) => Json(value).into_response(),
-        Err(response) => response,
-    }
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PinsResponse {

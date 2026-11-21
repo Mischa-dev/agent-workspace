@@ -33,12 +33,7 @@ use std::time::Duration;
 
 mod record_rules;
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    routing::{get, post},
-};
+use axum::{Json, Router, extract::State, routing::get};
 use chrono::{DateTime, NaiveTime, TimeZone, Utc};
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
@@ -48,10 +43,10 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
+    auth::AuthenticatedActor,
     collections::definition::FilterWrite,
     collections::task_query::{self, TaskQuery},
-    error::{ApiJson, ApiPath, AppError},
+    error::{ApiPath, AppError},
     events::{self, Caller, Event, Subject},
     idempotency::IdempotencyKey,
     jobs::{self, JobContext, JobError, JobRegistry, NewJob},
@@ -77,18 +72,7 @@ const SUBJECT_KIND: &str = "automation_rule";
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route(
-            "/api/v1/projects/{project_id}/automations",
-            get(list_route).post(create_route),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/automations/{rule_id}",
-            axum::routing::patch(update_route).delete(delete_route),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/automations/{rule_id}/run",
-            post(run_now_route),
-        )
+        .route("/api/v1/projects/{project_id}/automations", get(list_route))
         .route(
             "/api/v1/projects/{project_id}/automations/{rule_id}/runs",
             get(runs_route),
@@ -3822,61 +3806,6 @@ async fn list_route(
 ) -> Result<Json<RuleList>, AppError> {
     let caller = Caller::browser(&principal)?;
     Ok(Json(list(&state, &caller, project_id).await?))
-}
-
-async fn create_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<CreateRule>,
-) -> Result<(StatusCode, Json<RuleView>), AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let made = create(&state, &mut transaction, &caller, project_id, request).await?;
-    transaction.commit().await?;
-    Ok((StatusCode::CREATED, Json(made)))
-}
-
-async fn update_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, rule_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<UpdateRule>,
-) -> Result<Json<RuleView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    Ok(Json(
-        update(&state, &caller, project_id, rule_id, request).await?,
-    ))
-}
-
-async fn delete_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, rule_id)): ApiPath<(Uuid, Uuid)>,
-) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    delete(&state, &caller, project_id, rule_id).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn run_now_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, rule_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<RunNow>,
-) -> Result<Json<RunView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    Ok(Json(
-        run_now(&state, &caller, project_id, rule_id, request).await?,
-    ))
 }
 
 async fn runs_route(

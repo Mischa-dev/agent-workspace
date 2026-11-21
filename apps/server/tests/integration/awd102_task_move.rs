@@ -1104,7 +1104,6 @@ async fn only_projects_the_mover_can_add_tasks_to_are_offered() {
         "moira",
     )
     .await;
-    let roles = format!("/api/v1/organizations/{}/roles", setup.organization_id);
     let mut role_ids = Vec::new();
     for (name, permissions) in [
         // An unfamiliar name, with what a move needs.
@@ -1112,17 +1111,16 @@ async fn only_projects_the_mover_can_add_tasks_to_are_offered() {
         // A member-like role without adding tasks.
         ("Editor", json!(["tasks.view", "tasks.edit"])),
     ] {
-        let (status, role) = send(
-            app,
-            setup.browser.request(
-                "POST",
-                &roles,
-                None,
+        let (status, role) = setup
+            .browser
+            .op_in(
+                app,
+                setup.organization_id,
+                "role_create",
                 json!({"name": name, "baseRole": "member", "permissions": permissions}),
-            ),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED, "{role}");
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{role}");
         role_ids.push(
             role["id"]
                 .as_str()

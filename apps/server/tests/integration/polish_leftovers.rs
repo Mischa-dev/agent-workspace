@@ -436,27 +436,23 @@ async fn unnamed_threads_go_by_their_first_message_until_named() {
     assert_eq!(name_of(from_origin.clone()).await, "New thread");
 
     // Naming it ends that, and names are unique again.
-    let (status, renamed) = send(
-        &setup.app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/threads/{second}"),
-            None,
-            json!({"name": "Offsite"}),
-        ),
-    )
-    .await;
+    let (status, renamed) = setup
+        .browser
+        .op(
+            &setup.app,
+            "thread_update",
+            json!({"threadId": second, "name": "Offsite"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{renamed}");
-    let (status, clash) = send(
-        &setup.app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/threads/{from_origin}"),
-            None,
-            json!({"name": "offsite"}),
-        ),
-    )
-    .await;
+    let (status, clash) = setup
+        .browser
+        .op(
+            &setup.app,
+            "thread_update",
+            json!({"threadId": from_origin, "name": "offsite"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::CONFLICT, "{clash}");
 }
 

@@ -33,10 +33,21 @@ pub fn register_ops(registry: &mut Registry) {
 }
 
 /// The caller as the rule functions read it, in the space the call acts in.
+/// Who makes or runs a rule, by the edge the call came through: a person in
+/// the browser isn't acting through an app, so their apps' limit doesn't
+/// apply to the rule (`automations::through_app`).
 fn caller_and_space(call: &OpCall<'_>) -> (Caller, Uuid) {
     let principal = principal_for(call.ctx, None);
     let space = principal.project_id;
-    (Caller::mcp(&principal), space)
+    let mut caller = Caller::mcp(&principal);
+    if let crate::ops::Edge::Web { session_id } = call.ctx.edge {
+        caller.session_id = Some(session_id);
+        caller.channel = "browser";
+        caller.authentication_class = "password_session";
+        caller.client_name = None;
+        caller.token_project_id = None;
+    }
+    (caller, space)
 }
 
 fn space(project_id: &str) -> Target {

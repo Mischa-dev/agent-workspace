@@ -686,17 +686,16 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
     // Bea holds a narrowed role that sees tasks but doesn't edit them: she
     // reads the fields, and can neither define them nor set a value.
     let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
-    let (status, reader) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/organizations/{}/roles", setup.organization_id),
-            None,
+    let (status, reader) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_create",
             json!({"name": "Reader", "baseRole": "member", "permissions": ["tasks.view"]}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{reader}");
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{reader}");
     let membership_version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2",
     )
@@ -705,19 +704,7 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
     .fetch_one(&setup.pool)
     .await
     .expect("membership version");
-    let (status, assigned) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/role",
-                setup.organization_id
-            ),
-            None,
-            json!({"roleId": reader["id"], "applyToProjects": true, "expectedVersion": membership_version}),
-        ),
-    )
-    .await;
+    let (status, assigned) = setup.browser.op_in(app, setup.organization_id, "role_assign", json!({"account": bea, "role": reader["id"], "applyToProjects": true, "expectedVersion": membership_version})).await;
     assert!(status.is_success(), "{status}: {assigned}");
     let (status, listed) = send(
         app,
@@ -752,19 +739,15 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
 
     // Alex's app may only see and edit tasks: it sets values, but field
     // definitions are neither offered nor accepted through it.
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{alex}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["tasks.view", "tasks.edit"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": alex, "permissions": ["tasks.view", "tasks.edit"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let alex_app = connect_app(app, &alex_browser, "Alex's app", "full").await;
     let session = initialize(app, &alex_app).await.expect("Alex's app");
@@ -814,17 +797,8 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
     // workflow's permission, so the page offers it to her and the server
     // takes it, and she still can't set a value.
     let (cam, cam_browser) = add_person(&setup, &[&work], "cam").await;
-    let (status, keeper) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/organizations/{}/roles", setup.organization_id),
-            None,
-            json!({"name": "Workflow keeper", "baseRole": "admin", "permissions": ["tasks.view", "tasks.workflow"]}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{keeper}");
+    let (status, keeper) = setup.browser.op_in(app, setup.organization_id, "role_create", json!({"name": "Workflow keeper", "baseRole": "admin", "permissions": ["tasks.view", "tasks.workflow"]})).await;
+    assert_eq!(status, StatusCode::OK, "{keeper}");
     let membership_version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2",
     )
@@ -833,19 +807,7 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
     .fetch_one(&setup.pool)
     .await
     .expect("membership version");
-    let (status, assigned) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{cam}/role",
-                setup.organization_id
-            ),
-            None,
-            json!({"roleId": keeper["id"], "applyToProjects": true, "expectedVersion": membership_version}),
-        ),
-    )
-    .await;
+    let (status, assigned) = setup.browser.op_in(app, setup.organization_id, "role_assign", json!({"account": cam, "role": keeper["id"], "applyToProjects": true, "expectedVersion": membership_version})).await;
     assert!(status.is_success(), "{status}: {assigned}");
     let (status, listed) = send(
         app,

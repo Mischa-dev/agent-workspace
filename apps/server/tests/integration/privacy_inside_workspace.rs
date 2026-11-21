@@ -420,12 +420,12 @@ async fn members_never_read_what_they_are_not_in() {
 /// Gives `actor` a custom workspace role that keeps everything a member has
 /// except tasks and code, applied to their projects.
 async fn narrow(setup: &Setup, actor: Uuid) {
-    let (status, role) = send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/organizations/{}/roles", setup.organization_id),
-            None,
+    let (status, role) = setup
+        .browser
+        .op_in(
+            &setup.app,
+            setup.organization_id,
+            "role_create",
             json!({
                 "name": "No tasks or code",
                 "baseRole": "member",
@@ -434,9 +434,8 @@ async fn narrow(setup: &Setup, actor: Uuid) {
                     "whiteboards.edit", "collections.edit", "sheets.edit", "directory.view"
                 ]
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_success(), "narrowed role: {status} {role}");
     let role_id = role["role"]["id"].clone();
     let role_id = if role_id.is_null() {
@@ -452,19 +451,7 @@ async fn narrow(setup: &Setup, actor: Uuid) {
     .fetch_one(&setup.pool)
     .await
     .expect("membership version");
-    let (status, changed) = send(
-        &setup.app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{actor}/role",
-                setup.organization_id
-            ),
-            None,
-            json!({"roleId": role_id, "applyToProjects": true, "expectedVersion": version}),
-        ),
-    )
-    .await;
+    let (status, changed) = setup.browser.op_in(&setup.app, setup.organization_id, "role_assign", json!({"account": actor, "role": role_id, "applyToProjects": true, "expectedVersion": version})).await;
     assert!(status.is_success(), "narrow {actor}: {status} {changed}");
 }
 
