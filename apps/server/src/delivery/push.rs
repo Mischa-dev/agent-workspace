@@ -541,6 +541,9 @@ async fn claim(state: &AppState, connection_id: Uuid) -> Result<Claimed, AppErro
         match held {
             None => admitted.push(post),
             Some(until) => {
+                // In a scoped transaction like every tenant write, so the
+                // row rules let it see the delivery.
+                let mut deferral = crate::db::scoped_tx(&state.pool).await?;
                 sqlx::query(
                     "UPDATE deliveries SET next_attempt_at = $3 \
                      WHERE connection_id = $1 AND event_position = $2 AND state = 'pending'",
@@ -548,8 +551,9 @@ async fn claim(state: &AppState, connection_id: Uuid) -> Result<Claimed, AppErro
                 .bind(delivery.id)
                 .bind(post.position)
                 .bind(until)
-                .execute(&state.pool)
+                .execute(&mut *deferral)
                 .await?;
+                deferral.commit().await?;
             }
         }
     }

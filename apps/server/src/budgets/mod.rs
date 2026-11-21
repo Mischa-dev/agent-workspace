@@ -336,11 +336,7 @@ async fn warn(
         agent_run_id: None,
         pull_request_id: None,
         detail: json!({
-            "title": if notice.level == "hard" {
-                "A budget you set is used up"
-            } else {
-                "A budget you set is nearly used"
-            },
+            "level": notice.level,
             "meter": notice.meter,
             "limit": notice.limit,
             "used": notice.used,

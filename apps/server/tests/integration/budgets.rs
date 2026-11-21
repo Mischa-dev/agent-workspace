@@ -619,13 +619,13 @@ async fn a_report_past_a_hard_budget_tells_whoever_set_it() {
     .expect("usage");
     assert_eq!(used, Some(120), "spent usage is recorded past the limit");
     let titles = sqlx::query_scalar::<_, String>(
-        "SELECT detail->>'title' FROM notifications \
+        "SELECT detail->>'level' FROM notifications \
          WHERE recipient_actor_id = $1 AND kind = 'budget_warning'",
     )
     .bind(account)
     .fetch_all(&world.pool)
     .await
     .expect("warnings");
-    assert_eq!(titles, ["A budget you set is used up"], "told once a day");
+    assert_eq!(titles, ["hard"], "told once a day that it is used up");
     world.finish().await;
 }
