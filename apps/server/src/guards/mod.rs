@@ -498,12 +498,14 @@ pub async fn give_back_hold(
          AND newer.state IN ('pending', 'allowed')
         JOIN requests request ON request.id = newer.request_id
         WHERE given.id = $1 AND given.state = 'used'
-        FOR UPDATE OF given, newer
+        FOR UPDATE OF given, newer, request
         "#,
     )
     .bind(hold)
     .fetch_optional(&mut **transaction)
     .await?;
+    // The newer ask's request is locked with the holds, so a reviewer's
+    // answer either lands first (and stands) or waits for the withdrawal.
     if let Some((newer, status)) = asked_again {
         if status != "open" {
             return Ok(());
