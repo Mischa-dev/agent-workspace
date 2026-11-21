@@ -3478,7 +3478,7 @@ async fn keys_to_ids(
         && let Some(link) = unresolved(arguments, "identifier")
         && !link.is_empty()
         && link.len() <= 2048
-        && let Some(id) = pull_request_by_link(state, principal, &link).await?
+        && let Some((id, _)) = pull_request_by_link(state, principal, &link, None).await?
     {
         arguments["identifier"] = serde_json::Value::String(id.to_string());
         changed = true;
@@ -3495,20 +3495,24 @@ async fn keys_to_ids(
     Ok(changed)
 }
 
-/// The pull request at `link` the caller may see, preferring their home
-/// project's.
-async fn pull_request_by_link(
+/// The pull request at `link` the caller may see, and its space, preferring
+/// their home project's; only one in `workspace` when the call was made in
+/// one.
+pub(crate) async fn pull_request_by_link(
     state: &AppState,
     principal: &McpPrincipal,
     link: &str,
-) -> Result<Option<Uuid>, AppError> {
-    Ok(sqlx::query_scalar::<_, Uuid>(
+    workspace: Option<Uuid>,
+) -> Result<Option<(Uuid, Uuid)>, AppError> {
+    Ok(sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"
-        SELECT id FROM github_pull_requests
-        WHERE html_url = $1
-          AND (project_id = $2 OR actor_can_access_project($3, $4, project_id))
-          AND pull_request_visible_to(id, $3)
-        ORDER BY project_id = $2 DESC, project_id
+        SELECT pull.id, pull.project_id FROM github_pull_requests pull
+        JOIN projects project ON project.id = pull.project_id
+        WHERE pull.html_url = $1
+          AND (pull.project_id = $2 OR actor_can_access_project($3, $4, pull.project_id))
+          AND pull_request_visible_to(pull.id, $3)
+          AND ($5::uuid IS NULL OR project.organization_id = $5)
+        ORDER BY pull.project_id = $2 DESC, pull.project_id
         LIMIT 1
         "#,
     )
@@ -3516,6 +3520,7 @@ async fn pull_request_by_link(
     .bind(principal.project_id)
     .bind(principal.actor_id)
     .bind(principal.external_agent_connection_id)
+    .bind(workspace)
     .fetch_optional(crate::db::scoped(&state.pool))
     .await?)
 }

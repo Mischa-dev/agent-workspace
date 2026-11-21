@@ -216,10 +216,15 @@ pub(crate) struct PullRequestGetInput {
 
 impl Targeted for PullRequestGetInput {
     fn target(&self) -> Target {
-        Target::thing(
-            "pull_request",
-            parse_id(&self.identifier).unwrap_or_else(Uuid::nil),
-        )
+        // A link is found when the call runs, in the space or workspace the
+        // call was made in.
+        match parse_id(&self.identifier) {
+            Some(id) => Target::thing("pull_request", id),
+            None => match self.project_id.as_deref().and_then(parse_id) {
+                Some(space) => Target::Space(space),
+                None => Target::Workspace(None),
+            },
+        }
     }
 }
 
@@ -229,6 +234,9 @@ impl Operation for PullRequestGet {
     const MODULE: &'static str = MODULE;
     const PERMISSION: Option<Perm> = Some(Perm::CodeView);
     const IDEMPOTENCY: Idempotency = Idempotency::None;
+    // A link the edge couldn't find is looked for in the credential's own
+    // workspace when the call names none.
+    const HOME_WORKSPACE_BY_DEFAULT: bool = true;
     const TITLE: &'static str = "Get pull request";
     const DESCRIPTION: &'static str = "Read a pull request by its ID or its link on GitHub: \
         state, head and base, checks, review, whether it can merge, and the tasks it delivers. \
@@ -241,8 +249,29 @@ impl Operation for PullRequestGet {
         call: &mut OpCall<'_>,
         input: PullRequestGetInput,
     ) -> Result<PullRequestProjection, OpError> {
+        let mut principal = principal(call);
+        // A link is found here too, not only at the MCP edge, so the web
+        // and the v2 API take one as well; it is read in its own space.
+        let mut identifier = input.identifier;
+        if parse_id(&identifier).is_none() && !identifier.is_empty() && identifier.len() <= 2048 {
+            let found = crate::mcp::pull_request_by_link(
+                call.state,
+                &principal,
+                &identifier,
+                Some(call.ctx.workspace_id),
+            )
+            .await
+            .map_err(|error| OpError::logged(Self::NAME, &error))?;
+            match found {
+                Some((id, space)) => {
+                    identifier = id.to_string();
+                    principal = principal_for(call.ctx, Some(space));
+                }
+                None => return Err(OpError::not_found("That pull request")),
+            }
+        }
         found(
-            reads::pull_request_get(call.state, &principal(call), &input.identifier).await,
+            reads::pull_request_get(call.state, &principal, &identifier).await,
             "That pull request",
         )
     }

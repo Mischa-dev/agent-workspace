@@ -1436,6 +1436,28 @@ async fn commit_step(pool: &PgPool, import_id: Uuid) -> Result<Step, AppError> {
                 by_milestone.entry(milestone).or_default().push(*id);
             }
         }
+        // A matched task goes under the parent its draft names, which may
+        // have been made just now in this batch.
+        let made = batch
+            .iter()
+            .map(|task| task.reference.as_str())
+            .zip(created.iter().copied())
+            .collect::<HashMap<_, _>>();
+        for (task, existing) in &matched {
+            let Some(parent) = task.parent.as_deref().and_then(|parent| {
+                made.get(parent)
+                    .copied()
+                    .or_else(|| tasks.get(parent).copied().flatten())
+            }) else {
+                continue;
+            };
+            if let Err(message) =
+                set_parent(&mut transaction, &actor, task, *existing, parent).await?
+            {
+                transaction.rollback().await?;
+                return Ok(Step::Failed(message));
+            }
+        }
         for (milestone, ids) in by_milestone {
             planning::move_tasks_to_milestone(
                 &mut transaction,
@@ -1689,6 +1711,61 @@ async fn update_existing(
         }
     }
     Ok(Ok(()))
+}
+
+/// Puts a task the plan matched under the parent its draft names, unless
+/// it is there already.
+async fn set_parent(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    task: &DraftTask,
+    work_item_id: Uuid,
+    parent: Uuid,
+) -> Result<Result<(), String>, AppError> {
+    use crate::work_item_commands::{
+        AuditVersionMetadata, UpdateWorkItemCommand, UpdateWorkItemOutcome, lock_work_item,
+        update_locked_work_item,
+    };
+    let Some(current) = lock_work_item(transaction, actor.project_id, work_item_id).await? else {
+        return Ok(Ok(()));
+    };
+    if current.parent_work_item_id == Some(parent) || parent == work_item_id {
+        return Ok(Ok(()));
+    }
+    let version = current.version;
+    let outcome = update_locked_work_item(
+        transaction,
+        actor,
+        current,
+        UpdateWorkItemCommand {
+            expected_version: version,
+            title: None,
+            description: None,
+            type_id: None,
+            status_id: None,
+            priority: None,
+            assignee_actor_id: None,
+            parent_work_item_id: Some(Some(parent)),
+            board_placement: None,
+            labels: None,
+            fields: Default::default(),
+            field_values: None,
+            summary: "Moved under its parent from a plan",
+            audit_action: "work_item.updated",
+            audit_version_metadata: AuditVersionMetadata::Omit,
+        },
+    )
+    .await?;
+    Ok(match outcome {
+        UpdateWorkItemOutcome::Applied { .. }
+        | UpdateWorkItemOutcome::Noop(_)
+        | UpdateWorkItemOutcome::NotFound => Ok(()),
+        _ => Err(format!(
+            "The existing task for {} couldn't go under its parent {}.",
+            task.reference,
+            task.parent.as_deref().unwrap_or_default()
+        )),
+    })
 }
 
 async fn record(
