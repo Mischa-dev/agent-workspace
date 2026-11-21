@@ -3816,16 +3816,15 @@ async fn check_token(
     .fetch_one(pool)
     .await
     .expect("a message in B's DM");
-    let (status, saved_dm) = send_json(
-        app,
-        b.browser.request(
-            "POST",
-            "/api/v1/later",
-            None,
-            json!({"messageId": dm_message, "note": "From the DM"}),
-        ),
-    )
-    .await;
+    let (status, saved_dm) = b
+        .browser
+        .op_in(
+            app,
+            b.organization,
+            "later_save",
+            json!({"messageId": dm_message, "text": "From the DM"}),
+        )
+        .await;
     assert!(status.is_success(), "{status} {saved_dm}");
     let saved_dm = sqlx::query_scalar::<_, uuid::Uuid>(
         "SELECT id FROM saved_items WHERE actor_id = $1 AND message_id = $2",
@@ -3835,6 +3834,30 @@ async fn check_token(
     .fetch_one(pool)
     .await
     .expect("the saved DM message");
+    // The Later page names the workspace it shows, which needn't be the one
+    // an item was saved in: B's owner, on a page in A, still changes and
+    // removes a note filed in B.
+    let (status, note) = b
+        .browser
+        .op_in(
+            app,
+            b.organization,
+            "later_save",
+            json!({"text": "Filed in B"}),
+        )
+        .await;
+    assert!(status.is_success(), "{status} {note}");
+    let note = note["item"]["id"].as_str().expect("the note").to_owned();
+    for change in [
+        json!({"id": note, "done": true}),
+        json!({"id": note, "remove": true}),
+    ] {
+        let (status, changed) = b
+            .browser
+            .op_in(app, a.organization, "later_update", change)
+            .await;
+        assert!(status.is_success(), "{status} {changed}");
+    }
     let soon = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
     let (status, scheduled_dm) = send_json(
         app,

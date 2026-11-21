@@ -122,9 +122,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/direct/groups",
     "DELETE /api/v1/files/{id}",
     "POST /api/v1/inbox/update",
-    "POST /api/v1/later",
-    "DELETE /api/v1/later/{id}",
-    "PATCH /api/v1/later/{id}",
     "PUT /api/v1/notification-settings/channels",
     "PUT /api/v1/notification-settings/mutes",
     "PATCH /api/v1/organizations/{organization_id}",
@@ -177,9 +174,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{id}/pages/import",
     "POST /api/v1/projects/{id}/restore",
     "POST /api/v1/projects/{id}/switch",
-    "POST /api/v1/projects/{project_id}/agent-profiles",
-    "DELETE /api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-    "PATCH /api/v1/projects/{project_id}/agent-profiles/{profile_id}",
     "POST /api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
     "POST /api/v1/projects/{project_id}/agent-runs/{run_id}/pull-request",
     "POST /api/v1/projects/{project_id}/ai/analyze",
@@ -189,11 +183,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/ai/suggestions/{suggestion_id}/accept",
     "POST /api/v1/projects/{project_id}/ai/suggestions/{suggestion_id}/dismiss",
     "POST /api/v1/projects/{project_id}/ai/test",
-    "POST /api/v1/projects/{project_id}/environments",
-    "PUT /api/v1/projects/{project_id}/environments/{environment_id}",
-    "POST /api/v1/projects/{project_id}/environments/{environment_id}/archive",
-    "POST /api/v1/projects/{project_id}/environments/{environment_id}/check",
-    "POST /api/v1/projects/{project_id}/environments/{environment_id}/default",
     "POST /api/v1/projects/{project_id}/execution-profiles/{profile_id}/account/login/api-key",
     "POST /api/v1/projects/{project_id}/execution-profiles/{profile_id}/account/login/browser",
     "POST /api/v1/projects/{project_id}/execution-profiles/{profile_id}/account/login/cancel",
@@ -241,12 +230,9 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
     "POST /api/v1/projects/{project_id}/repositories",
     "POST /api/v1/projects/{project_id}/repositories/{repository_id}/archive",
-    "POST /api/v1/projects/{project_id}/save-as-template",
     "DELETE /api/v1/projects/{project_id}/secrets/{name}",
     "PUT /api/v1/projects/{project_id}/secrets/{name}",
-    "POST /api/v1/projects/{project_id}/task-templates",
     "POST /api/v1/projects/{project_id}/task-templates/{template_id}/apply",
-    "PUT /api/v1/projects/{project_id}/work-item-workflow",
     "POST /api/v1/projects/{project_id}/work-items",
     "POST /api/v1/projects/{project_id}/work-items/bulk",
     "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}",
@@ -264,7 +250,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/push/subscriptions",
     "DELETE /api/v1/push/subscriptions/{id}",
     "POST /api/v1/push/subscriptions/{id}/test",
-    "POST /api/v1/settings/values/{key}/reset",
     "POST /api/v1/things/{kind}/{id}/files",
     "POST /api/v1/threads/{id}/agent-runs",
     "POST /api/v1/threads/{id}/archive",
@@ -2298,7 +2283,6 @@ struct Spares {
     /// An unsent upload A's own file_delete removes.
     tool_delete_upload: Uuid,
     reply_upload: Uuid,
-    later: Uuid,
     /// Sent now over HTTP, and changed through MCP.
     scheduled: [Uuid; 2],
     harness: Uuid,
@@ -2342,8 +2326,7 @@ struct Spares {
     comments: [Uuid; 2],
     /// A board in the trash, deleted for good.
     trashed_whiteboard: Uuid,
-    /// An agent and an account for runs, deleted.
-    agent_profile: Uuid,
+    /// An account for runs, deleted.
     provider_account: Uuid,
     /// A custom role nobody holds, removed.
     role: Uuid,
@@ -2473,20 +2456,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     ] {
         uploads.push(upload(app, browser, &uri, "text/plain", b"Net unsent".to_vec()).await);
     }
-    ok(
-        app,
-        browser,
-        "POST",
-        "/api/v1/later",
-        json!({"note": "Net spare", "remindAt": soon, "organizationId": a.organization}),
-    )
-    .await;
-    let later = scalar(
-        pool,
-        "SELECT id FROM saved_items WHERE note = $1",
-        "Net spare",
-    )
-    .await;
     for text_value in ["Net spare one", "Net spare two"] {
         ok_op(
             app,
@@ -2539,12 +2508,11 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         .as_str()
         .and_then(|id| id.parse().ok())
         .expect("spare rule");
-    ok(
+    ok_op(
         app,
         browser,
-        "POST",
-        &format!("/api/v1/projects/{project}/environments"),
-        json!({"name": "Net spare cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-spare"}),
+        "/api/v2/ops/environment_create",
+        json!({"projectId": project, "name": "Net spare cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-spare"}),
     )
     .await;
     let spare_environment = scalar(
@@ -2644,15 +2612,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         json!({"whiteboardId": trashed_whiteboard, "deleted": true}),
     )
     .await;
-    let profile = ok(
-        app,
-        browser,
-        "POST",
-        &format!("/api/v1/projects/{project}/agent-profiles"),
-        json!({"template": "reviewer", "name": "Net spare reviewer"}),
-    )
-    .await;
-    let agent_profile = Uuid::parse_str(&string_at(&profile, "/id")).expect("agent profile");
     let account = ok(
         app,
         browser,
@@ -2998,7 +2957,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         tool_comment_upload: uploads[1],
         tool_delete_upload: uploads[2],
         reply_upload,
-        later,
         scheduled: [scheduled[0], scheduled[1]],
         harness,
         rule: spare_rule,
@@ -3023,7 +2981,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         repository,
         comments: [comments[0], comments[1]],
         trashed_whiteboard,
-        agent_profile,
         provider_account,
         collection_view,
         dashboard,
@@ -3967,7 +3924,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
     let organization = || id(a.organization, b.organization);
     let task = || id(a.task, b.task);
     let channel = || id(&a.channel, &b.channel);
-    let soon = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
     let far = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
     // Which workspace a request's first path value belongs to.
     let is_a = |values: &[String], a_value: &str| values[0] == a_value;
@@ -3981,43 +3937,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         "p256dh": URL_SAFE_NO_PAD.encode(device_public.as_ref()),
         "auth": URL_SAFE_NO_PAD.encode([9_u8; 16]),
     });
-    let workflow = |statuses: &[Value], types: &[Value]| {
-        json!({
-            "statuses": statuses,
-            "types": types,
-            "transitions": "all",
-        })
-    };
-    // A's statuses and types, each with one more: new in A's own request,
-    // and B's in the others, which are then valid but for B's ID.
-    let added_status =
-        json!({"name": "Net added status", "semanticCategory": "review", "isDefault": false});
-    let added_type = json!({"name": "Net added type", "isDefault": false});
-    let plus = |entries: &[Value], entry: Value| {
-        let mut entries = entries.to_vec();
-        entries.push(entry);
-        entries
-    };
-    let a_workflow = workflow(
-        &plus(&sp.statuses, added_status.clone()),
-        &plus(&sp.types, added_type.clone()),
-    );
-    let b_status_workflow = workflow(
-        &plus(&sp.statuses, with(&added_status, "id", json!(bx.status))),
-        &plus(&sp.types, added_type.clone()),
-    );
-    let b_type_workflow = workflow(
-        &plus(&sp.statuses, added_status),
-        &plus(&sp.types, with(&added_type, "id", json!(bx.task_type))),
-    );
-    let workflow_version = |project: &str| {
-        current(
-            "project_task_settings",
-            "workflow_version",
-            &[("project_id", project.to_owned())],
-            1,
-        )
-    };
     let navigation_version = |project: &str| {
         current(
             "project_navigation_states",
@@ -4387,26 +4306,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             json!({"action": "read", "all": true, "projectId": b.project}),
             json!({"action": "read", "ids": [bx.notification]}),
         ]),
-        body_case(
-            "POST /api/v1/later",
-            &[],
-            json!({"messageId": a.dm_message, "note": "Net"}),
-            vec![
-                json!({"messageId": b.message}),
-                json!({"workItemId": b.task}),
-                json!({"note": "Net", "remindAt": soon, "organizationId": b.organization}),
-            ],
-        ),
-        path_case(
-            "PATCH /api/v1/later/{id}",
-            &[id(ax.later, bx.later)],
-            json_body(json!({"note": "Net note"})),
-        ),
-        path_case(
-            "DELETE /api/v1/later/{id}",
-            &[id(sp.later, bx.later)],
-            empty(),
-        ),
         // Notification settings
         body_case(
             "PUT /api/v1/notification-settings/channels",
@@ -4804,36 +4703,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         path_case("POST /api/v1/projects/{id}/switch", &[project()], |values| {
             Payload::Json(json!({"expectedVersion": navigation_version(&values[0])}))
         }),
-        // Agent profiles and runs
-        path_case(
-            "POST /api/v1/projects/{project_id}/agent-profiles",
-            &[project()],
-            json_body(json!({"template": "reviewer", "name": "Net reviewer"})),
-        )
-        .rejecting(vec![json!({
-            "template": "reviewer",
-            "name": "Net reviewer b",
-            "environmentId": bx.environment,
-        })]),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            &[project(), id(ax.agent_profile, bx.agent_profile)],
-            |values| {
-                Payload::Json(json!({
-                    "version": version("agent_profiles", &values[1]),
-                    "description": "Net reviews",
-                }))
-            },
-        )
-        .rejecting(vec![json!({
-            "version": version("agent_profiles", ax.agent_profile),
-            "environmentId": bx.environment,
-        })]),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            &[project(), id(sp.agent_profile, bx.agent_profile)],
-            empty(),
-        ),
+        // Runs
         path_case(
             "POST /api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
             &[project(), id(a.run, b.run)],
@@ -4890,50 +4760,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         ),
         // Automations
-        // Environments
-        path_case(
-            "POST /api/v1/projects/{project_id}/environments",
-            &[project()],
-            json_body(json!({"name": "Net cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-net"})),
-        )
-        .rejecting(vec![json!({
-            "name": "Net cloud b",
-            "harness": "codex_cloud",
-            "providerEnvironmentId": "env-net-b",
-            "repositoryId": b.repository,
-        })]),
-        path_case(
-            "PUT /api/v1/projects/{project_id}/environments/{environment_id}",
-            &[project(), id(ax.environment, bx.environment)],
-            versioned(
-                "project_environments",
-                1,
-                json!({"name": "Cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-launch"}),
-            ),
-        )
-        .rejecting(vec![json!({
-            "name": "Cloud",
-            "harness": "codex_cloud",
-            "providerEnvironmentId": "env-launch",
-            "repositoryId": b.repository,
-            "expectedVersion": version("project_environments", ax.environment),
-        })]),
-        path_case(
-            "POST /api/v1/projects/{project_id}/environments/{environment_id}/default",
-            &[project(), id(ax.environment, bx.environment)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/environments/{environment_id}/check",
-            &[project(), id(ax.environment, bx.environment)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/environments/{environment_id}/archive",
-            &[project(), id(ax.environment, bx.environment)],
-            empty(),
-        )
-        .last(),
         // Personal provider sign-in
         path_case(
             "POST /api/v1/projects/{project_id}/execution-profiles/{profile_id}/account/login/api-key",
@@ -5324,11 +5150,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         .without_own(NEEDS_GITHUB),
         // Recurring tasks and templates
         path_case(
-            "POST /api/v1/projects/{project_id}/task-templates",
-            &[project()],
-            json_body(json!({"name": "Net template", "title": "Net review"})),
-        ),
-        path_case(
             "POST /api/v1/projects/{project_id}/task-templates/{template_id}/apply",
             &[project(), looked_up(ax.task_template, bx.task_template)],
             json_body(json!({"title": "Net applied"})),
@@ -5337,11 +5158,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             json!({"title": "Net applied", "assigneeActorId": b.rook}),
             json!({"title": "Net applied", "milestoneId": bx.milestone}),
         ]),
-        path_case(
-            "POST /api/v1/projects/{project_id}/save-as-template",
-            &[project()],
-            json_body(json!({"name": "Net setup two", "description": "Net"})),
-        ),
         // Repositories
         path_case(
             "POST /api/v1/projects/{project_id}/repositories",
@@ -5373,25 +5189,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         ),
         // The workflow
-        path_case(
-            "PUT /api/v1/projects/{project_id}/work-item-workflow",
-            &[project()],
-            |values| {
-                Payload::Json(with(&a_workflow, "expectedVersion", workflow_version(&values[0])))
-            },
-        )
-        .rejecting(vec![
-            with(
-                &b_status_workflow,
-                "expectedVersion",
-                workflow_version(&a.project),
-            ),
-            with(
-                &b_type_workflow,
-                "expectedVersion",
-                workflow_version(&a.project),
-            ),
-        ]),
         // Tasks
         path_case(
             "POST /api/v1/projects/{project_id}/work-items",
@@ -5596,15 +5393,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         .last(),
         // Reply requests
         // Settings
-        body_case(
-            "POST /api/v1/settings/values/{key}/reset",
-            &["run.model"],
-            json!({"scope": "project", "projectId": a.project}),
-            vec![
-                json!({"scope": "project", "projectId": b.project}),
-                json!({"scope": "workspace", "organizationId": b.organization}),
-            ],
-        ),
         // Usage
         path_case(
             "POST /api/v1/usage/accounts/{account_id}/batch",

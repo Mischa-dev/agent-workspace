@@ -13,12 +13,7 @@
 //! agent's claimed requests and open sessions. What it's working on is only
 //! named to people who can see that thread.
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::HeaderMap,
-    routing::{get, patch},
-};
+use axum::{Json, Router, extract::State, routing::get};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -28,11 +23,10 @@ use uuid::Uuid;
 use crate::harness_catalog::Harnesses;
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
+    auth::AuthenticatedActor,
     environments::authorize_project,
-    error::{ApiJson, ApiPath, AppError},
+    error::{ApiPath, AppError},
     policy::Action,
-    settings,
 };
 
 const MAX_PROFILES_PER_PROJECT: i64 = 40;
@@ -41,11 +35,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/api/v1/projects/{project_id}/agent-profiles",
-            get(list_http).post(create_http),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            patch(update_http).delete(delete_http),
+            get(list_http),
         )
         .route("/api/v1/projects/{project_id}/agents", get(presence_http))
 }
@@ -533,22 +523,6 @@ async fn handle_taken(
     .await?)
 }
 
-async fn manage(
-    state: &AppState,
-    headers: &HeaderMap,
-    principal: &AuthenticatedActor,
-    project_id: Uuid,
-) -> Result<Uuid, AppError> {
-    require_authenticated_write(state, headers, principal).await?;
-    authorize_project(
-        &state.pool,
-        principal.actor_id,
-        project_id,
-        Action::SettingsManage,
-    )
-    .await
-}
-
 pub(crate) async fn load(
     connection: &mut sqlx::PgConnection,
     state: &AppState,
@@ -566,40 +540,6 @@ pub(crate) async fn load(
     .await?
     .map(|profile| named(&harnesses, profile))
     .ok_or(AppError::NotFound("agent_profile"))
-}
-
-async fn create_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<ProfileRequest>,
-) -> Result<Json<ProfileView>, AppError> {
-    let organization_id = manage(&state, &headers, &principal, project_id).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (profile_id, metadata) = create_in(
-        &state,
-        &mut transaction,
-        principal.actor_id,
-        organization_id,
-        project_id,
-        request,
-    )
-    .await?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        Some(project_id),
-        "agent_profile.created",
-        "agent_profile",
-        Some(profile_id),
-        metadata,
-    )
-    .await?;
-    let view = load(&mut transaction, &state, project_id, profile_id).await?;
-    transaction.commit().await?;
-    Ok(Json(view))
 }
 
 /// Make an agent in the project, for someone the caller checked may manage
@@ -754,41 +694,6 @@ pub(crate) async fn create_in(
     ))
 }
 
-async fn update_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, profile_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<ProfileRequest>,
-) -> Result<Json<ProfileView>, AppError> {
-    let organization_id = manage(&state, &headers, &principal, project_id).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (action, metadata) = update_in(
-        &state,
-        &mut transaction,
-        principal.actor_id,
-        organization_id,
-        project_id,
-        profile_id,
-        request,
-    )
-    .await?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        Some(project_id),
-        action,
-        "agent_profile",
-        Some(profile_id),
-        metadata,
-    )
-    .await?;
-    let view = load(&mut transaction, &state, project_id, profile_id).await?;
-    transaction.commit().await?;
-    Ok(Json(view))
-}
-
 /// Change an agent of the project (turning it off takes it out of
 /// mentions), for someone the caller checked may manage its settings.
 /// Returns the audit row's action and metadata; the caller records it.
@@ -924,33 +829,6 @@ pub struct RemovedProfile {
     /// it: then it's off the list, out of mentions and can't run, and what it
     /// did keeps its name.
     pub outcome: &'static str,
-}
-
-/// Deletes an agent that never did anything; one that did is hidden instead,
-/// so its past runs and messages keep their author.
-async fn delete_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, profile_id)): ApiPath<(Uuid, Uuid)>,
-) -> Result<Json<RemovedProfile>, AppError> {
-    manage(&state, &headers, &principal, project_id).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (outcome, handle) =
-        remove_in(&mut transaction, principal.actor_id, project_id, profile_id).await?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        Some(project_id),
-        &format!("agent_profile.{outcome}"),
-        "agent_profile",
-        Some(profile_id),
-        json!({ "handle": handle }),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(RemovedProfile { outcome }))
 }
 
 /// Remove an agent of the project: delete it if it never did anything, or

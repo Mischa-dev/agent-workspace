@@ -326,6 +326,7 @@ export default function TemplatesPage({ project }: SettingsPageProps) {
         <SaveProjectTemplateDialog
           defaultName={project.name}
           onClose={() => setSavingProject(false)}
+          organizationId={project.organizationId}
           projectId={projectId}
         />
       ) : null}
@@ -558,7 +559,17 @@ function RecurringDialog({
   )
 }
 
-function SaveProjectTemplateDialog({ defaultName, onClose, projectId }: { defaultName: string; onClose: () => void; projectId: string }) {
+function SaveProjectTemplateDialog({
+  defaultName,
+  onClose,
+  organizationId,
+  projectId,
+}: {
+  defaultName: string
+  onClose: () => void
+  organizationId: string
+  projectId: string
+}) {
   const queryClient = useQueryClient()
   const idempotencyKey = useRef(crypto.randomUUID())
   const [name, setName] = useState(`${defaultName} setup`)
@@ -573,7 +584,7 @@ function SaveProjectTemplateDialog({ defaultName, onClose, projectId }: { defaul
     setError(null)
     try {
       const template = await saveAsProjectTemplate(projectId, { name: name.trim(), description }, idempotencyKey.current)
-      void queryClient.invalidateQueries({ queryKey: viewKeys.projectTemplateLists(template.organizationId) })
+      void queryClient.invalidateQueries({ queryKey: viewKeys.projectTemplateLists(organizationId) })
       showToast({ tone: 'success', title: `${template.name} saved`, description: 'Pick it when you create a project.' })
       onClose()
     } catch (reason) {

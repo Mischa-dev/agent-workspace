@@ -149,7 +149,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/projects/{project_id}/work-item-workflow",
-            get(planning::get_workflow).put(planning::replace_workflow),
+            get(planning::get_workflow),
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/bulk",
@@ -173,7 +173,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/projects/{project_id}/task-templates",
-            get(templates::get_templates).post(templates::create_template),
+            get(templates::get_templates),
         )
         .route(
             "/api/v1/projects/{project_id}/task-templates/{template_id}/apply",
@@ -198,10 +198,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/export",
             get(imports::export_project),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/save-as-template",
-            axum::routing::post(project_templates::save_as_template),
         )
         .route(
             "/api/v1/organizations/{organization_id}/project-templates",

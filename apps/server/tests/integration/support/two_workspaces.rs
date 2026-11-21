@@ -1123,12 +1123,16 @@ async fn build_workspace(
     .await;
     assert_eq!(view["outcome"], "ok", "{label} view: {view}");
     let task_template = post(
-        format!("/api/v1/projects/{project}/task-templates"),
+        format!("/api/v2/w/{organization}/ops/template_create"),
         "template-1",
-        json!({"name": format!("Launch template{m}"), "title": format!("Launch review{m}"), "subtasks": [{"title": format!("Launch step{m}")}]}),
+        json!({"projectId": project, "name": format!("Launch template{m}"), "title": format!("Launch review{m}"), "subtasks": [{"title": format!("Launch step{m}")}]}),
     )
     .await;
-    let task_template = string_at(&task_template, "/id");
+    assert_eq!(
+        task_template["outcome"], "ok",
+        "{label} task template: {task_template}"
+    );
+    let task_template = string_at(&task_template, "/value/template/id");
     let recurring = post(
         format!("/api/v2/w/{organization}/ops/recurring_create"),
         "recurring-1",
@@ -1136,12 +1140,16 @@ async fn build_workspace(
     )
     .await;
     assert_eq!(recurring["outcome"], "ok", "{label} recurring: {recurring}");
-    post(
-        format!("/api/v1/projects/{project}/save-as-template"),
+    let project_template = post(
+        format!("/api/v2/w/{organization}/ops/project_template_create"),
         "project-template-1",
-        json!({"name": format!("Launch setup{m}"), "description": format!("Launch defaults{m}")}),
+        json!({"projectId": project, "name": format!("Launch setup{m}"), "description": format!("Launch defaults{m}")}),
     )
     .await;
+    assert_eq!(
+        project_template["outcome"], "ok",
+        "{label} project template: {project_template}"
+    );
     let import = post(
         format!("/api/v1/projects/{project}/imports"),
         "import-1",
@@ -1335,24 +1343,21 @@ async fn build_workspace(
     )
     .await
     .expect("run usage");
-    let uri = format!("/api/v1/projects/{project}/agent-profiles");
-    let (status, written) = send(
-        app,
-        browser.request(
-            "POST",
-            &uri,
-            None,
+    let (status, written) = browser
+        .op(
+            app,
+            "agent_profile_set",
             json!({
+                "projectId": project,
                 "template": "reviewer",
                 "name": format!("Reviewer{m}"),
                 "description": format!("Reviews{m}"),
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(
         status.is_success(),
-        "{label} POST {uri}: {status} {written}"
+        "{label} agent_profile_set: {status} {written}"
     );
     let uri = format!("/api/v1/organizations/{organization}/harnesses");
     let (status, written) = send(
@@ -1417,25 +1422,22 @@ async fn build_workspace(
     }
     // An environment and a queued launch (W7), started far ahead so the
     // queue leaves it waiting.
-    let uri = format!("/api/v1/projects/{project}/environments");
-    let (status, written) = send(
-        app,
-        browser.request(
-            "POST",
-            &uri,
-            None,
+    let (status, written) = browser
+        .op(
+            app,
+            "environment_create",
             json!({
+                "projectId": project,
                 "name": format!("Cloud{m}"),
                 "harness": "codex_cloud",
                 "providerEnvironmentId": "env-launch",
                 "setupNotes": format!("Notes{m}"),
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(
         status.is_success(),
-        "{label} POST {uri}: {status} {written}"
+        "{label} environment_create: {status} {written}"
     );
     let uri = format!("/api/v1/projects/{project}/launches");
     let start_at = (chrono::Utc::now() + chrono::Duration::days(20)).to_rfc3339();
@@ -1563,34 +1565,37 @@ async fn build_workspace(
     // reminder, a saved task, a bare reminder, a scheduled message and a
     // channel set to every message.
     let soon = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
-    for (method, uri, body) in [
+    for (workspace, input) in [
         (
-            "POST",
-            "/api/v1/later".to_owned(),
-            json!({"messageId": message, "note": format!("Read{m}"), "remindAt": soon}),
+            None,
+            json!({"messageId": message, "text": format!("Read{m}"), "at": soon}),
         ),
+        (None, json!({"task": task.to_string()})),
         (
-            "POST",
-            "/api/v1/later".to_owned(),
-            json!({"workItemId": task}),
-        ),
-        (
-            "POST",
-            "/api/v1/later".to_owned(),
-            json!({"note": format!("Call back{m}"), "remindAt": soon, "organizationId": organization}),
-        ),
-        (
-            "PUT",
-            format!("/api/v1/conversations/{channel}/notification-level"),
-            json!({"level": "all"}),
+            Some(organization),
+            json!({"text": format!("Call back{m}"), "at": soon}),
         ),
     ] {
-        let (status, written) = send(app, browser.request(method, &uri, None, body)).await;
-        assert!(
-            status.is_success(),
-            "{label} {method} {uri}: {status} {written}"
-        );
+        let (status, written) = match workspace {
+            Some(workspace) => browser.op_in(app, workspace, "later_save", input).await,
+            None => browser.op(app, "later_save", input).await,
+        };
+        assert_eq!(status, StatusCode::OK, "{label} later_save: {written}");
     }
+    let (status, written) = send(
+        app,
+        browser.request(
+            "PUT",
+            &format!("/api/v1/conversations/{channel}/notification-level"),
+            None,
+            json!({"level": "all"}),
+        ),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "{label} notification level: {status} {written}"
+    );
     let (status, scheduled) = browser
         .op(
             app,

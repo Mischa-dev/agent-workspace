@@ -38,7 +38,6 @@
     "/api/v1/projects/{project_id}/invitations",
     "/api/v1/projects/{project_id}/layout*",
     "/api/v1/projects/{project_id}/secrets*",
-    "/api/v1/projects/{project_id}/save-as-template",
     "/api/v1/projects/{project_id}/export",
     "/api/v1/organizations/{organization_id}/project-templates*",
     "/api/v1/project-invitations/*"

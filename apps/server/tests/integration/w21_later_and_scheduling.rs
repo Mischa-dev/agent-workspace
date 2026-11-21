@@ -82,8 +82,12 @@ async fn later(setup: &Setup, browser: &Browser, view: &str) -> Value {
     page
 }
 
+/// Saves through later_save, from the fields the page has: a message, a
+/// note and a reminder time.
 async fn save(setup: &Setup, browser: &Browser, body: Value) -> (StatusCode, Value) {
-    call(setup, browser, "POST", "/api/v1/later", None, body).await
+    let input =
+        json!({"messageId": body["messageId"], "text": body["note"], "at": body["remindAt"]});
+    browser.op(&setup.app, "later_save", input).await
 }
 
 async fn group(setup: &Setup, key: &str, members: &[Uuid]) -> String {
@@ -212,10 +216,13 @@ async fn a_saved_private_message_vanishes_and_stays_silent_after_leaving() {
         json!({"messageId": message, "note": "Read this", "remindAt": in_an_hour()}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{saved}");
+    assert_eq!(status, StatusCode::OK, "{saved}");
     let item = saved["item"]["id"].as_str().expect("item").to_owned();
-    assert_eq!(
-        saved["item"]["message"]["preview"], "Secret plan",
+    // The preview says whose message it is and where, as Later lists it.
+    assert!(
+        saved["item"]["preview"]
+            .as_str()
+            .is_some_and(|preview| preview.ends_with("Secret plan")),
         "{saved}"
     );
     // Saving again is the same item.
@@ -249,15 +256,13 @@ async fn a_saved_private_message_vanishes_and_stays_silent_after_leaving() {
         assert!(!page.to_string().contains("Secret plan"), "{page}");
     }
     assert_eq!(later(setup, &mara_browser, "open").await["openCount"], 0);
-    let (status, body) = call(
-        setup,
-        &mara_browser,
-        "PATCH",
-        &format!("/api/v1/later/{item}"),
-        None,
-        json!({"note": "Still mine?"}),
-    )
-    .await;
+    let (status, body) = mara_browser
+        .op(
+            &setup.app,
+            "later_update",
+            json!({"id": item, "text": "Still mine?"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     run_jobs(&fixture).await;
     assert_eq!(
@@ -265,15 +270,13 @@ async fn a_saved_private_message_vanishes_and_stays_silent_after_leaving() {
         0
     );
     // Someone else can't touch it either.
-    let (status, _) = call(
-        setup,
-        &zoe_browser,
-        "DELETE",
-        &format!("/api/v1/later/{item}"),
-        None,
-        Value::Null,
-    )
-    .await;
+    let (status, _) = zoe_browser
+        .op(
+            &setup.app,
+            "later_update",
+            json!({"id": item, "remove": true}),
+        )
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -284,7 +287,7 @@ async fn a_plain_note_can_be_saved_without_scheduling_a_reminder() {
     };
     let setup = &fixture.setup;
     let (status, saved) = save(setup, &setup.browser, json!({"note": "Buy milk"})).await;
-    assert_eq!(status, StatusCode::CREATED, "{saved}");
+    assert_eq!(status, StatusCode::OK, "{saved}");
     let id = saved["item"]["id"].as_str().expect("saved note");
     assert_eq!(remind_at(&setup.pool, id).await, None);
     let listed = later(setup, &setup.browser, "open").await;
@@ -296,6 +299,25 @@ async fn a_plain_note_can_be_saved_without_scheduling_a_reminder() {
             .await
             .expect("notifications");
     assert_eq!(notifications, 0, "an untimed note sends no notification");
+
+    // A note lives in the workspace's own space; it can still be marked done
+    // and removed there.
+    let (status, done) = setup
+        .browser
+        .op(&setup.app, "later_update", json!({"id": id, "done": true}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["item"]["done"], true, "{done}");
+    let (status, removed) = setup
+        .browser
+        .op(
+            &setup.app,
+            "later_update",
+            json!({"id": id, "remove": true}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert_eq!(removed["removed"], true, "{removed}");
 }
 
 #[tokio::test]
@@ -322,7 +344,7 @@ async fn a_due_reminder_notifies_once_and_done_or_snooze_work_from_the_push() {
         json!({"note": "Call the printer", "remindAt": in_an_hour()}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{saved}");
+    assert_eq!(status, StatusCode::OK, "{saved}");
     let item = saved["item"]["id"].as_str().expect("item").to_owned();
     assert_eq!(saved["item"]["kind"], "reminder");
 

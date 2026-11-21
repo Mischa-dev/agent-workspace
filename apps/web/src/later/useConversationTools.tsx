@@ -24,6 +24,7 @@ import { commandsFor, type SlashCommand, type SlashOutcome } from './slashComman
 import { atPhrase, parseReminder, parseSchedule, whenPhrase } from './when'
 import '../styles/conversation.css'
 import { here, spaceHref } from '../app/href'
+import { useWorkspaceId } from '../app/workspace'
 
 const LEVELS: { level: NotificationLevel; label: string }[] = [
   { level: 'all', label: 'Every new message' },
@@ -51,6 +52,7 @@ export function useConversationTools({
   projectId: string
 }) {
   const queryClient = useQueryClient()
+  const workspaceId = useWorkspaceId()
   const navigate = useNavigate()
   const inProject = kind === 'channel' || kind === 'thread'
   // A project's layout can leave out slash commands, scheduling and agents in @ suggestions.
@@ -132,16 +134,16 @@ export function useConversationTools({
         if (!reminder.note) throw new Error('Say what to remind you of, like “/remind me to call Sam at 3pm”.')
         if (!reminder.at) throw new Error('Add a time, like “at 3pm”, “tomorrow” or “in 20 minutes”.')
         if (reminder.at.getTime() <= Date.now()) throw new Error('That time has passed.')
-        await saveForLater({ note: reminder.note, remindAt: reminder.at.toISOString() })
+        await saveForLater({ note: reminder.note, remindAt: reminder.at.toISOString() }, workspaceId)
         invalidateLater(queryClient)
         showToast({ tone: 'success', title: `Reminder set for ${atPhrase(reminder.at)}`, description: reminder.note, action: viewLater() })
         return { kind: 'done' }
       }
       case 'later': {
         if (args) {
-          await saveForLater({ note: args })
+          await saveForLater({ note: args }, workspaceId)
         } else if (latestMessageId) {
-          await saveForLater({ messageId: latestMessageId })
+          await saveForLater({ messageId: latestMessageId }, workspaceId)
         } else {
           navigate(here('/later'))
           return { kind: 'done' }

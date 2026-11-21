@@ -909,6 +909,33 @@ pub(super) async fn send(
     .await
 }
 
+/// Runs an operation (`POST /api/v2/ops/{name}`) the way [`send`] sends a
+/// request, answering the operation's value, or the whole envelope when it
+/// didn't succeed.
+pub(super) async fn send_op(
+    application: &axum::Router,
+    who: (&str, &str),
+    name: &str,
+    key: &str,
+    body: Value,
+) -> (StatusCode, String, Value) {
+    let (status, text, envelope) = send(
+        application,
+        who,
+        "POST",
+        &format!("/api/v2/ops/{name}"),
+        key,
+        body,
+    )
+    .await;
+    let value = if envelope["outcome"] == "ok" {
+        envelope["value"].clone()
+    } else {
+        envelope
+    };
+    (status, text, value)
+}
+
 pub(super) async fn send_get(
     application: &axum::Router,
     (cookie, _): (&str, &str),

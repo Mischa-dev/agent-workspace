@@ -1,4 +1,5 @@
 import { requestJson } from '../api/client'
+import { callOp } from '../api/ops'
 
 export type RunDefaults = { model?: string | null; reasoning?: string | null; speed?: string | null }
 
@@ -104,27 +105,38 @@ export function listProfiles(projectId: string) {
   return requestJson<ProfileList>(projectPath(projectId, 'agent-profiles'))
 }
 
-export function createProfile(projectId: string, input: ProfileInput) {
-  return requestJson<AgentProfile>(projectPath(projectId, 'agent-profiles'), {
-    method: 'POST',
-    json: input,
-    idempotencyKey: crypto.randomUUID(),
-  })
+/** Null goes back to the default: the operation clears with an empty string. */
+function profileFields(input: ProfileInput) {
+  const fields = { ...input }
+  delete fields.version
+  return {
+    ...fields,
+    harness: input.harness === null ? '' : input.harness,
+    environmentId: input.environmentId === null ? '' : input.environmentId,
+  }
 }
 
-export function updateProfile(projectId: string, profileId: string, input: ProfileInput & { version: number }) {
-  return requestJson<AgentProfile>(projectPath(projectId, `agent-profiles/${encodeURIComponent(profileId)}`), {
-    method: 'PATCH',
-    json: input,
-    idempotencyKey: crypto.randomUUID(),
+export async function createProfile(projectId: string, input: ProfileInput) {
+  const done = await callOp('agent_profile_set', { ...profileFields(input), projectId })
+  return done.profile as unknown as AgentProfile
+}
+
+export async function updateProfile(projectId: string, profileId: string, input: ProfileInput & { version: number }) {
+  const done = await callOp('agent_profile_set', {
+    ...profileFields(input),
+    projectId,
+    profile: profileId,
+    expectedVersion: input.version,
   })
+  return done.profile as unknown as AgentProfile
 }
 
 /** Deleted outright when it never did anything; hidden when runs or messages still point at it. */
 export type ProfileRemoval = { outcome: 'deleted' | 'hidden' }
 
-export function deleteProfile(projectId: string, profileId: string) {
-  return requestJson<ProfileRemoval>(projectPath(projectId, `agent-profiles/${encodeURIComponent(profileId)}`), { method: 'DELETE' })
+export async function deleteProfile(projectId: string, profileId: string): Promise<ProfileRemoval> {
+  const done = await callOp('agent_profile_set', { projectId, profile: profileId, remove: true })
+  return { outcome: done.done === 'deleted' ? 'deleted' : 'hidden' }
 }
 
 export function listPresence(projectId: string) {

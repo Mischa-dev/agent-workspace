@@ -385,8 +385,9 @@ export function listProjectTemplates(organizationId: string, includeArchived = f
   )
 }
 
-export function saveAsProjectTemplate(projectId: string, input: { name: string; description: string }, idempotencyKey: string) {
-  return requestJson<ProjectTemplate>(projectPath(projectId, 'save-as-template'), { method: 'POST', idempotencyKey, json: input })
+export async function saveAsProjectTemplate(projectId: string, input: { name: string; description: string }, idempotencyKey: string) {
+  const { template } = await callOp('project_template_create', { projectId, ...input }, { requestId: idempotencyKey })
+  return template
 }
 
 export function updateProjectTemplate(

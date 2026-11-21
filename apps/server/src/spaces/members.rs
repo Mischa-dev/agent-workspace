@@ -188,6 +188,26 @@ async fn set_expiry(
     Ok(())
 }
 
+/// A deadline that already passed would end a membership brought back
+/// again at once: bringing someone back clears it. One still ahead stays.
+async fn clear_lapsed(
+    connection: &mut PgConnection,
+    space: Uuid,
+    account: Uuid,
+) -> Result<(), OpError> {
+    sqlx::query(
+        "UPDATE project_memberships SET expires_at = NULL \
+         WHERE project_id = $1 AND actor_id = $2 AND NOT via_group \
+           AND expires_at <= now()",
+    )
+    .bind(space)
+    .bind(account)
+    .execute(connection)
+    .await
+    .map_err(AppError::from)?;
+    Ok(())
+}
+
 fn refused(error: AppError) -> OpError {
     match error {
         AppError::Forbidden => OpError::Denied {
@@ -308,18 +328,7 @@ impl Operation for SpaceMemberAdd {
         if let Some(expires_at) = input.expires_at.as_deref() {
             set_expiry(tx, space, account, expiry(expires_at)?).await?;
         } else if removed {
-            // A deadline that already passed would end the restored
-            // membership again at once: bringing someone back clears it.
-            sqlx::query(
-                "UPDATE project_memberships SET expires_at = NULL \
-                 WHERE project_id = $1 AND actor_id = $2 AND NOT via_group \
-                   AND expires_at <= now()",
-            )
-            .bind(space)
-            .bind(account)
-            .execute(&mut **tx)
-            .await
-            .map_err(AppError::from)?;
+            clear_lapsed(tx, space, account).await?;
         }
         let view = member(tx, space, account).await?;
         call.audit_target(
@@ -398,8 +407,9 @@ impl Operation for SpaceMemberUpdate {
         )
         .await
         .map_err(refused)?;
-        if let Some(expires_at) = expires_at {
-            set_expiry(tx, space, account, expires_at).await?;
+        match expires_at {
+            Some(expires_at) => set_expiry(tx, space, account, expires_at).await?,
+            None => clear_lapsed(tx, space, account).await?,
         }
         let view = member(tx, space, account).await?;
         call.audit_target(

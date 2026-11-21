@@ -89584,7 +89584,7 @@
     },
     "/api/v2/w/{workspace}/ops/later_save": {
       "post": {
-        "description": "Save a message (messageId) or task for later, or set yourself a reminder: text and at (RFC 3339, up to a year ahead). Saving the same message or task again updates it.",
+        "description": "Save a message (messageId) or task for later, or keep a note for yourself (text). Add at (RFC 3339, up to a year ahead) to be reminded. Saving the same message or task again updates it.",
         "operationId": "later_save",
         "parameters": [
           {
@@ -89614,7 +89614,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "at": {
-                    "description": "When, as RFC 3339 (2026-10-18T09:00:00+02:00), up to a year ahead.\nLeave it out to save a message or task for later without a reminder.",
+                    "description": "When, as RFC 3339 (2026-10-18T09:00:00+02:00), up to a year ahead.\nLeave it out to keep it on the list without a reminder.",
                     "type": [
                       "string",
                       "null"
@@ -89635,7 +89635,7 @@
                     ]
                   },
                   "text": {
-                    "description": "What to be reminded of. Needed unless you save a message or task.",
+                    "description": "A note, or what to be reminded of. Needed unless you save a message\nor task.",
                     "type": [
                       "string",
                       "null"

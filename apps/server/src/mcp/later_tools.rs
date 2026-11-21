@@ -276,10 +276,11 @@ pub(crate) async fn later_list(
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ReminderSetArguments {
-    /// What to be reminded of. Needed unless you save a message or task.
+    /// A note, or what to be reminded of. Needed unless you save a message
+    /// or task.
     pub text: Option<String>,
     /// When, as RFC 3339 (2026-10-18T09:00:00+02:00), up to a year ahead.
-    /// Leave it out to save a message or task for later without a reminder.
+    /// Leave it out to keep it on the list without a reminder.
     pub at: Option<String>,
     /// Save this message: its ID or link.
     pub message_id: Option<String>,
@@ -339,9 +340,6 @@ pub(crate) async fn later_save(
                 .is_none_or(|text| text.trim().is_empty())
             {
                 return Ok(ToolResult::invalid("text", "Say what to remind you of."));
-            }
-            if arguments.at.is_none() {
-                return Ok(ToolResult::invalid("at", "Say when, as RFC 3339."));
             }
             // AWD-75: a person's plain reminder is kept in their home
             // workspace, so Inbox must be on there, not only somewhere. With

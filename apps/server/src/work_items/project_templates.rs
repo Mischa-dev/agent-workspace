@@ -459,14 +459,6 @@ fn copyable_setting(key: &str, value: &Value) -> bool {
     })
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct SaveAsTemplateRequest {
-    name: String,
-    #[serde(default)]
-    description: String,
-}
-
 fn normalize_description(value: &str) -> Option<String> {
     let text = value.trim();
     (text.chars().count() <= MAX_DESCRIPTION_CHARACTERS
@@ -493,46 +485,6 @@ pub(crate) enum ProjectTemplateOutcome {
     NameTaken,
     LimitReached,
     TooLarge,
-}
-
-pub(super) async fn save_as_template(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<SaveAsTemplateRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    if let Some(refused) = check_name_and_description(&request.name, &request.description) {
-        return Ok(outcome_response(refused, StatusCode::CREATED));
-    }
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let organization_id =
-        settings::authorize_project_manage(&mut *transaction, &principal, project_id).await?;
-    let outcome = save_project_template(
-        &mut transaction,
-        principal.actor_id,
-        organization_id,
-        project_id,
-        &request.name,
-        &request.description,
-    )
-    .await?;
-    if let ProjectTemplateOutcome::Done(view, _) = &outcome {
-        settings::audit(
-            &mut transaction,
-            &headers,
-            &principal,
-            Some(project_id),
-            "project_template.created",
-            "project_template",
-            Some(view.id),
-            json!({ "organizationId": organization_id }),
-        )
-        .await?;
-        transaction.commit().await?;
-    }
-    Ok(outcome_response(outcome, StatusCode::CREATED))
 }
 
 /// A name or description the template can't take, checked before anything
