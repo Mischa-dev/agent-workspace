@@ -17,6 +17,7 @@ use super::state::RunState;
 use crate::{
     AppState,
     error::AppError,
+    harness_catalog::Harnesses,
     ops::{Idempotency, OpCall, OpError, OpKind, Operation, Perm, Target, Targeted, refs::IdRef},
 };
 
@@ -182,11 +183,11 @@ const LINE_SELECT: &str = r#"
       AND (run.space_id IS NULL OR actor_can_access_project($1, NULL, run.space_id))
 "#;
 
-fn named(state: &AppState, mut line: RunLine) -> RunLine {
+fn named(harnesses: &Harnesses, mut line: RunLine) -> RunLine {
     line.harness_name = line
         .harness
         .as_deref()
-        .map(|harness| crate::agent_sessions::harness_name(state, harness));
+        .map(|harness| harnesses.name(harness));
     line
 }
 
@@ -305,12 +306,13 @@ pub async fn list(
     .bind(limit + 1)
     .fetch_all(&mut *transaction)
     .await?;
+    let harnesses = Harnesses::visible_on(state, &mut transaction).await?;
     drop(transaction);
     let more = rows.len() > usize::try_from(limit).unwrap_or(0);
     let mut runs = rows
         .into_iter()
         .take(usize::try_from(limit).unwrap_or(0))
-        .map(|run| named(state, run))
+        .map(|run| named(&harnesses, run))
         .collect::<Vec<_>>();
     redact(state, viewer, &mut runs).await?;
     let next_cursor = more.then(|| runs.last().map(encode_cursor)).flatten();
@@ -321,6 +323,19 @@ pub async fn list(
 /// "see tasks", the task's title; without "see code", the branch and pull
 /// request (as `views::redact` does for the built-in run page).
 async fn redact(state: &AppState, viewer: Uuid, runs: &mut [RunLine]) -> Result<(), AppError> {
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    redact_on(&mut transaction, viewer, runs).await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// [`redact`] on a connection the caller holds, so a reader holding one
+/// takes no second.
+async fn redact_on(
+    connection: &mut PgConnection,
+    viewer: Uuid,
+    runs: &mut [RunLine],
+) -> Result<(), AppError> {
     let mut projects = runs
         .iter()
         .filter_map(|run| run.project_id)
@@ -331,9 +346,15 @@ async fn redact(state: &AppState, viewer: Uuid, runs: &mut [RunLine]) -> Result<
         (Vec::new(), Vec::new())
     } else {
         (
-            crate::search::projects_showing_tasks(&state.pool, viewer, &projects).await?,
-            crate::search::projects_allowing(
-                &state.pool,
+            crate::search::projects_allowing_on(
+                &mut *connection,
+                viewer,
+                &projects,
+                crate::policy::Permission::TasksView,
+            )
+            .await?,
+            crate::search::projects_allowing_on(
+                &mut *connection,
                 viewer,
                 &projects,
                 crate::policy::Permission::CodeView,
@@ -560,8 +581,9 @@ pub async fn view(
     .bind(run_id)
     .fetch_all(&mut *connection)
     .await?;
-    let mut lines = vec![named(state, line)];
-    redact(state, viewer, &mut lines).await?;
+    let harnesses = Harnesses::visible_on(state, &mut *connection).await?;
+    let mut lines = vec![named(&harnesses, line)];
+    redact_on(&mut *connection, viewer, &mut lines).await?;
     let run = lines.remove(0);
     let files = if sees_code(&mut *connection, viewer, run.project_id).await? {
         super::changes::get(&mut *connection, run_id)

@@ -293,6 +293,7 @@ async fn the_built_in_host_may_answer_a_question_with_a_large_catalog() {
     // A catalog past 64 KiB is kept, as an action's answer, sent the way
     // the host sends it (through the server's routes).
     let (host, action) = issue(CommandKind::Action).await;
+    let unread = action;
     assert!(host.builtin);
     let client = hosts::builtin::transport::client(&world.state);
     let kept = tenancy::system("runs.host", async move {
@@ -331,4 +332,27 @@ async fn the_built_in_host_may_answer_a_question_with_a_large_catalog() {
         ),
         "{refused:?}"
     );
+
+    // An answer nobody came back to read (its asker stopped waiting) is
+    // forgotten once it is older than any asker waits; a fresh one stays.
+    let (host, fresh) = issue(CommandKind::Action).await;
+    ack(host, fresh, 1024).await.expect("a fresh answer");
+    let pool = world.pool.clone();
+    let left = tenancy::system("runs.host", async move {
+        sqlx::query(
+            "UPDATE host_commands SET updated_at = now() - interval '2 hours' WHERE id = $1",
+        )
+        .bind(unread)
+        .execute(db::scoped(&pool))
+        .await
+        .expect("age the unread answer");
+        commands::sweep(&pool).await.expect("the sweep");
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM host_commands WHERE id = ANY($1)")
+            .bind(vec![unread, fresh])
+            .fetch_all(db::scoped(&pool))
+            .await
+            .expect("the answers")
+    })
+    .await;
+    assert_eq!(left, vec![fresh]);
 }

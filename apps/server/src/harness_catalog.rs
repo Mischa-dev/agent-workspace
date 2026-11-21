@@ -400,6 +400,9 @@ mod tests {
     fn unknown_harnesses_read_by_their_word() {
         let catalog = Harnesses::default();
         assert_eq!(catalog.name("night_runner"), "Night Runner");
+        assert_eq!(readable("runner"), "Runner");
+        assert_eq!(readable("my-runner_2"), "My Runner 2");
+        assert_eq!(readable(""), "");
         assert!(catalog.manifest("night_runner").is_none());
         let mut catalog = Harnesses::default();
         catalog.insert(manifest("x_off"), false, None);

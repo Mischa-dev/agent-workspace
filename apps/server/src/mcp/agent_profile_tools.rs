@@ -252,7 +252,7 @@ pub(crate) async fn agent_profile_write(
             None
         } else {
             let view =
-                agent_profiles::load(&mut *transaction, state, project_id, profile_id).await?;
+                agent_profiles::load(&mut transaction, state, project_id, profile_id).await?;
             Some(serde_json::to_value(view).unwrap_or(Value::Null))
         };
         transaction.commit().await?;

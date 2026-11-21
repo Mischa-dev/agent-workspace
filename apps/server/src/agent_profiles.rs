@@ -159,11 +159,11 @@ pub struct ProfileList {
     pub ready: bool,
 }
 
-fn named(state: &AppState, mut profile: ProfileView) -> ProfileView {
+fn named(harnesses: &Harnesses, mut profile: ProfileView) -> ProfileView {
     profile.harness_name = profile
         .harness
         .as_deref()
-        .map(|harness| crate::agent_sessions::harness_name(state, harness));
+        .map(|harness| harnesses.name(harness));
     profile
 }
 
@@ -185,6 +185,7 @@ pub async fn list_profiles(
         crate::memory::project_access(&state.pool, viewer, project_id, Action::SettingsManage)
             .await
             .is_ok();
+    let catalog = Harnesses::of(state, organization_id).await?;
     let profiles = sqlx::query_as::<_, ProfileView>(&format!(
         "{PROFILE_SELECT} WHERE profile.project_id = $1 AND profile.hidden_at IS NULL ORDER BY profile.enabled DESC, membership.display_name, profile.id"
     ))
@@ -192,9 +193,8 @@ pub async fn list_profiles(
     .fetch_all(crate::db::scoped(&state.pool))
     .await?
     .into_iter()
-    .map(|profile| named(state, profile))
+    .map(|profile| named(&catalog, profile))
     .collect();
-    let catalog = Harnesses::of(state, organization_id).await?;
     let harnesses = catalog
         .manifests()
         .filter(|manifest| catalog.runner_for(&manifest.kind).is_none())
@@ -524,19 +524,21 @@ async fn handle_taken(
 }
 
 pub(crate) async fn load(
-    executor: impl sqlx::PgExecutor<'_>,
+    connection: &mut sqlx::PgConnection,
     state: &AppState,
     project_id: Uuid,
     profile_id: Uuid,
 ) -> Result<ProfileView, AppError> {
+    // On the caller's connection: a save holds it while it reads back.
+    let harnesses = Harnesses::visible_on(state, &mut *connection).await?;
     sqlx::query_as::<_, ProfileView>(&format!(
         "{PROFILE_SELECT} WHERE profile.project_id = $1 AND profile.id = $2 AND profile.hidden_at IS NULL"
     ))
     .bind(project_id)
     .bind(profile_id)
-    .fetch_optional(executor)
+    .fetch_optional(&mut *connection)
     .await?
-    .map(|profile| named(state, profile))
+    .map(|profile| named(&harnesses, profile))
     .ok_or(AppError::NotFound("agent_profile"))
 }
 
@@ -707,7 +709,7 @@ pub(crate) async fn update_in(
     if request.template.is_some() {
         return Err(AppError::Validation("template"));
     }
-    let current = load(&mut **transaction, state, project_id, profile_id).await?;
+    let current = load(transaction, state, project_id, profile_id).await?;
     if request
         .version
         .is_some_and(|version| version != current.version)
