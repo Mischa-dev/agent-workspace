@@ -219,13 +219,7 @@ pub enum LoginStart {
     ApiKey,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LoginKind {
-    Browser,
-    DeviceCode,
-    ApiKey,
-}
+pub use super::manifest::LoginKind;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RateLimitWindow {

@@ -23,13 +23,15 @@ use serde_json::{Value, json};
 use sqlx::{FromRow, PgExecutor};
 use uuid::Uuid;
 
+use crate::harness_catalog::Harnesses;
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
+    harness::manifest::RunLocation,
     memory,
     policy::{Action, ActorKind},
-    provider::{ProfileAccount, manifest::RunLocation},
+    provider::ProfileAccount,
     settings,
 };
 
@@ -125,11 +127,11 @@ pub(crate) struct EnvironmentList {
 }
 
 pub(crate) fn view(
-    state: &AppState,
+    catalog: &Harnesses,
     row: EnvironmentRow,
     default: Option<Uuid>,
 ) -> EnvironmentView {
-    let manifest = state.supervisors.manifest(&row.harness);
+    let manifest = catalog.manifest(&row.harness);
     EnvironmentView {
         is_default: default == Some(row.id),
         harness_name: manifest
@@ -153,11 +155,9 @@ pub(crate) fn view(
     }
 }
 
-pub(crate) fn harness_choices(state: &AppState, organization_id: Uuid) -> Vec<HarnessChoice> {
-    state
-        .supervisors
-        .manifests_in(organization_id)
-        .into_iter()
+pub(crate) fn harness_choices(catalog: &Harnesses) -> Vec<HarnessChoice> {
+    catalog
+        .manifests()
         .map(|manifest| HarnessChoice {
             kind: manifest.kind.clone(),
             display_name: manifest.display_name.clone(),
@@ -259,14 +259,15 @@ pub(crate) async fn list_for(
         default_environment(state, organization_id, project_id, actor_id).await?;
     let rows = active_environments(&state.pool, project_id).await?;
     let default = default.filter(|id| rows.iter().any(|row| row.id == *id));
+    let catalog = Harnesses::of(state, organization_id).await?;
     Ok(EnvironmentList {
         environments: rows
             .into_iter()
-            .map(|row| view(state, row, default))
+            .map(|row| view(&catalog, row, default))
             .collect(),
         default_environment_id: default,
         default_source,
-        harnesses: harness_choices(state, organization_id),
+        harnesses: harness_choices(&catalog),
         can_manage,
     })
 }
@@ -331,9 +332,9 @@ async fn clean(
             .bind(project_id)
             .fetch_one(crate::db::scoped(&state.pool))
             .await?;
-    let manifest = state
-        .supervisors
-        .manifest_in(organization_id, &request.harness)
+    let catalog = Harnesses::of(state, organization_id).await?;
+    let manifest = catalog
+        .manifest(&request.harness)
         .ok_or(AppError::Validation("harness"))?;
     let provider_environment_id = optional_text(request.provider_environment_id);
     if provider_environment_id
@@ -466,7 +467,11 @@ async fn create_environment(
     transaction.commit().await?;
     let (default, _) =
         default_environment(&state, organization_id, project_id, principal.actor_id).await?;
-    Ok(Json(view(&state, row, default)))
+    Ok(Json(view(
+        &Harnesses::of(&state, organization_id).await?,
+        row,
+        default,
+    )))
 }
 
 /// Add an environment to a project, for someone the caller checked may
@@ -567,7 +572,11 @@ async fn update_environment(
     transaction.commit().await?;
     let (default, _) =
         default_environment(&state, organization_id, project_id, principal.actor_id).await?;
-    Ok(Json(view(&state, row, default)))
+    Ok(Json(view(
+        &Harnesses::of(&state, organization_id).await?,
+        row,
+        default,
+    )))
 }
 
 /// Change an active environment (the request's expectedVersion must be
@@ -849,7 +858,7 @@ async fn check_environment(
     Ok(Json(CheckResult {
         ok,
         message,
-        environment: view(&state, row, default),
+        environment: view(&Harnesses::of(&state, organization_id).await?, row, default),
     }))
 }
 
@@ -866,7 +875,8 @@ pub(crate) async fn check_in(
         .await?
         .ok_or(AppError::NotFound("environment"))?;
     let account = own_account(&state.pool, organization_id, actor_id, &environment.harness).await?;
-    let manifest = state.supervisors.manifest(&environment.harness);
+    let catalog = Harnesses::of(state, organization_id).await?;
+    let manifest = catalog.manifest(&environment.harness);
     let (ok, message) = match (manifest, account) {
         (None, _) => (
             false,

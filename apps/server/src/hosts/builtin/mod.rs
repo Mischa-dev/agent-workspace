@@ -31,9 +31,9 @@ use crate::{
     AppState,
     domain::RunState,
     error::AppError,
+    harness::run_config::RunConfig,
     hosts::builtin::http::RunSetup,
     outbox,
-    provider::run_config::RunConfig,
     runs::{ACTIVE_RUN_STATES, run_cap},
 };
 
@@ -121,6 +121,22 @@ pub(crate) async fn resolve_config(
 ) -> Result<RunConfig, AppError> {
     let defaults = crate::launch::run_defaults(connection, project_id, actor_id).await?;
     resolve_config_with(state, &defaults, setup, launch).await
+}
+
+/// A1.17: tells the server which harnesses this host runs, so it offers
+/// them and checks launches against them without asking the host.
+pub async fn describe_harnesses(
+    state: &AppState,
+    client: &agent_workspace_host_protocol::HostClient,
+    lease_token: i64,
+) -> Result<(), agent_workspace_host_protocol::ClientError> {
+    client
+        .builtin_harnesses(&agent_workspace_host_protocol::BuiltinHarnesses {
+            harnesses: state.supervisors.builtin_manifests(),
+            lease_token,
+        })
+        .await
+        .map(|_| ())
 }
 
 /// [`resolve_config`] when the caller already read the run settings.

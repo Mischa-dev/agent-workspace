@@ -25,6 +25,7 @@ use serde_json::{Map, Value, json};
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
+use crate::harness_catalog::Harnesses;
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
@@ -176,7 +177,7 @@ fn named(state: &AppState, mut profile: ProfileView) -> ProfileView {
     profile
 }
 
-fn takes(manifest: &crate::provider::manifest::AdapterManifest, option: &str) -> bool {
+fn takes(manifest: &crate::harness::manifest::AdapterManifest, option: &str) -> bool {
     manifest
         .options_schema
         .pointer(&format!("/properties/{option}"))
@@ -203,16 +204,15 @@ pub async fn list_profiles(
     .into_iter()
     .map(|profile| named(state, profile))
     .collect();
-    let harnesses = state
-        .supervisors
-        .manifests_in(organization_id)
-        .into_iter()
-        .filter(|manifest| state.supervisors.runner_for(&manifest.kind).is_none())
+    let catalog = Harnesses::of(state, organization_id).await?;
+    let harnesses = catalog
+        .manifests()
+        .filter(|manifest| catalog.runner_for(&manifest.kind).is_none())
         .map(|manifest| HarnessChoice {
             kind: manifest.kind.clone(),
             display_name: manifest.display_name.clone(),
-            takes_instructions: takes(&manifest, "instructions"),
-            takes_allowed_tools: takes(&manifest, "allowedTools"),
+            takes_instructions: takes(manifest, "instructions"),
+            takes_allowed_tools: takes(manifest, "allowedTools"),
         })
         .collect();
     let ready = default_worker(&state.pool, project_id).await?.is_some();
@@ -323,7 +323,7 @@ fn text(value: Option<String>, max: usize, what: &'static str) -> Result<Option<
 
 async fn clean(
     state: &AppState,
-    organization_id: Uuid,
+    catalog: &Harnesses,
     project_id: Uuid,
     request: ProfileRequest,
     current: Option<&ProfileView>,
@@ -390,11 +390,8 @@ async fn clean(
         None => current.and_then(|profile| profile.harness.clone()),
     };
     if let Some(harness) = &harness {
-        let known = state
-            .supervisors
-            .manifest_in(organization_id, harness)
-            .is_some();
-        if !known || state.supervisors.runner_for(harness).is_some() {
+        let known = catalog.manifest(harness).is_some();
+        if !known || catalog.runner_for(harness).is_some() {
             return Err(AppError::Validation("harness"));
         }
     }
@@ -614,7 +611,8 @@ pub(crate) async fn create_in(
     project_id: Uuid,
     request: ProfileRequest,
 ) -> Result<(Uuid, Value), AppError> {
-    let clean = clean(state, organization_id, project_id, request.clone(), None).await?;
+    let catalog = Harnesses::of_on(state, transaction, organization_id).await?;
+    let clean = clean(state, &catalog, project_id, request.clone(), None).await?;
     crate::execution_setup::lock_project_setup(transaction, project_id).await?;
     let count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM agent_profiles WHERE project_id = $1 AND hidden_at IS NULL",
@@ -815,7 +813,8 @@ pub(crate) async fn update_in(
         ));
     }
     let enabled = request.enabled.unwrap_or(current.enabled);
-    let clean = clean(state, organization_id, project_id, request, Some(&current)).await?;
+    let catalog = Harnesses::of_on(state, transaction, organization_id).await?;
+    let clean = clean(state, &catalog, project_id, request, Some(&current)).await?;
     crate::execution_setup::lock_project_setup(transaction, project_id).await?;
     if enabled
         && handle_taken(
@@ -1152,7 +1151,7 @@ impl ProfileSettings {
     /// allowed tools, for harnesses whose options name them.
     pub fn options(
         &self,
-        manifest: &crate::provider::manifest::AdapterManifest,
+        manifest: &crate::harness::manifest::AdapterManifest,
     ) -> Map<String, Value> {
         let mut options = Map::new();
         if !self.instructions.trim().is_empty() && takes(manifest, "instructions") {
@@ -1168,7 +1167,7 @@ impl ProfileSettings {
     /// prompt instead, so every harness hears them.
     pub fn prompt(
         &self,
-        manifest: Option<&crate::provider::manifest::AdapterManifest>,
+        manifest: Option<&crate::harness::manifest::AdapterManifest>,
         prompt: &str,
     ) -> String {
         let instructions = self.instructions.trim();

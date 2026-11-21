@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
+use crate::harness_catalog::Harnesses;
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
@@ -15,7 +16,7 @@ use crate::{
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     policy::{Action, Permission, RoleGrant},
     provider::{
-        CODEX_KIND, ProfileHealth, SupervisorRegistry,
+        CODEX_KIND, ProfileHealth,
         catalog::{self, Catalog},
         manifest::{AdapterManifest, ModelOverrides},
     },
@@ -286,6 +287,7 @@ async fn list_execution_workers(
         Action::ProjectView,
     )
     .await?;
+    let harnesses = Harnesses::visible_on(&state, &mut transaction).await?;
     let rows = sqlx::query_as::<_, ExecutionWorkerRow>(
         r#"
         SELECT
@@ -357,10 +359,8 @@ async fn list_execution_workers(
     .bind(principal.actor_id)
     .bind(MAX_EXECUTION_RESOURCES)
     .bind(
-        state
-            .supervisors
+        harnesses
             .manifests()
-            .into_iter()
             .map(|manifest| manifest.kind.clone())
             .collect::<Vec<_>>(),
     )
@@ -370,7 +370,7 @@ async fn list_execution_workers(
 
     let workers = rows
         .into_iter()
-        .map(|row| execution_worker_view(&state.supervisors, row))
+        .map(|row| execution_worker_view(&harnesses, row))
         .collect::<Result<Vec<_>, _>>()?;
     transaction.commit().await?;
     Ok(Json(ExecutionWorkersResponse { workers }))
@@ -440,6 +440,7 @@ async fn list_execution_profiles(
     .fetch_all(&mut *transaction)
     .await?;
 
+    let harnesses = Harnesses::visible_on(&state, &mut transaction).await?;
     let mut profiles = Vec::with_capacity(rows.len());
     for row in rows {
         let health = state
@@ -447,7 +448,7 @@ async fn list_execution_profiles(
             .health(&row.account_adapter_kind, row.provider_account_id)
             .await;
         profiles.push(execution_profile_view(
-            &state.supervisors,
+            &harnesses,
             row,
             health,
             principal.actor_id,
@@ -487,10 +488,10 @@ async fn register_personal_execution_profile(
         (Some(kind), None) => kind.clone(),
         (None, None) => CODEX_KIND.to_owned(),
     };
-    let manifest = state
-        .supervisors
+    let manifest = Harnesses::visible(&state)
+        .await?
         .manifest(&adapter_kind)
-        .map(|manifest| (*manifest).clone())
+        .cloned()
         .ok_or(AppError::Validation("adapterKind"))?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let access = require_project_action(
@@ -725,8 +726,11 @@ async fn list_harnesses(
     transaction.commit().await?;
     let can_edit = may_edit_catalog(&workspace);
     let mut harnesses = Vec::new();
-    for manifest in state.supervisors.manifests_in(workspace.organization_id) {
-        harnesses.push(harness_view(&state, workspace.organization_id, &manifest, can_edit).await?);
+    for manifest in Harnesses::of(&state, workspace.organization_id)
+        .await?
+        .manifests()
+    {
+        harnesses.push(harness_view(&state, workspace.organization_id, manifest, can_edit).await?);
     }
     Ok(Json(HarnessesResponse { harnesses }))
 }
@@ -745,8 +749,8 @@ async fn list_workspace_catalog(
             .await
             .is_ok();
     let mut harnesses = Vec::new();
-    for manifest in state.supervisors.manifests_in(organization_id) {
-        harnesses.push(harness_view(&state, organization_id, &manifest, can_edit).await?);
+    for manifest in Harnesses::of(&state, organization_id).await?.manifests() {
+        harnesses.push(harness_view(&state, organization_id, manifest, can_edit).await?);
     }
     Ok(Json(HarnessesResponse { harnesses }))
 }
@@ -789,10 +793,10 @@ pub(crate) async fn refresh_in(
     idempotency: Option<(&str, &IdempotencyKey)>,
 ) -> Result<HarnessView, AppError> {
     let request_hash = RequestHash::for_value(&serde_json::json!({ "kind": kind }))?;
-    let manifest = state
-        .supervisors
-        .manifest_in(organization_id, kind)
-        .map(|manifest| (*manifest).clone())
+    let manifest = Harnesses::of(state, organization_id)
+        .await?
+        .manifest(kind)
+        .cloned()
         .ok_or(AppError::NotFound("harness"))?;
     if !manifest.features.model_listing {
         return Err(AppError::Conflict(
@@ -991,10 +995,10 @@ pub(crate) async fn save_overrides_in(
     model_id: &str,
     overrides: &ModelOverrides,
 ) -> Result<HarnessView, AppError> {
-    let manifest = state
-        .supervisors
-        .manifest_in(organization_id, kind)
-        .map(|manifest| (*manifest).clone())
+    let manifest = Harnesses::of(state, organization_id)
+        .await?
+        .manifest(kind)
+        .cloned()
         .ok_or(AppError::NotFound("harness"))?;
     catalog::save_overrides(
         &state.pool,
@@ -1044,10 +1048,10 @@ pub(crate) async fn remove_model_in(
     kind: &str,
     model_id: &str,
 ) -> Result<HarnessView, AppError> {
-    let manifest = state
-        .supervisors
-        .manifest_in(organization_id, kind)
-        .map(|manifest| (*manifest).clone())
+    let manifest = Harnesses::of(state, organization_id)
+        .await?
+        .manifest(kind)
+        .cloned()
         .ok_or(AppError::NotFound("harness"))?;
     if !catalog::remove_model(&state.pool, organization_id, &manifest.kind, model_id).await? {
         return Err(AppError::NotFound("harness_model"));
@@ -1110,7 +1114,8 @@ async fn fetch_owned_execution_profile(
         .supervisors
         .health(&row.account_adapter_kind, row.provider_account_id)
         .await;
-    execution_profile_view(&state.supervisors, row, health, owner_actor_id)
+    let harnesses = Harnesses::visible(state).await?;
+    execution_profile_view(&harnesses, row, health, owner_actor_id)
 }
 
 async fn require_project_action(
@@ -1160,7 +1165,7 @@ async fn require_project_action(
 }
 
 fn execution_worker_view(
-    registry: &SupervisorRegistry,
+    harnesses: &Harnesses,
     row: ExecutionWorkerRow,
 ) -> Result<ExecutionWorkerView, AppError> {
     let actor_status = parse_actor_status(&row.actor_status)?;
@@ -1196,7 +1201,7 @@ fn execution_worker_view(
     {
         ExecutionWorkerStatus::AuthenticationRequired
     } else if !row.provider_enabled
-        || registry.manifest(&row.provider_kind).is_none()
+        || harnesses.manifest(&row.provider_kind).is_none()
         || profile_status == Some(ExecutionProfileStatus::Unavailable)
         || row.profile_usable == Some(false)
         || account_state == Some(AccountState::Unknown)
@@ -1219,7 +1224,7 @@ fn execution_worker_view(
         enabled: row.worker_enabled,
         status,
         provider: provider_view(
-            registry,
+            harnesses,
             &row.provider_kind,
             row.provider_enabled,
             row.provider_version,
@@ -1230,7 +1235,7 @@ fn execution_worker_view(
 }
 
 fn execution_profile_view(
-    registry: &SupervisorRegistry,
+    harnesses: &Harnesses,
     row: ExecutionProfileRow,
     supervisor_health: Option<ProfileHealth>,
     viewer_actor_id: Uuid,
@@ -1241,7 +1246,7 @@ fn execution_profile_view(
     let available_for_new_runs = status == ExecutionProfileStatus::Available
         && account_state == AccountState::Authenticated
         && row.provider_enabled
-        && registry.manifest(&row.provider_kind).is_some()
+        && harnesses.manifest(&row.provider_kind).is_some()
         && owner_status == ActorStatus::Active
         && row.owner_membership_enabled;
 
@@ -1272,7 +1277,7 @@ fn execution_profile_view(
         available_for_new_runs,
         supervisor: supervisor_health_view(supervisor_health),
         provider: provider_view(
-            registry,
+            harnesses,
             &row.provider_kind,
             row.provider_enabled,
             row.provider_version,
@@ -1335,14 +1340,14 @@ fn execution_actor_view(
 /// adapter for, or a binary version outside its range, shows as unsupported
 /// rather than failing the whole list.
 fn provider_view(
-    registry: &SupervisorRegistry,
+    harnesses: &Harnesses,
     kind: &str,
     enabled: bool,
     version: i64,
     binary_version: &str,
     capabilities: &serde_json::Value,
 ) -> Result<ProviderView, AppError> {
-    let manifest = registry.manifest(kind);
+    let manifest = harnesses.manifest(kind);
     Ok(ProviderView {
         kind: kind.to_owned(),
         display_name: manifest

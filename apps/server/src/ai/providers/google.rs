@@ -6,7 +6,7 @@ use super::{
     Chat, ChatRequest, Completion, CompletionRequest, ModelPart, ModelRole, ModelStop,
     ProviderError, ProviderManifest, address, base_url, object, send, tokens, tool_schema,
 };
-use crate::provider::manifest::ModelEntry;
+use crate::harness::manifest::ModelEntry;
 
 const DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
 

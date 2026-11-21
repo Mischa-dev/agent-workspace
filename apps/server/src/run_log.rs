@@ -16,7 +16,8 @@ use uuid::Uuid;
 use crate::{
     AppState,
     error::AppError,
-    provider::{adapter::TokenUsage, catalog, manifest::ModelPrices},
+    harness::manifest::ModelPrices,
+    provider::{adapter::TokenUsage, catalog},
 };
 
 pub use agent_workspace_redaction::{
@@ -66,10 +67,12 @@ pub async fn builtin_estimate(
     else {
         return Ok(None);
     };
-    let Some(manifest) = state.supervisors.manifest(&scope.adapter_kind) else {
+    let harnesses = crate::harness_catalog::Harnesses::of(state, scope.workspace_id).await?;
+    // A registered harness switched off mid-run still prices that run.
+    let Some(manifest) = harnesses.known(&scope.adapter_kind) else {
         return Ok(None);
     };
-    let prices = catalog::run_catalog(&state.pool, scope.workspace_id, &manifest)
+    let prices = catalog::run_catalog(&state.pool, scope.workspace_id, manifest)
         .await?
         .into_iter()
         .find(|entry| entry.id == model)

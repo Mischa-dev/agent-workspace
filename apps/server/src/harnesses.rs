@@ -28,9 +28,12 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
+    harness::{
+        manifest::{AdapterManifest, RunLocation},
+        registered,
+    },
     provider::{
         command_line::{self, CommandAdapter, CommandSpec, RunnerAdapter},
-        manifest::{AdapterManifest, RunLocation},
         registry::CustomAdapter,
     },
 };
@@ -77,6 +80,21 @@ fn command_of(row: &HarnessRow) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The manifest a registration gives its harness: what the host runs it by
+/// and what the server offers and checks launches against.
+pub fn manifest_of(
+    kind: &str,
+    name: &str,
+    transport: &str,
+    manifest: &Value,
+) -> Result<AdapterManifest, String> {
+    match transport {
+        "acp" => registered::acp_manifest(kind, name, manifest),
+        "runner" => registered::command_line_manifest(kind, name, manifest, RunLocation::Cloud),
+        _ => registered::command_line_manifest(kind, name, manifest, RunLocation::LocalHost),
+    }
+}
+
 fn adapter_for(state: &AppState, row: &HarnessRow) -> Result<CustomAdapter, String> {
     let spec = |manifest| CommandSpec {
         manifest,
@@ -84,29 +102,16 @@ fn adapter_for(state: &AppState, row: &HarnessRow) -> Result<CustomAdapter, Stri
         secret_names: row.secret_names.clone(),
         allowed_dirs: state.config.command_harness_dirs.clone(),
     };
+    let manifest = manifest_of(&row.kind, &row.name, &row.transport, &row.manifest)?;
     let adapter: Arc<dyn crate::provider::adapter::HarnessAdapter> = match row.transport.as_str() {
-        "runner" => Arc::new(RunnerAdapter::new(command_line::build_manifest(
-            &row.kind,
-            &row.name,
-            &row.manifest,
-            RunLocation::Cloud,
-        )?)),
+        "runner" => Arc::new(RunnerAdapter::new(manifest)),
         "acp" => Arc::new(crate::provider::acp::AcpAdapter::new(
-            spec(crate::provider::acp::build_manifest(
-                &row.kind,
-                &row.name,
-                &row.manifest,
-            )?),
+            spec(manifest),
             state.config.codex_host_concurrency_limit,
             state.supervisors.host_cell(),
         )),
         _ => Arc::new(CommandAdapter::new(
-            spec(command_line::build_manifest(
-                &row.kind,
-                &row.name,
-                &row.manifest,
-                RunLocation::LocalHost,
-            )?),
+            spec(manifest),
             state.config.codex_host_concurrency_limit,
             state.supervisors.host_cell(),
         )),
@@ -421,20 +426,7 @@ fn explain(state: &AppState, row: &HarnessRow) -> Option<String> {
     {
         return Some(reason);
     }
-    match row.transport.as_str() {
-        "acp" => crate::provider::acp::build_manifest(&row.kind, &row.name, &row.manifest).err(),
-        "runner" => {
-            command_line::build_manifest(&row.kind, &row.name, &row.manifest, RunLocation::Cloud)
-                .err()
-        }
-        _ => command_line::build_manifest(
-            &row.kind,
-            &row.name,
-            &row.manifest,
-            RunLocation::LocalHost,
-        )
-        .err(),
-    }
+    manifest_of(&row.kind, &row.name, &row.transport, &row.manifest).err()
 }
 
 /// Whether a registration runs a program on this host: a command-line
@@ -513,42 +505,47 @@ async fn create(
         return Err(AppError::Conflict("harness", "name in use"));
     }
     // Kinds are unique across the server; another workspace may have
-    // taken this one.
+    // taken this one, and its row is hidden from this one, so the insert
+    // itself finds out (and the next suffix is tried).
     let base = row.kind.clone();
+    let mut inserted = false;
     for attempt in 0..20 {
         if attempt > 0 {
             row.kind = format!("{}_{}", base, attempt + 1);
         }
-        let taken = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM custom_harnesses WHERE kind = $1)",
+        if crate::harness_catalog::is_builtin(&mut transaction, &row.kind).await? {
+            continue;
+        }
+        inserted = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO custom_harnesses (
+                id, organization_id, kind, name, transport, manifest, command,
+                secret_names, runner_actor_id, created_by_actor_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (kind) DO NOTHING
+            RETURNING id
+            "#,
         )
+        .bind(row.id)
+        .bind(organization_id)
         .bind(&row.kind)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if !taken && state.supervisors.manifest(&row.kind).is_none() {
+        .bind(&row.name)
+        .bind(&row.transport)
+        .bind(&row.manifest)
+        .bind(&row.command)
+        .bind(&row.secret_names)
+        .bind(row.runner_actor_id)
+        .bind(principal.actor_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .is_some();
+        if inserted {
             break;
         }
     }
-    sqlx::query(
-        r#"
-        INSERT INTO custom_harnesses (
-            id, organization_id, kind, name, transport, manifest, command,
-            secret_names, runner_actor_id, created_by_actor_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        "#,
-    )
-    .bind(row.id)
-    .bind(organization_id)
-    .bind(&row.kind)
-    .bind(&row.name)
-    .bind(&row.transport)
-    .bind(&row.manifest)
-    .bind(&row.command)
-    .bind(&row.secret_names)
-    .bind(row.runner_actor_id)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
-    .await?;
+    if !inserted {
+        return Err(AppError::Conflict("harness", "no free kind for this name"));
+    }
     crate::settings::audit(
         &mut transaction,
         &headers,

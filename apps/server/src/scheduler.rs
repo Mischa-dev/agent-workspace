@@ -105,10 +105,28 @@ async fn host(state: AppState, cluster: Cluster, lease: Lease) -> Result<(), App
         };
         let host_jobs = async {
             let mut interval = tokio::time::interval(Duration::from_secs(1));
+            // The harnesses this host runs, told to the server once it holds
+            // the lease (and again each second until the server has them).
+            let mut described = false;
             loop {
                 tokio::select! {
                     _ = interval.tick() => {}
                     () = lease.lost.cancelled() => return,
+                }
+                if !described {
+                    match crate::hosts::builtin::describe_harnesses(&state, &builtin, lease.token)
+                        .await
+                    {
+                        Ok(()) => described = true,
+                        Err(error) => tracing::warn!(
+                            status = match error {
+                                agent_workspace_host_protocol::ClientError::Refused(status, _) =>
+                                    status,
+                                agent_workspace_host_protocol::ClientError::Http(_) => 0,
+                            },
+                            "built-in host could not describe its harnesses"
+                        ),
+                    }
                 }
                 if let Err(error) = crate::jobs::run_due_host(&state, &jobs, &lease).await {
                     tracing::warn!(error_category = error.log_category(), "host jobs failed");
