@@ -238,7 +238,7 @@ async fn builtin_harnesses_route(
     }
     protocol_header(&headers)?;
     use crate::harness_catalog::{Refused, StoreError, store_builtin};
-    match store_builtin(&state.pool, &request.harnesses).await {
+    match store_builtin(&state.pool, &request.harnesses, request.lease_token).await {
         Ok(()) => Ok(Json(json!({ "harnesses": request.harnesses.len() }))),
         Err(StoreError::Refused(Refused(field, message))) => {
             Err(HostError::Invalid { field, message })

@@ -40,12 +40,23 @@ async fn the_catalog_is_what_the_host_described_and_the_workspace_registered() {
     let before = of(world.a.organization).await;
     assert!(before.manifests().next().is_some());
 
-    // The host describes its harnesses through its own client.
+    // The host describes its harnesses through its own client, while it
+    // holds the built-in host lease.
+    sqlx::query(
+        "INSERT INTO leases (name, holder_instance_id, token, acquired_at, expires_at) \
+         VALUES ('builtin-host', $1, 7, now(), now() + interval '1 hour') \
+         ON CONFLICT (name) DO UPDATE SET token = 7, expires_at = EXCLUDED.expires_at",
+    )
+    .bind(Uuid::now_v7())
+    .execute(&world.pool)
+    .await
+    .expect("hold the lease");
     let client = transport::client(&state);
     let first = manifest("described_one");
     client
         .builtin_harnesses(&BuiltinHarnesses {
             harnesses: vec![first.clone()],
+            lease_token: 7,
         })
         .await
         .expect("describe");
@@ -87,6 +98,7 @@ async fn the_catalog_is_what_the_host_described_and_the_workspace_registered() {
     client
         .builtin_harnesses(&BuiltinHarnesses {
             harnesses: vec![manifest("described_two")],
+            lease_token: 7,
         })
         .await
         .expect("describe again");
@@ -99,6 +111,7 @@ async fn the_catalog_is_what_the_host_described_and_the_workspace_registered() {
         client
             .builtin_harnesses(&BuiltinHarnesses {
                 harnesses: vec![manifest("twice"), manifest("twice")],
+                lease_token: 7,
             })
             .await
             .is_err()
@@ -109,6 +122,21 @@ async fn the_catalog_is_what_the_host_described_and_the_workspace_registered() {
             .manifest("described_two")
             .is_some()
     );
+
+    // A host that lost the lease (an older token) can't replace the list
+    // its successor sent.
+    assert!(
+        client
+            .builtin_harnesses(&BuiltinHarnesses {
+                harnesses: vec![manifest("stale")],
+                lease_token: 6,
+            })
+            .await
+            .is_err()
+    );
+    let b = of(world.b.organization).await;
+    assert!(b.manifest("stale").is_none());
+    assert!(b.manifest("described_two").is_some());
 
     // Nobody else may describe the built-in host's harnesses.
     let refused = world
@@ -122,6 +150,7 @@ async fn the_catalog_is_what_the_host_described_and_the_workspace_registered() {
                 .body(Body::from(
                     serde_json::to_vec(&BuiltinHarnesses {
                         harnesses: vec![manifest("intruder")],
+                        lease_token: 7,
                     })
                     .expect("json"),
                 ))

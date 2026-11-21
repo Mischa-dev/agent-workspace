@@ -2043,9 +2043,9 @@ async fn start_launch(
                 .map(|environment| environment.harness.clone())
         });
     let known = Harnesses::visible(state).await?;
-    let manifest = harness
-        .as_deref()
-        .and_then(|harness| known.manifest(harness));
+    // Its settings, even when its registration was switched off after the
+    // launch was queued: the launch still runs as it was asked for.
+    let manifest = harness.as_deref().and_then(|harness| known.known(harness));
     let mut options = Map::new();
     if let (Some(environment), Some(manifest)) = (&environment, &manifest) {
         options = environment_options(environment, manifest);

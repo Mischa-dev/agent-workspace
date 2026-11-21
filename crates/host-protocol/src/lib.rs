@@ -336,6 +336,10 @@ pub struct DescribedAccount {
 #[serde(rename_all = "camelCase")]
 pub struct BuiltinHarnesses {
     pub harnesses: Vec<harness::manifest::AdapterManifest>,
+    /// The fencing token of the lease the host holds while it sends this:
+    /// a host that has lost its lease can't replace the list its successor
+    /// sent.
+    pub lease_token: i64,
 }
 
 /// `POST /api/v1/host/windows`: the plan windows of described accounts.

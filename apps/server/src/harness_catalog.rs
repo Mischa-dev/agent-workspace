@@ -20,7 +20,9 @@ use crate::{AppState, error::AppError, harness::manifest::AdapterManifest};
 /// The most harnesses the built-in host may describe.
 pub const MAX_BUILTIN_HARNESSES: usize = 32;
 /// The most one described manifest may take, as JSON.
-pub const MAX_MANIFEST_BYTES: usize = 256 * 1024;
+pub const MAX_MANIFEST_BYTES: usize = 48 * 1024;
+/// The most the whole list may take, under the request body limit.
+pub const MAX_LIST_BYTES: usize = 192 * 1024;
 
 #[derive(Clone, Debug)]
 struct Entry {
@@ -230,10 +232,29 @@ pub async fn is_builtin(connection: &mut sqlx::PgConnection, kind: &str) -> Resu
 pub struct Refused(pub &'static str, pub String);
 
 /// Stores the built-in host's harnesses, replacing the list it sent before:
-/// a kind it no longer lists is gone.
-pub async fn store_builtin(pool: &PgPool, harnesses: &[AdapterManifest]) -> Result<(), StoreError> {
+/// a kind it no longer lists is gone. `lease_token` is the built-in host
+/// lease's fencing token as the sender holds it: a sender that has lost the
+/// lease is refused, and a takeover waits for this write (`FOR SHARE`).
+pub async fn store_builtin(
+    pool: &PgPool,
+    harnesses: &[AdapterManifest],
+    lease_token: i64,
+) -> Result<(), StoreError> {
     let rows = checked(harnesses).map_err(StoreError::Refused)?;
     let mut transaction = crate::db::scoped_tx(pool).await?;
+    let held = sqlx::query_scalar::<_, i32>(
+        "SELECT 1 FROM leases WHERE name = $1 AND token = $2 AND expires_at > now() FOR SHARE",
+    )
+    .bind(crate::cluster::LeaseName::BuiltinHost.to_string())
+    .bind(lease_token)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    if held.is_none() {
+        return Err(StoreError::Refused(Refused(
+            "leaseToken",
+            "Describe harnesses while holding the built-in host lease.".to_owned(),
+        )));
+    }
     let kinds = rows
         .iter()
         .map(|(kind, _)| kind.clone())
@@ -321,6 +342,16 @@ fn checked(harnesses: &[AdapterManifest]) -> Result<Vec<(String, Value)>, Refuse
             ));
         }
         rows.push((manifest.kind.clone(), value));
+    }
+    let total = rows
+        .iter()
+        .map(|(_, value)| serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len()))
+        .fold(0_usize, usize::saturating_add);
+    if total > MAX_LIST_BYTES {
+        return Err(Refused(
+            "harnesses",
+            format!("Keep the whole list under {} KiB.", MAX_LIST_BYTES / 1024),
+        ));
     }
     Ok(rows)
 }

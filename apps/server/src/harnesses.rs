@@ -505,42 +505,47 @@ async fn create(
         return Err(AppError::Conflict("harness", "name in use"));
     }
     // Kinds are unique across the server; another workspace may have
-    // taken this one.
+    // taken this one, and its row is hidden from this one, so the insert
+    // itself finds out (and the next suffix is tried).
     let base = row.kind.clone();
+    let mut inserted = false;
     for attempt in 0..20 {
         if attempt > 0 {
             row.kind = format!("{}_{}", base, attempt + 1);
         }
-        let taken = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM custom_harnesses WHERE kind = $1)",
+        if crate::harness_catalog::is_builtin(&mut transaction, &row.kind).await? {
+            continue;
+        }
+        inserted = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO custom_harnesses (
+                id, organization_id, kind, name, transport, manifest, command,
+                secret_names, runner_actor_id, created_by_actor_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (kind) DO NOTHING
+            RETURNING id
+            "#,
         )
+        .bind(row.id)
+        .bind(organization_id)
         .bind(&row.kind)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if !taken && !crate::harness_catalog::is_builtin(&mut transaction, &row.kind).await? {
+        .bind(&row.name)
+        .bind(&row.transport)
+        .bind(&row.manifest)
+        .bind(&row.command)
+        .bind(&row.secret_names)
+        .bind(row.runner_actor_id)
+        .bind(principal.actor_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .is_some();
+        if inserted {
             break;
         }
     }
-    sqlx::query(
-        r#"
-        INSERT INTO custom_harnesses (
-            id, organization_id, kind, name, transport, manifest, command,
-            secret_names, runner_actor_id, created_by_actor_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        "#,
-    )
-    .bind(row.id)
-    .bind(organization_id)
-    .bind(&row.kind)
-    .bind(&row.name)
-    .bind(&row.transport)
-    .bind(&row.manifest)
-    .bind(&row.command)
-    .bind(&row.secret_names)
-    .bind(row.runner_actor_id)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
-    .await?;
+    if !inserted {
+        return Err(AppError::Conflict("harness", "no free kind for this name"));
+    }
     crate::settings::audit(
         &mut transaction,
         &headers,

@@ -114,7 +114,9 @@ async fn host(state: AppState, cluster: Cluster, lease: Lease) -> Result<(), App
                     () = lease.lost.cancelled() => return,
                 }
                 if !described {
-                    match crate::hosts::builtin::describe_harnesses(&state, &builtin).await {
+                    match crate::hosts::builtin::describe_harnesses(&state, &builtin, lease.token)
+                        .await
+                    {
                         Ok(()) => described = true,
                         Err(error) => tracing::warn!(
                             status = match error {

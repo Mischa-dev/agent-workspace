@@ -128,10 +128,12 @@ pub(crate) async fn resolve_config(
 pub async fn describe_harnesses(
     state: &AppState,
     client: &agent_workspace_host_protocol::HostClient,
+    lease_token: i64,
 ) -> Result<(), agent_workspace_host_protocol::ClientError> {
     client
         .builtin_harnesses(&agent_workspace_host_protocol::BuiltinHarnesses {
             harnesses: state.supervisors.builtin_manifests(),
+            lease_token,
         })
         .await
         .map(|_| ())
