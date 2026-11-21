@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import catalog from '../api/generated/catalog.json'
 import type { OpenApiDocument } from './api'
-import { AUTOMATION_OPERATIONS, operationFields, operationFormValues, operationInput, operationInputSchema } from './operationForm'
+import { AUTOMATION_OPERATIONS, operationFields, operationFormValues, operationInput, operationInputSchema, shownFirst } from './operationForm'
 
 const DOCUMENT: OpenApiDocument = {
   info: { title: 'test', version: '1' },
@@ -73,6 +73,14 @@ describe('an operation as a rule action', () => {
     expect(operationInput(schema, base, 'space-1')).not.toHaveProperty('urgent')
     const needed = { ...schema, required: [...(schema.required ?? []), 'urgent'] }
     expect(operationInput(needed, base, 'space-1')).toMatchObject({ urgent: false })
+  })
+
+  it('shows its text first even when the text is optional', () => {
+    const schema = operationInputSchema(DOCUMENT, 'thing_make')!
+    const first = shownFirst(schema, operationFields(schema))
+    expect([...first].sort()).toEqual(['description', 'size', 'title'])
+    const needsText = { ...schema, required: [...(schema.required ?? []), 'description'] }
+    expect(shownFirst(needsText, operationFields(needsText)).has('description')).toBe(true)
   })
 
   it('never offers an operation that needs the version of what it changes', () => {

@@ -10,6 +10,7 @@ import {
   AUTOMATION_OPERATIONS,
   fieldName,
   operationFields,
+  shownFirst,
   operationFormValues,
   operationInput,
   operationInputSchema,
@@ -64,6 +65,7 @@ export function OperationAction({
     [document.data, action.operation],
   )
   const fields = useMemo(() => (schema ? operationFields(schema) : []), [schema])
+  const first = useMemo(() => (schema ? shownFirst(schema, fields) : new Set<string>()), [schema, fields])
   // What the person typed, kept as typed; the saved input is built from it.
   const [typed, setTyped] = useState<{ operation: string; values: FormValues } | null>(null)
   const values = typed && typed.operation === action.operation ? typed.values : schema ? operationFormValues(schema, action.input) : {}
@@ -120,12 +122,12 @@ export function OperationAction({
         <p className="aw-quiet">It needs nothing else.</p>
       ) : (
         <>
-          <FormPieceFields fields={fields.filter((field) => field.required)} onChange={change} values={values} />
-          {fields.some((field) => !field.required) ? (
-            <details className="aw-disclosure" open={fields.some((field) => !field.required && values[field.id] !== undefined && values[field.id] !== '')}>
+          <FormPieceFields fields={fields.filter((field) => first.has(field.id))} onChange={change} values={values} />
+          {fields.some((field) => !first.has(field.id)) ? (
+            <details className="aw-disclosure" open={fields.some((field) => !first.has(field.id) && values[field.id] !== undefined && values[field.id] !== '')}>
               <summary>More options</summary>
               <div className="aw-rule-operation">
-                <FormPieceFields fields={fields.filter((field) => !field.required)} onChange={change} values={values} />
+                <FormPieceFields fields={fields.filter((field) => !first.has(field.id))} onChange={change} values={values} />
               </div>
             </details>
           ) : null}
