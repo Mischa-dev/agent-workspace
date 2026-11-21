@@ -4,6 +4,7 @@ import { expect, test, type Page } from '@playwright/test'
 
 import { seeded, seededValue, webOrigin } from './environment'
 import { workOsStandIn } from './workos-stand-in'
+import { at } from './addresses'
 
 // The whole single sign-on round trip, through a local stand-in for WorkOS on
 // another site: link it to an account, sign in with it, stay signed in past
@@ -48,7 +49,7 @@ test('links single sign-on, signs in with it, stays signed in, and signs out', a
   await expect(signIn.getByText(`Single sign-on linked as ${workOsStandIn.user.email}.`)).toBeVisible()
 
   // Still signed in after a reload, on another page, and after the server checks with WorkOS again.
-  await signIn.goto('/w/-/home')
+  await signIn.goto(at('/home'))
   await expect(signIn).toHaveURL(/\/home$/)
   expireWorkOsChecks()
   await signIn.reload()
@@ -63,7 +64,7 @@ test('links single sign-on, signs in with it, stays signed in, and signs out', a
   const csrf = (await context.cookies()).find((cookie) => cookie.name.endsWith('agent_workspace_csrf'))?.value ?? ''
   const signOut = await signIn.request.post('/api/v1/auth/logout', { headers: { 'x-csrf-token': csrf, origin: webOrigin } })
   expect(signOut.ok()).toBe(true)
-  await signIn.goto('/w/-/home')
+  await signIn.goto(at('/home'))
   await expect(signIn).toHaveURL(/\/sign-in/)
   await context.close()
 })

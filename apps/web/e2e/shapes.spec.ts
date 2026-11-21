@@ -6,6 +6,7 @@ import path from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 
 import { repoRoot, seededValue, serverOrigin, storageStatePath } from './environment'
+import { at } from './addresses'
 
 // W1.39, the shape walk (R22, R31): a workspace made from each shape shows
 // nothing of a module that's off, in any words. Each walk opens the shell,
@@ -91,7 +92,7 @@ async function offWords(page: Page, words: string[]) {
 for (const shape of SHAPES) {
   test(`a ${shape} workspace shows nothing of a module that's off`, async ({ page }) => {
     test.setTimeout(180_000)
-    await page.goto('/w/-/home')
+    await page.goto(at('/home'))
     const session = (await (await page.request.get(`${serverOrigin}/api/v1/auth/session`)).json()) as { user: { actorId: string } }
     const workspaceId = randomUUID()
     const slug = `shape-${shape.replace('_', '-')}-${workspaceId.slice(0, 8)}`
