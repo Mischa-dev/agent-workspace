@@ -2001,6 +2001,10 @@ async fn run_tool(
         Ok(acting) => acting,
         Err(error) => {
             tracing::error!(category = error.log_category(), "MCP acting lookup failed");
+            // The tool never ran: its review can be used again.
+            if let Some(hold) = review {
+                give_back_review(&state, hold).await;
+            }
             return Ok(refusal(
                 &request_name,
                 "Couldn't check your access just now. Try again.".to_owned(),
@@ -2014,7 +2018,12 @@ async fn run_tool(
     {
         match asker_of(&state, principal.actor_id, asked).await {
             Ok(asker) => acting.requested_by = asker,
-            Err(error) => return Ok(refusal(&request_name, error.message().into_owned())),
+            Err(error) => {
+                if let Some(hold) = review {
+                    give_back_review(&state, hold).await;
+                }
+                return Ok(refusal(&request_name, error.message().into_owned()));
+            }
         }
     }
     let call = crate::access::acting::within(acting, call);

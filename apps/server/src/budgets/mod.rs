@@ -210,7 +210,20 @@ pub async fn record_run_usage(
         )
         .await
         {
-            Ok(()) | Err(AppError::LimitReached(_)) => {}
+            Ok(()) => {}
+            // A report that jumps past a hard budget still tells whoever
+            // set it (once a day, like a warning).
+            Err(AppError::LimitReached(refused)) => {
+                let notice = LimitNotice {
+                    meter: refused.meter,
+                    scope: refused.scope,
+                    limit: refused.limit,
+                    used: refused.used.saturating_add(quantity),
+                    level: "hard",
+                    budget: refused.budget,
+                };
+                warn(transaction, workspace, &notice).await?;
+            }
             Err(error) => return Err(error),
         }
         let key = format!("{meter}:{report}");
@@ -243,6 +256,8 @@ pub async fn record_run_usage(
 /// asking for the next would wait in a circle with another claim that
 /// took them in the other order. Counted once by `key`, so a claim that
 /// then fails counts nothing again when it is retried.
+/// Called after the claim has committed, so it never waits for a second
+/// connection while holding one.
 pub async fn admit_delivery(
     pool: &sqlx::PgPool,
     event: &crate::events::LoggedEvent,
@@ -321,7 +336,11 @@ async fn warn(
         agent_run_id: None,
         pull_request_id: None,
         detail: json!({
-            "title": "A budget you set is nearly used",
+            "title": if notice.level == "hard" {
+                "A budget you set is used up"
+            } else {
+                "A budget you set is nearly used"
+            },
             "meter": notice.meter,
             "limit": notice.limit,
             "used": notice.used,

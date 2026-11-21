@@ -555,3 +555,77 @@ async fn a_spent_run_budget_refuses_a_built_in_run_too() {
     );
     world.finish().await;
 }
+
+/// A run's usage is already spent, so a report that jumps past a hard
+/// budget is recorded, and whoever set the budget is told it is used up.
+#[tokio::test]
+async fn a_report_past_a_hard_budget_tells_whoever_set_it() {
+    let Some(world) = crate::support::two_workspaces::two_workspaces("budgets_jump").await else {
+        return;
+    };
+    let (account, workspace, space, conversation) = sqlx::query_as::<_, (Uuid, Uuid, Uuid, Uuid)>(
+        "SELECT worker.actor_id, project.organization_id, project.id, run.conversation_id \
+             FROM agent_runs run \
+             JOIN execution_workers worker ON worker.id = run.execution_worker_id \
+             JOIN projects project ON project.id = worker.project_id \
+             WHERE run.id = $1",
+    )
+    .bind(world.a.run)
+    .fetch_one(&world.pool)
+    .await
+    .expect("the run's agent");
+    sqlx::query(
+        "INSERT INTO spend_limits (id, workspace_id, scope_kind, scope_id, per_account, meter, \
+                                   period, hard_limit, set_by_actor_id) \
+         VALUES ($1, $2, 'account', $3, false, 'reported_tokens', 'day', 100, $3)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(workspace)
+    .bind(account)
+    .execute(&world.pool)
+    .await
+    .expect("a budget");
+    for tokens in [50, 60, 10] {
+        agent_workspace_server::tenancy::system("runs.host", async {
+            let mut transaction = agent_workspace_server::db::scoped_tx(&world.pool)
+                .await
+                .expect("transaction");
+            agent_workspace_server::budgets::record_run_usage(
+                &mut transaction,
+                agent_workspace_server::budgets::RunUsage {
+                    workspace,
+                    space: Some(space),
+                    conversation: Some(conversation),
+                    account,
+                    report: Uuid::now_v7(),
+                    tokens,
+                    cost: None,
+                },
+            )
+            .await
+            .expect("recorded");
+            transaction.commit().await.expect("commit");
+        })
+        .await;
+    }
+    let used = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT sum(quantity)::bigint FROM usage_events \
+         WHERE workspace_id = $1 AND meter = 'reported_tokens' AND account_id = $2",
+    )
+    .bind(workspace)
+    .bind(account)
+    .fetch_one(&world.pool)
+    .await
+    .expect("usage");
+    assert_eq!(used, Some(120), "spent usage is recorded past the limit");
+    let titles = sqlx::query_scalar::<_, String>(
+        "SELECT detail->>'title' FROM notifications \
+         WHERE recipient_actor_id = $1 AND kind = 'budget_warning'",
+    )
+    .bind(account)
+    .fetch_all(&world.pool)
+    .await
+    .expect("warnings");
+    assert_eq!(titles, ["A budget you set is used up"], "told once a day");
+    world.finish().await;
+}

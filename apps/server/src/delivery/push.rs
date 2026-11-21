@@ -472,29 +472,6 @@ async fn claim(state: &AppState, connection_id: Uuid) -> Result<Claimed, AppErro
                     .is_some_and(|limits| read::within_limits(limits, &row.event));
         }
         let skip = !row.deliverable;
-        // A2.14: over a hard budget on deliveries, a push waits for the
-        // next period instead of failing (counted once, so a retry after a
-        // failed post doesn't count again).
-        if !skip
-            && let Some(until) = Box::pin(crate::budgets::admit_delivery(
-                &state.pool,
-                &row.event,
-                delivery.account_id,
-                &format!("delivery:{}:{}", delivery.id, row.event.position),
-            ))
-            .await?
-        {
-            sqlx::query(
-                "UPDATE deliveries SET next_attempt_at = $3 \
-                 WHERE connection_id = $1 AND event_position = $2",
-            )
-            .bind(delivery.id)
-            .bind(row.event.position)
-            .bind(until)
-            .execute(&mut *transaction)
-            .await?;
-            continue;
-        }
         let next = if skip { None } else { Some(CLAIM_SECONDS) };
         sqlx::query(
             r#"
@@ -528,14 +505,17 @@ async fn claim(state: &AppState, connection_id: Uuid) -> Result<Claimed, AppErro
             .collect::<Vec<_>>();
         let lookups = Lookups::for_batch(&mut transaction, &delivered).await?;
         for (attempts, item) in items {
-            posts.push(Post {
-                position: item.event.position,
-                attempts,
-                message_id: envelope::event_id(item.event.id),
-                body: envelope::envelope(&item, &delivery, &lookups, None).to_string(),
-            });
+            posts.push((
+                item.event.clone(),
+                Post {
+                    position: item.event.position,
+                    attempts,
+                    message_id: envelope::event_id(item.event.id),
+                    body: envelope::envelope(&item, &delivery, &lookups, None).to_string(),
+                },
+            ));
         }
-        posts.sort_by_key(|post| post.position);
+        posts.sort_by_key(|(_, post)| post.position);
     }
     let secrets = if posts.is_empty() {
         Vec::new()
@@ -543,6 +523,37 @@ async fn claim(state: &AppState, connection_id: Uuid) -> Result<Claimed, AppErro
         signing_secrets(&mut transaction, state, delivery.id).await?
     };
     transaction.commit().await?;
+    // A2.14: over a hard budget on deliveries, a push waits for the next
+    // period instead of failing. Asked once the claim is in (the rows are
+    // ours for a minute), each in its own short transaction: holding one's
+    // counters while asking for the next would wait in a circle with another
+    // claim, and the claim's connection is free again. Counted once by key,
+    // so a retry after a failed post doesn't count again.
+    let mut admitted = Vec::with_capacity(posts.len());
+    for (event, post) in posts {
+        let held = Box::pin(crate::budgets::admit_delivery(
+            &state.pool,
+            &event,
+            delivery.account_id,
+            &format!("delivery:{}:{}", delivery.id, post.position),
+        ))
+        .await?;
+        match held {
+            None => admitted.push(post),
+            Some(until) => {
+                sqlx::query(
+                    "UPDATE deliveries SET next_attempt_at = $3 \
+                     WHERE connection_id = $1 AND event_position = $2 AND state = 'pending'",
+                )
+                .bind(delivery.id)
+                .bind(post.position)
+                .bind(until)
+                .execute(&state.pool)
+                .await?;
+            }
+        }
+    }
+    let posts = admitted;
     Ok(Claimed {
         url: delivery.webhook_url.clone().unwrap_or_default(),
         connection: delivery,

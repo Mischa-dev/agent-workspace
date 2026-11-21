@@ -333,6 +333,10 @@ pub struct LimitRefusal {
     pub resets_at: Option<DateTime<Utc>>,
     pub who_can_change: Who,
     pub message: String,
+    /// The budget that refused it and who set it (A2.14), when a budget did.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub budget: Option<(Uuid, Uuid)>,
 }
 
 impl LimitRefusal {
@@ -395,6 +399,7 @@ impl LimitRefusal {
             resets_at,
             who_can_change: who,
             message,
+            budget: limit.row,
         }
     }
 }
