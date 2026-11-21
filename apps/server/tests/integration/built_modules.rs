@@ -139,14 +139,17 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
         &world.app,
         world.owner.browser.request(
             "POST",
-            &format!("/api/v1/bug-report-links/{form_id}/replace"),
+            "/api/v2/ops/bug_report_link_update",
             Some("form-link"),
-            json!({}),
+            json!({"projectId": world.project("WORK"), "linkId": form_id, "replace": true}),
         ),
     )
     .await;
     assert!(status.is_success(), "{link}");
-    let form_url = link["formUrl"].as_str().expect("form url").to_owned();
+    let form_url = link["value"]["formUrl"]
+        .as_str()
+        .expect("form url")
+        .to_owned();
     let token = form_url.rsplit('/').next().expect("token").to_owned();
     let form = |token: String| {
         let world = &world;

@@ -529,30 +529,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/account/api-tokens/{credential_id}/revoke",
         CredentialManage
     ),
-    policy_route!(
-        "bug_reports",
-        Post,
-        "/api/v1/projects/{project_id}/bug-report-links",
-        WorkItemCreate
-    ),
-    policy_route!(
-        "bug_reports",
-        Patch,
-        "/api/v1/bug-report-links/{link_id}",
-        WorkItemCreate
-    ),
-    policy_route!(
-        "bug_reports",
-        Delete,
-        "/api/v1/bug-report-links/{link_id}",
-        WorkItemCreate
-    ),
-    policy_route!(
-        "bug_reports",
-        Post,
-        "/api/v1/bug-report-links/{link_id}/replace",
-        WorkItemCreate
-    ),
     boundary_route!(
         "bug_reports",
         Post,

@@ -78,6 +78,10 @@ async fn destination(
 ) -> Result<(super::Destination, usize), OpError> {
     let permission = match place {
         Place::Conversation(_) => Perm::ChannelsPost,
+        // A file for a comment needs only what the comment does.
+        Place::Task {
+            for_comment: true, ..
+        } => Perm::TasksComment,
         Place::Task { .. } => Perm::TasksEdit,
     };
     let located = Located {

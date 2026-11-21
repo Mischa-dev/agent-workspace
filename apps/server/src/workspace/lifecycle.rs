@@ -414,12 +414,6 @@ const OTHER_ID_FAMILIES: &[(&str, &str)] = &[
          WHERE id = $1",
     ),
     (
-        "/api/v1/bug-report-links/{",
-        "SELECT project_id FROM bug_report_links \
-         -- visibility: the space only, to refuse a write; the handler checks access\n \
-         WHERE id = $1",
-    ),
-    (
         "/api/v1/project-invitations/{",
         "SELECT project_id FROM project_invitations \
          -- visibility: the space only, to refuse a write; the handler checks access\n \

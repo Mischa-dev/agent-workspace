@@ -99,9 +99,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/agent-runs/{id}/acknowledge-failure",
     "POST /api/v1/agent-runs/{id}/interrupt",
     "POST /api/v1/agent-runs/{id}/retry",
-    "DELETE /api/v1/bug-report-links/{link_id}",
-    "PATCH /api/v1/bug-report-links/{link_id}",
-    "POST /api/v1/bug-report-links/{link_id}/replace",
     "POST /api/v1/channels/{id}/archive",
     "POST /api/v1/channels/{id}/messages",
     "POST /api/v1/channels/{id}/restore",
@@ -194,7 +191,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/ai/suggestions/{suggestion_id}/accept",
     "POST /api/v1/projects/{project_id}/ai/suggestions/{suggestion_id}/dismiss",
     "POST /api/v1/projects/{project_id}/ai/test",
-    "POST /api/v1/projects/{project_id}/bug-report-links",
     "POST /api/v1/projects/{project_id}/environments",
     "PUT /api/v1/projects/{project_id}/environments/{environment_id}",
     "POST /api/v1/projects/{project_id}/environments/{environment_id}/archive",
@@ -2311,7 +2307,6 @@ struct Spares {
     /// Sent now over HTTP, and changed through MCP.
     scheduled: [Uuid; 2],
     harness: Uuid,
-    bug_link: Uuid,
     /// A rule A's own automation_delete removes.
     rule: Uuid,
     /// An environment A's own environment_archive archives.
@@ -2530,20 +2525,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         pool,
         "SELECT id FROM custom_harnesses WHERE name = $1",
         "Net spare runner",
-    )
-    .await;
-    ok(
-        app,
-        browser,
-        "POST",
-        &format!("/api/v1/projects/{project}/bug-report-links"),
-        json!({"name": "Net spare"}),
-    )
-    .await;
-    let bug_link = scalar(
-        pool,
-        "SELECT id FROM bug_report_links WHERE name = $1",
-        "Net spare",
     )
     .await;
     let spare_rule = ok_op(
@@ -3025,7 +3006,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         later,
         scheduled: [scheduled[0], scheduled[1]],
         harness,
-        bug_link,
         rule: spare_rule,
         environment: spare_environment,
         project_invitation,
@@ -4190,21 +4170,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         ),
         // Bug report links
-        path_case(
-            "DELETE /api/v1/bug-report-links/{link_id}",
-            &[id(sp.bug_link, bx.bug_link)],
-            empty(),
-        ),
-        path_case(
-            "PATCH /api/v1/bug-report-links/{link_id}",
-            &[id(ax.bug_link, bx.bug_link)],
-            json_body(json!({"name": "Net game"})),
-        ),
-        path_case(
-            "POST /api/v1/bug-report-links/{link_id}/replace",
-            &[id(ax.bug_link, bx.bug_link)],
-            empty(),
-        ),
         // Channels and threads
         path_case(
             "POST /api/v1/channels/{id}/archive",
@@ -4940,11 +4905,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         ),
         // Automations
-        path_case(
-            "POST /api/v1/projects/{project_id}/bug-report-links",
-            &[project()],
-            json_body(json!({"name": "Net game"})),
-        ),
         // Environments
         path_case(
             "POST /api/v1/projects/{project_id}/environments",

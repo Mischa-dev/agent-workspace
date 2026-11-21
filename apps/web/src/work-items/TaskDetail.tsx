@@ -558,7 +558,7 @@ function TaskDetailBody({
             </Suspense>
           ) : null}
           <Suspense fallback={<MessageSkeleton label="Loading activity" rows={2} />}>
-            <TaskActivity disabled={disabled} item={item} projectArchived={projectArchived} />
+            <TaskActivity item={item} projectArchived={projectArchived} />
           </Suspense>
         </div>
         {wide ? (

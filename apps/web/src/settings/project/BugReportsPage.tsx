@@ -70,13 +70,13 @@ function BugReports({ project }: { project: Project }) {
   const refresh = () => queryClient.invalidateQueries({ queryKey: bugReportKeys.links(projectId) })
 
   const toggle = useMutation({
-    mutationFn: (link: BugReportLink) => updateBugReportLink(link.id, { state: link.state === 'active' ? 'paused' : 'active' }),
+    mutationFn: (link: BugReportLink) => updateBugReportLink(link, { state: link.state === 'active' ? 'paused' : 'active' }),
     onSuccess: (link) => showToast({ title: link.state === 'active' ? `${link.name} is on` : `${link.name} paused` }),
     onError: (error) => toastError('The link didn’t change', error),
     onSettled: refresh,
   })
   const replace = useMutation({
-    mutationFn: (link: BugReportLink) => replaceBugReportLink(link.id),
+    mutationFn: (link: BugReportLink) => replaceBugReportLink(link),
     onSuccess: (result) => {
       setReplacing(null)
       setSetup({ name: result.link.name, url: result.url })
@@ -84,7 +84,7 @@ function BugReports({ project }: { project: Project }) {
     onSettled: refresh,
   })
   const remove = useMutation({
-    mutationFn: (link: BugReportLink) => deleteBugReportLink(link.id),
+    mutationFn: (link: BugReportLink) => deleteBugReportLink(link),
     onSuccess: (_, link) => {
       setDeleting(null)
       showToast({ title: `${link.name} deleted` })

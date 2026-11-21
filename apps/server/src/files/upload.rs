@@ -85,8 +85,13 @@ pub(crate) async fn destination(
             let membership = lock_membership(transaction, command_actor.actor_id, project_id)
                 .await?
                 .ok_or(AppError::NotFound("work_item"))?;
-            if authorize_mutation(command_actor, &membership, Action::WorkItemEdit, Some(id))?
-                != Decision::Allow
+            // A file for a comment needs only what the comment does.
+            let action = if for_comment {
+                Action::WorkItemComment
+            } else {
+                Action::WorkItemEdit
+            };
+            if authorize_mutation(command_actor, &membership, action, Some(id))? != Decision::Allow
             {
                 return Err(AppError::NotFound("work_item"));
             }

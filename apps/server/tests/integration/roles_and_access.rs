@@ -6368,7 +6368,7 @@ async fn an_agent_made_admin_does_what_an_admin_does() {
 /// "moderate channels", held by admins, whatever kind of account holds it.
 #[tokio::test]
 async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
-    let Some(setup) = setup("k116_task_comments").await else {
+    let Some((setup, _root)) = with_data_root("k116_task_comments").await else {
         return;
     };
     let app = &setup.app;
@@ -6430,6 +6430,39 @@ async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{fixed}");
+    // And to attach a file to a comment, though not to the task itself.
+    let upload = |purpose: &str| {
+        Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/projects/{work}/work-items/{task}/files?name=note.txt{purpose}"
+            ))
+            .header("origin", "http://127.0.0.1:3100")
+            .header("cookie", &alex_browser.cookie)
+            .header("x-csrf-token", &alex_browser.csrf)
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(Body::from("Alex's note"))
+            .expect("upload")
+    };
+    let (status, attached) = send(app, upload("&for=comment")).await;
+    assert_eq!(status, StatusCode::CREATED, "{attached}");
+    let (status, refused) = send(app, upload("")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    // A direct upload asks the same: this server has no direct store, so a
+    // start Alex may make answers that, and one Alex may not make is refused.
+    let start = |for_comment: bool| {
+        alex_browser.op(
+            app,
+            "file_upload_start",
+            json!({"taskId": task, "forComment": for_comment, "name": "shot.png",
+                   "size": 5, "sha256": "0".repeat(64)}),
+        )
+    };
+    let (_, started) = start(true).await;
+    assert_eq!(started["code"], "direct_upload_unavailable", "{started}");
+    let (status, refused) = start(false).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(refused["details"]["permission"], "tasks.edit", "{refused}");
 
     // Mara comments through her tools.
     let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");

@@ -27,7 +27,7 @@ use crate::{
     conversations::{MessageCommandActor, lock_message_conversation, require_active_conversation},
     error::{ApiPath, ApiQuery, AppError},
     policy::Action,
-    work_items::{authorize_task_change, authorize_task_view},
+    work_items::{authorize_task_change, authorize_task_comment, authorize_task_view},
 };
 
 pub fn router() -> Router<AppState> {
@@ -131,7 +131,13 @@ async fn upload_to_task(
         Some(_) => return Err(AppError::Validation("for")),
     };
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    authorize_task_change(&mut transaction, &principal, project_id, work_item_id).await?;
+    // A comment's files need what writing the comment needs; the task's
+    // own files need editing it.
+    if for_comment {
+        authorize_task_comment(&mut transaction, &principal, project_id, work_item_id).await?;
+    } else {
+        authorize_task_change(&mut transaction, &principal, project_id, work_item_id).await?;
+    }
     let limit = upload_limit(&mut transaction, project_id).await?;
     transaction.commit().await?;
     let row = store_body(

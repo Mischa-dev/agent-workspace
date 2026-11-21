@@ -5173,6 +5173,17 @@
           "required": {
             "default": false,
             "type": "boolean"
+          },
+          "showIf": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ShowIfWrite"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Ask it only when an earlier question's answer is one of these\nvalues, or, with none listed, is given at all."
           }
         },
         "required": [
@@ -5201,11 +5212,50 @@
         ],
         "type": "object"
       },
+      "FormSectionWrite": {
+        "additionalProperties": false,
+        "properties": {
+          "before": {
+            "description": "The question (its field, by name or ID) the section starts with.",
+            "type": "string"
+          },
+          "description": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "before"
+        ],
+        "type": "object"
+      },
       "FormSet": {
         "additionalProperties": false,
         "description": "A value the form gives a field on every record.",
         "properties": {
           "field": {
+            "type": "string"
+          },
+          "value": true
+        },
+        "required": [
+          "field",
+          "value"
+        ],
+        "type": "object"
+      },
+      "FormSetWrite": {
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "description": "The field, by name or ID.",
             "type": "string"
           },
           "value": true
@@ -5295,6 +5345,20 @@
               "string",
               "null"
             ]
+          },
+          "sections": {
+            "description": "Headings that split the questions into sections, each shown before\nthe question it names.",
+            "items": {
+              "$ref": "#/components/schemas/FormSectionWrite"
+            },
+            "type": "array"
+          },
+          "sets": {
+            "description": "Values every record the form makes gets, for fields it doesn't ask.",
+            "items": {
+              "$ref": "#/components/schemas/FormSetWrite"
+            },
+            "type": "array"
           },
           "thanks": {
             "default": null,
@@ -13779,6 +13843,26 @@
             "type": "string"
           },
           "isOneOf": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "field"
+        ],
+        "type": "object"
+      },
+      "ShowIfWrite": {
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "description": "The earlier question's field, by name or ID.",
+            "type": "string"
+          },
+          "isOneOf": {
+            "description": "An option's name, or \"Yes\" or \"No\" for a checkbox.",
             "items": {
               "type": "string"
             },

@@ -34,6 +34,38 @@ async fn write(
     send(&setup.app, browser.request(method, uri, Some(&key), body)).await
 }
 
+/// Makes a form link, or changes one, through its operation; answers the
+/// status and the operation's value, or the refusal.
+async fn link_op(
+    setup: &Setup,
+    browser: &Browser,
+    link: Option<&str>,
+    project: &str,
+    mut body: Value,
+) -> (StatusCode, Value) {
+    if let Some(collection) = body
+        .as_object_mut()
+        .and_then(|body| body.remove("collectionId"))
+    {
+        body["collection"] = collection;
+    }
+    body["projectId"] = json!(project);
+    let name = match link {
+        None => "bug_report_link_create",
+        Some(link) => {
+            body["linkId"] = json!(link);
+            "bug_report_link_update"
+        }
+    };
+    let (status, mut answer) =
+        write(setup, browser, "POST", &format!("/api/v2/ops/{name}"), body).await;
+    if status.is_success() {
+        (status, answer["value"].take())
+    } else {
+        (status, answer)
+    }
+}
+
 /// A request from anyone with the link: no session, any origin.
 async fn public(
     setup: &Setup,
@@ -134,7 +166,6 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
             .expect("id")
             .to_owned()
     };
-    let links = format!("/api/v1/projects/{work}/bug-report-links");
     let form = json!({
         "intro": "Tell us what broke.",
         "thanks": "Thanks, we read every one.",
@@ -146,42 +177,38 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
     });
 
     // A person can't be asked on a public form.
-    let (status, refused) = write(
-        &setup,
-        &setup.browser,
-        "POST",
-        &links,
+    let (status, refused) = link_op(&setup, &setup.browser, None, &work,
         json!({"name": "Playtest form", "collectionId": collection, "form": {"fields": [{"field": field("Tester")}]}}),
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
     assert!(
-        refused["error"]["message"]
+        refused["message"]
             .as_str()
             .unwrap_or_default()
             .contains("Tester"),
         "{refused}"
     );
     // A collection from another project is never found.
-    let (status, made_elsewhere) = write(
+    let (status, made_elsewhere) = link_op(
         &setup,
         &setup.browser,
-        "POST",
-        &format!("/api/v1/projects/{other}/bug-report-links"),
+        None,
+        &other,
         json!({"name": "Sneaky", "collectionId": collection, "form": {"fields": []}}),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{made_elsewhere}");
 
-    let (status, made) = write(
+    let (status, made) = link_op(
         &setup,
         &setup.browser,
-        "POST",
-        &links,
+        None,
+        &work,
         json!({"name": "Playtest form", "collectionId": collection, "form": form}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{made}");
+    assert_eq!(status, StatusCode::OK, "{made}");
     assert_eq!(made["link"]["collectionName"], "Playtests");
     let token = token_of(&made["formUrl"]);
     assert!(
@@ -304,11 +331,11 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
     assert_eq!(records["total"], 1, "{records}");
 
     // Paused, it shows and takes nothing.
-    let (status, paused) = write(
+    let (status, paused) = link_op(
         &setup,
         &setup.browser,
-        "PATCH",
-        &format!("/api/v1/bug-report-links/{link_id}"),
+        Some(&link_id),
+        &work,
         json!({"state": "paused"}),
     )
     .await;
@@ -332,11 +359,11 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     // A task link's report URL isn't a form.
-    let (_, task_link) = write(
+    let (_, task_link) = link_op(
         &setup,
         &setup.browser,
-        "POST",
-        &links,
+        None,
+        &work,
         json!({"name": "Crashes"}),
     )
     .await;
@@ -361,11 +388,11 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
     .execute(&setup.pool)
     .await
     .expect("viewer");
-    let (status, refused) = write(
+    let (status, refused) = link_op(
         &setup,
         &vera_browser,
-        "POST",
-        &links,
+        None,
+        &work,
         json!({"name": "Mine", "collectionId": collection, "form": {"fields": []}}),
     )
     .await;
@@ -374,15 +401,11 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
     // A member makes one, then becomes a viewer: the form turns itself off
     // instead of adding records for them.
     let (mel, mel_browser) = add_person(&setup, &[&work], "mel").await;
-    let (status, mels) = write(
-        &setup,
-        &mel_browser,
-        "POST",
-        &links,
+    let (status, mels) = link_op(&setup, &mel_browser, None, &work,
         json!({"name": "Mel's form", "collectionId": collection, "form": {"fields": [{"field": field("Severity")}]}}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{mels}");
+    assert_eq!(status, StatusCode::OK, "{mels}");
     let mels_rendered = render(&setup, &token_of(&mels["formUrl"])).await;
     sqlx::query(
         "UPDATE project_memberships SET role = 'viewer' WHERE project_id = $1 AND actor_id = $2",
@@ -414,14 +437,11 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
         .expect("state");
     assert_eq!(state, "disabled");
     // Still its maker, but without record edit: the questions can't change.
-    let (status, refused) = write(
+    let (status, refused) = link_op(
         &setup,
         &mel_browser,
-        "PATCH",
-        &format!(
-            "/api/v1/bug-report-links/{}",
-            mels["link"]["id"].as_str().expect("id")
-        ),
+        Some(mels["link"]["id"].as_str().expect("id")),
+        &work,
         json!({"form": {"fields": []}}),
     )
     .await;
@@ -549,7 +569,6 @@ async fn public_forms_hold_back_scripts_floods_and_a_busy_day() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{created}");
     let collection = created["collection"]["id"].as_str().expect("id").to_owned();
-    let links = format!("/api/v1/projects/{work}/bug-report-links");
     let make = |name: &'static str, limit: Option<u32>| {
         let mut form = json!({"fields": []});
         if let Some(limit) = limit {
@@ -557,24 +576,18 @@ async fn public_forms_hold_back_scripts_floods_and_a_busy_day() {
         }
         json!({"name": name, "collectionId": collection, "form": form})
     };
-    let (status, refused) = write(
+    let (status, refused) = link_op(
         &setup,
         &setup.browser,
-        "POST",
-        &links,
+        None,
+        &work,
         make("Too many", Some(10_001)),
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
-    let (status, small) = write(
-        &setup,
-        &setup.browser,
-        "POST",
-        &links,
-        make("Small", Some(3)),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{small}");
+    let (status, small) =
+        link_op(&setup, &setup.browser, None, &work, make("Small", Some(3))).await;
+    assert_eq!(status, StatusCode::OK, "{small}");
     assert_eq!(small["link"]["form"]["dailyLimit"], 3, "{small}");
     let small_token = token_of(&small["formUrl"]);
     let small_report = format!("/api/v1/bug-reports/{small_token}");
@@ -661,11 +674,11 @@ async fn public_forms_hold_back_scripts_floods_and_a_busy_day() {
     assert_eq!(told, 1);
 
     // Turned on again, it takes answers again.
-    let (status, resumed) = write(
+    let (status, resumed) = link_op(
         &setup,
         &setup.browser,
-        "PATCH",
-        &format!("/api/v1/bug-report-links/{small_id}"),
+        Some(&small_id),
+        &work,
         json!({"state": "active"}),
     )
     .await;
@@ -674,8 +687,8 @@ async fn public_forms_hold_back_scripts_floods_and_a_busy_day() {
     assert_eq!(status, StatusCode::CREATED, "{sent}");
 
     // Twenty an hour from one address; another address still gets in.
-    let (status, open) = write(&setup, &setup.browser, "POST", &links, make("Open", None)).await;
-    assert_eq!(status, StatusCode::CREATED, "{open}");
+    let (status, open) = link_op(&setup, &setup.browser, None, &work, make("Open", None)).await;
+    assert_eq!(status, StatusCode::OK, "{open}");
     let open_token = token_of(&open["formUrl"]);
     let open_rendered = render(&setup, &open_token).await;
     let database_url = std::env::var("AGENT_WORKSPACE_DATABASE_URL").expect("database url");

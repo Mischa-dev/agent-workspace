@@ -2756,8 +2756,8 @@ pub(crate) async fn authorize_task_view(
     }
 }
 
-/// Whether a person may change a task, which attaching a file to it or to
-/// one of its comments needs: the same rule as editing it, in an active
+/// Whether a person may change a task, which attaching a file to it
+/// needs: the same rule as editing it, in an active
 /// project, on a task that isn't archived.
 pub(crate) async fn authorize_task_change(
     transaction: &mut Transaction<'_, Postgres>,
@@ -2771,6 +2771,24 @@ pub(crate) async fn authorize_task_change(
         project_id,
         work_item_id,
         Action::WorkItemEdit,
+    )
+    .await
+}
+
+/// Whether a person may attach a file to a comment they write on a task:
+/// commenting on it, in an active project, on a task that isn't archived.
+pub(crate) async fn authorize_task_comment(
+    transaction: &mut Transaction<'_, Postgres>,
+    principal: &AuthenticatedActor,
+    project_id: Uuid,
+    work_item_id: Uuid,
+) -> Result<(), AppError> {
+    authorize_open_task(
+        transaction,
+        principal,
+        project_id,
+        work_item_id,
+        Action::WorkItemComment,
     )
     .await
 }

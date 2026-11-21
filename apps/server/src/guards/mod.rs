@@ -77,9 +77,9 @@ impl GuardRow {
 }
 
 /// Every string in a call's input, lower case, one per line: what a
-/// guard's terms are looked for in. Structured content's text nodes are
-/// also read joined, as readers see them, so a term split across nodes is
-/// still found.
+/// guard's terms are looked for in. Neighbouring text nodes of structured
+/// content are also read joined, as readers see them, so a term split
+/// across them is still found.
 fn text_of(input: &Value) -> String {
     fn walk(value: &Value, out: &mut String) {
         match value {
@@ -90,11 +90,25 @@ fn text_of(input: &Value) -> String {
             Value::Array(items) => items.iter().for_each(|item| walk(item, out)),
             Value::Object(fields) => {
                 if let Some(Value::Array(nodes)) = fields.get("nodes") {
-                    let joined = nodes
-                        .iter()
-                        .filter_map(|node| node.get("text").and_then(Value::as_str))
-                        .collect::<String>();
-                    out.push_str(&joined.to_lowercase());
+                    // Neighbouring text nodes read as one run; a mention or
+                    // a reference between them ends it, as readers see the
+                    // handle or label there instead.
+                    let mut run = String::new();
+                    for node in nodes {
+                        match node.get("text").and_then(Value::as_str) {
+                            Some(text)
+                                if node.get("type").and_then(Value::as_str) == Some("text") =>
+                            {
+                                run.push_str(text);
+                            }
+                            _ => {
+                                out.push_str(&run.to_lowercase());
+                                out.push('\n');
+                                run.clear();
+                            }
+                        }
+                    }
+                    out.push_str(&run.to_lowercase());
                     out.push('\n');
                 }
                 fields.values().for_each(|item| walk(item, out));
@@ -592,6 +606,18 @@ mod tests {
             ]},
         }));
         assert!(text.contains("release now"), "{text}");
+    }
+
+    #[test]
+    fn a_mention_between_text_nodes_breaks_the_run() {
+        let text = super::text_of(&json!({
+            "content": {"version": 1, "nodes": [
+                {"type": "text", "text": "["},
+                {"type": "mention", "actorId": "a"},
+                {"type": "text", "text": "](https://example.com)"},
+            ]},
+        }));
+        assert!(!text.contains("[]("), "{text}");
     }
 
     #[test]

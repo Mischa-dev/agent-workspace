@@ -23,7 +23,7 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, patch, post},
+    routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand_core::{OsRng, RngCore};
@@ -35,9 +35,9 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
+    auth::AuthenticatedActor,
     collection_forms::{self, FormConfig},
-    error::{ApiJson, ApiPath, AppError},
+    error::{ApiPath, AppError},
     events::{self, Caller},
     mcp::{self, McpPrincipal},
     policy::{Action as PolicyAction, ActorKind},
@@ -57,15 +57,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/api/v1/projects/{project_id}/bug-report-links",
-            get(list_route).post(create_route),
-        )
-        .route(
-            "/api/v1/bug-report-links/{link_id}",
-            patch(update_route).delete(delete_route),
-        )
-        .route(
-            "/api/v1/bug-report-links/{link_id}/replace",
-            post(replace_route),
+            get(list_route),
         )
         .route(
             "/api/v1/bug-reports/{token}",
@@ -1745,95 +1737,6 @@ async fn list_route(
 ) -> Result<Json<LinkList>, AppError> {
     let caller = Caller::browser(&principal)?;
     Ok(Json(list(&state, &caller, project_id).await?))
-}
-
-async fn create_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<CreateLink>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    project_rights(&state.pool, &caller, project_id).await?;
-    if let Some(message) = form_problem(
-        &state.pool,
-        project_id,
-        request.collection_id,
-        Some(&request.form.clone().unwrap_or_default()),
-    )
-    .await?
-    {
-        return Ok(form_refusal(&message));
-    }
-    Ok((
-        StatusCode::CREATED,
-        Json(create(&state, &caller, project_id, request).await?),
-    )
-        .into_response())
-}
-
-fn form_refusal(message: &str) -> Response {
-    (
-        StatusCode::UNPROCESSABLE_ENTITY,
-        Json(json!({
-            "error": {
-                "code": "validation_failed",
-                "message": message,
-                "details": { "field": "form" },
-            }
-        })),
-    )
-        .into_response()
-}
-
-async fn update_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(link_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<UpdateLink>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    if request.form.is_some() {
-        let row = manageable(&state.pool, &caller, link_id).await?;
-        if let Some(message) = form_problem(
-            &state.pool,
-            row.project_id,
-            row.collection_id,
-            request.form.as_ref(),
-        )
-        .await?
-        {
-            return Ok(form_refusal(&message));
-        }
-    }
-    Ok(Json(update(&state, &caller, link_id, request).await?).into_response())
-}
-
-async fn replace_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(link_id): ApiPath<Uuid>,
-) -> Result<Json<LinkWithUrl>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    Ok(Json(replace(&state, &caller, link_id).await?))
-}
-
-async fn delete_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(link_id): ApiPath<Uuid>,
-) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    delete(&state, &caller, link_id).await?;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]

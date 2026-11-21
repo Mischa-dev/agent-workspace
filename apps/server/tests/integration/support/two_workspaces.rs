@@ -1672,9 +1672,9 @@ async fn build_workspace(
         app,
         browser.request(
             "POST",
-            &format!("/api/v1/projects/{project}/bug-report-links"),
-            None,
-            json!({"name": format!("Game{m}")}),
+            "/api/v2/ops/bug_report_link_create",
+            Some(&format!("bug-link-{tag}")),
+            json!({"projectId": project, "name": format!("Game{m}")}),
         ),
     )
     .await;

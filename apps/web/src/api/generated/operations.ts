@@ -252,15 +252,19 @@ export type FormConfig = { dailyLimit?: number | null; fields?: FormField[]; int
 
 export type FormField = { field: string; required?: boolean; showIf?: ShowIf | null }
 
-export type FormFieldWrite = { field: string; required?: boolean }
+export type FormFieldWrite = { field: string; required?: boolean; showIf?: ShowIfWrite | null }
 
 export type FormSection = { before: string; description?: string; title: string }
 
+export type FormSectionWrite = { before: string; description?: string | null; title: string }
+
 export type FormSet = { field: string; value: unknown }
+
+export type FormSetWrite = { field: string; value: unknown }
 
 export type FormSummary = { archived?: boolean; audience: Audience; collectionId: string; collectionName: string; id: string; linkId?: string | null; name: string; questions: number; version: number }
 
-export type FormWrite = { dailyLimit?: number | null; fields?: FormFieldWrite[]; intro?: string | null; thanks?: string | null }
+export type FormWrite = { dailyLimit?: number | null; fields?: FormFieldWrite[]; intro?: string | null; sections?: FormSectionWrite[]; sets?: FormSetWrite[]; thanks?: string | null }
 
 export type FormatWrite = { align?: string | null; bold?: boolean | null; clear?: boolean | null; color?: string | null; fill?: string | null; italic?: boolean | null; numberFormat?: string | null; range: string; strike?: boolean | null; tab?: string | null; underline?: boolean | null; wrap?: boolean | null }
 
@@ -691,6 +695,8 @@ export type SheetSummary = { archived: boolean; cells: number; createdAt: string
 export type SheetViewOut = { filters: ViewFilter[]; hiddenColumns: string[]; id: string; name: string; shared: boolean; sheetId: string; sort: ViewSort[]; tab: string; tabId: string; updatedAt: string; version: number }
 
 export type ShowIf = { field: string; isOneOf?: string[] }
+
+export type ShowIfWrite = { field: string; isOneOf?: string[] }
 
 export type SidebarItem = { conversationId: string; hidden: boolean; kind: string; lastMessageAt?: string | null; name: string; position: number; private: boolean; sectionId: string; spaceId: string; unread: boolean }
 

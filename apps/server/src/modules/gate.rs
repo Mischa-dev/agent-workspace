@@ -142,10 +142,6 @@ pub(crate) const ID_EXEMPT: &[(&str, &str)] = &[
          in, and it was made by someone who could edit the page",
     ),
     (
-        "/api/v1/bug-report-links/",
-        "a link is managed from its project's settings, which the gate covers",
-    ),
-    (
         "/api/v1/bug-reports/",
         "a public report link by token, posted without a session; the gate answers only signed-in callers",
     ),
