@@ -114,7 +114,7 @@ function groupTimeline(entries: WorkItemTimelineEntry[]): Group[] {
 }
 
 /** Comments and changes, oldest first, with the comment box at the end; long runs of changes fold away. */
-export function TaskActivity({ disabled, item, projectArchived }: { disabled: boolean; item: WorkItem; projectArchived: boolean }) {
+export function TaskActivity({ item, projectArchived }: { item: WorkItem; projectArchived: boolean }) {
   const timeline = useWorkItemTimeline(item.projectId, item.id)
   const experience = useProjectExperience(item.projectId)
   // Pages come newest first; the list reads oldest to newest, so older pages go on top.
@@ -125,7 +125,11 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
   const [unfolded, setUnfolded] = useState<ReadonlySet<number>>(() => new Set())
   const viewerId = useAuthenticatedSession().user.actorId ?? null
   // Whoever may moderate here deletes anyone's comment; everyone else only their own.
-  const moderator = can(useProject(item.projectId).data, 'channels.moderate')
+  const project = useProject(item.projectId).data
+  const moderator = can(project, 'channels.moderate')
+  // Commenting is its own permission: someone who may comment but not edit
+  // the task still writes, edits and deletes their own comments.
+  const commenting = !projectArchived && !item.archivedAt && can(project, 'tasks.comment')
   const [editing, setEditing] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<PostedComment | null>(null)
   const [history, setHistory] = useState<PostedComment | null>(null)
@@ -186,12 +190,12 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
     const removedBy = posted.removed?.removedBy
     const actions: MenuEntry[] = []
     const reply = () => setReplying({ messageId: posted.id, authorName: posted.author.displayName, text: posted.plainText.slice(0, 300) })
-    const canReply = replies && !posted.removed && !disabled
+    const canReply = replies && !posted.removed && commenting
     if (canReply) actions.push({ label: 'Reply', icon: Reply, onSelect: reply })
     if (!posted.removed) {
-      if (own && !disabled) actions.push({ label: 'Edit', icon: 'pencil', onSelect: () => setEditing(posted.id) })
+      if (own && commenting) actions.push({ label: 'Edit', icon: 'pencil', onSelect: () => setEditing(posted.id) })
       if (posted.editedAt) actions.push({ label: 'Edit history', icon: 'clock', onSelect: () => setHistory(posted) })
-      if ((own || moderator) && !projectArchived && item.capabilities.edit) {
+      if (!projectArchived && ((own && can(project, 'tasks.comment')) || moderator)) {
         actions.push({ label: 'Delete', icon: 'trash', danger: true, onSelect: () => setDeleting(posted) })
       }
     }
@@ -319,7 +323,7 @@ export function TaskActivity({ disabled, item, projectArchived }: { disabled: bo
         ) : null}
         {history ? <CommentHistoryDialog comment={history} onClose={() => setHistory(null)} projectId={item.projectId} workItemId={item.id} /> : null}
       </Suspense>
-      {!disabled ? (
+      {commenting ? (
         <StructuredComposer
           disabled={createComment.isPending}
           draftKey={`comment:${item.id}`}

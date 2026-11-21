@@ -384,26 +384,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/bug-report-links",
-            Tool("bug_report_link_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/bug-report-links/{link_id}",
-            Tool("bug_report_link_update"),
-        ),
-        (
-            Delete,
-            "/api/v1/bug-report-links/{link_id}",
-            Tool("bug_report_link_update"),
-        ),
-        (
-            Post,
-            "/api/v1/bug-report-links/{link_id}/replace",
-            Tool("bug_report_link_update"),
-        ),
-        (
-            Post,
             "/api/v1/bug-reports/{token}",
             Plumbing("a public bug report form"),
         ),
@@ -1330,7 +1310,7 @@ mod tests {
     /// Hand-written web writes whose tool is already an operation: each is a
     /// second edge for something the generated route does (K2.22). The
     /// number only goes down; when you delete one, lower it.
-    const HAND_WRITTEN_OPERATION_ROUTES: usize = 124;
+    const HAND_WRITTEN_OPERATION_ROUTES: usize = 120;
 
     #[test]
     fn hand_written_routes_for_operations_only_go_down() {

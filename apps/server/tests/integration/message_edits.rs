@@ -2358,20 +2358,26 @@ async fn a_timeline_reads_in_a_fixed_number_of_statements() {
     }
     let mut counts = Vec::new();
     for channel in [&quiet, &busy] {
-        let counter = StatementCount::default();
-        let subscriber = tracing_subscriber::registry().with(counter.clone());
-        // Counted only while the request itself is polled: a default for
-        // the thread would also count whatever else the runtime polls on
-        // it meanwhile, such as the app's background loops.
-        let (status, timeline) = get(
-            &setup,
-            &setup.browser,
-            &format!("/api/v1/conversations/{channel}/timeline"),
-        )
-        .with_subscriber(subscriber)
-        .await;
-        assert_eq!(status, StatusCode::OK, "{timeline}");
-        counts.push(counter.0.load(std::sync::atomic::Ordering::Relaxed));
+        // The fewest of three reads: anything else that happens to run in
+        // the request's task (a pool connection being set up) only adds.
+        let mut fewest = usize::MAX;
+        for _ in 0..3 {
+            let counter = StatementCount::default();
+            let subscriber = tracing_subscriber::registry().with(counter.clone());
+            // Counted only while the request itself is polled: a default for
+            // the thread would also count whatever else the runtime polls on
+            // it meanwhile, such as the app's background loops.
+            let (status, timeline) = get(
+                &setup,
+                &setup.browser,
+                &format!("/api/v1/conversations/{channel}/timeline"),
+            )
+            .with_subscriber(subscriber)
+            .await;
+            assert_eq!(status, StatusCode::OK, "{timeline}");
+            fewest = fewest.min(counter.0.load(std::sync::atomic::Ordering::Relaxed));
+        }
+        counts.push(fewest);
     }
     assert!(counts[0] > 0, "statements are counted: {counts:?}");
     assert_eq!(
