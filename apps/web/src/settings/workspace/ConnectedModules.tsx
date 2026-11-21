@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent, type ReactNode } from 'react'
 
 import { callOp, invalidateOps, opKey, useOp, type OpInput, type OpOutput } from '../../api/ops'
+import { toastError } from '../../app/toastError'
 import type { OpName } from '../../api/generated/operations'
 import { refreshLayouts } from '../../experience/api'
 import {
@@ -150,8 +151,28 @@ export function ConnectedModules({ workspaceId }: { workspaceId: string }) {
                       ...(module.pending
                         ? [{ label: 'Review changes…', icon: 'checklist' as const, onSelect: () => window.requestAnimationFrame(() => setReviewing(module)) }]
                         : []),
-                      { label: 'Check for changes', icon: 'retry' as const, onSelect: () => refresh.mutate({ moduleId: module.moduleId }) },
-                      ...(module.fileSource ? [{ label: 'Check its files', icon: 'check' as const, onSelect: () => test.mutate({ moduleId: module.moduleId }) }] : []),
+                      {
+                        label: 'Check for changes',
+                        icon: 'retry' as const,
+                        onSelect: () =>
+                          refresh.mutate(
+                            { moduleId: module.moduleId },
+                            { onError: (error) => toastError(`Couldn’t check ${module.name} for changes`, error) },
+                          ),
+                      },
+                      ...(module.fileSource
+                        ? [
+                            {
+                              label: 'Check its files',
+                              icon: 'check' as const,
+                              onSelect: () =>
+                                test.mutate(
+                                  { moduleId: module.moduleId },
+                                  { onError: (error) => toastError(`Couldn’t check ${module.name}’s files`, error) },
+                                ),
+                            },
+                          ]
+                        : []),
                       { separator: true as const },
                       {
                         label: 'Disconnect…',
