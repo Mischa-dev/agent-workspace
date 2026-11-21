@@ -491,6 +491,71 @@ async fn guards_on_records_collections_and_sheets_see_their_writes() {
     }
 }
 
+/// A2.27: a keyed write that an allowed review let through, retried after
+/// a lost answer, is answered from its first run: the same records, said
+/// to be a replay, with no second review asked.
+#[tokio::test]
+async fn a_keyed_retry_after_an_allowed_review_replays() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .build("teammate_guards_keyed_retry")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let space = world.project("WORK");
+    let made = tool(
+        &world,
+        rook,
+        "collection_create",
+        json!({"projectId": space, "name": "Bugs"}),
+    )
+    .await;
+    let collection = made["value"]["collection"]["id"].clone();
+    op(
+        &world,
+        "guard_set",
+        json!({"name": "Records get a look", "action": "review",
+               "targetKinds": ["record"], "reviewers": [world.owner.actor]}),
+    )
+    .await;
+    let call = json!({"projectId": space, "collection": collection,
+                      "records": [{"title": "Crash"}], "clientRequestId": "add-crash-1"});
+    let held = tool(&world, rook, "record_create_many", call.clone()).await;
+    assert_eq!(held["value"]["status"], "pending_review", "{held}");
+    op(
+        &world,
+        "request_respond",
+        json!({"requestId": held["value"]["requestId"], "optionId": "allow"}),
+    )
+    .await;
+    let first = tool(&world, rook, "record_create_many", call.clone()).await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert!(first["value"]["records"].is_array(), "{first}");
+    let again = tool(&world, rook, "record_create_many", call).await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    assert_eq!(again["replayed"], true, "{again}");
+    assert_eq!(
+        again["value"]["records"], first["value"]["records"],
+        "{again}"
+    );
+    let pending =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM guard_holds WHERE state = 'pending'")
+            .fetch_one(world.pool())
+            .await
+            .expect("holds");
+    assert_eq!(pending, 0);
+    let kept = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM collection_records WHERE title = 'Crash'",
+    )
+    .fetch_one(world.pool())
+    .await
+    .expect("records");
+    assert_eq!(kept, 1);
+}
+
 /// A conversation's memory page is that conversation's: a change to it held
 /// for review goes only to reviewers who can read the conversation, and
 /// with none who can, it is refused rather than shown to the others.

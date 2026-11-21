@@ -722,6 +722,7 @@ async fn pipeline<O: Operation>(
                 (O::GUARD_KIND.unwrap_or(kind), id)
             },
             &canonical,
+            ctx.request_id.as_deref(),
         ))
         .await?
         {
@@ -754,7 +755,7 @@ async fn pipeline<O: Operation>(
     }
     if let Some(hold) = guard_hold {
         let tx = call.tx().await?;
-        crate::guards::use_hold(tx, hold).await?;
+        crate::guards::use_hold(tx, hold, ctx.request_id.as_deref()).await?;
     }
     let output =
         crate::policy::within_agent_limits(ctx.caller.limits.clone(), O::run(&mut call, decoded))

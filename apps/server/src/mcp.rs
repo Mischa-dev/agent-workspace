@@ -1338,8 +1338,17 @@ async fn guard_hand_written(
         space_id: Some(principal.project_id),
         direct: None,
     };
+    let request_key = input
+        .get("clientRequestId")
+        .and_then(serde_json::Value::as_str);
     match Box::pin(crate::guards::check(
-        state, &caller, &located, name, target, &input,
+        state,
+        &caller,
+        &located,
+        name,
+        target,
+        &input,
+        request_key,
     ))
     .await?
     {
@@ -1348,7 +1357,7 @@ async fn guard_hand_written(
             let mut transaction = crate::db::scoped_tx(&state.pool)
                 .await
                 .map_err(|error| crate::ops::OpError::logged(name, &error.into()))?;
-            crate::guards::use_hold(&mut transaction, hold).await?;
+            crate::guards::use_hold(&mut transaction, hold, request_key).await?;
             transaction
                 .commit()
                 .await
