@@ -55,13 +55,18 @@ struct SheetInverse {
 }
 
 /// A board element a change set touched: its stored copy before (none for
-/// one it added) and the version the change left it at.
+/// one it added) and the version and nonce the change left it at. An edit
+/// can win a tie at the same version on its nonce, so both say whether the
+/// element is still as the change left it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ElementBefore {
     pub id: String,
     pub before: Option<Value>,
     pub version: i32,
+    /// Missing on change sets kept before the nonce was.
+    #[serde(default)]
+    pub nonce: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -213,7 +218,10 @@ pub async fn record_board(
         let mut joined = open.elements;
         for element in elements {
             match joined.iter_mut().find(|known| known.id == element.id) {
-                Some(known) => known.version = element.version,
+                Some(known) => {
+                    known.version = element.version;
+                    known.nonce = element.nonce;
+                }
                 None => joined.push(element),
             }
         }
@@ -757,8 +765,8 @@ async fn undo_board(
         .iter()
         .map(|entry| entry.id.clone())
         .collect::<Vec<_>>();
-    let now = sqlx::query_as::<_, (String, i32, Value)>(
-        "SELECT element_id, version, data FROM whiteboard_elements \
+    let now = sqlx::query_as::<_, (String, i32, i64, Value)>(
+        "SELECT element_id, version, version_nonce, data FROM whiteboard_elements \
          WHERE whiteboard_id = $1 AND element_id = ANY($2)",
     )
     .bind(board_id)
@@ -766,13 +774,15 @@ async fn undo_board(
     .fetch_all(&mut **transaction)
     .await?
     .into_iter()
-    .map(|(id, version, data)| (id, (version, data)))
+    .map(|(id, version, nonce, data)| (id, (version, nonce, data)))
     .collect::<std::collections::HashMap<_, _>>();
     let mut writes = Vec::new();
     let mut skipped = Vec::new();
     for entry in entries {
         match now.get(&entry.id) {
-            Some((version, data)) if *version == entry.version => {
+            Some((version, nonce, data))
+                if *version == entry.version && entry.nonce.is_none_or(|kept| kept == *nonce) =>
+            {
                 let mut copy = match entry.before {
                     Some(before) => before,
                     None => {

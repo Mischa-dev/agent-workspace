@@ -901,6 +901,8 @@ pub struct Applied {
     pub tabs_changed: bool,
     /// Up to `limit` of the cells that changed, inputs first.
     pub changed: Vec<ChangedCell>,
+    /// The row each row change landed in, in the order of the changes.
+    pub rows: Vec<i32>,
 }
 
 /// A tab as a write sees it while its changes are worked through.
@@ -924,6 +926,9 @@ struct WorkingTab {
     rules: Vec<conditional::ConditionalRule>,
     /// Its validation rules as this write leaves them.
     validations: Vec<validation::ValidationRule>,
+    /// The first of `moves` its validation rules follow: rules this write
+    /// sets name cells as they are by then, so only later moves move them.
+    validations_from: usize,
     /// Where the tab stands among the others now, from 0. Moves change it
     /// as they come; the engine keeps its own stable indexes.
     rank: usize,
@@ -1189,6 +1194,7 @@ async fn apply_unbounded(
             sorted: false,
             rules: tab.rules(),
             validations: tab.validation_rules(),
+            validations_from: 0,
             rank: 0,
         })
         .collect::<Vec<_>>();
@@ -1199,6 +1205,7 @@ async fn apply_unbounded(
     let mut operations = Vec::new();
     // Rows a `Row` change added, per tab, so two in one write don't collide.
     let mut appended: HashMap<usize, i32> = HashMap::new();
+    let mut landed_rows = Vec::new();
 
     for (index, change) in changes.iter().enumerate() {
         let tab_at = |working: &[WorkingTab], reference: &TabRef| {
@@ -1507,6 +1514,7 @@ async fn apply_unbounded(
                         next
                     }
                 };
+                landed_rows.push(row);
                 for (column, input) in sets {
                     operations.push((
                         index,
@@ -1614,6 +1622,7 @@ async fn apply_unbounded(
                     sorted: false,
                     rules: Vec::new(),
                     validations: Vec::new(),
+                    validations_from: 0,
                     rank: working.len(),
                 });
                 operations.push((index, Operation::AddTab { name }));
@@ -1829,6 +1838,7 @@ async fn apply_unbounded(
                         return Ok(Err(problem(index, ProblemKind::Invalid, message)));
                     }
                 };
+                working[tab].validations_from = working[tab].moves.len();
                 if working[tab].validations != rules {
                     working[tab].validations = rules;
                     working[tab].settings_changed = true;
@@ -1972,9 +1982,11 @@ async fn apply_unbounded(
 
     // Validation rules follow inserted and deleted rows and columns too; a
     // rule whose cells all went goes.
-    for tab in working.iter_mut().filter(|tab| !tab.moves.is_empty()) {
-        let moves = tab
-            .moves
+    for tab in working
+        .iter_mut()
+        .filter(|tab| tab.moves.len() > tab.validations_from)
+    {
+        let moves = tab.moves[tab.validations_from..]
             .iter()
             .map(|step| crate::discussion::anchors::GridMove {
                 rows: step.rows,
@@ -2486,6 +2498,7 @@ async fn apply_unbounded(
             looks_changed,
             tabs_changed,
             changed,
+            rows: landed_rows,
         }));
     }
     sqlx::query(
@@ -2541,6 +2554,7 @@ async fn apply_unbounded(
         looks_changed,
         tabs_changed,
         changed,
+        rows: landed_rows,
     }))
 }
 
