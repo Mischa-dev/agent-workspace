@@ -407,7 +407,8 @@ async fn guards_hold_tools_called_by_their_old_names() {
 
 /// A review given back after the same call asked again while the first
 /// ran (the first then made nothing): the unanswered second ask is
-/// withdrawn, and the allowed review is used by the next call.
+/// withdrawn, and the allowed review is used by the next call. Once a
+/// reviewer has answered the second ask, that answer stands instead.
 #[tokio::test]
 async fn a_review_given_back_replaces_the_ask_a_retry_raised_meanwhile() {
     let Some(world) = WorldBuilder::default()
@@ -420,7 +421,6 @@ async fn a_review_given_back_replaces_the_ask_a_retry_raised_meanwhile() {
     };
     let rook = &world.agents["rook"];
     let space = world.project("WORK");
-    let write = json!({"projectId": space, "title": "Plan", "body": "Notes."});
     op(
         &world,
         "guard_set",
@@ -428,57 +428,76 @@ async fn a_review_given_back_replaces_the_ask_a_retry_raised_meanwhile() {
                "operations": ["page_write"], "reviewers": [world.owner.actor]}),
     )
     .await;
-    let held = tool(&world, rook, "page_write", write.clone()).await;
-    let first_request = held["value"]["requestId"]
-        .as_str()
-        .expect("request")
-        .to_owned();
-    op(
-        &world,
-        "request_respond",
-        json!({"requestId": first_request, "optionId": "allow"}),
-    )
-    .await;
-    // The first call has used the review and is still running.
-    let first = sqlx::query_scalar::<_, Uuid>(
-        "UPDATE guard_holds SET state = 'used' WHERE request_id = $1::uuid RETURNING id",
-    )
-    .bind(&first_request)
-    .fetch_one(world.pool())
-    .await
-    .expect("the first call uses its review");
-    let again = tool(&world, rook, "page_write", write.clone()).await;
-    assert_eq!(again["value"]["status"], "pending_review", "{again}");
-    let second_request = again["value"]["requestId"]
-        .as_str()
-        .expect("request")
-        .to_owned();
-    assert_ne!(second_request, first_request);
-    // The first call made nothing, so its review comes back.
-    agent_workspace_server::tenancy::system("runs.host", async {
-        let mut transaction = agent_workspace_server::db::scoped_tx(world.pool())
-            .await
-            .expect("transaction");
-        agent_workspace_server::guards::give_back_hold(&mut transaction, first)
-            .await
-            .expect("given back");
-        transaction.commit().await.expect("commit");
-    })
-    .await;
-    let status = sqlx::query_scalar::<_, String>("SELECT status FROM requests WHERE id = $1::uuid")
-        .bind(&second_request)
+    for (title, second_answered) in [("Plan", false), ("Notes", true)] {
+        let write = json!({"projectId": space, "title": title, "body": "Notes."});
+        let held = tool(&world, rook, "page_write", write.clone()).await;
+        let first_request = held["value"]["requestId"]
+            .as_str()
+            .expect("request")
+            .to_owned();
+        op(
+            &world,
+            "request_respond",
+            json!({"requestId": first_request, "optionId": "allow"}),
+        )
+        .await;
+        // The first call has used the review and is still running.
+        let first = sqlx::query_scalar::<_, Uuid>(
+            "UPDATE guard_holds SET state = 'used' WHERE request_id = $1::uuid RETURNING id",
+        )
+        .bind(&first_request)
         .fetch_one(world.pool())
         .await
-        .expect("the second ask");
-    assert_eq!(status, "cancelled", "the second ask is withdrawn");
-    let made = tool(&world, rook, "page_write", write).await;
-    assert_eq!(made["outcome"], "ok", "{made}");
-    let pages =
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM project_pages WHERE title = 'Plan'")
-            .fetch_one(world.pool())
-            .await
-            .expect("pages");
-    assert_eq!(pages, 1);
+        .expect("the first call uses its review");
+        let again = tool(&world, rook, "page_write", write.clone()).await;
+        assert_eq!(again["value"]["status"], "pending_review", "{again}");
+        let second_request = again["value"]["requestId"]
+            .as_str()
+            .expect("request")
+            .to_owned();
+        assert_ne!(second_request, first_request);
+        if second_answered {
+            op(
+                &world,
+                "request_respond",
+                json!({"requestId": second_request, "optionId": "deny"}),
+            )
+            .await;
+        }
+        // The first call made nothing, so its review comes back.
+        agent_workspace_server::tenancy::system("runs.host", async {
+            let mut transaction = agent_workspace_server::db::scoped_tx(world.pool())
+                .await
+                .expect("transaction");
+            agent_workspace_server::guards::give_back_hold(&mut transaction, first)
+                .await
+                .expect("given back");
+            transaction.commit().await.expect("commit");
+        })
+        .await;
+        let status =
+            sqlx::query_scalar::<_, String>("SELECT status FROM requests WHERE id = $1::uuid")
+                .bind(&second_request)
+                .fetch_one(world.pool())
+                .await
+                .expect("the second ask");
+        let made = tool(&world, rook, "page_write", write).await;
+        let pages =
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM project_pages WHERE title = $1")
+                .bind(title)
+                .fetch_one(world.pool())
+                .await
+                .expect("pages");
+        if second_answered {
+            assert_eq!(status, "answered", "the reviewer's answer stands");
+            assert_ne!(made["outcome"], "ok", "{made}");
+            assert_eq!(pages, 0, "the denial wins over the given-back review");
+        } else {
+            assert_eq!(status, "cancelled", "the second ask is withdrawn");
+            assert_eq!(made["outcome"], "ok", "{made}");
+            assert_eq!(pages, 1);
+        }
+    }
     world.finish().await;
 }
 
