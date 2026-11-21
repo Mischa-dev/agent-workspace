@@ -72,6 +72,15 @@ where
     let mut since = tokio::time::Instant::now();
     let mut stopped = None;
     loop {
+        // Admission (and the lease check in it) comes before anything new is
+        // fetched: once it fails, nothing more starts.
+        if stopped.is_none() && (started_since >= PER_PASS || since.elapsed() >= BETWEEN_AGAIN) {
+            if let Err(error) = between().await {
+                stopped = Some(error);
+            }
+            started_since = 0;
+            since = tokio::time::Instant::now();
+        }
         if stopped.is_none() && running.len() < IN_FLIGHT {
             match client.commands(0, 0).await {
                 Ok(listed) => {
@@ -112,13 +121,6 @@ where
                 Some(error) => Err(error),
                 None => Ok(handled),
             };
-        }
-        if stopped.is_none() && (started_since >= PER_PASS || since.elapsed() >= BETWEEN_AGAIN) {
-            if let Err(error) = between().await {
-                stopped = Some(error);
-            }
-            started_since = 0;
-            since = tokio::time::Instant::now();
         }
         tokio::select! {
             Some((command_id, run)) = running.next() => {
@@ -455,6 +457,36 @@ mod tests {
         .expect("the slow command waits only for the quick ones")
         .expect("the pump");
         assert_eq!(handled, wait_for + 1);
+    }
+
+    #[tokio::test]
+    async fn nothing_new_is_fetched_once_admission_fails() {
+        let queue = Arc::new(Queue::new(false, u128::MAX));
+        let client = HostClient::with_transport("http://localhost", "token", queue.clone());
+        let host = Waits {
+            wait_for: usize::MAX,
+            quick: 0.into(),
+            enough: Notify::new(),
+        };
+        let listed_when_stopped = Mutex::new(None);
+        let between = || async {
+            *listed_when_stopped.lock().expect("listed") =
+                Some(*queue.listed.lock().expect("listed"));
+            Err(RuntimeError::Internal("the lease was lost"))
+        };
+        let ended = tokio::time::timeout(Duration::from_secs(30), pump(&host, &client, between))
+            .await
+            .expect("the pass ends once admission says so");
+        assert!(ended.is_err());
+        let stopped_at = listed_when_stopped
+            .lock()
+            .expect("listed")
+            .expect("admission ran");
+        assert_eq!(*queue.listed.lock().expect("listed"), stopped_at);
+        assert_eq!(
+            host.quick.load(std::sync::atomic::Ordering::SeqCst),
+            usize::try_from(stopped_at).expect("small")
+        );
     }
 
     #[tokio::test]

@@ -30,6 +30,8 @@ const LONGEST_WAIT: Duration = Duration::from_secs(5);
 /// changed is shown, not needed: a turn or a stop never waits long on it,
 /// and the next report (or the last, at the run's end) says it again.
 const CHANGES_UNREACHABLE_FOR: Duration = Duration::from_secs(3);
+/// The longest a changes report takes in all, a slow answer included.
+const CHANGES_GIVE_UP: Duration = Duration::from_secs(10);
 
 /// Whether a call may go through if tried again shortly: no answer at all,
 /// or a server that is starting or stopping.
@@ -329,14 +331,19 @@ impl RunReports {
                 format!("{}-{}-{report}", self.run_id.simple(), self.opened.simple()).as_bytes()
             ))
         );
-        self.call_with(
-            "run_changes_report",
-            fields,
-            &key,
-            true,
-            CHANGES_UNREACHABLE_FOR,
+        // Given up, it may still land: its key makes a later one count once.
+        tokio::time::timeout(
+            CHANGES_GIVE_UP,
+            self.call_with(
+                "run_changes_report",
+                fields,
+                &key,
+                true,
+                CHANGES_UNREACHABLE_FOR,
+            ),
         )
-        .await?;
+        .await
+        .map_err(|_| AppError::Internal("report the run's changes in time"))??;
         Ok(())
     }
 }

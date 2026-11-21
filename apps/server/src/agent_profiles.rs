@@ -550,18 +550,19 @@ async fn manage(
 }
 
 pub(crate) async fn load(
-    executor: impl sqlx::PgExecutor<'_>,
+    connection: &mut sqlx::PgConnection,
     state: &AppState,
     project_id: Uuid,
     profile_id: Uuid,
 ) -> Result<ProfileView, AppError> {
-    let harnesses = Harnesses::visible(state).await?;
+    // On the caller's connection: a save holds it while it reads back.
+    let harnesses = Harnesses::visible_on(state, &mut *connection).await?;
     sqlx::query_as::<_, ProfileView>(&format!(
         "{PROFILE_SELECT} WHERE profile.project_id = $1 AND profile.id = $2 AND profile.hidden_at IS NULL"
     ))
     .bind(project_id)
     .bind(profile_id)
-    .fetch_optional(executor)
+    .fetch_optional(&mut *connection)
     .await?
     .map(|profile| named(&harnesses, profile))
     .ok_or(AppError::NotFound("agent_profile"))
@@ -596,7 +597,7 @@ async fn create_http(
         metadata,
     )
     .await?;
-    let view = load(&mut *transaction, &state, project_id, profile_id).await?;
+    let view = load(&mut transaction, &state, project_id, profile_id).await?;
     transaction.commit().await?;
     Ok(Json(view))
 }
@@ -783,7 +784,7 @@ async fn update_http(
         metadata,
     )
     .await?;
-    let view = load(&mut *transaction, &state, project_id, profile_id).await?;
+    let view = load(&mut transaction, &state, project_id, profile_id).await?;
     transaction.commit().await?;
     Ok(Json(view))
 }
@@ -803,7 +804,7 @@ pub(crate) async fn update_in(
     if request.template.is_some() {
         return Err(AppError::Validation("template"));
     }
-    let current = load(&mut **transaction, state, project_id, profile_id).await?;
+    let current = load(transaction, state, project_id, profile_id).await?;
     if request
         .version
         .is_some_and(|version| version != current.version)

@@ -888,10 +888,15 @@ pub fn run_diff(
     // In a worktree, files the run made but never staged count too. They
     // are marked to be added in a scratch copy of the index, so the
     // worktree's own index (what the harness staged) is left as it is.
-    let scratch = if bare || head.is_some() {
-        None
+    // One that can't be marked (a nested repository with no commit yet)
+    // leaves the new files out, and the diff says it is incomplete.
+    let (scratch, new_files_left_out) = if bare || head.is_some() {
+        (None, false)
     } else {
-        Some(ScratchIndex::with_new_files(repository)?)
+        match ScratchIndex::with_new_files(repository) {
+            Ok((scratch, left_out)) => (Some(scratch), left_out),
+            Err(_) => (None, true),
+        }
     };
     let index = scratch.as_ref().map(ScratchIndex::path);
     let args = |extra: &[&str]| {
@@ -935,7 +940,7 @@ pub fn run_diff(
     Ok(RunDiff {
         files,
         patch,
-        truncated: truncated || more_files,
+        truncated: truncated || more_files || new_files_left_out,
     })
 }
 
@@ -944,7 +949,9 @@ pub fn run_diff(
 struct ScratchIndex(PathBuf);
 
 impl ScratchIndex {
-    fn with_new_files(worktree: &Path) -> Result<Self, RuntimeError> {
+    /// The scratch index, and whether some new files were left out (a
+    /// nested repository with no commit yet can't be marked).
+    fn with_new_files(worktree: &Path) -> Result<(Self, bool), RuntimeError> {
         let worktree_arg = || [OsString::from("-C"), worktree.as_os_str().to_owned()];
         let own = run_git(
             worktree_arg()
@@ -973,18 +980,25 @@ impl ScratchIndex {
             None,
             Some(&scratch.0),
         )?;
-        if !untracked.stdout.is_empty() {
+        // A nested repository is listed as its folder (`prototype/`).
+        let (folders, files): (Vec<&[u8]>, Vec<&[u8]>) = untracked
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|entry| !entry.is_empty())
+            .partition(|entry| entry.ends_with(b"/"));
+        let left_out = !folders.is_empty();
+        if !files.is_empty() {
             // Past what a diff lists, the rest wouldn't show anyway.
-            let listed = untracked
-                .stdout
-                .split_inclusive(|byte| *byte == 0)
+            let listed = files
+                .into_iter()
                 .take(MAX_CHANGED_FILES + 1)
-                .flatten()
-                .copied()
+                .flat_map(|entry| entry.iter().copied().chain([0]))
                 .collect::<Vec<u8>>();
             run_git_on_index(
                 worktree_arg().into_iter().chain(
                     [
+                        // A new file's name is a name, never pathspec magic.
+                        "--literal-pathspecs",
                         "add",
                         "--intent-to-add",
                         "--pathspec-from-file=-",
@@ -996,7 +1010,7 @@ impl ScratchIndex {
                 Some(&scratch.0),
             )?;
         }
-        Ok(scratch)
+        Ok((scratch, left_out))
     }
 
     fn path(&self) -> &Path {
@@ -2004,6 +2018,22 @@ mod tests {
         let small = super::run_diff(repository, false, &base, None, 10).expect("diff");
         assert!(small.truncated && small.patch.is_empty() && small.files.len() == 5);
         assert!(super::run_diff(repository, false, "not-a-commit", None, 10).is_err());
+
+        // A name that looks like pathspec magic is still a name.
+        std::fs::write(repository.join(":(notes).txt"), "odd\n").expect("write");
+        let odd = super::run_diff(repository, false, &base, None, 1 << 20).expect("diff");
+        assert!(odd.files.iter().any(|file| file.path == ":(notes).txt"));
+        assert!(!odd.truncated);
+
+        // A nested repository with no commit can't be marked: the run's
+        // other changes still show, and the diff says it left some out.
+        std::fs::create_dir(repository.join("prototype")).expect("nested");
+        git(&repository.join("prototype"), ["init", "--quiet"]);
+        std::fs::write(repository.join("prototype/main.rs"), "fn main() {}\n").expect("write");
+        let nested = super::run_diff(repository, false, &base, None, 1 << 20).expect("diff");
+        assert!(nested.files.iter().any(|file| file.path == "kept.txt"));
+        assert!(nested.files.iter().any(|file| file.path == "unstaged.txt"));
+        assert!(nested.truncated);
     }
 
     #[cfg(unix)]

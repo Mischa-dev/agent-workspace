@@ -26,15 +26,19 @@ const REQUESTER_APP_REFUSED_REASON: &str = "Cancelled before it started: whoever
 const ACTIVE_TURN_STATES: &str = "('starting', 'working', 'blocked', 'recovering')";
 
 /// Something may be ready to start: the built-in host's holder looks now
-/// (K5.3). Here when this instance holds it; otherwise a wake on the control
-/// channel reaches the holder, whose one-second tick is the safety net. A
-/// state without a cluster (a test's) drains here, as before.
+/// (K5.3). When this instance holds it, its own admission loop is woken (one
+/// loop, so one command pump, per holder); otherwise a wake on the control
+/// channel reaches the holder. The holder's one-second tick is the safety
+/// net. A state without a cluster (a test's) drains here, as before.
 pub fn kick(state: AppState) {
     tokio::spawn(async move {
         let result = match state.supervisors.cluster() {
             None => drain(&state, None).await,
             Some(cluster) => match cluster.held_lease(&LeaseName::BuiltinHost) {
-                Some(lease) => drain(&state, Some((cluster, &lease))).await,
+                Some(_) => {
+                    cluster.release_wake().notify_waiters();
+                    Ok(())
+                }
                 None => crate::db::scoped_one(&state.pool, async |connection| {
                     sqlx::query("SELECT pg_notify(realtime_channel('control'), 'host:kick')")
                         .execute(&mut *connection)
