@@ -164,36 +164,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         SettingsManage
     ),
     policy_route!(
-        "environments",
-        Post,
-        "/api/v1/projects/{project_id}/environments",
-        SettingsManage
-    ),
-    policy_route!(
-        "environments",
-        Put,
-        "/api/v1/projects/{project_id}/environments/{environment_id}",
-        SettingsManage
-    ),
-    policy_route!(
-        "environments",
-        Post,
-        "/api/v1/projects/{project_id}/environments/{environment_id}/archive",
-        SettingsManage
-    ),
-    policy_route!(
-        "environments",
-        Post,
-        "/api/v1/projects/{project_id}/environments/{environment_id}/default",
-        SettingsManage
-    ),
-    policy_route!(
-        "environments",
-        Post,
-        "/api/v1/projects/{project_id}/environments/{environment_id}/check",
-        WorkerInvoke
-    ),
-    policy_route!(
         "harnesses",
         Post,
         "/api/v1/organizations/{organization_id}/harnesses",
@@ -209,24 +179,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "harnesses",
         Delete,
         "/api/v1/organizations/{organization_id}/harnesses/{harness_id}",
-        SettingsManage
-    ),
-    policy_route!(
-        "agent_profiles",
-        Post,
-        "/api/v1/projects/{project_id}/agent-profiles",
-        SettingsManage
-    ),
-    policy_route!(
-        "agent_profiles",
-        Patch,
-        "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-        SettingsManage
-    ),
-    policy_route!(
-        "agent_profiles",
-        Delete,
-        "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
         SettingsManage
     ),
     policy_route!(
@@ -939,9 +891,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     // W21: Later is the caller's own list. Saving checks they can see the
     // message or task, and every read and reminder checks again.
-    boundary_route!("later", Post, "/api/v1/later", SessionAuthentication),
-    boundary_route!("later", Patch, "/api/v1/later/{id}", SessionAuthentication),
-    boundary_route!("later", Delete, "/api/v1/later/{id}", SessionAuthentication),
     // W21: scheduling, editing and sending run the send command's checks;
     // canceling is the author's own.
     boundary_route!(

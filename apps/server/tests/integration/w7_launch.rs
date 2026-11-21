@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use crate::{
     m3_scheduler_http::{create_test_mirror, integration_pool, schema_pool, uuid_field},
-    w2_harness_platform::{MEMBER_LOGIN, insert_member, login, send, send_get},
+    w2_harness_platform::{MEMBER_LOGIN, insert_member, login, send, send_get, send_op},
 };
 
 const OWNER_LOGIN: &str = "w7-launch-owner";
@@ -160,28 +160,26 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
     assert_eq!(limited.0, StatusCode::OK, "{}", limited.1);
 
     // The first environment becomes the default, and launching preselects it.
-    let environment = send(
+    let environment = send_op(
         &application,
         owner,
-        "POST",
-        &format!("{project}/environments"),
+        "environment_create",
         "environment",
-        json!({"name": "Demo here", "harness": "demo", "setupNotes": "Nothing to set up."}),
+        json!({"projectId": seed.project_id, "name": "Demo here", "harness": "demo", "setupNotes": "Nothing to set up."}),
     )
     .await;
     assert!(environment.0.is_success(), "environment: {}", environment.1);
-    assert_eq!(environment.2["isDefault"], true);
-    let environment_id = uuid_field(&environment.2, "id");
+    assert_eq!(environment.2["environment"]["isDefault"], true);
+    let environment_id = uuid_field(&environment.2["environment"], "id");
     let members_view = send_get(&application, member, &format!("{project}/environments")).await;
     assert_eq!(members_view.0, StatusCode::OK, "{}", members_view.1);
     assert_eq!(members_view.2["canManage"], false);
-    let refused = send(
+    let refused = send_op(
         &application,
         member,
-        "POST",
-        &format!("{project}/environments"),
+        "environment_create",
         "member-environment",
-        json!({"name": "Mine", "harness": "demo"}),
+        json!({"projectId": seed.project_id, "name": "Mine", "harness": "demo"}),
     )
     .await;
     assert!(

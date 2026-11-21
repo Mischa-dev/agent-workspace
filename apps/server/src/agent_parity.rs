@@ -87,31 +87,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/environments",
-            Tool("environment_create"),
-        ),
-        (
-            Put,
-            "/api/v1/projects/{project_id}/environments/{environment_id}",
-            Tool("environment_update"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/environments/{environment_id}/archive",
-            Tool("environment_archive"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/environments/{environment_id}/default",
-            Tool("environment_update"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/environments/{environment_id}/check",
-            Tool("environment_check"),
-        ),
-        (
-            Post,
             "/api/v1/organizations/{organization_id}/harnesses",
             Person("registers a program the host runs"),
         ),
@@ -124,21 +99,6 @@ mod tests {
             Delete,
             "/api/v1/organizations/{organization_id}/harnesses/{harness_id}",
             Person("registers a program the host runs"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/agent-profiles",
-            Tool("agent_profile_set"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            Tool("agent_profile_set"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            Tool("agent_profile_set"),
         ),
         (
             Put,
@@ -700,9 +660,6 @@ mod tests {
             "/api/v1/conversations/{id}/notification-level",
             Person("a person's own notification preferences"),
         ),
-        (Post, "/api/v1/later", Tool("later_save")),
-        (Patch, "/api/v1/later/{id}", Tool("later_update")),
-        (Delete, "/api/v1/later/{id}", Tool("later_update")),
         (
             Post,
             "/api/v1/push/subscriptions",
@@ -1290,7 +1247,7 @@ mod tests {
     /// Hand-written web writes whose tool is already an operation: each is a
     /// second edge for something the generated route does (K2.22). The
     /// number only goes down; when you delete one, lower it.
-    const HAND_WRITTEN_OPERATION_ROUTES: usize = 115;
+    const HAND_WRITTEN_OPERATION_ROUTES: usize = 104;
 
     #[test]
     fn hand_written_routes_for_operations_only_go_down() {

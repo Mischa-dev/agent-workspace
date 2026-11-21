@@ -3816,16 +3816,15 @@ async fn check_token(
     .fetch_one(pool)
     .await
     .expect("a message in B's DM");
-    let (status, saved_dm) = send_json(
-        app,
-        b.browser.request(
-            "POST",
-            "/api/v1/later",
-            None,
-            json!({"messageId": dm_message, "note": "From the DM"}),
-        ),
-    )
-    .await;
+    let (status, saved_dm) = b
+        .browser
+        .op_in(
+            app,
+            b.organization,
+            "later_save",
+            json!({"messageId": dm_message, "text": "From the DM"}),
+        )
+        .await;
     assert!(status.is_success(), "{status} {saved_dm}");
     let saved_dm = sqlx::query_scalar::<_, uuid::Uuid>(
         "SELECT id FROM saved_items WHERE actor_id = $1 AND message_id = $2",

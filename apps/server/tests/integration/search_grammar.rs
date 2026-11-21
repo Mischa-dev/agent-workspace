@@ -159,16 +159,10 @@ async fn each_filter_narrows_and_none_widens() {
     )
     .await;
     assert!(status.is_success(), "pin: {body}");
-    let (status, body) = send(
-        app,
-        lena.browser.request(
-            "POST",
-            "/api/v1/later",
-            Some("grammar-save"),
-            json!({"messageId": reviewed}),
-        ),
-    )
-    .await;
+    let (status, body) = lena
+        .browser
+        .op(app, "later_save", json!({"messageId": reviewed}))
+        .await;
     assert!(status.is_success(), "save: {body}");
 
     let all = sorted(&[&planned, &reviewed, &whispered, &hidden]);

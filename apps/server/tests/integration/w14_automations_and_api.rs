@@ -41,7 +41,7 @@ use crate::{
     m3_scheduler_http::{
         create_test_mirror, integration_pool, response_json, schema_pool, uuid_field,
     },
-    w2_harness_platform::{MEMBER_LOGIN, insert_member, login, send},
+    w2_harness_platform::{MEMBER_LOGIN, insert_member, login, send, send_op},
 };
 
 const OWNER_LOGIN: &str = "w14-owner";
@@ -298,13 +298,12 @@ async fn webhooks_and_automations_walk() {
         let done = send(&application, owner, "POST", &path, key, body).await;
         assert!(done.0.is_success(), "{path}: {}", done.1);
     }
-    let environment = send(
+    let environment = send_op(
         &application,
         owner,
-        "POST",
-        &format!("{project}/environments"),
+        "environment_create",
         "environment",
-        json!({"name": "Demo here", "harness": "demo"}),
+        json!({"projectId": seed.project_id, "name": "Demo here", "harness": "demo"}),
     )
     .await;
     assert!(environment.0.is_success(), "environment: {}", environment.1);

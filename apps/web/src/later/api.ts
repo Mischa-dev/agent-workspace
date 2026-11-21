@@ -181,27 +181,40 @@ export type SaveInput = {
   remindAt?: string | null
 }
 
-export async function saveForLater(input: SaveInput): Promise<SavedItem> {
-  const body = asRecord(await requestJson<unknown>('/api/v1/later', { method: 'POST', json: input }))
-  const item = normalizeSavedItem(body.item)
+/** What a save or change answers: enough to mark the message and say when. */
+export type SavedResult = { id: string; remindAt: string | null }
+
+const savedResult = (item: { id: string; remindAt?: string | null } | null | undefined): SavedResult => {
   if (!item) throw new Error('The saved item came back unreadable.')
-  return item
+  return { id: item.id, remindAt: item.remindAt ?? null }
+}
+
+export async function saveForLater(input: SaveInput): Promise<SavedResult> {
+  const { item } = await callOp('later_save', {
+    messageId: input.messageId ?? null,
+    task: input.workItemId ?? null,
+    text: input.note ?? null,
+    at: input.remindAt ?? null,
+  })
+  return savedResult(item)
 }
 
 export async function changeSaved(
   id: string,
   change: { remindAt?: string | null; note?: string; done?: boolean },
-): Promise<SavedItem> {
-  const body = asRecord(
-    await requestJson<unknown>(`/api/v1/later/${encodeURIComponent(id)}`, { method: 'PATCH', json: change }),
-  )
-  const item = normalizeSavedItem(body.item)
-  if (!item) throw new Error('The saved item came back unreadable.')
-  return item
+): Promise<SavedResult> {
+  const { item } = await callOp('later_update', {
+    id,
+    // A reminder taken off is "none"; left out, it stays as it is.
+    at: change.remindAt === undefined ? undefined : (change.remindAt ?? 'none'),
+    text: change.note,
+    done: change.done,
+  })
+  return savedResult(item)
 }
 
 export async function removeSaved(id: string) {
-  await requestJson<unknown>(`/api/v1/later/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  await callOp('later_update', { id, remove: true })
 }
 
 export async function fetchScheduled(conversationId: string | null): Promise<ScheduledMessage[]> {
