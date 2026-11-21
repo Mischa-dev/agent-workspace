@@ -81,7 +81,8 @@ impl Operation for ConnectedModuleInstall {
         one-time code at its install address to collect its credentials. You can only approve \
         what you hold yourself. Pass preview: true first to see who publishes it, each scope it \
         asks for and why, and the kinds, operations, events, panels and frame origins it adds, \
-        with nothing installed; then install with the digest it showed.";
+        with nothing installed (a preview that names no scopes approves only the required \
+        ones); then install with the digest it showed and the scopes you chose.";
     const EMITS: &'static [&'static str] = &["module.connected"];
     const PREVIEW: bool = true;
 

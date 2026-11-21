@@ -14,9 +14,9 @@ import { HomeSidebar } from '../shell/HomeSidebar'
 import { ProjectSidebar } from '../shell/ProjectSidebar'
 import { MemoryTabs, WorkTabs } from '../shell/ProjectTabs'
 import { authenticatedSession, organization } from '../test/appHarness'
-import { OWN_WORDS, layoutKeys, type EffectiveLayout } from './layout'
+import { OWN_WORDS, layoutKeys, normalizeEffective, type EffectiveLayout } from './layout'
 import { NOUN_IDS, PART_IDS } from './parts'
-import { REGISTRY } from './registry'
+import { REGISTRY, keepModuleChanges, layoutFrom } from './registry'
 
 // Keeps layouts (AWD-66) whole as the app grows: the ids the code names
 // match registry.json, presets name only real parts, and every row of a
@@ -180,6 +180,17 @@ describe('layout registry', () => {
     await screen.findByText('Plans for the week')
     await new Promise((resolve) => window.setTimeout(resolve, 50))
     expect(linkNames()).not.toContain('Leads')
+  })
+
+  it('reads built modules’ hidden parts from the server, and keeps them through a layout save', () => {
+    const effective = normalizeEffective({ hidden: ['area.pages'], hiddenModules: ['module.crm'] })
+    expect(effective.hidden).toEqual(['area.pages', 'module.crm'])
+
+    // The editor has no switch for a built module yet: saving anything else keeps the stored one.
+    const stored = { preset: 'software_team', changes: { 'module.crm': false } } as Parameters<typeof keepModuleChanges>[1]
+    const edited = layoutFrom('software_team', new Set(), {}, [])
+    expect(keepModuleChanges(edited, stored).changes).toMatchObject({ 'module.crm': false })
+    expect(keepModuleChanges(edited, null)).toEqual(edited)
   })
 
   it('hides every tab whose part is hidden, and the tab bar once one tab is left', () => {

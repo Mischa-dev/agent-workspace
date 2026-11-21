@@ -160,7 +160,8 @@ export function ConnectedModules({ workspaceId }: { workspaceId: string }) {
                             { onError: (error) => toastError(`Couldn’t check ${module.name} for changes`, error) },
                           ),
                       },
-                      ...(module.fileSource
+                      // Files are checked once the app has its account; until then there is nothing to reach.
+                      ...(module.fileSource && module.state === 'active'
                         ? [
                             {
                               label: 'Check its files',

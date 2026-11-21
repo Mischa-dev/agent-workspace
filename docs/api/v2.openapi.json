@@ -39970,7 +39970,7 @@
     },
     "/api/v2/w/{workspace}/ops/connected_module_install": {
       "post": {
-        "description": "Install an outside app as a module from its manifest's address, approving the scopes given (or all it asks for that this server has). The app gets its own account here with a role holding exactly what was approved, and is sent a one-time code at its install address to collect its credentials. You can only approve what you hold yourself. Pass preview: true first to see who publishes it, each scope it asks for and why, and the kinds, operations, events, panels and frame origins it adds, with nothing installed; then install with the digest it showed. Needs \"Manage modules\" where it acts.",
+        "description": "Install an outside app as a module from its manifest's address, approving the scopes given (or all it asks for that this server has). The app gets its own account here with a role holding exactly what was approved, and is sent a one-time code at its install address to collect its credentials. You can only approve what you hold yourself. Pass preview: true first to see who publishes it, each scope it asks for and why, and the kinds, operations, events, panels and frame origins it adds, with nothing installed (a preview that names no scopes approves only the required ones); then install with the digest it showed and the scopes you chose. Needs \"Manage modules\" where it acts.",
         "operationId": "connected_module_install",
         "parameters": [
           {
