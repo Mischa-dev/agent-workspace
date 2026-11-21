@@ -210,8 +210,7 @@ impl Action {
 }
 
 pub use crate::access::catalogue::{
-    Level, PERMISSION_MODULES, PERMISSIONS, Permission, PermissionInfo, PermissionScope,
-    PermissionSet,
+    Level, PERMISSIONS, Permission, PermissionInfo, PermissionScope, PermissionSet,
 };
 
 /// The role a membership holds: its built-in role (which every check that
@@ -490,13 +489,13 @@ mod tests {
             if info.required {
                 assert!(info.built_in.iter().all(|held| *held), "{}", info.key);
             }
-            assert!(
-                super::PERMISSION_MODULES
-                    .iter()
-                    .any(|(module, _)| *module == info.module),
-                "{} names an unknown module",
-                info.key
-            );
+            // Exactly one module owns it (M1.3o): its manifest lists it.
+            let owners = crate::modules::registry::Registry::global()
+                .descriptions()
+                .iter()
+                .filter(|manifest| manifest.permissions.iter().any(|key| key == info.key))
+                .count();
+            assert_eq!(owners, 1, "{} is owned by {owners} modules", info.key);
         }
         assert_eq!(
             PermissionSet::built_in(MembershipRole::Owner),

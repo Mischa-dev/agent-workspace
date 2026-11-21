@@ -55,8 +55,8 @@ use crate::{
     mcp::McpPrincipal,
     outbox::{OutboxEventPayload, ProjectMembershipUpdatedPayload, enqueue_typed},
     policy::{
-        Action, AgentLimits, MembershipRole, MembershipScope, PERMISSION_MODULES, PERMISSIONS,
-        Permission, PermissionSet, RoleGrant, current_agent_limit,
+        Action, AgentLimits, MembershipRole, MembershipScope, PERMISSIONS, Permission,
+        PermissionSet, RoleGrant, current_agent_limit,
     },
     views::definition::BUILTIN_VIEW_KEYS,
 };
@@ -699,15 +699,22 @@ pub struct ModuleEntry {
 }
 
 pub(crate) fn catalogue() -> (Vec<ModuleEntry>, Vec<PermissionEntry>) {
-    let modules = PERMISSION_MODULES
-        .iter()
-        .map(|(key, name)| ModuleEntry { key, name })
+    // Grouped by the module that owns each permission (M1.3o).
+    let registry = crate::modules::registry::Registry::global();
+    let modules = registry
+        .permission_modules()
+        .map(|manifest| ModuleEntry {
+            key: manifest.id.as_str(),
+            name: manifest.name.as_str(),
+        })
         .collect();
     let permissions = PERMISSIONS
         .iter()
         .map(|info| PermissionEntry {
             key: info.key,
-            module: info.module,
+            module: registry
+                .module_of_permission(info.key)
+                .map_or("workspace", |manifest| manifest.id.as_str()),
             label: info.label,
             meaning: info.meaning,
             scope: info.scope.key(),
@@ -2631,16 +2638,30 @@ mod tests {
         }
     }
 
+    /// The Roles page groups each permission under the module that owns it
+    /// (M1.3o); the web app's keys are generated from the same catalogue.
     #[test]
-    fn the_web_app_knows_every_permission() {
-        let web = include_str!("../../../web/src/settings/workspace/roles.ts");
-        for info in PERMISSIONS {
+    fn permissions_are_grouped_by_the_module_that_owns_them() {
+        let (modules, permissions) = catalogue();
+        let group = |key: &str| {
+            permissions
+                .iter()
+                .find(|entry| entry.key == key)
+                .map(|entry| entry.module)
+        };
+        assert_eq!(group("tasks.edit"), Some("tasks"));
+        assert_eq!(group("modules.manage"), Some("workspace"));
+        assert_eq!(group("direct.start"), Some("messages"));
+        for entry in &permissions {
             assert!(
-                web.contains(&format!("'{}'", info.key)),
-                "add '{}' to PERMISSION_KEYS in apps/web/src/settings/workspace/roles.ts",
-                info.key
+                modules.iter().any(|module| module.key == entry.module),
+                "{} is grouped under {}, which isn't listed",
+                entry.key,
+                entry.module
             );
         }
+        // The web's list is generated from PERMISSIONS (ops/codegen), and
+        // generated_files_are_current keeps it current.
     }
 
     #[test]

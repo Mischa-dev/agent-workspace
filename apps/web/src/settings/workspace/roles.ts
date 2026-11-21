@@ -1,88 +1,11 @@
+import { PERMISSION_KEYS } from '../../api/generated/permissions'
 import { callOp } from '../../api/ops'
 
 /**
- * Every permission a role can hold (AWD-74). The server's catalogue
- * (`policy::PERMISSIONS`) is the source of truth and comes with the roles;
- * this list types it. A new permission adds its key here too.
+ * Every permission a role can hold (AWD-74), generated from the server's
+ * catalogue and the modules that own each one (M1.3o).
  */
-export const PERMISSION_KEYS = [
-  'projects.view',
-  'projects.create',
-  'projects.manage',
-  'tasks.view',
-  'tasks.create',
-  'tasks.edit',
-  'tasks.delete',
-  'tasks.workflow',
-  'channels.post',
-  'channels.create',
-  'channels.moderate',
-  'pages.edit',
-  'whiteboards.edit',
-  'collections.edit',
-  'collections.build',
-  'sheets.edit',
-  'runs.launch',
-  'runs.approve',
-  'runs.interrupt',
-  'runs.accounts',
-  'runs.report',
-  'requests.raise',
-  'requests.answer',
-  'code.view',
-  'code.publish',
-  'code.manage',
-  'agents.manage',
-  'agents.manage_any',
-  'hosts.manage',
-  'members.view',
-  'directory.view',
-  'members.invite',
-  'members.manage',
-  'roles.manage',
-  'settings.manage',
-  // K1.9: levels and capabilities of the catalogue's new shape.
-  'spaces.browse',
-  'tasks.comment',
-  'tasks.suggest',
-  'tasks.edit_own',
-  'views.share',
-  'dashboards.view',
-  'dashboards.edit',
-  'conversations.see',
-  'conversations.members',
-  'direct.start',
-  'replies.steer',
-  'pages.see',
-  'pages.comment',
-  'pages.suggest',
-  'pages.edit_own',
-  'whiteboards.comment',
-  'whiteboards.suggest',
-  'whiteboards.edit_own',
-  'collections.comment',
-  'collections.suggest',
-  'data.connect',
-  'data.share',
-  'sheets.comment',
-  'sheets.suggest',
-  'sheets.edit_own',
-  'runs.environments',
-  'requests.answer_sensitive',
-  'agents.create',
-  'webhooks.manage',
-  'automations.manage',
-  'modules.build',
-  'modules.manage',
-  'workspace.delete',
-  'settings.audit',
-  // K1.27: groups, and chat's keys.
-  'members.groups',
-  'channels.browse',
-  'channels.create_private',
-  'channels.mention_everyone',
-  'workspace.export',
-] as const
+export { PERMISSION_KEYS }
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number]
 export type BaseRole = 'owner' | 'admin' | 'member' | 'viewer'
