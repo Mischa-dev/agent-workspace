@@ -18,6 +18,7 @@ use crate::{
     AppState,
     auth::AuthenticatedActor,
     error::{ApiPath, ApiQuery, AppError},
+    harness_catalog::Harnesses,
     run_log::{TOTALS, UsageTotals},
     runs::changes::{self, ChangedFile, Changes},
 };
@@ -127,11 +128,11 @@ fn summary_select() -> String {
     SUMMARY_SELECT.replace("{TOTALS}", TOTALS)
 }
 
-fn named(state: &AppState, mut run: RunSummary) -> RunSummary {
+fn named(harnesses: &Harnesses, mut run: RunSummary) -> RunSummary {
     run.harness_name = run
         .harness
         .as_deref()
-        .map(|harness| crate::agent_sessions::harness_name(state, harness));
+        .map(|harness| harnesses.name(harness));
     run
 }
 
@@ -207,6 +208,7 @@ async fn visible_run(
     run_id: Uuid,
 ) -> Result<(RunSummary, bool), AppError> {
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let harnesses = Harnesses::visible_on(state, &mut transaction).await?;
     let mut run = sqlx::query_as::<_, RunSummary>(&format!(
         "{} WHERE run.id = $1 AND conversation_visible_to(run.conversation_id, $2) AND actor_can_access_project($2, NULL, project.id)",
         summary_select()
@@ -215,7 +217,7 @@ async fn visible_run(
     .bind(viewer)
     .fetch_optional(&mut *transaction)
     .await?
-    .map(|run| named(state, run))
+    .map(|run| named(&harnesses, run))
     .ok_or(AppError::NotFound("agent_run"))?;
     drop(transaction);
     let sees_code = redact(state, viewer, std::slice::from_mut(&mut run)).await?;

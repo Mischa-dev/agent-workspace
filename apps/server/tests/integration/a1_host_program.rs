@@ -322,6 +322,28 @@ async fn the_host_runs_as_its_own_program_through_restarts_of_either() {
         "recovered honestly: {state} {reason:?}"
     );
 
+    // A question about a model account, asked on the server, is answered by
+    // the (restarted) program over HTTP: the account's state is read, not left unknown.
+    let (status, account) = server
+        .send(browser.request(
+            "GET",
+            &format!(
+                "/api/v1/projects/{}/execution-profiles/{}/account",
+                seed.project_id, seed.execution_profile_id
+            ),
+            None,
+            serde_json::Value::Null,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{account}");
+    assert!(
+        matches!(
+            account["accountState"].as_str(),
+            Some("authenticated" | "authentication_required")
+        ),
+        "{account}"
+    );
+
     host.kill().await.expect("stop the host");
     let _ = host.wait().await;
     cluster.finish().await;

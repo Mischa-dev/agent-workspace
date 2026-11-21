@@ -452,10 +452,22 @@ fn fit_models(mut models: Vec<ModelEntry>) -> Vec<ModelEntry> {
     for model in &mut models {
         model.description = None;
     }
-    while models.len() > 1 && size(&models) > MAX_MODELS_BYTES {
-        let keep = models.len() * MAX_MODELS_BYTES / size(&models).max(1);
-        models.truncate(keep.clamp(1, models.len() - 1));
+    // The longest start of the list that fits: `[`, the models with a
+    // comma between each, `]`.
+    let mut total = 2_usize;
+    let mut keep = 0;
+    for (index, model) in models.iter().enumerate() {
+        let item = serde_json::to_vec(model).map_or(usize::MAX, |bytes| bytes.len());
+        let total_with = total
+            .saturating_add(item)
+            .saturating_add(usize::from(index > 0));
+        if total_with > MAX_MODELS_BYTES {
+            break;
+        }
+        total = total_with;
+        keep += 1;
     }
+    models.truncate(keep.max(1));
     models
 }
 
@@ -624,5 +636,11 @@ mod tests {
         assert!(huge.len() < 20_000 && !huge.is_empty());
         assert!(serde_json::to_vec(&huge).expect("json").len() <= MAX_MODELS_BYTES);
         assert_eq!(huge[0].id, "model-0");
+        // The longest start that fits: one more model would not.
+        let mut one_more = huge.clone();
+        let mut next = model(huge.len(), 0);
+        next.description = None;
+        one_more.push(next);
+        assert!(serde_json::to_vec(&one_more).expect("json").len() > MAX_MODELS_BYTES);
     }
 }

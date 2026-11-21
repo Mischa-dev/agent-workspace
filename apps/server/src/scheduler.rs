@@ -198,14 +198,23 @@ async fn drain_with_here(
     fence: Option<(&Cluster, &Lease)>,
     builtin: &agent_workspace_host_protocol::HostClient,
 ) -> Result<(), AppError> {
+    admit(state, fence).await?;
+    // A1.16: the built-in host carries out the starts it was just sent
+    // (and anything else waiting for it), through the host protocol. While
+    // it is busy it keeps admitting runs, and stops starting commands once
+    // the lease is lost.
+    crate::hosts::builtin::driver::pump_with(state, builtin, || Box::pin(admit(state, fence)))
+        .await?;
+    Ok(())
+}
+
+/// Admit every run that can start now.
+async fn admit(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Result<(), AppError> {
     while claim_next(state, fence).await? {
         if fence.is_some_and(|(_, lease)| lease.lost.is_cancelled()) {
             return Err(AppError::LeaseLost);
         }
     }
-    // A1.16: the built-in host carries out the starts it was just sent
-    // (and anything else waiting for it), through the host protocol.
-    crate::hosts::builtin::driver::pump_with(state, builtin).await?;
     Ok(())
 }
 

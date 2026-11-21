@@ -47,11 +47,33 @@ impl ProgramSettings {
         if !matches!(parsed.scheme(), "http" | "https") {
             bail!("AGENT_WORKSPACE_HOST_SERVER_URL must be http or https");
         }
+        if plain_over_a_network(&parsed) {
+            // Not refused: a private network the operator trusts is theirs to
+            // choose. But everything on the channel can be read on the way.
+            tracing::warn!(
+                "AGENT_WORKSPACE_HOST_SERVER_URL is plain http to an address that isn't this \
+                 machine: the host's token, run credentials and sign-in keys cross the network \
+                 unencrypted. Use https, or keep the server on a loopback address."
+            );
+        }
         let code_file = super::install::code_path(config);
         Ok(Self {
             server_url: server_url.trim().trim_end_matches('/').to_owned(),
             code_file,
         })
+    }
+}
+
+/// Whether `url` is plain http to somewhere other than this machine.
+fn plain_over_a_network(url: &url::Url) -> bool {
+    if url.scheme() != "http" {
+        return false;
+    }
+    match url.host() {
+        Some(url::Host::Domain(domain)) => !domain.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(address)) => !address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => !address.is_loopback(),
+        None => true,
     }
 }
 
@@ -215,5 +237,22 @@ pub async fn run(
             let _ = shutdown.send(true);
             wait.await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plain_over_a_network;
+
+    #[test]
+    fn plain_http_is_flagged_only_off_this_machine() {
+        let flagged =
+            |address: &str| plain_over_a_network(&url::Url::parse(address).expect("an address"));
+        assert!(flagged("http://server:3100"));
+        assert!(flagged("http://10.0.0.5:3100"));
+        assert!(!flagged("http://localhost:3100"));
+        assert!(!flagged("http://127.0.0.1:3100"));
+        assert!(!flagged("http://[::1]:3100"));
+        assert!(!flagged("https://server.example"));
     }
 }

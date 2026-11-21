@@ -67,12 +67,23 @@ impl commands::CommandHost for BuiltinCommands<'_> {
 /// Carry out every command the built-in hosts have waiting. The lease holder
 /// calls it on each tick; tests call it through `scheduler::drain_now`.
 pub async fn pump(state: &AppState) -> Result<usize, AppError> {
-    pump_with(state, &super::transport::client(state)).await
+    let between = || async { Ok::<(), AppError>(()) };
+    pump_with(state, &super::transport::client(state), between).await
 }
 
-/// [`pump`] with a client already made (the lease holder keeps one).
-pub async fn pump_with(state: &AppState, client: &HostClient) -> Result<usize, AppError> {
-    Ok(commands::pump(&BuiltinCommands { state }, client).await?)
+/// [`pump`] with a client already made (the lease holder keeps one), and
+/// what to do between commands while the pass is busy (the scheduler
+/// admits runs there): see [`commands::pump`].
+pub async fn pump_with<B, F>(
+    state: &AppState,
+    client: &HostClient,
+    between: B,
+) -> Result<usize, AppError>
+where
+    B: FnMut() -> F,
+    F: std::future::Future<Output = Result<(), AppError>>,
+{
+    commands::pump(&BuiltinCommands { state }, client, between).await
 }
 
 /// Carry out at once what the built-in host has waiting for one run, of

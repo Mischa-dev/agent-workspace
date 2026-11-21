@@ -40,28 +40,43 @@ pub fn refused(reason: &str, message: &str) -> Ack {
 pub const IN_FLIGHT: usize = 8;
 /// How often the host looks for new commands while some are in flight.
 const LOOK_AGAIN: Duration = Duration::from_millis(250);
-/// The most commands one pass starts, so a pass ends under steady traffic
-/// and what runs between passes (admitting runs) gets its turn.
+/// After this many starts, or [`BETWEEN_AGAIN`], a pass that is still busy
+/// gives what runs between passes (admitting runs) its turn.
 pub const PER_PASS: usize = 4 * IN_FLIGHT;
+const BETWEEN_AGAIN: Duration = Duration::from_secs(1);
 
 /// Carry out the commands waiting for this host, up to [`IN_FLIGHT`] at
-/// once and [`PER_PASS`] in all, until none is waiting or in flight.
-/// Commands for one run are carried out one at a time, in order. Returns
-/// how many.
-pub async fn pump<H: CommandHost>(host: &H, client: &HostClient) -> Result<usize, RuntimeError> {
+/// once, until none is waiting or in flight. Commands for one run are
+/// carried out one at a time, in order. Returns how many.
+///
+/// The host keeps looking for new commands the whole time, so one that
+/// waits to be picked up (an account question) is, however slow the ones
+/// in flight are. While the pass is busy, `between` runs every
+/// [`PER_PASS`] starts or [`BETWEEN_AGAIN`] (the server admits runs
+/// there); if it fails, no more commands start, the ones in flight
+/// finish, and the pass ends with its error.
+pub async fn pump<H, B, F, E>(host: &H, client: &HostClient, mut between: B) -> Result<usize, E>
+where
+    H: CommandHost,
+    B: FnMut() -> F,
+    F: Future<Output = Result<(), E>>,
+    E: From<RuntimeError>,
+{
     let mut handled = 0;
     let mut running = FuturesUnordered::new();
     let mut busy_runs = HashSet::new();
     // A command whose acknowledgement is overdue is listed again as
     // uncertain; one still in flight here isn't carried out twice.
     let mut in_flight = HashSet::new();
-    let mut started = 0;
+    let mut started_since = 0;
+    let mut since = tokio::time::Instant::now();
+    let mut stopped = None;
     loop {
-        if running.len() < IN_FLIGHT && started < PER_PASS {
+        if stopped.is_none() && running.len() < IN_FLIGHT {
             match client.commands(0, 0).await {
                 Ok(listed) => {
                     for summary in listed.commands {
-                        if running.len() >= IN_FLIGHT || started >= PER_PASS {
+                        if running.len() >= IN_FLIGHT {
                             break;
                         }
                         if in_flight.contains(&summary.command_id)
@@ -77,7 +92,7 @@ pub async fn pump<H: CommandHost>(host: &H, client: &HostClient) -> Result<usize
                             busy_runs.insert(run);
                         }
                         in_flight.insert(command.command_id);
-                        started += 1;
+                        started_since += 1;
                         running.push(async move {
                             let ack = carry_out(host, client, &command).await;
                             let _ = client.ack(command.command_id, &ack).await;
@@ -86,14 +101,24 @@ pub async fn pump<H: CommandHost>(host: &H, client: &HostClient) -> Result<usize
                     }
                 }
                 Err(_) if running.is_empty() => {
-                    return Err(RuntimeError::Internal("read the built-in host's commands"));
+                    return Err(RuntimeError::Internal("read the built-in host's commands").into());
                 }
                 // The ones in flight still finish; the list is read again.
                 Err(_) => {}
             }
         }
         if running.is_empty() {
-            return Ok(handled);
+            return match stopped {
+                Some(error) => Err(error),
+                None => Ok(handled),
+            };
+        }
+        if stopped.is_none() && (started_since >= PER_PASS || since.elapsed() >= BETWEEN_AGAIN) {
+            if let Err(error) = between().await {
+                stopped = Some(error);
+            }
+            started_since = 0;
+            since = tokio::time::Instant::now();
         }
         tokio::select! {
             Some((command_id, run)) = running.next() => {
@@ -106,6 +131,11 @@ pub async fn pump<H: CommandHost>(host: &H, client: &HostClient) -> Result<usize
             () = tokio::time::sleep(LOOK_AGAIN) => {}
         }
     }
+}
+
+/// Nothing to do between commands: for a host with nothing else to run.
+pub async fn nothing_between() -> Result<(), RuntimeError> {
+    Ok(())
 }
 
 /// Carry out at once what is waiting for one run, of these kinds: a
@@ -292,37 +322,64 @@ mod tests {
         let host = Host {
             quick_done: Notify::new(),
         };
-        let handled = tokio::time::timeout(Duration::from_secs(10), pump(&host, &client))
-            .await
-            .expect("the slow command waits only for the quick one")
-            .expect("the pump");
+        let handled = tokio::time::timeout(
+            Duration::from_secs(10),
+            pump(&host, &client, nothing_between),
+        )
+        .await
+        .expect("the slow command waits only for the quick one")
+        .expect("the pump");
         assert_eq!(handled, 2);
         assert_eq!(*server.acked.lock().expect("acked"), vec![QUICK, SLOW]);
     }
 
-    /// A server that always has one more command waiting.
-    #[derive(Debug, Default)]
-    struct EndlessCommands {
+    /// A server with one slow command waiting (if `slow`), and `limit` quick
+    /// ones, one more each time it is listed.
+    #[derive(Debug)]
+    struct Queue {
+        slow: bool,
+        limit: u128,
         listed: Mutex<u128>,
+        slow_listed: Mutex<bool>,
     }
 
-    impl Transport for EndlessCommands {
+    impl Queue {
+        fn new(slow: bool, limit: u128) -> Self {
+            Self {
+                slow,
+                limit,
+                listed: Mutex::new(0),
+                slow_listed: Mutex::new(false),
+            }
+        }
+    }
+
+    impl Transport for Queue {
         fn send(&self, request: HttpRequest) -> TransportFuture<'_> {
             Box::pin(async move {
                 if request.path.starts_with("/api/v1/host/commands?") {
+                    let mut commands = Vec::new();
+                    let mut slow_listed = self.slow_listed.lock().expect("slow listed");
+                    if self.slow && !*slow_listed {
+                        *slow_listed = true;
+                        commands.push(SLOW);
+                    }
                     let mut listed = self.listed.lock().expect("listed");
-                    *listed += 1;
-                    let command_id = Uuid::from_u128(1000 + *listed);
-                    return ok(&CommandList {
-                        commands: vec![CommandSummary {
+                    if *listed < self.limit {
+                        *listed += 1;
+                        commands.push(Uuid::from_u128(1000 + *listed));
+                    }
+                    let commands = commands
+                        .into_iter()
+                        .map(|command_id| CommandSummary {
                             command_id,
                             seq: 0,
                             kind: CommandKind::Action,
                             run_id: None,
                             offer: 1,
-                        }],
-                        next: 0,
-                    });
+                        })
+                        .collect();
+                    return ok(&CommandList { commands, next: 0 });
                 }
                 let command_id = request
                     .path
@@ -342,20 +399,88 @@ mod tests {
         }
     }
 
+    /// The slow command finishes only once `wait_for` quick ones have.
+    struct Waits {
+        wait_for: usize,
+        quick: std::sync::atomic::AtomicUsize,
+        enough: Notify,
+    }
+
+    impl CommandHost for Waits {
+        async fn start(&self, _: &HostClient, _: &Command) -> Ack {
+            refused("unused", "unused")
+        }
+        async fn inspect(&self, _: &Command) -> Ack {
+            refused("unused", "unused")
+        }
+        async fn answered(&self, _: &Command) -> Ack {
+            refused("unused", "unused")
+        }
+        async fn cancelled(&self, _: &Command) -> Ack {
+            refused("unused", "unused")
+        }
+        async fn action(&self, command: &Command) -> Ack {
+            if command.command_id == SLOW {
+                self.enough.notified().await;
+            } else {
+                let done = self.quick.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                if done == self.wait_for {
+                    self.enough.notify_one();
+                }
+            }
+            let mut ack = Ack::new(AckOutcome::Accepted);
+            ack.result = Some(json!({}));
+            ack
+        }
+    }
+
     #[tokio::test]
-    async fn a_pass_ends_under_steady_traffic() {
+    async fn new_commands_are_picked_up_past_a_pass_while_a_slow_one_waits() {
+        let wait_for = 2 * PER_PASS;
         let client = HostClient::with_transport(
             "http://localhost",
             "token",
-            Arc::new(EndlessCommands::default()),
+            Arc::new(Queue::new(true, u128::try_from(wait_for).expect("small"))),
         );
-        let host = Host {
-            quick_done: Notify::new(),
+        let host = Waits {
+            wait_for,
+            quick: 0.into(),
+            enough: Notify::new(),
         };
-        let handled = tokio::time::timeout(Duration::from_secs(30), pump(&host, &client))
+        let handled = tokio::time::timeout(
+            Duration::from_secs(30),
+            pump(&host, &client, nothing_between),
+        )
+        .await
+        .expect("the slow command waits only for the quick ones")
+        .expect("the pump");
+        assert_eq!(handled, wait_for + 1);
+    }
+
+    #[tokio::test]
+    async fn admission_gets_its_turn_under_steady_traffic_and_can_end_the_pass() {
+        let client = HostClient::with_transport(
+            "http://localhost",
+            "token",
+            Arc::new(Queue::new(false, u128::MAX)),
+        );
+        let host = Waits {
+            wait_for: usize::MAX,
+            quick: 0.into(),
+            enough: Notify::new(),
+        };
+        let turns = std::sync::atomic::AtomicUsize::new(0);
+        let between = || async {
+            if turns.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1 >= 3 {
+                Err(RuntimeError::Internal("the lease was lost"))
+            } else {
+                Ok(())
+            }
+        };
+        let ended = tokio::time::timeout(Duration::from_secs(30), pump(&host, &client, between))
             .await
-            .expect("the pass ends")
-            .expect("the pump");
-        assert_eq!(handled, PER_PASS);
+            .expect("the pass ends once admission says so");
+        assert!(ended.is_err());
+        assert_eq!(turns.load(std::sync::atomic::Ordering::SeqCst), 3);
     }
 }

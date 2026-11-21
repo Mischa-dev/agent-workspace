@@ -885,6 +885,15 @@ pub fn run_diff(
             "worktree is not ready",
         ));
     }
+    // In a worktree, files the run made but never staged count too. They
+    // are marked to be added in a scratch copy of the index, so the
+    // worktree's own index (what the harness staged) is left as it is.
+    let scratch = if bare || head.is_some() {
+        None
+    } else {
+        Some(ScratchIndex::with_new_files(repository)?)
+    };
+    let index = scratch.as_ref().map(ScratchIndex::path);
     let args = |extra: &[&str]| {
         let mut args = vec![
             OsString::from(if bare { "--git-dir" } else { "-C" }),
@@ -902,8 +911,8 @@ pub fn run_diff(
         args.push(OsString::from("--"));
         args
     };
-    let numstat = run_git(args(&["--numstat", "-z"]))?;
-    let statuses = run_git(args(&["--name-status", "-z"]))?;
+    let numstat = run_git_on_index(args(&["--numstat", "-z"]), None, index)?;
+    let statuses = run_git_on_index(args(&["--name-status", "-z"]), None, index)?;
     let mut files = parse_numstat(&numstat.stdout);
     let more_files = files.len() > MAX_CHANGED_FILES;
     files.truncate(MAX_CHANGED_FILES);
@@ -915,7 +924,7 @@ pub fn run_diff(
             .map(|(_, status)| status.clone())
             .unwrap_or_else(|| "modified".to_owned());
     }
-    let (patch, truncated) = match run_git(args(&[])) {
+    let (patch, truncated) = match run_git_on_index(args(&[]), None, index) {
         Ok(output) if output.stdout.len() <= max_patch_bytes => {
             (String::from_utf8_lossy(&output.stdout).into_owned(), false)
         }
@@ -928,6 +937,77 @@ pub fn run_diff(
         patch,
         truncated: truncated || more_files,
     })
+}
+
+/// A copy of a worktree's index in which its untracked files (those not
+/// ignored) are marked to be added, removed when dropped.
+struct ScratchIndex(PathBuf);
+
+impl ScratchIndex {
+    fn with_new_files(worktree: &Path) -> Result<Self, RuntimeError> {
+        let worktree_arg = || [OsString::from("-C"), worktree.as_os_str().to_owned()];
+        let own = run_git(
+            worktree_arg()
+                .into_iter()
+                .chain(["rev-parse", "--git-path", "index"].map(OsString::from)),
+        )?;
+        let own = PathBuf::from(String::from_utf8_lossy(&own.stdout).trim());
+        let own = if own.is_absolute() {
+            own
+        } else {
+            worktree.join(own)
+        };
+        let mut name = own.file_name().map(OsString::from).unwrap_or_default();
+        name.push(format!(".diff-{}", uuid::Uuid::new_v4().simple()));
+        let scratch = Self(own.with_file_name(name));
+        match std::fs::copy(&own, &scratch.0) {
+            Ok(_) => {}
+            // No index yet: Git starts the scratch one empty.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(RuntimeError::Internal("copy the worktree's index")),
+        }
+        let untracked = run_git_on_index(
+            worktree_arg()
+                .into_iter()
+                .chain(["ls-files", "--others", "--exclude-standard", "-z"].map(OsString::from)),
+            None,
+            Some(&scratch.0),
+        )?;
+        if !untracked.stdout.is_empty() {
+            // Past what a diff lists, the rest wouldn't show anyway.
+            let listed = untracked
+                .stdout
+                .split_inclusive(|byte| *byte == 0)
+                .take(MAX_CHANGED_FILES + 1)
+                .flatten()
+                .copied()
+                .collect::<Vec<u8>>();
+            run_git_on_index(
+                worktree_arg().into_iter().chain(
+                    [
+                        "add",
+                        "--intent-to-add",
+                        "--pathspec-from-file=-",
+                        "--pathspec-file-nul",
+                    ]
+                    .map(OsString::from),
+                ),
+                Some(&listed),
+                Some(&scratch.0),
+            )?;
+        }
+        Ok(scratch)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for ScratchIndex {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 fn parse_numstat(output: &[u8]) -> Vec<ChangedFile> {
@@ -1097,11 +1177,27 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    run_git_on_index(arguments, input, None)
+}
+
+/// `run_git_with_input`, reading and writing `index` instead of the
+/// repository's own index when one is given.
+fn run_git_on_index<I, S>(
+    arguments: I,
+    input: Option<&[u8]>,
+    index: Option<&Path>,
+) -> Result<Output, RuntimeError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     let _process_permit = GitProcessPermit::try_acquire()?;
     let mut command = Command::new("/usr/bin/git");
+    command.args(arguments).env_clear();
+    if let Some(index) = index {
+        command.env("GIT_INDEX_FILE", index);
+    }
     command
-        .args(arguments)
-        .env_clear()
         .env("PATH", "/usr/local/bin:/usr/bin:/bin")
         .env("LANG", "C.UTF-8")
         .env("LC_ALL", "C.UTF-8")
@@ -1863,9 +1959,34 @@ mod tests {
         std::fs::write(repository.join("kept.txt"), "one\n2\nthree\n").expect("write");
         std::fs::remove_file(repository.join("gone.txt")).expect("remove");
         std::fs::write(repository.join("new.txt"), "hi\n").expect("write");
-        // New files show once they're staged, as a harness's result is.
+        // A new file counts whether or not it was staged, and listing it
+        // leaves what was staged alone.
         git(repository, ["add", "-A"]);
+        std::fs::write(repository.join("unstaged.txt"), "made\n").expect("write");
+        std::fs::write(repository.join(".gitignore"), "ignored.txt\n").expect("write");
+        std::fs::write(repository.join("ignored.txt"), "skip\n").expect("write");
+        let staged_before = staged(repository);
         let diff = super::run_diff(repository, false, &base, None, 1 << 20).expect("diff");
+        assert_eq!(staged(repository), staged_before);
+        assert_eq!(
+            diff.files
+                .iter()
+                .find(|file| file.path == "unstaged.txt")
+                .map(|file| (file.status.as_str(), file.added)),
+            Some(("added", Some(1)))
+        );
+        assert!(diff.patch.contains("+made"));
+        assert!(diff.files.iter().all(|file| file.path != "ignored.txt"));
+        let scratch_left = std::fs::read_dir(repository.join(".git"))
+            .expect("git dir")
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("index.diff-")
+            });
+        assert!(!scratch_left);
         let find = |path: &str| diff.files.iter().find(|file| file.path == path).cloned();
         assert_eq!(
             find("kept.txt").map(|file| (file.status, file.added, file.removed)),
@@ -1881,8 +2002,21 @@ mod tests {
         );
         assert!(diff.patch.contains("+three") && !diff.truncated);
         let small = super::run_diff(repository, false, &base, None, 10).expect("diff");
-        assert!(small.truncated && small.patch.is_empty() && small.files.len() == 3);
+        assert!(small.truncated && small.patch.is_empty() && small.files.len() == 5);
         assert!(super::run_diff(repository, false, "not-a-commit", None, 10).is_err());
+    }
+
+    #[cfg(unix)]
+    fn staged(repository: &Path) -> Vec<u8> {
+        Command::new("/usr/bin/git")
+            .current_dir(repository)
+            .args(["diff", "--cached", "--name-status"])
+            .env_clear()
+            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+            .env("HOME", "/dev/null")
+            .output()
+            .expect("staged")
+            .stdout
     }
 
     #[cfg(unix)]

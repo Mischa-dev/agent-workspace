@@ -893,7 +893,7 @@ fn launch_view_select() -> String {
 }
 
 fn launch_view(
-    state: &AppState,
+    harnesses: &Harnesses,
     row: LaunchViewRow,
     viewer_id: Uuid,
     can_manage: bool,
@@ -901,7 +901,7 @@ fn launch_view(
     let harness_name = row
         .harness
         .as_deref()
-        .map(|harness| crate::agent_sessions::harness_name(state, harness));
+        .map(|harness| harnesses.name(harness));
     LaunchView {
         can_cancel: row.state == "queued" && (row.requested_by_actor_id == viewer_id || can_manage),
         id: row.id,
@@ -975,10 +975,11 @@ async fn views_by_id(
     .bind(ids)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
+    let harnesses = Harnesses::visible(state).await?;
     Ok(rows
         .into_iter()
         .map(|row| {
-            let mut view = launch_view(state, row, caller.actor_id, manage);
+            let mut view = launch_view(&harnesses, row, caller.actor_id, manage);
             if !sees_tasks {
                 view.work_item = None;
             }
@@ -1347,7 +1348,7 @@ async fn plan_for(
         "harness",
         harness
             .as_deref()
-            .map(|harness| crate::agent_sessions::harness_name(state, harness))
+            .map(|harness| known.name(harness))
             .unwrap_or_default(),
     );
     fields.insert(
@@ -2096,7 +2097,7 @@ async fn start_launch(
                 "harness",
                 harness
                     .as_deref()
-                    .map(|harness| crate::agent_sessions::harness_name(state, harness))
+                    .map(|harness| known.name(harness))
                     .unwrap_or_default(),
             );
             fields.insert(
@@ -2546,6 +2547,13 @@ async fn drain_here(state: &AppState) -> Result<usize, AppError> {
     )
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
+    // One catalog for the pass: which harnesses hand off to a runner, and
+    // what each is called.
+    let catalog = if due.is_empty() {
+        Harnesses::default()
+    } else {
+        Harnesses::visible(state).await?
+    };
     let mut started = 0;
     for queued in due {
         let launch = load_launch(&state.pool, queued.id).await?;
@@ -2688,7 +2696,7 @@ async fn drain_here(state: &AppState) -> Result<usize, AppError> {
         };
         // A connected runner needs no account here: the task goes to it.
         let runner = match harness.as_deref() {
-            Some(harness) => Harnesses::visible(state).await?.runner_for(harness),
+            Some(harness) => catalog.runner_for(harness),
             None => None,
         };
         if runner.is_some() {
@@ -2725,7 +2733,7 @@ async fn drain_here(state: &AppState) -> Result<usize, AppError> {
                         queued.actor_name,
                         harness
                             .as_deref()
-                            .map(|harness| crate::agent_sessions::harness_name(state, harness))
+                            .map(|harness| catalog.name(harness))
                             .unwrap_or_else(|| "this project's runs".to_owned())
                     ),
                 )
@@ -2840,8 +2848,9 @@ pub(crate) async fn list_for(
     // The launched task's key and title only for someone whose role (and an
     // app's limit) lets them see tasks here; the launch itself stays listed.
     let sees_tasks = sees_tasks(state, caller, project_id).await?;
+    let harnesses = Harnesses::visible(state).await?;
     let view = |row| {
-        let mut view = launch_view(state, row, caller.actor_id, manage);
+        let mut view = launch_view(&harnesses, row, caller.actor_id, manage);
         if !sees_tasks {
             view.work_item = None;
         }
