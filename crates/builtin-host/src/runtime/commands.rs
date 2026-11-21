@@ -90,11 +90,19 @@ where
                 Ok(listed) => {
                     for summary in listed.commands {
                         // Commands finishing while others are fetched free
-                        // slots; admission still gets its turn on time.
-                        if running.len() >= IN_FLIGHT
-                            || started_since >= PER_PASS
-                            || since.elapsed() >= BETWEEN_AGAIN
-                        {
+                        // slots; admission still gets its turn on time, and
+                        // the rest of this list follows it.
+                        if started_since >= PER_PASS || since.elapsed() >= BETWEEN_AGAIN {
+                            if let Err(error) =
+                                alongside(&mut running, &mut finished, between()).await
+                            {
+                                stopped = Some(error);
+                                break;
+                            }
+                            started_since = 0;
+                            since = tokio::time::Instant::now();
+                        }
+                        if running.len() >= IN_FLIGHT {
                             break;
                         }
                         if in_flight.contains(&summary.command_id)
@@ -379,6 +387,8 @@ mod tests {
     struct Queue {
         slow: bool,
         limit: u128,
+        /// How long each listing takes.
+        list_takes: Duration,
         listed: Mutex<u128>,
         slow_listed: Mutex<bool>,
     }
@@ -388,6 +398,7 @@ mod tests {
             Self {
                 slow,
                 limit,
+                list_takes: Duration::ZERO,
                 listed: Mutex::new(0),
                 slow_listed: Mutex::new(false),
             }
@@ -398,6 +409,7 @@ mod tests {
         fn send(&self, request: HttpRequest) -> TransportFuture<'_> {
             Box::pin(async move {
                 if request.path.starts_with("/api/v1/host/commands?") {
+                    tokio::time::sleep(self.list_takes).await;
                     let mut commands = Vec::new();
                     let mut slow_listed = self.slow_listed.lock().expect("slow listed");
                     if self.slow && !*slow_listed {
@@ -540,6 +552,28 @@ mod tests {
                 ok(&command(command_id))
             })
         }
+    }
+
+    #[tokio::test]
+    async fn a_slow_listing_still_hands_out_what_it_lists() {
+        let queue = Queue {
+            list_takes: BETWEEN_AGAIN + Duration::from_millis(200),
+            ..Queue::new(false, 2)
+        };
+        let client = HostClient::with_transport("http://localhost", "token", Arc::new(queue));
+        let host = Waits {
+            wait_for: usize::MAX,
+            quick: 0.into(),
+            enough: Notify::new(),
+        };
+        let handled = tokio::time::timeout(
+            Duration::from_secs(30),
+            pump(&host, &client, nothing_between),
+        )
+        .await
+        .expect("the pass ends")
+        .expect("the pump");
+        assert_eq!(handled, 2);
     }
 
     #[tokio::test]
