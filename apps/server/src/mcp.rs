@@ -789,7 +789,12 @@ impl McpServer {
         &self,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let mut tools = Self::tools().list_all();
+        // A2.15: every hand-written tool takes `context` (see `call_tool`).
+        let mut tools: Vec<_> = Self::tools()
+            .list_all()
+            .into_iter()
+            .map(crate::replies::asker::listed_with_context)
+            .collect();
         let Some(principal) = context_principal(&context) else {
             tools.extend(crate::ops::mcp::tools());
             let tools = tools.into_iter().map(slim_for_listing).collect();
@@ -4268,7 +4273,16 @@ mod tests {
             )));
         }
         assert!(super::made(&answer(serde_json::json!({"id": "x"}))));
-        for outcome in super::NOTHING_MADE {
+        // Spelled out rather than read from `NOTHING_MADE`, so a refusal
+        // dropped from that list fails here.
+        for outcome in [
+            "not_found",
+            "invalid_request",
+            "permission_denied",
+            "conflict",
+            "temporarily_unavailable",
+            "limit_reached",
+        ] {
             assert!(!super::made(&answer(
                 serde_json::json!({"outcome": outcome})
             )));

@@ -96,6 +96,7 @@ pub fn tool_of(meta: &OpMeta) -> Tool {
                 "description": "The workspace to act in, by id or slug. Needed only when you reach more than one and the target doesn't say which.",
             }),
         );
+        properties.insert("context".into(), crate::replies::asker::schema());
         if meta.kind.writes() {
             properties.insert(
                 "clientRequestId".into(),

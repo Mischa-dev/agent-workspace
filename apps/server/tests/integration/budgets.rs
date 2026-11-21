@@ -563,17 +563,7 @@ async fn a_report_past_a_hard_budget_tells_whoever_set_it() {
     let Some(world) = crate::support::two_workspaces::two_workspaces("budgets_jump").await else {
         return;
     };
-    let (account, workspace, space, conversation) = sqlx::query_as::<_, (Uuid, Uuid, Uuid, Uuid)>(
-        "SELECT worker.actor_id, project.organization_id, project.id, run.conversation_id \
-             FROM agent_runs run \
-             JOIN execution_workers worker ON worker.id = run.execution_worker_id \
-             JOIN projects project ON project.id = worker.project_id \
-             WHERE run.id = $1",
-    )
-    .bind(world.a.run)
-    .fetch_one(&world.pool)
-    .await
-    .expect("the run's agent");
+    let (account, workspace, space, conversation) = run_context(&world).await;
     sqlx::query(
         "INSERT INTO spend_limits (id, workspace_id, scope_kind, scope_id, per_account, meter, \
                                    period, hard_limit, set_by_actor_id) \
@@ -585,31 +575,16 @@ async fn a_report_past_a_hard_budget_tells_whoever_set_it() {
     .execute(&world.pool)
     .await
     .expect("a budget");
-    // 90 warns that it is nearly used; 20 more takes it past the limit,
-    // which updates that warning, once.
-    for tokens in [90, 20, 10] {
-        agent_workspace_server::tenancy::system("runs.host", async {
-            let mut transaction = agent_workspace_server::db::scoped_tx(&world.pool)
-                .await
-                .expect("transaction");
-            agent_workspace_server::budgets::record_run_usage(
-                &mut transaction,
-                agent_workspace_server::budgets::RunUsage {
-                    workspace,
-                    space: Some(space),
-                    conversation: Some(conversation),
-                    account,
-                    report: Uuid::now_v7(),
-                    tokens,
-                    cost: None,
-                },
-            )
-            .await
-            .expect("recorded");
-            transaction.commit().await.expect("commit");
-        })
-        .await;
-    }
+    let report = |tokens| report_tokens(&world, workspace, space, conversation, account, tokens);
+    // 90 warns that it is nearly used.
+    report(90).await;
+    assert_eq!(levels(&world, account).await, [("soft".to_owned(), 1)]);
+    // 20 more takes it past the limit, which updates that warning.
+    report(20).await;
+    assert_eq!(levels(&world, account).await, [("hard".to_owned(), 2)]);
+    // Already told today: 10 more changes nothing.
+    report(10).await;
+    assert_eq!(levels(&world, account).await, [("hard".to_owned(), 2)]);
     let used = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT sum(quantity)::bigint FROM usage_events \
          WHERE workspace_id = $1 AND meter = 'reported_tokens' AND account_id = $2",
@@ -620,19 +595,100 @@ async fn a_report_past_a_hard_budget_tells_whoever_set_it() {
     .await
     .expect("usage");
     assert_eq!(used, Some(120), "spent usage is recorded past the limit");
-    let titles = sqlx::query_scalar::<_, String>(
-        "SELECT detail->>'level' FROM notifications \
-         WHERE recipient_actor_id = $1 AND kind = 'budget_warning' ORDER BY created_at",
+    world.finish().await;
+}
+
+/// On a budget each account has its own share of, one account using its
+/// share up isn't turned back into "nearly used" by another nearing theirs.
+#[tokio::test]
+async fn a_used_up_budget_stays_used_up_for_the_day() {
+    let Some(world) = crate::support::two_workspaces::two_workspaces("budgets_levels").await else {
+        return;
+    };
+    let (agent, workspace, space, conversation) = run_context(&world).await;
+    let owner = world.a.rook;
+    sqlx::query(
+        "INSERT INTO spend_limits (id, workspace_id, scope_kind, scope_id, per_account, meter, \
+                                   period, hard_limit, set_by_actor_id) \
+         VALUES ($1, $2, 'workspace', $2, true, 'reported_tokens', 'hour', 100, $3)",
     )
-    .bind(account)
-    .fetch_all(&world.pool)
+    .bind(Uuid::now_v7())
+    .bind(workspace)
+    .bind(owner)
+    .execute(&world.pool)
     .await
-    .expect("warnings");
-    // One inbox item per budget: the warning becomes "used up".
+    .expect("a budget for each account");
+    report_tokens(&world, workspace, space, conversation, agent, 110).await;
+    assert_eq!(levels(&world, owner).await, [("hard".to_owned(), 1)]);
+    report_tokens(&world, workspace, space, conversation, owner, 90).await;
     assert_eq!(
-        titles,
-        ["hard"],
-        "the warning's item now says it is used up"
+        levels(&world, owner).await,
+        [("hard".to_owned(), 1)],
+        "another account nearing its share doesn't undo \"used up\""
     );
     world.finish().await;
+}
+
+/// The run's agent, workspace, space and conversation.
+async fn run_context(
+    world: &crate::support::two_workspaces::TwoWorkspaces,
+) -> (Uuid, Uuid, Uuid, Uuid) {
+    sqlx::query_as::<_, (Uuid, Uuid, Uuid, Uuid)>(
+        "SELECT worker.actor_id, project.organization_id, project.id, run.conversation_id \
+             FROM agent_runs run \
+             JOIN execution_workers worker ON worker.id = run.execution_worker_id \
+             JOIN projects project ON project.id = worker.project_id \
+             WHERE run.id = $1",
+    )
+    .bind(world.a.run)
+    .fetch_one(&world.pool)
+    .await
+    .expect("the run's agent")
+}
+
+async fn report_tokens(
+    world: &crate::support::two_workspaces::TwoWorkspaces,
+    workspace: Uuid,
+    space: Uuid,
+    conversation: Uuid,
+    account: Uuid,
+    tokens: i64,
+) {
+    agent_workspace_server::tenancy::system("runs.host", async {
+        let mut transaction = agent_workspace_server::db::scoped_tx(&world.pool)
+            .await
+            .expect("transaction");
+        agent_workspace_server::budgets::record_run_usage(
+            &mut transaction,
+            agent_workspace_server::budgets::RunUsage {
+                workspace,
+                space: Some(space),
+                conversation: Some(conversation),
+                account,
+                report: Uuid::now_v7(),
+                tokens,
+                cost: None,
+            },
+        )
+        .await
+        .expect("recorded");
+        transaction.commit().await.expect("commit");
+    })
+    .await;
+}
+
+/// Each budget warning in `recipient`'s inbox: its level and how many times
+/// it was updated.
+async fn levels(
+    world: &crate::support::two_workspaces::TwoWorkspaces,
+    recipient: Uuid,
+) -> Vec<(String, i32)> {
+    sqlx::query_as::<_, (String, i32)>(
+        "SELECT detail->>'level', repeat_count FROM notifications \
+         WHERE recipient_actor_id = $1 AND kind = 'budget_warning' ORDER BY created_at",
+    )
+    .bind(recipient)
+    .fetch_all(&world.pool)
+    .await
+    .expect("warnings")
 }
