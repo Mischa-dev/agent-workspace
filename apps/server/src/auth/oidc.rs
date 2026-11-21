@@ -491,7 +491,9 @@ async fn finish(
     } else {
         // Through the sign-in page: the session cookie is SameSite=Strict, so
         // it isn't sent on a redirect chain that began at the issuer.
-        let back = attempt.return_to.unwrap_or_else(|| "/home".to_owned());
+        let back = attempt
+            .return_to
+            .unwrap_or_else(|| crate::addresses::Target::Home.href());
         format!(
             "/sign-in?returnTo={}",
             url::form_urlencoded::byte_serialize(back.as_bytes()).collect::<String>()

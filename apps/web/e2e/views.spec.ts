@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 import { screenshotDir, seeded, seededValue, storageStatePath } from './environment'
+import { CURRENT_WORKSPACE, spaceSettingsHref } from '../src/app/href'
 
 // Views and data (W11): the sidebar's pinned views, My work, the timeline,
 // and a Markdown plan imported through the preview.
@@ -28,7 +29,7 @@ test('opens Ready for agents from the sidebar, then My work and the timeline', a
 test('imports a Markdown plan after a preview', async ({ page }) => {
   const projectId = seededValue('E2E_PROJECT_ID')
   const stamp = Date.now()
-  await page.goto(`/settings/projects/${projectId}/import-export`)
+  await page.goto(spaceSettingsHref(projectId, 'import-export', CURRENT_WORKSPACE))
   await page.getByLabel('Plan', { exact: true }).fill(`## Launch ${stamp}\n- [ ] Write the notes ${stamp}\n  - [ ] Check the links ${stamp}\n- [x] Pick a date ${stamp}`)
   await page.getByRole('button', { name: 'Preview import' }).click()
   await expect(page.getByText(`Write the notes ${stamp}`)).toBeVisible()
@@ -55,7 +56,7 @@ test('shows what slips when a milestone moves earlier', async ({ page, context }
   const milestone = (await created.json()) as { id: string }
 
   // Two dated tasks in the milestone, brought in as a CSV.
-  await page.goto(`/settings/projects/${projectId}/import-export`)
+  await page.goto(spaceSettingsHref(projectId, 'import-export', CURRENT_WORKSPACE))
   await page.getByRole('radio', { name: 'CSV' }).click()
   await page.getByLabel('CSV file').setInputFiles({
     name: 'plan.csv',

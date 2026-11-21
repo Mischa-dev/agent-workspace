@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { PART_IDS } from '../experience/parts'
+import { isWorkspacePath, workspaceRoutePath } from '../app/href'
 import { routePaths } from '../app/routes'
 import { MODULE_IDS } from './names'
 import { REGISTERED_FOLDERS, WEB_MODULES, paletteEntries, sidebarRows } from './registry'
@@ -58,7 +59,9 @@ describe('the web module registry', () => {
     const paths = routePaths()
     for (const module of WEB_MODULES) {
       for (const route of [...(module.routes ?? []), ...(module.publicRoutes ?? [])]) {
-        expect(paths.filter((path) => path === route.path)).toEqual([route.path])
+        // A workspace page lives at its workspace address (W1.14d); the rest at their own.
+        const at = isWorkspacePath(route.path) ? `/w/:ws${workspaceRoutePath(route.path)}` : route.path
+        expect(paths.filter((path) => path === at)).toEqual([at])
       }
     }
   })

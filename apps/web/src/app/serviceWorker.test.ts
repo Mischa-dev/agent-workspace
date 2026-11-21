@@ -137,7 +137,7 @@ describe('service worker push', () => {
       data: { json: () => ({ title: 'Hi', url: 'https://evil.example/', actions: [{ action: 'launch', url: '//evil.example' }] }) },
     })
     const [, options] = worker.showNotification.mock.calls[0] as unknown as [string, ShownOptions]
-    expect(options.data.url).toBe('/home')
+    expect(options.data.url).toBe('/w/-/home')
     expect(options.actions).toHaveLength(1)
     await worker.dispatch('push', { data: { json: () => { throw new Error('bad') } } })
     expect(worker.showNotification).toHaveBeenLastCalledWith('Agent Workspace', expect.any(Object))

@@ -171,8 +171,9 @@ export class WebSocketStub extends EventTarget {
   static readonly OPEN = 1
   static instances: WebSocketStub[] = []
   readyState = WebSocketStub.CONNECTING
-  send = vi.fn()
   close = vi.fn()
+  // The page sends `hello`, watches and typing frames (W1.6).
+  send = vi.fn()
 
   constructor(public readonly url: string) {
     super()
@@ -288,7 +289,7 @@ export function installAppShellLifecycle() {
   beforeEach(() => {
     WebSocketStub.instances = []
     vi.stubGlobal('WebSocket', WebSocketStub)
-    window.history.replaceState({}, '', '/home')
+    window.history.replaceState({}, '', '/w/-/home')
     document.cookie =
       'agent_workspace_csrf=test-csrf; Path=/; SameSite=Strict'
   })

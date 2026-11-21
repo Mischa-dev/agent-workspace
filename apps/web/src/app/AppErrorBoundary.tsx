@@ -3,6 +3,7 @@ import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { reportError } from '../telemetry/reportErrors'
 import { Button } from '../ui'
 import { failingComponent } from './failingComponent'
+import { CURRENT_WORKSPACE, workspaceHref } from './href'
 
 type Props = {
   children: ReactNode
@@ -46,7 +47,7 @@ export class AppErrorBoundary extends Component<Props, State> {
               Try again
             </Button>
             <Button onClick={() => window.location.reload()}>Reload workspace</Button>
-            <Button onClick={() => window.location.assign('/home')} variant="ghost">
+            <Button onClick={() => window.location.assign(workspaceHref(CURRENT_WORKSPACE))} variant="ghost">
               Go to Home
             </Button>
           </div>

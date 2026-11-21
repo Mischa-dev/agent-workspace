@@ -3,6 +3,7 @@ import path from 'node:path'
 import { expect, test, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test'
 
 import { screenshotDir, seededValue, storageStatePath } from './environment'
+import { at } from './addresses'
 
 // Custom fields (AWD-89) at a desktop and a phone width, in light and dark:
 // Settings › Fields, a task with every kind of value, the list with field
@@ -132,7 +133,7 @@ for (const { scheme, theme } of schemes) {
           },
         ]
         for (const shot of shots) {
-          await page.goto(shot.path)
+          await page.goto(at(shot.path))
           await shot.ready()
           await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
           await page.screenshot({

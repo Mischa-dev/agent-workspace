@@ -85,13 +85,13 @@ self.addEventListener('notificationclick', (event) => {
     const reply = typeof event.reply === 'string' ? event.reply.trim() : ''
     // Without an inline text field (most phones), Reply opens the composer.
     if (event.action === 'reply' && !reply) {
-      event.waitUntil(focusApp(composePath(data.url || '/home')))
+      event.waitUntil(focusApp(composePath(data.url || '/w/-/home')))
       return
     }
     event.waitUntil(act(data, event.action, reply))
     return
   }
-  const target = (event.action === 'launch' && data.launch) || data.url || '/home'
+  const target = (event.action === 'launch' && data.launch) || data.url || '/w/-/home'
   event.waitUntil(focusApp(target))
 })
 
@@ -101,7 +101,7 @@ const FAILED = { approve: 'Not approved', deny: 'Not denied', reply: 'Reply not 
 // Answer from the notification, then say what happened in a quiet one that
 // replaces it. A failure says why and opens the app where it can be done.
 async function act(data, action, reply) {
-  const url = data.url || '/home'
+  const url = data.url || '/w/-/home'
   let message = null
   try {
     const response = await fetch('/api/v1/notification-actions', {
@@ -217,7 +217,7 @@ function showPushNotification(payload) {
     actions,
     data: {
       id: text(payload.id),
-      url: inAppPath(payload.url) || '/home',
+      url: inAppPath(payload.url) || '/w/-/home',
       launch: launch ? inAppPath(launch.url) : null,
       token: actions.some((action) => TOKEN_ACTIONS.includes(action.action)) ? token : null,
       receipt: typeof payload.receipt === 'string' && payload.receipt ? payload.receipt : null,

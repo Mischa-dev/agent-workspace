@@ -2761,9 +2761,10 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
         LEFT JOIN project_memberships system_membership
           ON system_membership.project_id = $2
          AND system_membership.actor_id = (entry.system_event->>'actorId')::uuid
-        LEFT JOIN project_memberships author_membership
-          ON author_membership.project_id = $2
-         AND author_membership.actor_id = message.author_actor_id
+        -- The name the author goes by here: their membership in the space,
+        -- or their workspace profile where there is no space (a DM or group).
+        LEFT JOIN LATERAL place_profile($2, message.author_actor_id) author_membership
+          ON message.author_actor_id IS NOT NULL
         LEFT JOIN LATERAL (
             SELECT jsonb_agg(
                 jsonb_build_object(
@@ -2845,9 +2846,8 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
           ON via_grant.id = message.via_oauth_grant_id AND via_grant.show_via
         LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
         LEFT JOIN actors remover_actor ON remover_actor.id = message.removed_by_actor_id
-        LEFT JOIN project_memberships remover
-          ON remover.project_id = $2
-         AND remover.actor_id = message.removed_by_actor_id
+        LEFT JOIN LATERAL place_profile($2, message.removed_by_actor_id) remover
+          ON message.removed_by_actor_id IS NOT NULL
         LEFT JOIN mcp_oauth_grants removed_via_grant
           ON removed_via_grant.id = message.removed_via_oauth_grant_id
          AND removed_via_grant.show_via

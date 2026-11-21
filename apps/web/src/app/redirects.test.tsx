@@ -10,32 +10,22 @@ import { WorkspaceBoundary, WorkspaceProvider, WorkspaceRedirect } from './Works
 import { rememberWorkspace } from './workspace'
 import { permissionsOf } from '../test/permissions'
 
-// W1.14a: every old address of a workspace page (the workspace-level routes
-// of the route table before W1.14a) still opens that page, now under
-// /w/<slug>, with its query and hash; W1.14d deletes these after K4's links move.
+// W1.14a, W1.14d: the old addresses that can still arrive (old hrefs stored in
+// messages, the share target) open that page under /w/<slug>, with its query
+// and hash.
 const OLD_WORKSPACE_ROUTES = [
   '/',
-  '/home',
-  '/welcome',
-  '/search',
-  '/inbox',
-  '/later',
-  '/threads',
-  '/my-work',
-  '/initiatives',
-  '/runs',
-  '/runs/:runId',
-  '/pages',
-  '/whiteboards',
-  '/whiteboards/:whiteboardId',
   '/messages',
   '/messages/agents',
   '/messages/:conversationId',
   '/projects',
   '/projects/new',
-  '/new-task',
   '/share',
 ]
+
+// W1.14d: the server writes every link as a workspace address since K4.19,
+// so these old roots no longer redirect.
+const DROPPED = ['/home', '/welcome', '/search', '/inbox', '/later', '/threads', '/my-work', '/initiatives', '/runs', '/runs/:runId', '/pages', '/whiteboards', '/whiteboards/:whiteboardId', '/new-task']
 
 const acme = { id: 'org-acme', name: 'Acme', slug: 'acme', role: 'owner' as const, permissions: permissionsOf('owner') }
 const beta = { id: 'org-beta', name: 'Beta', slug: 'beta', role: 'member' as const, permissions: permissionsOf('member') }
@@ -91,8 +81,6 @@ function openSpaces(path: string) {
         element: <WorkspaceProvider />,
         children: [
           { path: '/projects/:projectId/*', element: <WorkspaceRedirect /> },
-          { path: '/settings/workspace/*', element: <WorkspaceRedirect /> },
-          { path: '/settings/projects/*', element: <WorkspaceRedirect /> },
           { path: '/w/:ws', element: <WorkspaceBoundary />, children: [{ path: '*', element: <Landed /> }] },
         ],
       },
@@ -145,8 +133,6 @@ describe('old addresses', () => {
     ['/projects/p1/launches', '/w/beta/s/p1/runs'],
     ['/projects/p1/graph', '/w/beta/s/p1/planning/graph'],
     ['/projects/p1/settings?tab=codex', '/w/beta/settings/spaces/p1?tab=codex'],
-    ['/settings/workspace/members', '/w/beta/settings/members'],
-    ['/settings/projects/p1/automations', '/w/beta/settings/spaces/p1/automations'],
   ])('%s opens at %s', async (old, now) => {
     rememberWorkspace('beta')
     openSpaces(old)
@@ -154,8 +140,22 @@ describe('old addresses', () => {
   })
 
   it('opens the default workspace when this browser has used none', async () => {
-    open('/inbox')
-    expect(await screen.findByLabelText('Landed')).toHaveTextContent('/w/acme/inbox')
+    open('/messages')
+    expect(await screen.findByLabelText('Landed')).toHaveTextContent('/w/acme/messages')
+  })
+
+  it.each(DROPPED)('%s no longer redirects', (old) => {
+    const matches = matchRoutes(appRoutes, concrete(old)) ?? []
+    const landed = matches[matches.length - 1]?.route as { handle?: { layout?: string } } | undefined
+    expect(landed?.handle?.layout).not.toBe('redirect')
+  })
+
+  it('no longer redirects old workspace and space settings links', () => {
+    for (const old of ['/settings/workspace/members', '/settings/projects/p1/automations']) {
+      const matches = matchRoutes(appRoutes, old) ?? []
+      const landed = matches[matches.length - 1]?.route as { handle?: { layout?: string } } | undefined
+      expect(landed?.handle?.layout).not.toBe('redirect')
+    }
   })
 
   it('opens a DM’s own address in the workspace used last', async () => {

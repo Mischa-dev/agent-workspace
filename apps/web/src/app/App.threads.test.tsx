@@ -274,13 +274,17 @@ describe('App Thread access and capabilities', () => {
     WebSocketStub.instances[0].dispatchEvent(
       new MessageEvent('message', {
         data: JSON.stringify({
-          event_id: '019fb600-0000-7000-8000-00000000000e',
-          event_cursor: 14,
-          version: 1,
-          project_id: projectAId,
-          type: 'conversation.archived',
-          occurred_at: '2026-07-31T15:02:00Z',
-          payload: { conversationId: threadId, version: 2 },
+          type: 'event',
+          position: '14',
+          event: {
+            event_id: '019fb600-0000-7000-8000-00000000000e',
+            event_cursor: 14,
+            version: 1,
+            project_id: projectAId,
+            type: 'conversation.archived',
+            occurred_at: '2026-07-31T15:02:00Z',
+            payload: { conversationId: threadId, version: 2 },
+          },
         }),
       }),
     )

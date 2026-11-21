@@ -42,7 +42,7 @@ describe('App sign-in and session boundary', () => {
   })
 
   it('signs in without writing credentials or tokens to browser storage', async () => {
-    window.history.replaceState({}, '', '/sign-in?returnTo=%2Fhome')
+    window.history.replaceState({}, '', '/sign-in?returnTo=%2Fw%2F-%2Fhome')
     const storageSpy = vi.spyOn(Storage.prototype, 'setItem')
     const fetchMock = vi.fn(
       (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -188,7 +188,7 @@ describe('App sign-in and session boundary', () => {
   })
 
   it('asks for a two-factor code before treating the person as signed in', async () => {
-    window.history.replaceState({}, '', '/sign-in?returnTo=%2Fhome')
+    window.history.replaceState({}, '', '/sign-in?returnTo=%2Fw%2F-%2Fhome')
     const fetchMock = vi.fn(
       (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const path = String(input)

@@ -1096,12 +1096,17 @@ async fn a_kept_dm_ends_with_workspace_membership_and_no_role_reads_a_dm() {
     // While both are in the workspace, both read it.
     assert!(visible(pool, dm_id, ana.actor).await);
     assert!(visible(pool, dm_id, mara.actor).await);
-    let (status, _) = send(
+    let (status, shown) = send(
         &world.app,
         ana.browser.request("GET", &timeline, None, Value::Null),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    // A DM has no space, so the author goes by their workspace profile,
+    // never "Former member".
+    let author = shown.to_string();
+    assert!(author.contains(&word), "{author}");
+    assert!(!author.contains("Former member"), "{author}");
     let answer = read(mara.token.clone(), mara.session.clone()).await;
     assert!(answer.to_string().contains(&word), "{answer}");
 

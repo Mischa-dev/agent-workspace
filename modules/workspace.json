@@ -216,7 +216,6 @@
       "/setup",
       "/settings/*",
       "/settings/workspace/*",
-      "/settings/projects/*",
       "/t/:kind/:id",
       "/",
       "/home",

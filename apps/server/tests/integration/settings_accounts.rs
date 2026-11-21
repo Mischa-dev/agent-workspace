@@ -931,7 +931,7 @@ async fn github_installations_need_a_claim_and_the_state_needs_its_browser() {
             Some(cookie.clone())
         )
         .await,
-        format!("/settings/projects/{project}/repositories?github=error&reason=denied")
+        format!("/w/-/settings/spaces/{project}/repositories?github=error&reason=denied")
     );
     assert_eq!(unused().await, 0);
     assert_eq!(

@@ -121,7 +121,11 @@ struct Places {
 }
 
 fn settings_href(project_id: Uuid) -> String {
-    format!("/settings/projects/{project_id}/runs#environments")
+    let target = crate::addresses::Target::SpaceSettings {
+        space: project_id,
+        section: "runs",
+    };
+    format!("{}#environments", target.href())
 }
 
 /// Where the account can run for `viewer`, and where it can't and why.

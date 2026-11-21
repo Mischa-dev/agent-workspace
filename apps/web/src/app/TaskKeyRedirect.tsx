@@ -8,7 +8,7 @@ import { useProjectByKey } from '../shell/useProjectByKey'
 import { Button, EmptyState, ErrorState, PageSkeleton } from '../ui'
 import { searchWorkItemReferences } from '../work-items/api'
 import { queryKeys } from '../api/queryKeys'
-import { spaceHref } from './href'
+import { CURRENT_WORKSPACE, spaceHref, workspaceHref } from './href'
 
 /** `/AWD-12` opens task 12 of the project whose key is AWD. */
 export function TaskKeyRedirect() {
@@ -66,7 +66,7 @@ export function TaskKeyRedirect() {
         <EmptyState
           action={
             <div className="aw-empty-choices">
-              <Button onClick={() => navigate(project ? spaceHref(project.id, `/work-items`) : '/home')} variant="primary">
+              <Button onClick={() => navigate(project ? spaceHref(project.id, `/work-items`) : workspaceHref(CURRENT_WORKSPACE))} variant="primary">
                 {project ? `Go to ${project.name} tasks` : 'Go to Home'}
               </Button>
               {project

@@ -3,6 +3,7 @@ import path from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 
 import { screenshotDir, seeded, seededValue, storageStatePath } from './environment'
+import { at } from './addresses'
 
 // Screenshots of key pages in light and dark, saved as run artifacts in
 // e2e-output/screenshots for a person to look at. This is a smoke check that
@@ -137,7 +138,7 @@ for (const { scheme, theme } of schemes) {
         const errors: string[] = []
         page.on('pageerror', (error) => errors.push(error.message))
 
-        await page.goto(keyPage.path())
+        await page.goto(at(keyPage.path()))
         await keyPage.ready(page)
         await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
         await page.screenshot({
@@ -150,7 +151,7 @@ for (const { scheme, theme } of schemes) {
 
       test(`${keyPage.name} on a phone`, async ({ page }) => {
         await page.setViewportSize({ width: 390, height: 844 })
-        await page.goto(keyPage.path())
+        await page.goto(at(keyPage.path()))
         await keyPage.ready(page)
         await page.screenshot({
           path: path.join(screenshotDir, `${keyPage.name}-${scheme}-phone.png`),

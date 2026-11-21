@@ -117,7 +117,7 @@ describe('entry points follow the modules where they lead', () => {
           ? new Promise<Response>((resolve) => (answer = () => void jsonResponse(run).then(resolve)))
           : undefined,
     })
-    window.history.replaceState({}, '', `/runs/${runId}`)
+    window.history.replaceState({}, '', `/w/-/runs/${runId}`)
     const first = render(<App />)
     await settle()
     expect(turnedOff('Runs')).toBeNull()
@@ -283,12 +283,12 @@ describe('entry points follow the modules where they lead', () => {
       },
     })
     // Their pages, opened earlier, know where they are.
-    window.history.replaceState({}, '', `/runs/${runAw}`)
+    window.history.replaceState({}, '', `/w/-/runs/${runAw}`)
     render(<App />)
     await settle()
-    await go(`/whiteboards/${boardAw}`)
+    await go(`/w/-/whiteboards/${boardAw}`)
     await settle()
-    await go(`/whiteboards/${boardHome}`)
+    await go(`/w/-/whiteboards/${boardHome}`)
     expect(await screen.findByRole('heading', { name: 'Whiteboards is turned off' })).toBeVisible()
     await go(`/projects/${projectAId}`)
     await settle()

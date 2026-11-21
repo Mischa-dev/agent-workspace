@@ -17,18 +17,22 @@ import {
 } from './session'
 import { isTwoFactorChallenge, login, loginTwoFactor } from './login'
 import './auth.css'
+import { CURRENT_WORKSPACE, workspaceHref } from '../app/href'
+
+/** Home in the workspace used last (the server's links say `/w/-/` where they don't name one). */
+const HOME = workspaceHref(CURRENT_WORKSPACE)
 
 function safeReturnTo(search: string) {
   const candidate = new URLSearchParams(search).get('returnTo')
-  if (!candidate?.startsWith('/') || candidate.startsWith('//')) return '/home'
+  if (!candidate?.startsWith('/') || candidate.startsWith('//')) return HOME
   try {
     const url = new URL(candidate, window.location.origin)
     if (url.origin !== window.location.origin || url.pathname === '/sign-in') {
-      return '/home'
+      return HOME
     }
     return `${url.pathname}${url.search}${url.hash}`
   } catch {
-    return '/home'
+    return HOME
   }
 }
 
