@@ -2009,16 +2009,14 @@ async fn a_threads_run_shows_its_branch_only_to_those_who_see_code() {
     .fetch_one(pool)
     .await
     .expect("membership version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{aw}/members/{bea}"),
-            Some("bea-no-code"),
-            json!({"roleId": role["id"], "expectedVersion": version}),
-        ),
-    )
-    .await;
+    let (status, changed) = setup
+        .browser
+        .op(
+            app,
+            "space_member_update",
+            json!({"spaceId": aw, "account": bea, "role": role["id"], "expectedVersion": version}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
 
     // The thread's active run, the run her interrupt answers with, and the

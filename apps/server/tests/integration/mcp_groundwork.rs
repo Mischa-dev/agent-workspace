@@ -302,16 +302,14 @@ async fn archiving_releases_claims_and_moved_originals_stay_archived() {
         .to_owned();
     // Mara works only in the old project, so she can't follow a moved task.
     let (mara, mara_token) = create_agent(app, &setup.browser, &space, "Mara", "mara").await;
-    let (status, added) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{old}/members"),
-            None,
-            json!({"actorId": mara, "role": "member"}),
-        ),
-    )
-    .await;
+    let (status, added) = setup
+        .browser
+        .op(
+            app,
+            "space_member_add",
+            json!({"spaceId": old, "account": mara, "role": "member"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{added}");
     let codex = connect_app(app, &setup.browser, "Codex", "full").await;
     let session = initialize(app, &codex).await.expect("Codex MCP");

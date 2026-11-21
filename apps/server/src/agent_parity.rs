@@ -203,11 +203,6 @@ mod tests {
             Person("a person's own account"),
         ),
         (
-            Post,
-            "/api/v1/projects/{project_id}/members",
-            Tool("space_member_add"),
-        ),
-        (
             Patch,
             "/api/v1/organizations/{organization_id}",
             Tool("workspace_update"),
@@ -830,21 +825,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/invitations",
-            Tool("invitation_create"),
-        ),
-        (
-            Post,
-            "/api/v1/project-invitations/{invitation_id}/revoke",
-            Tool("invitation_update"),
-        ),
-        (
-            Post,
-            "/api/v1/project-invitations/{invitation_id}/replace",
-            Tool("invitation_update"),
-        ),
-        (
-            Post,
             "/api/v1/project-invitations/resolve",
             Plumbing("accepting an invitation is signing up"),
         ),
@@ -857,11 +837,6 @@ mod tests {
             Post,
             "/api/v1/project-invitations/accept-existing",
             Plumbing("accepting an invitation is signing up"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/members/{actor_id}",
-            Tool("space_member_update"),
         ),
         (
             Post,
@@ -1315,7 +1290,7 @@ mod tests {
     /// Hand-written web writes whose tool is already an operation: each is a
     /// second edge for something the generated route does (K2.22). The
     /// number only goes down; when you delete one, lower it.
-    const HAND_WRITTEN_OPERATION_ROUTES: usize = 120;
+    const HAND_WRITTEN_OPERATION_ROUTES: usize = 115;
 
     #[test]
     fn hand_written_routes_for_operations_only_go_down() {

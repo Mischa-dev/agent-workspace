@@ -366,16 +366,15 @@ async fn an_agent_removed_from_its_first_project_still_works_in_another() {
     let side = world.project("SIDE").to_owned();
     let (agent, token) =
         create_agent(&world.app, &world.owner.browser, &work, "Scout", "scout").await;
-    let (status, added) = send(
-        &world.app,
-        world.owner.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{side}/members"),
-            None,
-            json!({"actorId": agent, "role": "member"}),
-        ),
-    )
-    .await;
+    let (status, added) = world
+        .owner
+        .browser
+        .op(
+            &world.app,
+            "space_member_add",
+            json!({"spaceId": side, "account": agent, "role": "member"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{added}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1::uuid AND actor_id = $2",
@@ -385,16 +384,15 @@ async fn an_agent_removed_from_its_first_project_still_works_in_another() {
     .fetch_one(world.pool())
     .await
     .expect("membership version");
-    let (status, removed) = send(
-        &world.app,
-        world.owner.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{agent}"),
-            Some("remove-scout"),
-            json!({"expectedVersion": version, "enabled": false}),
-        ),
-    )
-    .await;
+    let (status, removed) = world
+        .owner
+        .browser
+        .op(
+            &world.app,
+            "space_member_remove",
+            json!({"spaceId": work, "account": agent, "expectedVersion": version}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{removed}");
     let session = initialize(&world.app, &token)
         .await

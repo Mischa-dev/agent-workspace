@@ -256,16 +256,14 @@ async fn workspace_roles_are_explicit_and_removal_takes_everything_away() {
     let owner = owner_actor(&setup.pool).await;
     let (mira, mira_browser) = join_workspace(&setup, "member", "mira").await;
     assert_eq!(member(&setup, mira).await["role"], "member");
-    let (status, body) = send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{project}/members"),
-            Some("add-mira"),
-            json!({ "actorId": mira, "role": "member" }),
-        ),
-    )
-    .await;
+    let (status, body) = setup
+        .browser
+        .op(
+            &setup.app,
+            "space_member_add",
+            json!({"spaceId": project, "account": mira, "role": "member"}),
+        )
+        .await;
     assert!(status.is_success(), "{body}");
     let (status, _) = get(
         &setup.app,

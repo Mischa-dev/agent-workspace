@@ -240,10 +240,13 @@ function CreateDialog({
 }) {
   const [name, setName] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const queryClient = useQueryClient()
   const save = useMutation({
     mutationFn: () => createBugReportLink(projectId, name.trim()),
     onSuccess: (result) => onCreated(result.link.name, result.url),
     onError: (reason) => setError(`The link wasn’t made. ${describeError(reason).message}`),
+    // A link made on an earlier try can answer without its address: list it either way.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: bugReportKeys.links(projectId) }),
   })
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()

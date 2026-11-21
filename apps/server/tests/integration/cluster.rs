@@ -1395,10 +1395,10 @@ async fn removed_member_stops_hearing_at_once() {
     let (status, body) = cluster
         .instance(0)
         .send(owner.request(
-            "PATCH",
-            &format!("/api/v1/projects/{project}/members/{mara}"),
+            "POST",
+            "/api/v2/ops/space_member_remove",
             Some("k5-8-disable"),
-            json!({"expectedVersion": version, "enabled": false}),
+            json!({"spaceId": project, "account": mara, "expectedVersion": version}),
         ))
         .await;
     assert!(status.is_success(), "{status} {body}");
@@ -1880,10 +1880,10 @@ async fn document_update_reaches_watchers_only() {
     let (status, body) = cluster
         .instance(0)
         .send(owner.request(
-            "PATCH",
-            &format!("/api/v1/projects/{project}/members/{mara_id}"),
+            "POST",
+            "/api/v2/ops/space_member_remove",
             Some("k5-10-leave"),
-            json!({"expectedVersion": version, "enabled": false}),
+            json!({"spaceId": project, "account": mara_id, "expectedVersion": version}),
         ))
         .await;
     assert!(status.is_success(), "{status} {body}");

@@ -2290,7 +2290,7 @@ export type SpaceListInput = { includeArchived?: boolean; kinds?: SpaceKind[] | 
 
 export type SpaceListOutput = { spaces: SpaceView[] }
 
-export type SpaceMemberAddInput = { account: string; expiresAt?: string | null; role?: string | null; spaceId: string }
+export type SpaceMemberAddInput = { account: string; expectedVersion?: number | null; expiresAt?: string | null; role?: string | null; spaceId: string }
 
 export type SpaceMemberAddOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
 

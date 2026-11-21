@@ -175,16 +175,14 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
     let (mara, mara_token) = create_agent(app, &setup.browser, &space, "Mara", "mara").await;
     let (vic, vic_token) = create_agent(app, &setup.browser, &space, "Vic", "vic").await;
     for (agent, role) in [(mara, "member"), (vic, "viewer")] {
-        let (status, added) = send(
-            app,
-            setup.browser.request(
-                "POST",
-                &format!("/api/v1/projects/{work}/members"),
-                None,
-                json!({"actorId": agent, "role": role}),
-            ),
-        )
-        .await;
+        let (status, added) = setup
+            .browser
+            .op(
+                app,
+                "space_member_add",
+                json!({"spaceId": work, "account": agent, "role": role}),
+            )
+            .await;
         assert_eq!(status, StatusCode::OK, "{added}");
     }
     let codex = connect_app(app, &setup.browser, "Codex", "full").await;

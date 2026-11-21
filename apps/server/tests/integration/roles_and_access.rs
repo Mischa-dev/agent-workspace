@@ -290,16 +290,13 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, refused) = send(
-        &setup.app,
-        alex_browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{bea}"),
-            Some("ops-promotes-bea"),
-            json!({"expectedVersion": version, "role": "member"}),
-        ),
-    )
-    .await;
+    let (status, refused) = alex_browser
+        .op(
+            &setup.app,
+            "space_member_update",
+            json!({"spaceId": work, "account": bea, "expectedVersion": version, "role": "member"}),
+        )
+        .await;
     assert_eq!(
         status,
         StatusCode::FORBIDDEN,
@@ -739,15 +736,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{mara}"),
-            Some("mara-readers"),
-            json!({"expectedVersion": version, "roleId": readers["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": work, "account": mara, "expectedVersion": version, "role": readers["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     assert_eq!(changed["role"], "viewer");
@@ -947,16 +936,14 @@ async fn people_arrive_where_their_role_says() {
     // Cara signs in through another project first.
     let elsewhere = create_project(&setup, "ELSE", "Elsewhere").await;
     let (cara, _) = add_person(&setup, &[&elsewhere], "cara").await;
-    let (status, added) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/members"),
-            None,
-            json!({"actorId": cara, "role": "member", "roleId": lead["id"]}),
-        ),
-    )
-    .await;
+    let (status, added) = setup
+        .browser
+        .op(
+            app,
+            "space_member_add",
+            json!({"spaceId": work, "account": cara, "role": "member", "role": lead["id"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{added}");
     assert_eq!(added["roleId"], lead["id"]);
     let joined = sqlx::query_scalar::<_, Uuid>(
@@ -1010,15 +997,7 @@ async fn creating_from_a_template_needs_create_tasks_in_that_project() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{beta}/members/{tom}"),
-            Some("tom-editors"),
-            json!({"expectedVersion": version, "roleId": editors["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": beta, "account": tom, "expectedVersion": version, "role": editors["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
 
@@ -1091,15 +1070,7 @@ async fn a_narrowed_project_admin_role_does_not_make_a_workspace_admin() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{bea}"),
-            Some("bea-lead"),
-            json!({"expectedVersion": version, "roleId": lead["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": work, "account": bea, "expectedVersion": version, "role": lead["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     assert_eq!(changed["role"], "admin");
@@ -1160,15 +1131,7 @@ async fn task_files_follow_who_can_see_tasks() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{tom}"),
-            Some("tom-task-editors"),
-            json!({"expectedVersion": version, "roleId": editors["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": work, "account": tom, "expectedVersion": version, "role": editors["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     let session = initialize(app, &tom_token).await.expect("Tom");
@@ -1273,15 +1236,7 @@ async fn task_files_follow_who_can_see_tasks() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{bea}"),
-            Some("bea-no-tasks"),
-            json!({"expectedVersion": version, "roleId": blind["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": work, "account": bea, "expectedVersion": version, "role": blind["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     assert_eq!(
@@ -1339,17 +1294,13 @@ async fn a_narrowed_admin_cannot_bring_back_more_than_they_hold() {
 
     // Alex can't bring Bea back without a role change: Member holds more
     // than Ops.
-    let (version, _) = project_membership(&setup, project, bea).await;
-    let (status, refused) = send(
-        app,
-        alex_browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{bea}"),
-            Some("ops-brings-bea-back"),
-            json!({"expectedVersion": version, "enabled": true}),
-        ),
-    )
-    .await;
+    let (status, refused) = alex_browser
+        .op(
+            app,
+            "space_member_add",
+            json!({"spaceId": work, "account": bea}),
+        )
+        .await;
     assert_eq!(
         status,
         StatusCode::FORBIDDEN,
@@ -1361,16 +1312,14 @@ async fn a_narrowed_admin_cannot_bring_back_more_than_they_hold() {
     );
 
     // The owner, who holds everything, can.
-    let (status, back) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{bea}"),
-            Some("owner-brings-bea-back"),
-            json!({"expectedVersion": version, "enabled": true}),
-        ),
-    )
-    .await;
+    let (status, back) = setup
+        .browser
+        .op(
+            app,
+            "space_member_add",
+            json!({"spaceId": work, "account": bea}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{back}");
     assert!(
         project_membership(&setup, project, bea).await.1,
@@ -1485,15 +1434,7 @@ async fn file_search_leaves_out_task_files_where_tasks_are_hidden() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{tom}"),
-            Some("tom-posters"),
-            json!({"expectedVersion": version, "roleId": posters["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": work, "account": tom, "expectedVersion": version, "role": posters["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     let found = tool(app, &tom_token, &session, "search", search).await;
@@ -1517,6 +1458,8 @@ async fn project_membership(setup: &Setup, project: Uuid, actor: Uuid) -> (i64, 
 fn invitation_token(issued: &Value) -> String {
     issued["invitationUrl"]
         .as_str()
+        .or_else(|| issued["joinUrl"].as_str())
+        .or_else(|| issued["value"]["joinUrl"].as_str())
         .unwrap_or_else(|| panic!("invitation URL: {issued}"))
         .split_once("#token=")
         .expect("token fragment")
@@ -1549,30 +1492,27 @@ async fn invitations_and_agents_stay_within_what_the_giver_holds_now() {
 
     // As a plain admin, Alex invites a Member to the workspace and the project.
     let mut tokens = Vec::new();
-    for (path, resolve) in [
+    for (path, key, body, resolve, made) in [
         (
             format!(
                 "/api/v1/organizations/{}/invitations",
                 setup.organization_id
             ),
+            None,
+            json!({"role": "member", "expiresInHours": 24}),
             "/api/v1/workspace-invitations/resolve",
+            StatusCode::CREATED,
         ),
         (
-            format!("/api/v1/projects/{work}/invitations"),
+            "/api/v2/ops/invitation_create".to_owned(),
+            Some("alex-invites-to-work"),
+            json!({"projectId": work, "role": "member", "expiresInHours": 24}),
             "/api/v1/project-invitations/resolve",
+            StatusCode::OK,
         ),
     ] {
-        let (status, issued) = send(
-            app,
-            alex_browser.request(
-                "POST",
-                &path,
-                None,
-                json!({"role": "member", "expiresInHours": 24}),
-            ),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED, "{path}: {issued}");
+        let (status, issued) = send(app, alex_browser.request("POST", &path, key, body)).await;
+        assert_eq!(status, made, "{path}: {issued}");
         let token = invitation_token(&issued);
         let (status, resolved) = send(
             app,
@@ -1585,18 +1525,19 @@ async fn invitations_and_agents_stay_within_what_the_giver_holds_now() {
         tokens.push((resolve, token));
     }
     // The owner invites a Member to the project too, and adds an agent.
-    let (status, owners) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/invitations"),
-            None,
-            json!({"role": "member", "expiresInHours": 24}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{owners}");
-    let owners_invitation = owners["id"].as_str().expect("invitation").to_owned();
+    let (status, owners) = setup
+        .browser
+        .op(
+            app,
+            "invitation_create",
+            json!({"projectId": work, "role": "member", "expiresInHours": 24}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{owners}");
+    let owners_invitation = owners["invitation"]["id"]
+        .as_str()
+        .expect("invitation")
+        .to_owned();
     let (mara, _) = create_agent(app, &setup.browser, &work, "Mara", "mara").await;
     let (connection_id, version, _) = agent_connection(&setup, mara).await;
     let (status, disabled) = send(
@@ -1653,9 +1594,9 @@ async fn invitations_and_agents_stay_within_what_the_giver_holds_now() {
         app,
         alex_browser.request(
             "POST",
-            &format!("/api/v1/project-invitations/{owners_invitation}/replace"),
-            None,
-            json!({"expectedVersion": 1, "expiresInHours": 48}),
+            "/api/v2/ops/invitation_update",
+            Some("alex-replaces-owners"),
+            json!({"projectId": work, "invitation": owners_invitation, "replace": true, "expectedVersion": 1, "expiresInHours": 48}),
         ),
     )
     .await;
@@ -1875,15 +1816,7 @@ async fn reads_naming_tasks_or_repositories_follow_the_role_and_limit() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{other}/members/{bea}"),
-            Some("bea-other-no-tasks"),
-            json!({"expectedVersion": version, "roleId": blind["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": other, "account": bea, "expectedVersion": version, "role": blind["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     let found = tool(app, &bea_app, &session, "task_list", both).await;
@@ -2172,15 +2105,7 @@ async fn task_chips_name_the_task_only_for_readers_who_see_tasks() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{bea}"),
-            Some("bea-chips-no-tasks"),
-            json!({"expectedVersion": version, "roleId": blind["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": work, "account": bea, "expectedVersion": version, "role": blind["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     let chips = timeline_chips(&setup, &bea_browser, &channel).await;
@@ -2341,15 +2266,7 @@ async fn a_tasks_linked_code_needs_see_code() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{bea}"),
-            Some("bea-tasks-only"),
-            json!({"expectedVersion": version, "roleId": tasks_only["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": work, "account": bea, "expectedVersion": version, "role": tasks_only["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     let (status, item) = send(app, browser_task(&bea_browser)).await;
@@ -2365,7 +2282,7 @@ async fn set_project_role(
     project: &str,
     actor: Uuid,
     key: &str,
-    mut body: Value,
+    body: Value,
 ) -> (StatusCode, Value) {
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
@@ -2375,14 +2292,18 @@ async fn set_project_role(
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    body["expectedVersion"] = json!(version);
+    let role = body
+        .get("roleId")
+        .or_else(|| body.get("role"))
+        .cloned()
+        .expect("a role");
     send(
         &setup.app,
         setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{project}/members/{actor}"),
+            "POST",
+            "/api/v2/ops/space_member_update",
             Some(key),
-            body,
+            json!({"spaceId": project, "account": actor, "role": role, "expectedVersion": version}),
         ),
     )
     .await
@@ -2791,17 +2712,15 @@ async fn a_custom_admin_invitation_does_not_make_a_workspace_admin() {
     assert_eq!(status, StatusCode::OK, "{manager}");
     let mut tokens = Vec::new();
     for _ in 0..2 {
-        let (status, issued) = send(
-            app,
-            setup.browser.request(
-                "POST",
-                &format!("/api/v1/projects/{work}/invitations"),
-                None,
-                json!({"role": "admin", "roleId": manager["id"], "expiresInHours": 24}),
-            ),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED, "{issued}");
+        let (status, issued) = setup
+            .browser
+            .op(
+                app,
+                "invitation_create",
+                json!({"projectId": work, "role": manager["id"], "expiresInHours": 24}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{issued}");
         tokens.push(invitation_token(&issued));
     }
 
@@ -2880,17 +2799,14 @@ async fn a_project_invitation_lapses_when_its_issuer_loses_invite_in_the_project
     .execute(&setup.pool)
     .await
     .expect("alex is a project admin");
-    let (status, issued) = send(
-        app,
-        alex_browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/invitations"),
-            None,
-            json!({"role": "member", "expiresInHours": 24}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{issued}");
+    let (status, issued) = alex_browser
+        .op(
+            app,
+            "invitation_create",
+            json!({"projectId": work, "role": "member", "expiresInHours": 24}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{issued}");
     let token = invitation_token(&issued);
     let resolve = |token: &str| {
         setup.browser.request(
@@ -3968,10 +3884,10 @@ async fn project_roles_are_given_only_within_the_givers_project_role() {
     assert_eq!(status, StatusCode::OK, "{readers}");
     let give = |role: &Value, version: i64, key: &str| {
         alex_browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{bea}"),
+            "POST",
+            "/api/v2/ops/space_member_update",
             Some(key),
-            json!({"roleId": role["id"], "expectedVersion": version}),
+            json!({"spaceId": work, "account": bea, "role": role["id"], "expectedVersion": version}),
         )
     };
 
@@ -4090,17 +4006,14 @@ async fn a_project_invitation_lapses_when_its_issuers_project_role_narrows_below
     .execute(&setup.pool)
     .await
     .expect("alex is a project admin");
-    let (status, issued) = send(
-        app,
-        alex_browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/invitations"),
-            None,
-            json!({"role": "member", "expiresInHours": 24}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{issued}");
+    let (status, issued) = alex_browser
+        .op(
+            app,
+            "invitation_create",
+            json!({"projectId": work, "role": "member", "expiresInHours": 24}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{issued}");
     let token = invitation_token(&issued);
     let resolve = |token: &str| {
         setup.browser.request(

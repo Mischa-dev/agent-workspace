@@ -164676,7 +164676,7 @@
     },
     "/api/v2/w/{workspace}/ops/space_member_add": {
       "post": {
-        "description": "Add a person or agent of this workspace to a project or team space, as a member, a viewer or a custom role within yours. Someone already in it is changed with space_member_update. Returns their membership. Needs \"Change roles and remove people\" where it acts.",
+        "description": "Add a person or agent of this workspace to a project or team space, as a member, a viewer or a custom role within yours. Someone already in it is changed with space_member_update. Adding someone who was removed brings them back, in their old role unless you name one. Returns their membership. Needs \"Change roles and remove people\" where it acts.",
         "operationId": "space_member_add",
         "parameters": [
           {
@@ -164708,6 +164708,14 @@
                   "account": {
                     "description": "Who: an account's id or @handle in this workspace.",
                     "type": "string"
+                  },
+                  "expectedVersion": {
+                    "description": "For someone removed: their membership's version, as you read it, so\na change made since refuses this one.",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
                   },
                   "expiresAt": {
                     "description": "When their membership ends by itself (RFC 3339, in the future), for\na guest or anyone here for a while.",

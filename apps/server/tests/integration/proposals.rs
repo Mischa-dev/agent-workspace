@@ -41,15 +41,7 @@ async fn suggester(setup: &Setup, project: &str, actor: Uuid, name: &str, permis
     .fetch_one(&setup.pool)
     .await
     .expect("membership");
-    let (status, changed) = send(
-        &setup.app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{project}/members/{actor}"),
-            Some("make-suggester"),
-            json!({"roleId": role["id"], "expectedVersion": version}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(&setup.app, "space_member_update", json!({"spaceId": project, "account": actor, "role": role["id"], "expectedVersion": version}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
 }

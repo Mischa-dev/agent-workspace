@@ -717,10 +717,10 @@ async fn document_rooms(name: &str, target: Target) {
     call(
         api,
         &owner,
-        "PATCH",
-        &format!("/api/v1/projects/{project}/members/{mara}"),
+        "POST",
+        "/api/v2/ops/space_member_remove",
         Some("rooms-disable"),
-        json!({"expectedVersion": version, "enabled": false}),
+        json!({"spaceId": project, "account": mara, "expectedVersion": version}),
     )
     .await;
     until(&mut sockets[0], WAIT, |frame| {
