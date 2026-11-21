@@ -1051,6 +1051,13 @@
           "name": {
             "type": "string"
           },
+          "nav": {
+            "description": "Its sidebar entries the caller may follow, each with the space it\nshows in.",
+            "items": {
+              "$ref": "#/components/schemas/NavView"
+            },
+            "type": "array"
+          },
           "on": {
             "description": "Switched on here (module_set).",
             "type": "boolean"
@@ -1072,7 +1079,8 @@
           "name",
           "description",
           "on",
-          "parts"
+          "parts",
+          "nav"
         ],
         "type": "object"
       },
@@ -8419,6 +8427,13 @@
           },
           "label": {
             "type": "string"
+          },
+          "spaceId": {
+            "description": "The space the entry's collection, page or form is in, where the\nsidebar shows it; none when what it points at is gone.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "target": true
         },

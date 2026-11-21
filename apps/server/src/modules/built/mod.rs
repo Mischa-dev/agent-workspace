@@ -531,6 +531,7 @@ struct NavRow {
     label: String,
     icon: Option<String>,
     target: serde_json::Value,
+    space_id: Option<Uuid>,
 }
 
 /// A nav entry as read.
@@ -542,6 +543,10 @@ pub struct NavView {
     pub label: String,
     pub icon: Option<String>,
     pub target: serde_json::Value,
+    /// The space the entry's collection, page or form is in, where the
+    /// sidebar shows it; none when what it points at is gone.
+    #[schemars(with = "Option<String>")]
+    pub space_id: Option<Uuid>,
 }
 
 /// A module's nav entries `reader` may follow: an entry whose collection,
@@ -553,18 +558,19 @@ pub async fn nav(
 ) -> Result<Vec<NavView>, AppError> {
     Ok(sqlx::query_as::<_, NavRow>(&format!(
         r#"
-        SELECT nav.id, nav.label, nav.icon, nav.target FROM module_nav nav
+        SELECT nav.id, nav.label, nav.icon, nav.target, goes.project_id AS space_id
+        FROM module_nav nav
+        LEFT JOIN LATERAL (
+            SELECT project_id FROM collections
+            WHERE id::text = nav.target->>'collection'
+            UNION ALL
+            SELECT project_id FROM project_pages WHERE id::text = nav.target->>'page'
+            UNION ALL
+            SELECT project_id FROM bug_report_links WHERE id::text = nav.target->>'form'
+            LIMIT 1
+        ) goes ON true
         WHERE nav.module_id = $1
-          AND NOT EXISTS (
-              SELECT 1 FROM (
-                  SELECT project_id FROM collections
-                  WHERE id::text = nav.target->>'collection'
-                  UNION ALL
-                  SELECT project_id FROM project_pages WHERE id::text = nav.target->>'page'
-                  UNION ALL
-                  SELECT project_id FROM bug_report_links WHERE id::text = nav.target->>'form'
-              ) goes
-              WHERE NOT {reaches})
+          AND (goes.project_id IS NULL OR {reaches})
         ORDER BY nav.position, nav.id
         "#,
         reaches = Reader::reaches_sql("goes.project_id", 2)
@@ -581,6 +587,7 @@ pub async fn nav(
         label: row.label,
         icon: row.icon,
         target: row.target,
+        space_id: row.space_id,
     })
     .collect())
 }

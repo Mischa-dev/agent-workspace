@@ -68,7 +68,7 @@ export type BudgetScope = "workspace" | "account" | "space" | "conversation"
 
 export type BudgetView = { eachAccount: boolean; hardLimit?: number | null; id?: string | null; isDefault: boolean; meter: string; meterName: string; period: string; scope: string; scopeId?: string | null; setBy?: string | null; softLimit?: number | null; unit: string; used: number; version?: number | null }
 
-export type BuiltModuleSummary = { description: string; icon?: string | null; id: string; key: string; name: string; on: boolean; parts: number; spaceId?: string | null }
+export type BuiltModuleSummary = { description: string; icon?: string | null; id: string; key: string; name: string; nav: NavView[]; on: boolean; parts: number; spaceId?: string | null }
 
 export type ButtonInput = { label?: string | null; steps: ButtonStepInput[] }
 
@@ -422,7 +422,7 @@ export type NamedRange = { name: string; range: string; tab: string; tabId: stri
 
 export type NavEntry = { icon?: string | null; label: string; target: unknown }
 
-export type NavView = { icon?: string | null; id: string; label: string; target: unknown }
+export type NavView = { icon?: string | null; id: string; label: string; spaceId?: string | null; target: unknown }
 
 export type NewSpace = { key: string; name: string }
 
