@@ -195,7 +195,8 @@ export function TaskActivity({ item, projectArchived }: { item: WorkItem; projec
     if (!posted.removed) {
       if (own && commenting) actions.push({ label: 'Edit', icon: 'pencil', onSelect: () => setEditing(posted.id) })
       if (posted.editedAt) actions.push({ label: 'Edit history', icon: 'clock', onSelect: () => setHistory(posted) })
-      if (!projectArchived && ((own && can(project, 'tasks.comment')) || moderator)) {
+      // Deleting, even as a moderator, takes commenting here, as the server asks.
+      if (!projectArchived && can(project, 'tasks.comment') && (own || moderator)) {
         actions.push({ label: 'Delete', icon: 'trash', danger: true, onSelect: () => setDeleting(posted) })
       }
     }

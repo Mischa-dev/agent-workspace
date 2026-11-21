@@ -6368,7 +6368,7 @@ async fn an_agent_made_admin_does_what_an_admin_does() {
 /// "moderate channels", held by admins, whatever kind of account holds it.
 #[tokio::test]
 async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
-    let Some(setup) = setup("k116_task_comments").await else {
+    let Some((setup, _root)) = with_data_root("k116_task_comments").await else {
         return;
     };
     let app = &setup.app;
@@ -6430,6 +6430,24 @@ async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{fixed}");
+    // And to attach a file to a comment, though not to the task itself.
+    let upload = |purpose: &str| {
+        Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/projects/{work}/work-items/{task}/files?name=note.txt{purpose}"
+            ))
+            .header("origin", "http://127.0.0.1:3100")
+            .header("cookie", &alex_browser.cookie)
+            .header("x-csrf-token", &alex_browser.csrf)
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(Body::from("Alex's note"))
+            .expect("upload")
+    };
+    let (status, attached) = send(app, upload("&for=comment")).await;
+    assert_eq!(status, StatusCode::CREATED, "{attached}");
+    let (status, refused) = send(app, upload("")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
 
     // Mara comments through her tools.
     let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");

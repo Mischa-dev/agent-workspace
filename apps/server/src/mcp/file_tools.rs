@@ -841,7 +841,14 @@ async fn task_destination(
     let Some((work_item_id, project_id)) = resolve_task(state, principal, task).await? else {
         return Err(AppError::NotFound("work_item"));
     };
-    if !can_write_in(state, principal, project_id, Action::WorkItemEdit).await? {
+    // A comment's files need what writing the comment needs; the task's own
+    // files need editing it.
+    let action = if for_comment {
+        Action::WorkItemComment
+    } else {
+        Action::WorkItemEdit
+    };
+    if !can_write_in(state, principal, project_id, action).await? {
         return Err(AppError::NotFound("work_item"));
     }
     let open = sqlx::query_scalar::<_, bool>(

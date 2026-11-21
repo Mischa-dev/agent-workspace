@@ -102,18 +102,6 @@
     "title": "Set a budget"
   },
   {
-    "kind": "create",
-    "module": "tasks",
-    "name": "bug_report_link_create",
-    "title": "Create bug report link"
-  },
-  {
-    "kind": "change",
-    "module": "tasks",
-    "name": "bug_report_link_update",
-    "title": "Update bug report link"
-  },
-  {
     "kind": "change",
     "module": "pages",
     "name": "change_undo",

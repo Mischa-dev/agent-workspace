@@ -67,6 +67,7 @@ macro_rules! tool_op {
             $(preview: $preview:literal,)?
             $(destructive: $destructive:literal,)?
             $(long: |$long_input:ident| $long_body:expr,)?
+            $(shown_once: [$($shown:literal),*],)?
             title: $title:literal,
             description: $description:expr,
             emits: [$($emit:literal),*],
@@ -91,6 +92,7 @@ macro_rules! tool_op {
                     $long_body
                 }
             )?
+            $(const SHOWN_ONCE: &'static [&'static str] = &[$($shown),*];)?
             const TITLE: &'static str = $title;
             const DESCRIPTION: &'static str = $description;
             const EMITS: &'static [&'static str] = &[$($emit),*];
@@ -935,6 +937,8 @@ tool_op!(BugReportLinkCreate {
     kind: Create,
     permission: None,
     idempotency: Dispatcher,
+    // A link's URLs carry its token: never kept for a replay.
+    shown_once: ["url", "formUrl"],
     title: "Create bug report link",
     description: "Make a bug report link (its URL is shown once), optionally into a collection \
         with a form, as the space's settings do. Anyone who can add tasks makes one.",
@@ -953,6 +957,8 @@ tool_op!(BugReportLinkUpdate {
     permission: None,
     idempotency: Dispatcher,
     destructive: true,
+    // A link's URLs carry its token: never kept for a replay.
+    shown_once: ["url", "formUrl"],
     title: "Update bug report link",
     description: "Rename or pause a bug report link, give it a new URL (replace: true), or \
         delete it (linkId). Its maker or whoever manages the space changes it.",
