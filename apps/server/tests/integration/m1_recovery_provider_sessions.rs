@@ -269,7 +269,7 @@ done
         .canonicalize()
         .expect("canonical recovered worktree parent")
         .join("recovered-completion");
-    agent_workspace_server::git_runtime::create_worktree(
+    agent_workspace_server::hosts::builtin::git::create_worktree(
         mirror_path,
         &recovered_worktree,
         "codex/run-recovered-completion",

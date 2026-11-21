@@ -10,7 +10,7 @@ use agent_workspace_server::{
     bootstrap::{BootstrapCommand, bootstrap_admin},
     cluster::LeaseName,
     config::AppConfig,
-    git_runtime::expected_repository_mirror_path,
+    hosts::builtin::git::expected_repository_mirror_path,
     hosts::builtin::install::{self, Prepared},
     seed::dev_seed,
 };

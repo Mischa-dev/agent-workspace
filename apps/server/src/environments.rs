@@ -356,9 +356,11 @@ async fn clean(
         return Err(AppError::Validation("providerEnvironmentId"));
     }
     let branch = optional_text(request.branch);
-    if let Some(branch) = &branch {
-        crate::git_runtime::validate_registered_ref(branch)
-            .map_err(|_| AppError::Validation("branch"))?;
+    if branch
+        .as_deref()
+        .is_some_and(|branch| !agent_workspace_host_protocol::git_ref::is_safe_ref(branch))
+    {
+        return Err(AppError::Validation("branch"));
     }
     if request.setup_notes.chars().count() > 4000 {
         return Err(AppError::Validation("setupNotes"));

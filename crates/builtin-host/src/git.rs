@@ -999,20 +999,7 @@ fn validate_mirror(mirror: &Path) -> Result<(), RuntimeError> {
 /// A clone address without its user information (`user:secret@`), the
 /// form that may be shown or sent: `https://host/path`, or `host:path` for
 /// the scp-like form.
-pub fn without_user_info(value: &str) -> String {
-    match value.split_once("://") {
-        Some((scheme, rest)) => {
-            let (authority, path) = match rest.find('/') {
-                Some(index) => rest.split_at(index),
-                None => (rest, ""),
-            };
-            let host = authority.rsplit('@').next().unwrap_or(authority);
-            format!("{scheme}://{host}{path}")
-        }
-        // scp-style "git@github.com:owner/name.git"
-        None => value.rsplit('@').next().unwrap_or(value).to_owned(),
-    }
-}
+pub use agent_workspace_host_protocol::git_ref::without_user_info;
 
 fn validate_existing_mirror(mirror: &Path, expected_origin: &str) -> Result<(), RuntimeError> {
     validate_mirror(mirror)?;
@@ -1038,23 +1025,7 @@ fn validate_existing_mirror(mirror: &Path, expected_origin: &str) -> Result<(), 
 }
 
 fn validate_ref(value: &str) -> Result<(), RuntimeError> {
-    if value.is_empty()
-        || value.len() > 255
-        || value == "@"
-        || value.starts_with('-')
-        || value.starts_with('/')
-        || value.ends_with('/')
-        || value.ends_with('.')
-        || value.contains("//")
-        || value.contains("..")
-        || value.contains("@{")
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/'))
-        || value.split('/').any(|component| {
-            component.is_empty() || component.starts_with('.') || component.ends_with(".lock")
-        })
-    {
+    if !agent_workspace_host_protocol::git_ref::is_safe_ref(value) {
         return Err(RuntimeError::Invalid("unsafe Git reference"));
     }
     Ok(())

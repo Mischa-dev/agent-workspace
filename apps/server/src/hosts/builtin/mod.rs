@@ -27,6 +27,7 @@ pub mod preflight;
 pub mod program;
 pub mod recovery;
 pub mod report;
+pub mod repositories;
 pub mod requests;
 pub mod transport;
 pub mod worktrees;
@@ -34,6 +35,8 @@ pub mod worktrees;
 /// The registry of harness processes the embedded built-in host runs. The
 /// server's state carries it only so this process can be the host.
 pub use crate::provider::SupervisorRegistry;
+/// The host's git work on its mirrors and run worktrees.
+pub use agent_workspace_builtin_host::git;
 
 /// The harness a personal profile gets when its owner names neither a
 /// harness nor an account: the built-in host's first choice.

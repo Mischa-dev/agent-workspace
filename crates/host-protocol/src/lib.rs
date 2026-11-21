@@ -509,6 +509,7 @@ pub fn new_push_secret(random: [u8; 32]) -> String {
 
 pub mod account;
 mod client;
+pub mod git_ref;
 pub mod harness;
 mod model;
 pub use client::{

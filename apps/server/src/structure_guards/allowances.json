@@ -132,15 +132,7 @@
     "work_item_workflow.rs": 1,
     "work_items.rs": 1
   },
-  "server_runs_agents": {
-    "environments.rs": 1,
-    "github.rs": 1,
-    "lib.rs": 1,
-    "migration_preflight.rs": 1,
-    "repositories.rs": 1,
-    "seed.rs": 1,
-    "workspace/lifecycle.rs": 1
-  },
+  "server_runs_agents": {},
   "transactions_across_calls": {
     "auth/workos/agents.rs": 3
   },

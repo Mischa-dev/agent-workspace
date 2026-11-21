@@ -975,7 +975,7 @@ async fn remove_bytes(
     repositories: &[Uuid],
 ) -> Result<(), AppError> {
     for repository in repositories {
-        crate::git_runtime::remove_repository_data(&state.config.data_root, *repository).await?;
+        crate::hosts::builtin::repositories::remove(&state.config.data_root, *repository).await?;
     }
     for store in crate::files::store::FileStore::all(&state.config) {
         store.delete_workspace(workspace).await?;

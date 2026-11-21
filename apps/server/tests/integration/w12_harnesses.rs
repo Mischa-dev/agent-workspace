@@ -10,7 +10,7 @@ use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
-    git_runtime::expected_repository_mirror_path,
+    hosts::builtin::git::expected_repository_mirror_path,
     hosts::builtin::harness_host::ServerHost,
     jobs::{self, WorkerOptions},
     launch,

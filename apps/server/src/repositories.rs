@@ -14,11 +14,7 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
-    git_runtime::{
-        RegisteredRepository, RepositoryPreparationMode, expected_repository_mirror_path,
-        prepare_repository, prepare_repository_with_token, validate_registered_ref,
-    },
-    github::repository_git_token,
+    hosts::builtin::repositories::{self as host_repositories, Mirror},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     policy::{Action, Permission, RoleGrant},
 };
@@ -261,7 +257,7 @@ async fn insert_repository(
     }
 
     let repository_id = Uuid::now_v7();
-    let mirror_path = expected_repository_mirror_path(&state.config.data_root, repository_id)?;
+    let mirror_path = host_repositories::mirror_path(&state.config.data_root, repository_id)?;
     sqlx::query(
         r#"
         INSERT INTO repositories (
@@ -312,46 +308,19 @@ async fn run_preparation(
     repository_id: Uuid,
     row: RepositoryRow,
 ) -> Result<RepositoryRow, AppError> {
-    let registered = RegisteredRepository {
-        id: repository_id,
-        clone_url: row.clone_url,
-        default_branch: row.default_branch,
-        mirror_path: PathBuf::from(row.mirror_path),
-    };
-    let preparation_mode = if row.legacy_mirror_path.is_some() {
-        RepositoryPreparationMode::VerifyImportedMirror
-    } else {
-        RepositoryPreparationMode::RefreshOrClone
-    };
-    let data_root = state.config.data_root.clone();
-    let prepared = match preparation_mode {
-        RepositoryPreparationMode::VerifyImportedMirror => {
-            matches!(
-                tokio::task::spawn_blocking(move || {
-                    prepare_repository(data_root.as_path(), &registered, preparation_mode)
-                })
-                .await,
-                Ok(Ok(_))
-            )
-        }
-        RepositoryPreparationMode::RefreshOrClone => {
-            match repository_git_token(state, project_id, repository_id).await {
-                Ok(token) => matches!(
-                    tokio::task::spawn_blocking(move || {
-                        prepare_repository_with_token(
-                            data_root.as_path(),
-                            &registered,
-                            preparation_mode,
-                            &token,
-                        )
-                    })
-                    .await,
-                    Ok(Ok(_))
-                ),
-                Err(_) => false,
-            }
-        }
-    };
+    // The mirror is the built-in host's: it clones or refreshes it.
+    let prepared = host_repositories::prepare(
+        state,
+        project_id,
+        Mirror {
+            repository_id,
+            clone_url: row.clone_url,
+            default_branch: row.default_branch,
+            mirror_path: PathBuf::from(row.mirror_path),
+            imported: row.legacy_mirror_path.is_some(),
+        },
+    )
+    .await;
     if !prepared {
         tracing::warn!(%project_id, %repository_id, "repository preparation failed");
     }
@@ -726,7 +695,9 @@ fn validate_registration(
     if request.clone_url != expected || request.clone_url.contains('@') {
         return Err(AppError::Validation("cloneUrl"));
     }
-    validate_registered_ref(&request.default_branch)?;
+    if !agent_workspace_host_protocol::git_ref::is_safe_ref(&request.default_branch) {
+        return Err(AppError::Invalid("unsafe Git reference"));
+    }
     Ok(request)
 }
 

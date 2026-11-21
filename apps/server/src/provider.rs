@@ -13,7 +13,7 @@ use crate::{
     AppState,
     domain::RunState,
     error::AppError,
-    git_runtime::{RunDiff, run_diff, worktree_is_dirty},
+    hosts::builtin::git::{RunDiff, run_diff, worktree_is_dirty},
     hosts::builtin::report::{self, RunReports},
     message_content::{MessageContent, MessageContentError, ValidatedMessageContent},
 };

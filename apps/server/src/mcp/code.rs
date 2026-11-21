@@ -326,7 +326,7 @@ pub(super) async fn check_summaries(
 /// A clone URL without any user name or token in it. Registration refuses
 /// '@', but older or seeded rows aren't constrained in the database.
 pub(crate) fn public_clone_url(value: &str) -> String {
-    agent_workspace_builtin_host::git::without_user_info(value)
+    agent_workspace_host_protocol::git_ref::without_user_info(value)
 }
 
 // ---------------------------------------------------------------------------

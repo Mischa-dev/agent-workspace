@@ -17,7 +17,7 @@ use agent_workspace_server::{
     config::AppConfig,
     domain::RunState,
     events,
-    git_runtime::expected_repository_mirror_path,
+    hosts::builtin::git::expected_repository_mirror_path,
     jobs::{self, WorkerOptions},
     launch,
     outbox::{self, AgentRunUpdatedPayload, OutboxEventPayload},
