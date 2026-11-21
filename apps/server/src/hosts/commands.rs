@@ -207,26 +207,32 @@ pub async fn answer_of(pool: &PgPool, command_id: Uuid) -> Result<Option<Ack>, A
     Ok(ack.and_then(|ack| serde_json::from_value(ack).ok()))
 }
 
-/// An action nobody answered in time is closed: a host that comes to it
-/// later finds it gone.
-pub async fn close_unanswered(pool: &PgPool, command_id: Uuid) -> Result<(), AppError> {
-    sqlx::query(
+/// An action no host has taken up in time is closed: a host that comes to
+/// it later finds it gone. One a host has fetched is left to finish.
+/// Returns whether it was closed.
+pub async fn close_if_not_taken(pool: &PgPool, command_id: Uuid) -> Result<bool, AppError> {
+    let closed = sqlx::query(
         "UPDATE host_commands SET state = 'expired', ack_due_at = NULL, updated_at = now() \
-         WHERE id = $1 AND state IN ('pending', 'fetched')",
+         WHERE id = $1 AND state = 'pending'",
     )
     .bind(command_id)
     .execute(crate::db::scoped(pool))
     .await?;
-    Ok(())
+    Ok(closed.rows_affected() > 0)
 }
 
-/// Once its asker has read an action's answer, the row keeps only that it
-/// was answered, not what it said.
-pub async fn forget_result(pool: &PgPool, command_id: Uuid) -> Result<(), AppError> {
-    sqlx::query("UPDATE host_commands SET ack = ack - 'result' WHERE id = $1 AND ack ? 'result'")
-        .bind(command_id)
-        .execute(crate::db::scoped(pool))
-        .await?;
+/// Once its asker has read the answer, a built-in host's account question
+/// is gone: no row keeps what the account said, and usage polls don't pile
+/// up. (A question still in flight stays until its host answers it.)
+pub async fn forget_answered(pool: &PgPool, command_id: Uuid) -> Result<(), AppError> {
+    sqlx::query(
+        "DELETE FROM host_commands WHERE id = $1 AND kind = 'action' \
+           AND state IN ('acked', 'refused', 'expired') \
+           AND host_id IN (SELECT id FROM hosts WHERE builtin)",
+    )
+    .bind(command_id)
+    .execute(crate::db::scoped(pool))
+    .await?;
     Ok(())
 }
 

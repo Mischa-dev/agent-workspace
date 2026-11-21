@@ -9,9 +9,9 @@
 //!   loop doesn't also pick it up, and carries it out at once through the
 //!   protocol in process. Otherwise (the host's own program, or another
 //!   instance holds it) it waits for the host's answer. Either way no
-//!   transaction is held while the harness works (rule 14), and the answer
-//!   is wiped from the command once read: the row keeps that it was
-//!   answered, not what the account said.
+//!   transaction is held while the harness works (rule 14), and an
+//!   answered question is deleted once read: no row keeps what the account
+//!   said, and polls don't pile up.
 //! - [`answer`] is the host's half, run from its command loop.
 
 use std::{path::PathBuf, time::Duration};
@@ -34,10 +34,12 @@ use crate::{
     provider::{AccountHandle, HarnessError, LoginStart, RateLimitSummary, adapter::ResetOutcome},
 };
 
-/// How long the server waits for the host's answer when the host runs
-/// elsewhere: a control slot may take five seconds to free, and a sign-in a
-/// few more to start.
-const ANSWER_WAIT: Duration = Duration::from_secs(20);
+/// How long a question waits for the host to take it up when the host runs
+/// elsewhere. One the host hasn't taken by then is closed.
+const PICKUP_WAIT: Duration = Duration::from_secs(20);
+/// Beyond the harness's own request limit, how long a question the host has
+/// taken may still take: a control slot may need five seconds to free.
+const IN_FLIGHT_MARGIN: Duration = Duration::from_secs(15);
 const LOOK_EVERY: Duration = Duration::from_millis(200);
 
 /// What the host made of a question.
@@ -66,16 +68,55 @@ impl Asked {
     }
 }
 
-/// Whether this process carries the built-in host itself.
-fn in_process(state: &AppState) -> bool {
+/// Whether this process is the built-in host now: it runs the host
+/// embedded and holds the host's lease (a standby leaves the question to
+/// the holder, so a sign-in and its cancel reach the same harness). A
+/// state without a cluster (a test's) is its own host.
+fn host_is_here(state: &AppState) -> bool {
     state.config.roles.work
         && state.config.builtin_host
         && state.config.builtin_host_remote.is_none()
+        && state.supervisors.cluster().is_none_or(|cluster| {
+            cluster
+                .held_lease(&crate::cluster::LeaseName::BuiltinHost)
+                .is_some()
+        })
 }
 
 /// Ask the built-in host of `workspace_id` about one of its accounts.
 pub async fn ask(state: &AppState, workspace_id: Uuid, ask: AccountAsk) -> Result<Asked, AppError> {
-    let here = in_process(state);
+    ask_with_key(state, workspace_id, ask, None).await
+}
+
+/// [`ask`], handing the host an API key to sign in with (`ask` is an
+/// `ApiKeyLogin`). When this process is the host the key is handed over
+/// in memory; otherwise it is sealed beside the sign-in for the host to
+/// take once, which needs the secrets keyring.
+pub async fn ask_with_key(
+    state: &AppState,
+    workspace_id: Uuid,
+    ask: AccountAsk,
+    api_key: Option<&str>,
+) -> Result<Asked, AppError> {
+    let here = host_is_here(state);
+    if let (false, Some(key), AccountQuestion::ApiKeyLogin { ceremony_id }) =
+        (here, api_key, &ask.question)
+    {
+        let keys = crate::secrets::keyring(&state.config).map_err(|_| {
+            AppError::Conflict(
+                "provider_account",
+                "signing in with an API key through a separate host needs the server's secrets key",
+            )
+        })?;
+        crate::sign_ins::seal_api_key(
+            &state.pool,
+            keys.as_ref(),
+            ask.account_id,
+            *ceremony_id,
+            key,
+        )
+        .await?;
+    }
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let host_id = super::assistant::builtin_host_id(&mut transaction, workspace_id)
         .await?
@@ -102,16 +143,20 @@ pub async fn ask(state: &AppState, workspace_id: Uuid, ask: AccountAsk) -> Resul
     transaction.commit().await?;
     let ack = if here {
         let client = super::transport::client(state);
+        let mut handed = serde_json::Map::new();
+        if let Some(key) = api_key {
+            handed.insert("apiKey".into(), Value::String(key.to_owned()));
+        }
         let carried = crate::tenancy::system(
             "runs.host",
-            host_commands::carry_out_one(&super::driver::host(state), &client, command.id),
+            host_commands::carry_out_one(&super::driver::host(state), &client, command.id, handed),
         )
         .await;
         carried.ok()
     } else {
         wait_for_answer(state, command.id).await?
     };
-    commands::forget_result(&state.pool, command.id).await?;
+    commands::forget_answered(&state.pool, command.id).await?;
     Ok(match ack {
         Some(ack) => read_ack(ack),
         None => Asked::Failed("unanswered".to_owned()),
@@ -119,17 +164,25 @@ pub async fn ask(state: &AppState, workspace_id: Uuid, ask: AccountAsk) -> Resul
 }
 
 /// The host's acknowledgement of `command_id`, once it comes; `None` when
-/// it doesn't come in time (the command is closed then, so a late host
-/// doesn't carry out a stale question).
+/// it doesn't come in time. A question the host hasn't taken up within
+/// [`PICKUP_WAIT`] is closed, so a late host doesn't carry out a stale
+/// one. One it has taken is never closed under it (a sign-in or a spent
+/// reset may already have happened): it is waited for as long as the
+/// harness may take, and its answer still lands if it comes later.
 async fn wait_for_answer(state: &AppState, command_id: Uuid) -> Result<Option<Ack>, AppError> {
-    let deadline = tokio::time::Instant::now() + ANSWER_WAIT;
+    let started = tokio::time::Instant::now();
+    let mut deadline = started + PICKUP_WAIT;
+    let mut taken = false;
     loop {
         if let Some(ack) = commands::answer_of(&state.pool, command_id).await? {
             return Ok(Some(ack));
         }
         if tokio::time::Instant::now() >= deadline {
-            commands::close_unanswered(&state.pool, command_id).await?;
-            return commands::answer_of(&state.pool, command_id).await;
+            if taken || commands::close_if_not_taken(&state.pool, command_id).await? {
+                return commands::answer_of(&state.pool, command_id).await;
+            }
+            taken = true;
+            deadline = started + state.config.codex_request_timeout + IN_FLIGHT_MARGIN;
         }
         tokio::time::sleep(LOOK_EVERY).await;
     }

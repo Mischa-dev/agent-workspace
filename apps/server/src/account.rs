@@ -1281,31 +1281,19 @@ async fn start_login(
         LoginReservation::Replay(snapshot) => return Ok(Json(login_ceremony_view(snapshot))),
         LoginReservation::Reserved(ceremony_id) => ceremony_id,
     };
-    let question = match (kind, api_key) {
-        (LoginKind::ApiKey, Some(api_key)) => {
-            // The key goes to the host sealed beside the sign-in, never in
-            // the command that asks it to sign in.
-            let sealed = async {
-                let keys = crate::secrets::keyring(&state.config)?;
-                ceremonies::seal_api_key(
-                    &state.pool,
-                    keys.as_ref(),
-                    account_id,
-                    ceremony_id,
-                    api_key,
-                )
-                .await
-            }
-            .await;
-            if let Err(error) = sealed {
-                ceremonies::clear_login(&state.pool, account_id, Some(ceremony_id)).await?;
-                return Err(error);
-            }
-            AccountQuestion::ApiKeyLogin { ceremony_id }
-        }
-        (kind, _) => AccountQuestion::Login { kind },
+    let question = match kind {
+        LoginKind::ApiKey => AccountQuestion::ApiKeyLogin { ceremony_id },
+        kind => AccountQuestion::Login { kind },
     };
-    let asked = host_accounts::ask(state, access.organization_id, access.ask(question)).await;
+    // An API key goes to the host in memory, or sealed beside the sign-in
+    // when the host runs elsewhere; never in the command that asks it.
+    let asked = host_accounts::ask_with_key(
+        state,
+        access.organization_id,
+        access.ask(question),
+        api_key.filter(|_| kind == LoginKind::ApiKey),
+    )
+    .await;
     let response = match asked {
         Ok(Asked::Answered(AccountAnswer::LoginStarted { start })) => start,
         Ok(other) => {

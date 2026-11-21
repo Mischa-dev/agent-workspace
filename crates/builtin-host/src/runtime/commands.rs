@@ -97,15 +97,19 @@ async fn carry_out<H: CommandHost>(host: &H, client: &HostClient, command: &Comm
 
 /// Carry out one command this process claimed when it wrote it (the
 /// server asking its own built-in host, in process), and acknowledge it.
+/// `handed` is what the asker hands over in memory beside the command
+/// (such as an API key to sign in with), never written anywhere.
 pub async fn carry_out_one<H: CommandHost>(
     host: &H,
     client: &HostClient,
     command_id: Uuid,
+    handed: serde_json::Map<String, serde_json::Value>,
 ) -> Result<Ack, RuntimeError> {
-    let command = client
+    let mut command = client
         .command(command_id)
         .await
         .map_err(|_| RuntimeError::Internal("read the built-in host's command"))?;
+    command.detail.extend(handed);
     let ack = carry_out(host, client, &command).await;
     client
         .ack(command.command_id, &ack)

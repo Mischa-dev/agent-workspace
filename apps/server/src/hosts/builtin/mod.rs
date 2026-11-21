@@ -147,12 +147,16 @@ pub(crate) async fn resolve_config_with(
     setup: &RunSetup,
     launch: &RunConfig,
 ) -> Result<RunConfig, AppError> {
-    let account_defaults = match state.supervisors.manifest(&setup.adapter_kind) {
-        Some(manifest) => crate::launch::merged_defaults(&setup.run_defaults, defaults, &manifest),
+    // One catalog for both: the defaults are merged against the manifest
+    // the launch is checked against.
+    let harnesses = crate::harness_catalog::Harnesses::of(state, setup.organization_id).await?;
+    let account_defaults = match harnesses.manifest(&setup.adapter_kind) {
+        Some(manifest) => crate::launch::merged_defaults(&setup.run_defaults, defaults, manifest),
         None => setup.run_defaults.clone(),
     };
     crate::model_catalog::resolve_run_config(
         state,
+        &harnesses,
         setup.organization_id,
         &setup.adapter_kind,
         &account_defaults,

@@ -3,7 +3,7 @@
 //! asking doesn't carry the host itself (as when the host runs as its own
 //! program): each question waits for the host's loop to answer it. An API
 //! key travels sealed beside its sign-in and is taken once; no command keeps
-//! it, and no command keeps what the host answered.
+//! it, and an answered question is gone once read.
 
 use std::{sync::Arc, time::Duration};
 
@@ -198,21 +198,15 @@ async fn account_questions_go_to_the_host_and_keys_travel_sealed() {
     .await;
     assert!(matches!(again, Asked::Failed(_)), "{again:?}");
 
-    // No command keeps the key or what the host answered.
-    let (commands, with_key, with_result) = sqlx::query_as::<_, (i64, i64, i64)>(
-        "SELECT count(*), \
-                count(*) FILTER (WHERE body::text LIKE '%' || $2 || '%' \
-                                    OR coalesce(ack::text, '') LIKE '%' || $2 || '%'), \
-                count(*) FILTER (WHERE ack ? 'result') \
-         FROM host_commands \
+    // Answered questions are gone once read: no command keeps the key or
+    // what the host answered, and polls don't pile up.
+    let left = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM host_commands \
          WHERE workspace_id = $1 AND kind = 'action' AND body->>'action' = 'account'",
     )
     .bind(workspace)
-    .bind(API_KEY)
     .fetch_one(&world.pool)
     .await
     .expect("the commands");
-    assert_eq!(commands, 6);
-    assert_eq!(with_key, 0);
-    assert_eq!(with_result, 0);
+    assert_eq!(left, 0);
 }

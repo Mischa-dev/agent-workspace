@@ -406,16 +406,17 @@ pub async fn remove_model(
 
 /// Resolves a run's settings for the account it runs on: the launch
 /// overrides over the account's defaults over the workspace catalog and the
-/// harness's manifest as the host described it. Refuses values the harness
-/// doesn't offer, and a harness the workspace has switched off.
+/// harness's manifest as the host described it (`harnesses`, the
+/// workspace's). Refuses values the harness doesn't offer, and a harness
+/// the workspace has switched off.
 pub(crate) async fn resolve_run_config(
     state: &crate::AppState,
+    harnesses: &crate::harness_catalog::Harnesses,
     organization_id: Uuid,
     adapter_kind: &str,
     account_defaults: &Value,
     launch: &RunConfig,
 ) -> Result<RunConfig, AppError> {
-    let harnesses = crate::harness_catalog::Harnesses::of(state, organization_id).await?;
     let manifest = harnesses.manifest(adapter_kind).ok_or(AppError::Conflict(
         "agent_run",
         "this harness is not installed",
