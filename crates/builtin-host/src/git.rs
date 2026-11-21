@@ -2,7 +2,10 @@ use std::{
     ffi::{OsStr, OsString},
     fs::{self, OpenOptions},
     io::{Read, Write},
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    os::unix::{
+        ffi::OsStrExt,
+        fs::{OpenOptionsExt, PermissionsExt},
+    },
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     sync::atomic::{AtomicUsize, Ordering},
@@ -980,13 +983,19 @@ impl ScratchIndex {
             None,
             Some(&scratch.0),
         )?;
-        // A nested repository is listed as its folder (`prototype/`).
-        let (folders, files): (Vec<&[u8]>, Vec<&[u8]>) = untracked
+        // A nested repository is listed as its folder (`prototype/`). One
+        // with a commit checked out is marked as a link to that commit; one
+        // with none can't be marked.
+        let (folders, mut files): (Vec<&[u8]>, Vec<&[u8]>) = untracked
             .stdout
             .split(|byte| *byte == 0)
             .filter(|entry| !entry.is_empty())
             .partition(|entry| entry.ends_with(b"/"));
-        let left_out = !folders.is_empty();
+        let (committed, unborn): (Vec<&[u8]>, Vec<&[u8]>) = folders
+            .into_iter()
+            .partition(|folder| has_commit(&worktree.join(OsStr::from_bytes(folder))));
+        let left_out = !unborn.is_empty();
+        files.extend(committed);
         if !files.is_empty() {
             // Past what a diff lists, the rest wouldn't show anyway.
             let listed = files
@@ -1016,6 +1025,19 @@ impl ScratchIndex {
     fn path(&self) -> &Path {
         &self.0
     }
+}
+
+/// Whether the repository at `folder` has a commit checked out.
+fn has_commit(folder: &Path) -> bool {
+    run_git([
+        OsString::from("-C"),
+        folder.as_os_str().to_owned(),
+        OsString::from("rev-parse"),
+        OsString::from("--verify"),
+        OsString::from("--quiet"),
+        OsString::from("HEAD"),
+    ])
+    .is_ok()
 }
 
 impl Drop for ScratchIndex {
@@ -2025,6 +2047,36 @@ mod tests {
         assert!(odd.files.iter().any(|file| file.path == ":(notes).txt"));
         assert!(!odd.truncated);
 
+        // A nested repository with a commit shows as added (a link to it).
+        std::fs::create_dir(repository.join("library")).expect("nested");
+        let library = repository.join("library");
+        git(&library, ["init", "--quiet"]);
+        std::fs::write(library.join("lib.rs"), "\n").expect("write");
+        git(&library, ["add", "-A"]);
+        git(
+            &library,
+            [
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "library",
+            ],
+        );
+        let linked = super::run_diff(repository, false, &base, None, 1 << 20).expect("diff");
+        assert_eq!(
+            linked
+                .files
+                .iter()
+                .find(|file| file.path == "library")
+                .map(|file| file.status.clone()),
+            Some("added".to_owned())
+        );
+        assert!(!linked.truncated);
+
         // A nested repository with no commit can't be marked: the run's
         // other changes still show, and the diff says it left some out.
         std::fs::create_dir(repository.join("prototype")).expect("nested");
@@ -2033,6 +2085,7 @@ mod tests {
         let nested = super::run_diff(repository, false, &base, None, 1 << 20).expect("diff");
         assert!(nested.files.iter().any(|file| file.path == "kept.txt"));
         assert!(nested.files.iter().any(|file| file.path == "unstaged.txt"));
+        assert!(nested.files.iter().any(|file| file.path == "library"));
         assert!(nested.truncated);
     }
 
