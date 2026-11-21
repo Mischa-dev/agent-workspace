@@ -251,6 +251,7 @@ impl Operation for PullRequestGet {
         let Some(link) = input
             .get("identifier")
             .and_then(serde_json::Value::as_str)
+            .map(str::trim)
             .filter(|link| parse_id(link).is_none() && !link.is_empty() && link.len() <= 2048)
             .map(str::to_owned)
         else {
