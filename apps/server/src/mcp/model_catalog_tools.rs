@@ -11,7 +11,7 @@ use super::{
     McpPrincipal,
     common::{ToolResult, insert_audit, mark_via, parse_id, project_role},
 };
-use crate::{AppState, error::AppError, execution, provider::manifest::ModelOverrides, settings};
+use crate::{AppState, error::AppError, execution, harness::manifest::ModelOverrides, settings};
 
 const MANAGERS_ONLY: &str =
     "Changing the model lists takes a role that manages the workspace's settings.";

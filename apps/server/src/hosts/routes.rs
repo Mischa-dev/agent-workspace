@@ -13,7 +13,7 @@ use axum::{
         IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
     },
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use futures_util::stream::{self, Stream};
 use serde::Deserialize;
@@ -36,6 +36,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/hosts/enrol", post(enrol_route))
         .route("/api/v1/host/builtin/enrol", post(builtin_enrol_route))
+        .route(
+            "/api/v1/host/builtin/harnesses",
+            put(builtin_harnesses_route),
+        )
         .route("/api/v1/host/describe", post(describe_route))
         .route("/api/v1/host/heartbeat", post(heartbeat_route))
         .route("/api/v1/host/windows", post(windows_route))
@@ -219,6 +223,28 @@ async fn builtin_enrol_route(
     protocol_header(&headers)?;
     let token = super::builtin::install::enrol(&state.pool, &request.code).await?;
     Ok((StatusCode::CREATED, Json(json!({ "token": token }))))
+}
+
+/// A1.17: the harnesses the built-in host runs, sent when it takes its
+/// lease; the server offers them and checks launches against them.
+async fn builtin_harnesses_route(
+    State(state): State<AppState>,
+    builtin: BuiltinCall,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<agent_workspace_host_protocol::BuiltinHarnesses>,
+) -> Result<Json<Value>, HostError> {
+    if builtin.is_none() {
+        return Err(HostError::Unauthorized);
+    }
+    protocol_header(&headers)?;
+    use crate::harness_catalog::{Refused, StoreError, store_builtin};
+    match store_builtin(&state.pool, &request.harnesses).await {
+        Ok(()) => Ok(Json(json!({ "harnesses": request.harnesses.len() }))),
+        Err(StoreError::Refused(Refused(field, message))) => {
+            Err(HostError::Invalid { field, message })
+        }
+        Err(StoreError::App(error)) => Err(error.into()),
+    }
 }
 
 async fn describe_route(

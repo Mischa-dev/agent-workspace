@@ -285,6 +285,20 @@ impl HostClient {
         .await
     }
 
+    /// The built-in host's harnesses, for the server to offer and check
+    /// launches against.
+    pub async fn builtin_harnesses(
+        &self,
+        harnesses: &crate::BuiltinHarnesses,
+    ) -> Result<Value, ClientError> {
+        self.call(
+            "PUT",
+            "/api/v1/host/builtin/harnesses".to_owned(),
+            Some(json_body(harnesses)?),
+        )
+        .await
+    }
+
     /// Adopt a run this host started itself (A2.26); fetch the returned
     /// command for the run's credential.
     pub async fn adopt_run(&self, run: &crate::AdoptRun) -> Result<crate::AdoptedRun, ClientError> {

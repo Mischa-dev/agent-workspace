@@ -17,11 +17,11 @@ use crate::{
     conversations::{RunCapabilities, RunRow, RunView},
     domain::{RunState, allocate_conversation_sequence},
     error::{ApiJson, ApiPath, AppError},
+    harness::run_config::RunConfig,
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     message_content::MessageContent,
     outbox,
     policy::{Action, ActorKind, RoleGrant},
-    provider::run_config::RunConfig,
 };
 
 #[derive(Debug, FromRow)]

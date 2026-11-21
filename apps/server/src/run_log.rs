@@ -16,7 +16,8 @@ use uuid::Uuid;
 use crate::{
     AppState,
     error::AppError,
-    provider::{adapter::TokenUsage, catalog, manifest::ModelPrices},
+    harness::manifest::ModelPrices,
+    provider::{adapter::TokenUsage, catalog},
 };
 
 pub use agent_workspace_redaction::{

@@ -56,6 +56,10 @@ pub mod guards;
 pub use agent_workspace_builtin_host::git as git_runtime;
 pub mod github;
 pub mod groups;
+/// How hosts describe the harnesses they run (manifests, run
+/// configuration): shared with every host.
+pub use agent_workspace_host_protocol::harness;
+pub mod harness_catalog;
 pub mod harness_host;
 pub mod harnesses;
 pub mod health;

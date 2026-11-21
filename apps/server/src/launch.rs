@@ -27,12 +27,12 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     environments::{self, EnvironmentRow, EnvironmentView},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
+    harness::{manifest::AdapterManifest, run_config::RunConfig},
     hosts::builtin::http::{RunActor, StartRunRequest},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     jobs::{self, JobRegistry, NewJob},
     memory,
     policy::{Action, ActorKind},
-    provider::{manifest::AdapterManifest, run_config::RunConfig},
     settings,
 };
 
@@ -1185,7 +1185,7 @@ struct HarnessPlan {
     runner_name: Option<String>,
     kind: String,
     display_name: String,
-    runs_on: crate::provider::manifest::RunLocation,
+    runs_on: crate::harness::manifest::RunLocation,
     max_attempts: u8,
     models: Vec<ModelChoice>,
 }

@@ -176,7 +176,7 @@ fn named(state: &AppState, mut profile: ProfileView) -> ProfileView {
     profile
 }
 
-fn takes(manifest: &crate::provider::manifest::AdapterManifest, option: &str) -> bool {
+fn takes(manifest: &crate::harness::manifest::AdapterManifest, option: &str) -> bool {
     manifest
         .options_schema
         .pointer(&format!("/properties/{option}"))
@@ -1152,7 +1152,7 @@ impl ProfileSettings {
     /// allowed tools, for harnesses whose options name them.
     pub fn options(
         &self,
-        manifest: &crate::provider::manifest::AdapterManifest,
+        manifest: &crate::harness::manifest::AdapterManifest,
     ) -> Map<String, Value> {
         let mut options = Map::new();
         if !self.instructions.trim().is_empty() && takes(manifest, "instructions") {
@@ -1168,7 +1168,7 @@ impl ProfileSettings {
     /// prompt instead, so every harness hears them.
     pub fn prompt(
         &self,
-        manifest: Option<&crate::provider::manifest::AdapterManifest>,
+        manifest: Option<&crate::harness::manifest::AdapterManifest>,
         prompt: &str,
     ) -> String {
         let instructions = self.instructions.trim();

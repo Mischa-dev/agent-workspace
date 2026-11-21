@@ -28,9 +28,12 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
+    harness::{
+        manifest::{AdapterManifest, RunLocation},
+        registered,
+    },
     provider::{
         command_line::{self, CommandAdapter, CommandSpec, RunnerAdapter},
-        manifest::{AdapterManifest, RunLocation},
         registry::CustomAdapter,
     },
 };
@@ -77,6 +80,21 @@ fn command_of(row: &HarnessRow) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The manifest a registration gives its harness: what the host runs it by
+/// and what the server offers and checks launches against.
+pub fn manifest_of(
+    kind: &str,
+    name: &str,
+    transport: &str,
+    manifest: &Value,
+) -> Result<AdapterManifest, String> {
+    match transport {
+        "acp" => registered::acp_manifest(kind, name, manifest),
+        "runner" => registered::command_line_manifest(kind, name, manifest, RunLocation::Cloud),
+        _ => registered::command_line_manifest(kind, name, manifest, RunLocation::LocalHost),
+    }
+}
+
 fn adapter_for(state: &AppState, row: &HarnessRow) -> Result<CustomAdapter, String> {
     let spec = |manifest| CommandSpec {
         manifest,
@@ -84,29 +102,16 @@ fn adapter_for(state: &AppState, row: &HarnessRow) -> Result<CustomAdapter, Stri
         secret_names: row.secret_names.clone(),
         allowed_dirs: state.config.command_harness_dirs.clone(),
     };
+    let manifest = manifest_of(&row.kind, &row.name, &row.transport, &row.manifest)?;
     let adapter: Arc<dyn crate::provider::adapter::HarnessAdapter> = match row.transport.as_str() {
-        "runner" => Arc::new(RunnerAdapter::new(command_line::build_manifest(
-            &row.kind,
-            &row.name,
-            &row.manifest,
-            RunLocation::Cloud,
-        )?)),
+        "runner" => Arc::new(RunnerAdapter::new(manifest)),
         "acp" => Arc::new(crate::provider::acp::AcpAdapter::new(
-            spec(crate::provider::acp::build_manifest(
-                &row.kind,
-                &row.name,
-                &row.manifest,
-            )?),
+            spec(manifest),
             state.config.codex_host_concurrency_limit,
             state.supervisors.host_cell(),
         )),
         _ => Arc::new(CommandAdapter::new(
-            spec(command_line::build_manifest(
-                &row.kind,
-                &row.name,
-                &row.manifest,
-                RunLocation::LocalHost,
-            )?),
+            spec(manifest),
             state.config.codex_host_concurrency_limit,
             state.supervisors.host_cell(),
         )),
@@ -421,20 +426,7 @@ fn explain(state: &AppState, row: &HarnessRow) -> Option<String> {
     {
         return Some(reason);
     }
-    match row.transport.as_str() {
-        "acp" => crate::provider::acp::build_manifest(&row.kind, &row.name, &row.manifest).err(),
-        "runner" => {
-            command_line::build_manifest(&row.kind, &row.name, &row.manifest, RunLocation::Cloud)
-                .err()
-        }
-        _ => command_line::build_manifest(
-            &row.kind,
-            &row.name,
-            &row.manifest,
-            RunLocation::LocalHost,
-        )
-        .err(),
-    }
+    manifest_of(&row.kind, &row.name, &row.transport, &row.manifest).err()
 }
 
 /// Whether a registration runs a program on this host: a command-line

@@ -27,9 +27,10 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
+    harness::manifest::RunLocation,
     memory,
     policy::{Action, ActorKind},
-    provider::{ProfileAccount, manifest::RunLocation},
+    provider::ProfileAccount,
     settings,
 };
 
