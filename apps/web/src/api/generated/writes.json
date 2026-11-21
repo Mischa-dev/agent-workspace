@@ -985,6 +985,11 @@
     "title": "Stop a run"
   },
   {
+    "kind": "change",
+    "name": "run_changes_report",
+    "title": "Report a run's changes"
+  },
+  {
     "kind": "create",
     "name": "run_create",
     "title": "Open a run"

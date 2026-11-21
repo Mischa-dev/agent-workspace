@@ -231,7 +231,7 @@ const LISTEN_OUTSIDE_WAKE_CEILING: usize = 0;
 // (auth/workos/agents.rs); its owner is A2.
 const TRANSACTIONS_ACROSS_CALLS_CEILING: usize = 3;
 // A1.17 (G10): set to today's total when the guard landed.
-const SERVER_RUNS_AGENTS_CEILING: usize = 62;
+const SERVER_RUNS_AGENTS_CEILING: usize = 45;
 
 /// The rules of `AGENTS.md` rules 1 and 2 (access and account kinds). Every
 /// allowance of theirs names the K1 slice that removes it and why it is
@@ -513,11 +513,17 @@ pub(crate) fn background_spawns(source: &str) -> usize {
 
 /// The server reaching into what runs agents (A1 guard G10): the harness
 /// layer (`crate::provider`, or a `provider::` path brought in by a `use`),
-/// the worktree code (`git_runtime`) or a child process (`Command::new`).
+/// the worktree code (`git_runtime`) or a child process (`Command::new`),
+/// unless its line says it runs no agent (`// g10: not an agent (<why>)`).
 /// The embedded host's spawn point (`hosts/builtin/`) and the harness layer
 /// itself are left out by [`counts`].
 pub(crate) fn server_runs_agents(source: &str) -> usize {
     in_code(source, |line| {
+        // A tool that is no agent (an archiver, a database client), said so
+        // on its line.
+        if line.contains("// g10: not an agent") {
+            return 0;
+        }
         let bare_provider_paths = line
             .match_indices("provider::")
             .filter(|(index, _)| {
@@ -1367,6 +1373,13 @@ async fn notify(pool: &PgPool, client: &reqwest::Client) -> Result<(), Error> {
         );
         assert_eq!(
             background_spawns("tokio::task::spawn_blocking(move || x);"),
+            0
+        );
+        assert_eq!(server_runs_agents("let child = Command::new(binary);"), 1);
+        assert_eq!(
+            server_runs_agents(
+                "let tar = Command::new(\"tar\"); // g10: not an agent (backup archive)"
+            ),
             0
         );
         assert_eq!(vendor_names_core("let label = \"Ask Claude\";"), 1);

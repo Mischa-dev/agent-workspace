@@ -203,6 +203,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("requests", WORKSPACE_ID),
     ("role_grants", WORKSPACE_ID),
     ("run_activities", WORKSPACE_ID),
+    ("run_changes", WORKSPACE_ID),
     ("access_tokens", WORKSPACE_ID),
     ("run_usage", WORKSPACE_ID),
     ("runs", WORKSPACE_ID),

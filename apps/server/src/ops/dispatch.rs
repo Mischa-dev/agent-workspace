@@ -857,6 +857,7 @@ fn runs_while_paused(name: &str) -> bool {
             | "status_delete"
             | "agent_resume"
             | "run_activity_report"
+            | "run_changes_report"
             | "run_result_report"
             | "run_usage_report"
             | "run_update"

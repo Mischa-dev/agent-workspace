@@ -398,7 +398,7 @@ impl StartHost for BuiltinCommands<'_> {
         // Retention cleanup removes retained worktrees under this lock. Take
         // it, then claim only if the workspace is still retained: one
         // cleaned up since the inspection is gone.
-        crate::retention::lock_repository_retention(&mut transaction, run.repository_id).await?;
+        super::worktrees::lock_repository_retention(&mut transaction, run.repository_id).await?;
         // The retry publishes its own commit: the predecessor's publication
         // must not stand in for it, or a pull request could open from a
         // commit this run never made.

@@ -174,7 +174,7 @@ pub struct AgentRunUpdatedPayload {
 /// A1: a run changed, whoever runs it (the stopgap until K3's log carries
 /// `run.*` events). IDs and the state only; `change` names what happened
 /// (`opened`, `updated`, `activity`, `finished`, `liveness_changed`,
-/// `result_added`, `usage_updated`, `cancel`).
+/// `result_added`, `usage_updated`, `changes_reported`, `cancel`).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunChangedPayload {

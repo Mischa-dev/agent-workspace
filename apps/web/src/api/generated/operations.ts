@@ -94,6 +94,8 @@ export type ChangeSetView = { actor?: string | null; actorId: string; createdAt:
 
 export type ChangedCellLine = { cell: string; cleared?: boolean; display?: string | null; formula?: string | null; tab: string; value: unknown }
 
+export type ChangedFile = { added?: number | null; path: string; removed?: number | null; status: string }
+
 export type ChangedTask = { finished?: boolean | null; id: string; key: string; status?: string | null; statusGroup?: string | null; title?: string | null }
 
 export type Chart = { id: string; source: string; style: string; title: string }
@@ -2086,6 +2088,10 @@ export type RunCancelInput = { reason?: string | null; runId: string }
 
 export type RunCancelOutput = { idempotentReplay?: boolean; run: RunRecord }
 
+export type RunChangesReportInput = { files: ChangedFile[]; patch?: string; runId: string; truncated?: boolean }
+
+export type RunChangesReportOutput = { files: number; truncated: boolean }
+
 export type RunCreateInput = { cause: RunCauseInput; clientRunId?: string | null; parentRunId?: string | null; reportIntervalSeconds?: number | null; settings?: unknown; spaceId: string; state?: string | null; title: string }
 
 export type RunCreateOutput = { created: boolean; run: RunRecord }
@@ -2948,6 +2954,7 @@ export type Operations = {
   run_activity_list: { input: RunActivityListInput; output: RunActivityListOutput }
   run_activity_report: { input: RunActivityReportInput; output: RunActivityReportOutput }
   run_cancel: { input: RunCancelInput; output: RunCancelOutput }
+  run_changes_report: { input: RunChangesReportInput; output: RunChangesReportOutput }
   run_create: { input: RunCreateInput; output: RunCreateOutput }
   run_detail_get: { input: RunDetailGetInput; output: RunDetailGetOutput }
   run_failure_hide: { input: RunFailureHideInput; output: RunFailureHideOutput }

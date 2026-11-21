@@ -491,6 +491,10 @@ async fn a_review_given_back_replaces_the_ask_a_retry_raised_meanwhile() {
         if second_answered {
             assert_eq!(status, "answered", "the reviewer's answer stands");
             assert_ne!(made["outcome"], "ok", "{made}");
+            assert!(
+                made.to_string().contains("didn't allow this"),
+                "refused by the reviewer's answer, not anything else: {made}"
+            );
             assert_eq!(pages, 0, "the denial wins over the given-back review");
         } else {
             assert_eq!(status, "cancelled", "the second ask is withdrawn");

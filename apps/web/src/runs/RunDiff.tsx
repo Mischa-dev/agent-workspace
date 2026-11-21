@@ -7,12 +7,12 @@ import { splitPatch, type PatchFile } from './runModel'
 
 const STATUS_LABEL: Record<string, string> = { added: 'Added', modified: 'Changed', deleted: 'Deleted', renamed: 'Renamed' }
 
-/** Why a run has no files to list: not started, no branch, or its branch is gone. */
+/** Why a run has no files to list: still going, no branch, or its host never said what it changed. */
 function noFilesText(run: Pick<RunDetail, 'agentName' | 'baseCommit' | 'publishedCommit'>, live: boolean) {
-  if (live) return `Changes show up here once ${run.agentName ?? 'the agent'} edits files.`
+  if (live) return `Changes show up here when ${run.agentName ?? 'the agent'} finishes its turn.`
   if (!run.baseCommit) return 'This run didn’t work on a branch, so it has no changes to show.'
-  if (!run.publishedCommit) return 'The run’s branch is gone and was never published, so its changes can’t be read any more.'
-  return 'The run’s changes can’t be read right now.'
+  if (run.publishedCommit) return 'This run didn’t report its changes here. Open its branch to read them.'
+  return 'This run didn’t report its changes, so there are none to show.'
 }
 
 /** The files the run changed, with the diff fetched only when asked for. */
@@ -71,7 +71,7 @@ export function RunDiff({ live, run }: { live: boolean; run: Pick<RunDetail, 'ag
         </Banner>
       ) : null}
       {diff.data?.state === 'unavailable' ? (
-        <Banner tone="info">The diff can’t be read now: the run’s worktree and published commit are both gone.</Banner>
+        <Banner tone="info">This run didn’t report its diff.</Banner>
       ) : null}
       {tooBig ? (
         <Banner tone="warning" title="The diff is too big to show here.">

@@ -1,8 +1,9 @@
 //! A1.16: what the built-in host tells the server about a run goes only
 //! through the host protocol's run reports (`run_activity_report`,
-//! `run_update`, `run_usage_report`), with the credential the run's start
-//! carried, as any host reports. The built-in host's own step names
-//! (`command_started`, `run_failed`, ...) travel in `payload.step`.
+//! `run_update`, `run_usage_report`, `run_changes_report`), with the
+//! credential the run's start carried, as any host reports. The built-in
+//! host's own step names (`command_started`, `run_failed`, ...) travel in
+//! `payload.step`.
 
 use agent_workspace_host_protocol::{ClientError, HostClient, RunReporter, StreamDelta};
 use serde_json::{Map, Value, json};
@@ -283,6 +284,23 @@ impl RunReports {
             ),
         )
         .await?;
+        Ok(())
+    }
+
+    /// What the run changed in its repository against where it started
+    /// (A1.17): the server keeps the latest and shows it on the run's page,
+    /// reading nothing on this machine's disk. The same changes sent again
+    /// are taken once.
+    pub async fn changes(&self, diff: &crate::git::RunDiff) -> Result<(), AppError> {
+        let fields = serde_json::to_value(diff)
+            .map_err(|_| AppError::Internal("serialize the run's changes"))?;
+        let key = format!(
+            "changes-{}",
+            hex::encode(Sha256::digest(
+                format!("{}-{fields}", self.run_id.simple()).as_bytes()
+            ))
+        );
+        self.call("run_changes_report", fields, &key).await?;
         Ok(())
     }
 }

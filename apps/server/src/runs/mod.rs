@@ -28,6 +28,7 @@ use crate::{
 pub mod activities;
 pub mod brief;
 pub mod builtin;
+pub mod changes;
 pub mod credentials;
 pub mod finished;
 #[cfg(test)]
