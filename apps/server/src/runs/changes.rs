@@ -16,6 +16,11 @@ pub const MAX_FILES: usize = 2_000;
 /// was truncated.
 pub const MAX_PATCH_BYTES: usize = 768 * 1024;
 const MAX_PATH_CHARS: usize = 1_000;
+/// The largest report body taken: room for the patch and file list above
+/// once JSON has escaped them (a tab doubles, a control byte takes six).
+/// A host whose report would be bigger drops the patch, keeps the files
+/// and marks it truncated.
+pub const MAX_REPORT_BYTES: usize = 4 * 1024 * 1024;
 /// What a file can have undergone.
 pub const STATUSES: [&str; 4] = ["added", "modified", "deleted", "renamed"];
 

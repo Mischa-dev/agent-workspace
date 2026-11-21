@@ -1093,6 +1093,7 @@ impl Operation for RunChangesReport {
         the last, so send the whole picture each time (after a turn, and when the run ends); \
         the run's page shows the latest.";
     const EMITS: &'static [&'static str] = &["run.changes_reported"];
+    const MAX_BODY_BYTES: usize = super::changes::MAX_REPORT_BYTES;
 
     type Input = RunChangesReportInput;
     type Output = RunChangesOutput;

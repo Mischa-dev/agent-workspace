@@ -239,6 +239,10 @@ impl StartHost for BuiltinCommands<'_> {
     }
 
     async fn interrupted(&self, run_id: Uuid, reason: &str) -> Result<(), AppError> {
+        // What it changed before it stopped, while its reports are taken.
+        if let Ok(reports) = self.open_reports(run_id).await {
+            provider::report_changes_of(self.state, &reports, run_id).await;
+        }
         let mut transaction = crate::db::scoped_tx(&self.state.pool).await?;
         super::move_detail(
             &mut transaction,

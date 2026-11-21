@@ -874,6 +874,34 @@ async fn complete_run(
 /// bigger one either.
 const MAX_CHANGES_PATCH_BYTES: usize = 768 * 1024;
 
+/// [`report_changes`] for a run whose worktree isn't at hand: looked up, and
+/// nothing reported when the run has none.
+pub(crate) async fn report_changes_of(state: &AppState, reports: &RunReports, run_id: Uuid) {
+    let place = sqlx::query_as::<_, (String, String)>(
+        r#"
+        SELECT gw.path, rw.base_commit
+        FROM agent_runs ar
+        JOIN repository_workspaces rw ON rw.id = ar.repository_workspace_id
+        JOIN git_worktrees gw ON gw.repository_workspace_id = rw.id
+        WHERE ar.id = $1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(crate::db::scoped(&state.pool))
+    .await;
+    match place {
+        Ok(Some((worktree, base))) => {
+            report_changes(reports, PathBuf::from(worktree), Some(base)).await;
+        }
+        Ok(None) => {}
+        Err(error) => tracing::warn!(
+            run_id = %run_id,
+            error_category = AppError::from(error).log_category(),
+            "the run's changes were not reported"
+        ),
+    }
+}
+
 /// A1.17: what the run changed against its base, told to the server as any
 /// host tells it, so the run's page never reads this machine's disk. A run
 /// whose changes can't be read or taken still finishes; its page then shows
@@ -903,6 +931,13 @@ async fn report_changes(reports: &RunReports, worktree: PathBuf, base_commit: Op
             });
             diff.files.truncate(crate::runs::changes::MAX_FILES);
             diff.truncated |= diff.files.len() < before;
+            // A report the server would refuse for its size keeps its files
+            // and drops the patch, as one too big to keep would.
+            let size = serde_json::to_vec(&diff).map_or(usize::MAX, |body| body.len());
+            if size > crate::runs::changes::MAX_REPORT_BYTES - 64 * 1024 {
+                diff.patch.clear();
+                diff.truncated = true;
+            }
             reports.changes(&diff).await.map_err(AppError::from)
         }
         Ok(Err(error)) => Err(error),
@@ -978,6 +1013,8 @@ pub(crate) async fn fail_run(
     reports
         .note("provider:run:failed", "run_failed", reason, true)
         .await?;
+    // What it changed before failing is still worth reading.
+    report_changes_of(state, reports, run_id).await;
     reports.moved("failed", Some(reason)).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     crate::hosts::builtin::move_detail(&mut transaction, run_id, RunState::Failed, Some(reason))
