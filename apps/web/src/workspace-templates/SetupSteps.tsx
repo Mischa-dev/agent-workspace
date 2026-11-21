@@ -29,10 +29,10 @@ export function TemplateStep({ onboarding }: { onboarding: Onboarding }) {
   // other way to start.
   return (
     <div className="aw-templates__start">
-      <h3 className="aw-templates__name">What is this workspace for?</h3>
+      <h3 className="aw-templates__section">What is this workspace for?</h3>
       <ShapePicker canChange organizationId={onboarding.organizationId} />
-      <h3 className="aw-templates__name">Or start from a template</h3>
-      <TemplatePicker confirm={false} organizationId={onboarding.organizationId} />
+      <h3 className="aw-templates__section">Or start from a template</h3>
+      <TemplatePicker confirm={false} leads={false} organizationId={onboarding.organizationId} />
     </div>
   )
 }
