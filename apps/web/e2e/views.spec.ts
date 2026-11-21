@@ -48,12 +48,12 @@ test('shows what slips when a milestone moves earlier', async ({ page, context }
   }
   await page.goto(`/projects/${projectId}/milestones`)
   const csrf = (await context.cookies()).find((cookie) => cookie.name.endsWith('agent_workspace_csrf'))?.value ?? ''
-  const created = await page.request.post(`/api/v1/projects/${projectId}/milestones`, {
+  const created = await page.request.post('/api/v2/ops/milestone_create', {
     headers: { 'x-csrf-token': csrf, 'idempotency-key': `milestone-${stamp}`, origin: new URL(page.url()).origin },
-    data: { name: `Beta ${stamp}`, targetDate: day(20) },
+    data: { projectId, name: `Beta ${stamp}`, targetDate: day(20) },
   })
   expect(created.ok(), await created.text()).toBe(true)
-  const milestone = (await created.json()) as { id: string }
+  const milestone = ((await created.json()) as { value: { id: string } }).value
 
   // Two dated tasks in the milestone, brought in as a CSV.
   await page.goto(spaceSettingsHref(projectId, 'import-export', CURRENT_WORKSPACE))

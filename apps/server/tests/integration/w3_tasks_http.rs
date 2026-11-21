@@ -93,6 +93,16 @@ impl Client {
         self.send("PATCH", uri, Some(body)).await
     }
 
+    /// Runs an operation through the v2 route: its value when it succeeds,
+    /// the whole answer otherwise.
+    async fn op(&self, name: &str, input: Value) -> (StatusCode, Value) {
+        let (status, mut body) = self.post(&format!("/api/v2/ops/{name}"), input).await;
+        if body["outcome"] == "ok" {
+            return (status, body["value"].take());
+        }
+        (status, body)
+    }
+
     async fn put(&self, uri: &str, body: Value) -> (StatusCode, Value) {
         self.send("PUT", uri, Some(body)).await
     }
@@ -283,17 +293,14 @@ async fn planning_fields_dependencies_and_history_work_over_http() {
     let owner = &fixture.owner;
     let base = format!("/api/v1/projects/{project}");
 
-    let (status, label) = owner
-        .post(&format!("{base}/labels"), json!({ "name": "Backend" }))
-        .await;
-    assert_eq!(status, StatusCode::CREATED, "{label}");
+    let label = make_label(owner, project, "Backend").await;
     let (status, milestone) = owner
-        .post(
-            &format!("{base}/milestones"),
-            json!({ "name": "Beta", "targetDate": "2026-12-01" }),
+        .op(
+            "milestone_create",
+            json!({ "projectId": project, "name": "Beta", "targetDate": "2026-12-01" }),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{milestone}");
+    assert_eq!(status, StatusCode::OK, "{milestone}");
 
     let design = create_task(
         owner,
@@ -345,31 +352,27 @@ async fn planning_fields_dependencies_and_history_work_over_http() {
     let build_id = build["id"].as_str().expect("test value");
     let design_id = design["id"].as_str().expect("test value");
     let (status, linked) = owner
-        .post(
-            &format!("{base}/work-items/{build_id}/dependencies"),
-            json!({ "expectedVersion": build["version"], "blockedBy": [design["key"]] }),
+        .op(
+            "task_link",
+            json!({ "taskId": build_id, "expectedVersion": build["version"], "blockedBy": [design["key"]] }),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{linked}");
     assert_eq!(linked["blockedBy"][0]["key"], design["key"]);
+    let (_, build_now) = owner.get(&format!("{base}/work-items/{build_id}")).await;
     // A blocker carries its priority, so raising this task can offer to raise it (AWD-77).
-    assert_eq!(linked["blockedBy"][0]["priority"], design["priority"]);
-    assert_eq!(linked["ready"], false);
+    assert_eq!(build_now["blockedBy"][0]["priority"], design["priority"]);
+    assert_eq!(build_now["ready"], false);
     let (_, design_now) = owner.get(&format!("{base}/work-items/{design_id}")).await;
     assert_eq!(design_now["blocks"][0]["key"], build["key"]);
     let (status, cycle) = owner
-        .post(
-            &format!("{base}/work-items/{design_id}/dependencies"),
-            json!({ "expectedVersion": design_now["version"], "blockedBy": [build_id] }),
+        .op(
+            "task_link",
+            json!({ "taskId": design_id, "expectedVersion": design_now["version"], "blockedBy": [build_id] }),
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{cycle}");
-    assert_eq!(cycle["error"]["code"], "dependency_cycle");
-    assert!(
-        cycle["error"]["details"]["path"]
-            .as_array()
-            .is_some_and(|path| path.len() >= 2)
-    );
+    assert_eq!(cycle["outcome"], "conflict", "{cycle}");
 
     // A key search matches the project's own key, not just the number.
     let design_key = design["key"].as_str().expect("key");
@@ -431,9 +434,9 @@ async fn planning_fields_dependencies_and_history_work_over_http() {
     // Watching and unwatching.
     let (status, watch) = fixture
         .member
-        .post(
-            &format!("{base}/work-items/{design_id}/watch"),
-            json!({ "watching": true }),
+        .op(
+            "task_watch_set",
+            json!({ "taskId": design_id, "watching": true }),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{watch}");
@@ -445,9 +448,7 @@ async fn planning_fields_dependencies_and_history_work_over_http() {
     assert_eq!(milestones["milestones"][0]["total"], 1);
 
     // A task with two labels shows in both label columns.
-    let (_, frontend) = owner
-        .post(&format!("{base}/labels"), json!({ "name": "Frontend" }))
-        .await;
+    let frontend = make_label(owner, project, "Frontend").await;
     let both = create_task(
         owner,
         project,
@@ -525,9 +526,9 @@ async fn planning_fields_dependencies_and_history_work_over_http() {
     // nothing can be dropped there.
     let milestone_id = milestone["id"].as_str().expect("milestone id");
     let (status, archived) = owner
-        .patch(
-            &format!("{base}/milestones/{milestone_id}"),
-            json!({ "expectedVersion": milestone["version"], "archived": true }),
+        .op(
+            "milestone_update",
+            json!({ "projectId": project, "milestoneId": milestone_id, "expectedVersion": milestone["version"], "archived": true }),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{archived}");
@@ -576,20 +577,28 @@ async fn links_to_other_projects_respect_membership() {
     // The member can't link to a task they can't see, by key or by ID.
     for reference in [&secret["key"], &secret["id"]] {
         let (status, refused) = member
-            .post(
-                &format!("{base}/work-items/{main_id}/dependencies"),
-                json!({ "expectedVersion": main["version"], "blockedBy": [reference] }),
+            .op(
+                "task_link",
+                json!({ "taskId": main_id, "expectedVersion": main["version"], "blockedBy": [reference] }),
             )
             .await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+        assert!(status.is_client_error(), "{status}: {refused}");
+        assert!(
+            !refused.to_string().contains("Private groundwork"),
+            "{refused}"
+        );
+        // By ID, the refusal doesn't give the task's key away.
+        if reference == &secret["id"] {
+            assert!(!refused.to_string().contains("SIDE-"), "{refused}");
+        }
     }
 
     // The owner can; the member then sees that something blocks the task,
     // but not what.
     let (status, linked) = owner
-        .post(
-            &format!("{base}/work-items/{main_id}/dependencies"),
-            json!({ "expectedVersion": main["version"], "blockedBy": [secret["key"]] }),
+        .op(
+            "task_link",
+            json!({ "taskId": main_id, "expectedVersion": main["version"], "blockedBy": [secret["key"]] }),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{linked}");
@@ -602,17 +611,18 @@ async fn links_to_other_projects_respect_membership() {
     // duplicate, nor along a dependency cycle.
     let other = create_task(owner, project, json!({ "title": "Ship it again" })).await;
     let other_id = other["id"].as_str().expect("test value");
+    let (_, main_now) = owner.get(&format!("{base}/work-items/{main_id}")).await;
     let (status, duplicate) = owner
-        .post(
-            &format!("{base}/work-items/{main_id}/relations"),
-            json!({ "expectedVersion": linked["version"], "kind": "duplicates", "target": secret["key"] }),
+        .op(
+            "task_link",
+            json!({ "taskId": main_id, "expectedVersion": main_now["version"], "kind": "duplicates", "otherTaskId": secret["key"] }),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{duplicate}");
     let (status, refused) = member
-        .post(
-            &format!("{base}/work-items/{main_id}/relations"),
-            json!({ "expectedVersion": duplicate["version"], "kind": "duplicates", "target": other["key"] }),
+        .op(
+            "task_link",
+            json!({ "taskId": main_id, "expectedVersion": duplicate["version"], "kind": "duplicates", "otherTaskId": other["key"] }),
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
@@ -624,26 +634,23 @@ async fn links_to_other_projects_respect_membership() {
         ))
         .await;
     let (status, closed_loop) = owner
-        .post(
-            &format!("/api/v1/projects/{side_id}/work-items/{secret_id}/dependencies"),
-            json!({ "expectedVersion": secret_now["version"], "blockedBy": [other["key"]] }),
+        .op(
+            "task_link",
+            json!({ "taskId": secret_id, "expectedVersion": secret_now["version"], "blockedBy": [other["key"]] }),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{closed_loop}");
     let (_, other_now) = member.get(&format!("{base}/work-items/{other_id}")).await;
     let (status, refused) = member
-        .post(
-            &format!("{base}/work-items/{other_id}/dependencies"),
-            json!({ "expectedVersion": other_now["version"], "blockedBy": [main["key"]] }),
+        .op(
+            "task_link",
+            json!({ "taskId": other_id, "expectedVersion": other_now["version"], "blockedBy": [main["key"]] }),
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
     assert!(!refused.to_string().contains("SIDE-"), "{refused}");
     assert!(
-        refused["error"]["details"]["path"]
-            .as_array()
-            .expect("test value")
-            .contains(&json!("a task in another project")),
+        refused.to_string().contains("a task in another project"),
         "{refused}"
     );
 
@@ -920,16 +927,15 @@ async fn filters_take_several_values_and_leave_tasks_out() {
     let ready = status_named(&workflow, "Ready");
     let started = status_named(&workflow, "In Progress");
     let review = status_named(&workflow, "Review");
-    let (_, backend) = owner
-        .post(&format!("{base}/labels"), json!({ "name": "Backend" }))
-        .await;
-    let (_, frontend) = owner
-        .post(&format!("{base}/labels"), json!({ "name": "Frontend" }))
-        .await;
+    let backend = make_label(owner, project, "Backend").await;
+    let frontend = make_label(owner, project, "Frontend").await;
     let (status, beta) = owner
-        .post(&format!("{base}/milestones"), json!({ "name": "Beta" }))
+        .op(
+            "milestone_create",
+            json!({ "projectId": project, "name": "Beta" }),
+        )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{beta}");
+    assert_eq!(status, StatusCode::OK, "{beta}");
     let (backend, frontend, beta) = (&backend["id"], &frontend["id"], &beta["id"]);
     let (me, member) = (fixture.owner_actor_id, fixture.member_actor_id);
     for body in [
@@ -1121,13 +1127,7 @@ async fn lists_page_every_sort_and_grouping_quickly_at_ten_thousand_tasks() {
     let owner = &fixture.owner;
     let base = format!("/api/v1/projects/{project}/work-items");
     let first = create_task(owner, project, json!({ "title": "Seed task" })).await;
-    let label = owner
-        .post(
-            &format!("/api/v1/projects/{project}/labels"),
-            json!({ "name": "Ops" }),
-        )
-        .await
-        .1;
+    let label = make_label(owner, project, "Ops").await;
 
     // 10,000 more tasks straight into the table, like a long-lived project.
     // A task's record comes first (T1.3), in the same transaction.
@@ -1457,4 +1457,16 @@ async fn every_status_change_says_what_changed() {
     for changed in &changes {
         assert!(!changed.is_empty(), "{changes:?}");
     }
+}
+
+/// A label made through its operation, as its line (with `id`).
+async fn make_label(client: &Client, project: Uuid, name: &str) -> Value {
+    let (status, made) = client
+        .op(
+            "label_create",
+            json!({ "projectId": project, "name": name }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    made["label"].clone()
 }

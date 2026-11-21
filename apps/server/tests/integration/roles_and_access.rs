@@ -4284,7 +4284,11 @@ async fn managing_a_repository_needs_see_code() {
         .await
         .expect("repository version");
     for (path, key, body) in [
-        (format!("{base}/prepare"), "bea-prepare", json!({})),
+        (
+            "/api/v2/ops/repository_prepare".to_owned(),
+            "bea-prepare",
+            json!({"projectId": work, "repository": repository}),
+        ),
         (
             format!("{base}/archive"),
             "bea-archive",

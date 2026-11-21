@@ -251,12 +251,16 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
         &cookie,
         Some(&csrf),
         Some("prepare-key"),
-        &format!("{base}/{local_repository_id}/prepare"),
-        json!({}),
+        "/api/v2/ops/repository_prepare",
+        json!({"projectId": seed.project_id, "repository": local_repository_id}),
     )
     .await;
     assert_eq!(prepared.0, StatusCode::OK);
-    assert_eq!(prepared.2["preparationState"], "ready");
+    assert_eq!(
+        prepared.2["value"]["repository"]["preparationState"], "ready",
+        "{}",
+        prepared.2
+    );
     assert!(local_mirror.is_dir());
 
     let tamper = Command::new("/usr/bin/git")
@@ -279,16 +283,14 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
         &cookie,
         Some(&csrf),
         Some("prepare-mismatch-key"),
-        &format!("{base}/{local_repository_id}/prepare"),
-        json!({}),
+        "/api/v2/ops/repository_prepare",
+        json!({"projectId": seed.project_id, "repository": local_repository_id}),
     )
     .await;
     assert_eq!(failed_preparation.0, StatusCode::OK);
-    assert_eq!(failed_preparation.2["preparationState"], "failed");
-    assert_eq!(
-        failed_preparation.2["preparationFailureCategory"],
-        "git_prepare_failed"
-    );
+    let failed = &failed_preparation.2["value"]["repository"];
+    assert_eq!(failed["preparationState"], "failed", "{failed}");
+    assert_eq!(failed["preparationFailureCategory"], "git_prepare_failed");
 
     let foreign_project_id = Uuid::now_v7();
     sqlx::query(
@@ -320,8 +322,8 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
         &cookie,
         Some(&csrf),
         Some("forbidden-key"),
-        &format!("{base}/{local_repository_id}/prepare"),
-        json!({}),
+        "/api/v2/ops/repository_prepare",
+        json!({"projectId": seed.project_id, "repository": local_repository_id}),
     )
     .await;
     assert_eq!(forbidden.0, StatusCode::FORBIDDEN);

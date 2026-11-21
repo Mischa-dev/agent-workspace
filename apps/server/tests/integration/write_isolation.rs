@@ -218,13 +218,10 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/imports",
     "PATCH /api/v1/projects/{project_id}/imports/{import_id}",
     "POST /api/v1/projects/{project_id}/imports/{import_id}/commit",
-    "PUT /api/v1/projects/{project_id}/integrations/github/automation",
     "POST /api/v1/projects/{project_id}/integrations/github/connect",
     "POST /api/v1/projects/{project_id}/integrations/github/repositories",
     "POST /api/v1/projects/{project_id}/integrations/github/sync",
     "POST /api/v1/projects/{project_id}/invitations",
-    "POST /api/v1/projects/{project_id}/labels",
-    "PATCH /api/v1/projects/{project_id}/labels/{label_id}",
     "POST /api/v1/projects/{project_id}/fields",
     "PATCH /api/v1/projects/{project_id}/fields/{field_id}",
     "POST /api/v1/projects/{project_id}/collections",
@@ -243,8 +240,6 @@ const WRITE_ROUTES: &[&str] = &[
     "PUT /api/v1/projects/{project_id}/layout/rules",
     "POST /api/v1/projects/{project_id}/members",
     "PATCH /api/v1/projects/{project_id}/members/{actor_id}",
-    "POST /api/v1/projects/{project_id}/milestones",
-    "PATCH /api/v1/projects/{project_id}/milestones/{milestone_id}",
     "POST /api/v1/projects/{project_id}/provider-accounts",
     "DELETE /api/v1/projects/{project_id}/provider-accounts/{account_id}",
     "PATCH /api/v1/projects/{project_id}/provider-accounts/{account_id}",
@@ -254,27 +249,18 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/provider-accounts/{account_id}/login/device-code",
     "POST /api/v1/projects/{project_id}/provider-accounts/{account_id}/logout",
     "POST /api/v1/projects/{project_id}/provider-accounts/{account_id}/use",
-    "POST /api/v1/projects/{project_id}/pull-requests/{pull_request_id}/merge",
     "POST /api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
-    "POST /api/v1/projects/{project_id}/recurring-tasks",
-    "DELETE /api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-    "PATCH /api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
     "POST /api/v1/projects/{project_id}/repositories",
     "POST /api/v1/projects/{project_id}/repositories/{repository_id}/archive",
-    "POST /api/v1/projects/{project_id}/repositories/{repository_id}/prepare",
     "POST /api/v1/projects/{project_id}/save-as-template",
     "DELETE /api/v1/projects/{project_id}/secrets/{name}",
     "PUT /api/v1/projects/{project_id}/secrets/{name}",
     "POST /api/v1/projects/{project_id}/task-templates",
-    "PATCH /api/v1/projects/{project_id}/task-templates/{template_id}",
     "POST /api/v1/projects/{project_id}/task-templates/{template_id}/apply",
     "PUT /api/v1/projects/{project_id}/work-item-workflow",
     "POST /api/v1/projects/{project_id}/work-items",
     "POST /api/v1/projects/{project_id}/work-items/bulk",
     "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
-    "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
-    "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/ai/criteria",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/ai/summary",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/ai/triage",
@@ -282,21 +268,12 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
     "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
     "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/files",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/move",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
-    "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/release-claim",
-    "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}/primary",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
-    "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/watch",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/work-with-worker",
     "POST /api/v1/push/subscriptions",
     "DELETE /api/v1/push/subscriptions/{id}",
@@ -5153,22 +5130,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         ),
         // GitHub
         path_case(
-            "PUT /api/v1/projects/{project_id}/integrations/github/automation",
-            &[project()],
-            |values| {
-                Payload::Json(json!({
-                    "expectedVersion": current(
-                        "project_github_automation_settings",
-                        "version",
-                        &[("project_id", values[0].clone())],
-                        0,
-                    ),
-                    "pullRequestOpenEnabled": true,
-                    "pullRequestMergeEnabled": true,
-                }))
-            },
-        ),
-        path_case(
             "POST /api/v1/projects/{project_id}/integrations/github/connect",
             &[project()],
             json_body(json!({"mode": "install"})),
@@ -5196,16 +5157,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             "POST /api/v1/projects/{project_id}/invitations",
             &[project()],
             json_body(json!({"role": "viewer", "expiresInHours": 24})),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/labels",
-            &[project()],
-            json_body(json!({"name": "Net label"})),
-        ),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/labels/{label_id}",
-            &[project(), id(ax.label, bx.label)],
-            versioned("project_labels", 1, json!({"description": "Net"})),
         ),
         path_case(
             "POST /api/v1/projects/{project_id}/fields",
@@ -5419,16 +5370,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
                 }))
             },
         ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/milestones",
-            &[project()],
-            json_body(json!({"name": "Net milestone"})),
-        ),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/milestones/{milestone_id}",
-            &[project(), id(ax.milestone, bx.milestone)],
-            versioned("project_milestones", 1, json!({"description": "Net"})),
-        ),
         // Provider accounts
         path_case(
             "POST /api/v1/projects/{project_id}/provider-accounts",
@@ -5481,12 +5422,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         )
         .without_own(NEEDS_CLI),
         path_case(
-            "POST /api/v1/projects/{project_id}/pull-requests/{pull_request_id}/merge",
-            &[project(), id(a.pull_request, b.pull_request)],
-            |_| Payload::Json(json!({})),
-        )
-        .without_own(NEEDS_GITHUB),
-        path_case(
             "POST /api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
             &[project(), id(a.pull_request, b.pull_request)],
             empty(),
@@ -5494,44 +5429,9 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         .without_own(NEEDS_GITHUB),
         // Recurring tasks and templates
         path_case(
-            "POST /api/v1/projects/{project_id}/recurring-tasks",
-            &[project()],
-            |values| {
-                Payload::Json(json!({
-                    "templateId": if is_a(values, &a.project) { ax.task_template } else { bx.task_template },
-                    "frequency": "weekly",
-                    "weekdays": [2],
-                }))
-            },
-        )
-        .rejecting(vec![
-            json!({"templateId": bx.task_template, "frequency": "weekly", "weekdays": [2]}),
-            json!({"templateId": ax.task_template, "frequency": "weekly", "weekdays": [3], "assigneeActorId": b.rook}),
-        ]),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-            &[project(), id(ax.recurring, bx.recurring)],
-            versioned("recurring_tasks", 1, json!({"enabled": true})),
-        )
-        .rejecting(vec![json!({
-            "expectedVersion": version("recurring_tasks", ax.recurring),
-            "assigneeActorId": b.rook,
-        })]),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-            &[project(), id(ax.recurring, bx.recurring)],
-            empty(),
-        )
-        .last(),
-        path_case(
             "POST /api/v1/projects/{project_id}/task-templates",
             &[project()],
             json_body(json!({"name": "Net template", "title": "Net review"})),
-        ),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/task-templates/{template_id}",
-            &[project(), id(ax.task_template, bx.task_template)],
-            versioned("task_templates", 1, json!({"archived": false})),
         ),
         path_case(
             "POST /api/v1/projects/{project_id}/task-templates/{template_id}/apply",
@@ -5560,12 +5460,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
                 "trustAcknowledged": true,
             })),
         ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/repositories/{repository_id}/prepare",
-            &[project(), id(a.repository, b.repository)],
-            empty(),
-        )
-        .without_own("preparing clones the repository from GitHub"),
         path_case(
             "POST /api/v1/projects/{project_id}/repositories/{repository_id}/archive",
             &[project(), id(sp.repository, b.repository)],
@@ -5680,22 +5574,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             .collect(),
         ),
         path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
-            &[project(), task()],
-            versioned("work_items", 1, json!({"text": "Net criterion"})),
-        ),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
-            &[project(), task(), id(ax.criterion, bx.criterion)],
-            versioned("work_items", 1, json!({"completed": true})),
-        ),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
-            &[project(), task(), id(ax.criterion, bx.criterion)],
-            versioned("work_items", 1, json!({})),
-        )
-        .last(),
-        path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/ai/criteria",
             &[project(), task()],
             empty(),
@@ -5739,20 +5617,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         ),
         path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
-            &[project(), task()],
-            |values| {
-                Payload::Json(json!({
-                    "expectedVersion": version("work_items", &values[1]),
-                    "blockedBy": [if is_a(values, &a.project) { sp.task } else { b.subtask }.to_string()],
-                }))
-            },
-        )
-        .rejecting(vec![
-            json!({"expectedVersion": version("work_items", a.task), "blockedBy": [b.task.to_string()]}),
-            json!({"expectedVersion": version("work_items", a.task), "blocks": [b.task.to_string()]}),
-        ]),
-        path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/files",
             &[project(), task()],
             |_| Payload::Bytes("image/png", tiny_png()),
@@ -5795,65 +5659,14 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         )
         .last(),
         path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
-            &[project(), task(), id(a.pull_request, b.pull_request)],
-            versioned("work_items", 1, json!({})),
-        ),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
-            &[project(), task(), id(a.pull_request, b.pull_request)],
-            versioned("work_items", 1, json!({})),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
-            &[project(), task()],
-            |values| {
-                Payload::Json(json!({
-                    "expectedVersion": version("work_items", &values[1]),
-                    "kind": "relates_to",
-                    "target": if is_a(values, &a.project) { sp.task } else { b.subtask }.to_string(),
-                }))
-            },
-        )
-        .rejecting(vec![json!({
-            "expectedVersion": version("work_items", a.task),
-            "kind": "relates_to",
-            "target": b.task.to_string(),
-        })]),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/release-claim",
-            &[project(), task()],
-            empty(),
-        ),
-        path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
             &[project(), task(), id(a.repository, b.repository)],
             versioned("work_items", 1, json!({"role": "related"})),
         ),
         path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}/primary",
-            &[project(), task(), id(a.repository, b.repository)],
-            versioned("work_items", 1, json!({})),
-        ),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-            &[project(), task(), id(a.repository, b.repository)],
-            versioned("work_items", 1, json!({})),
-        ),
-        path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
             &[project(), task(), id(&a.thread, &b.thread)],
             empty(),
-        ),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
-            &[project(), task(), id(&a.thread, &b.thread)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/watch",
-            &[project(), task()],
-            json_body(json!({"watching": true})),
         ),
         path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/work-with-worker",

@@ -32,10 +32,6 @@ pub fn router() -> Router<AppState> {
             get(list_repositories).post(register_repository),
         )
         .route(
-            "/api/v1/projects/{project_id}/repositories/{repository_id}/prepare",
-            post(prepare_registered_repository),
-        )
-        .route(
             "/api/v1/projects/{project_id}/repositories/{repository_id}/archive",
             post(archive_repository),
         )
@@ -89,10 +85,6 @@ struct RegisterRepositoryRequest {
 struct ArchiveRepositoryRequest {
     expected_version: i64,
 }
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct EmptyRequest {}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct RepositoryCommandReference {
@@ -312,84 +304,6 @@ pub(crate) async fn register_picked_repository(
         trust_acknowledged: true,
     })?;
     insert_repository(state, transaction, project_id, &request).await
-}
-
-async fn prepare_registered_repository(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath((project_id, repository_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<EmptyRequest>,
-) -> Result<Json<RepositoryView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let scope = idempotency::resource_bound_scope("repository", repository_id, "prepare")?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let role = require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::RepositoryManage,
-    )
-    .await?;
-    // The answer is the repository (owner, name, clone URL, branch): only
-    // for someone who also sees code here.
-    require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::RepositoryView,
-    )
-    .await?;
-    let reservation = match idempotency::reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let reference: RepositoryCommandReference = replay.decode()?;
-            let row = fetch_repository(&mut transaction, project_id, reference.repository_id)
-                .await?
-                .ok_or(AppError::NotFound("repository"))?;
-            transaction.commit().await?;
-            return Ok(Json(repository_view(row, role_allows_manage(role))?));
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let admission_root = state.config.data_root.clone();
-    let admission_quota = state.config.data_quota_bytes;
-    let admission_free = state.config.minimum_free_bytes;
-    tokio::task::spawn_blocking(move || {
-        crate::storage_admission::require_growth(&admission_root, admission_quota, admission_free)
-    })
-    .await
-    .map_err(|_| AppError::Internal("join storage admission"))??;
-    let row = fetch_repository(&mut transaction, project_id, repository_id)
-        .await?
-        .filter(|row| row.archived_at.is_none() && row.enabled && row.trusted)
-        .ok_or(AppError::NotFound("repository"))?;
-    idempotency::complete(
-        &mut transaction,
-        &reservation,
-        StatusCode::OK,
-        &RepositoryCommandReference { repository_id },
-    )
-    .await?;
-    transaction.commit().await?;
-    let row = if state.supervisors.cluster().is_some() {
-        // The built-in host's holder prepares it on its own disk; the
-        // repository list shows how it went.
-        queue_prepare(&state, project_id, repository_id).await?;
-        row
-    } else {
-        run_preparation(&state, project_id, repository_id, row).await?
-    };
-    Ok(Json(repository_view(row, role_allows_manage(role))?))
 }
 
 async fn run_preparation(

@@ -1064,12 +1064,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "repositories",
         Post,
-        "/api/v1/projects/{project_id}/repositories/{repository_id}/prepare",
-        RepositoryManage
-    ),
-    policy_route!(
-        "repositories",
-        Post,
         "/api/v1/projects/{project_id}/repositories/{repository_id}/archive",
         RepositoryManage
     ),
@@ -1093,12 +1087,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     policy_route!(
         "github",
-        Put,
-        "/api/v1/projects/{project_id}/integrations/github/automation",
-        GithubIntegrationManage
-    ),
-    policy_route!(
-        "github",
         Post,
         "/api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
         RepositoryPublish
@@ -1114,12 +1102,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
         PullRequestRefresh
-    ),
-    policy_route!(
-        "github",
-        Post,
-        "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/merge",
-        PullRequestMerge
     ),
     boundary_route!(
         "github",
@@ -1427,24 +1409,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "work_items",
         Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Delete,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
         "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
         WorkItemComment
     ),
@@ -1468,80 +1432,14 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     policy_route!(
         "work_items",
-        Delete,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
         Post,
         "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Delete,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}/primary",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Delete,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
         WorkItemEdit
     ),
     policy_route!(
         "work_items",
         Post,
         "/api/v1/projects/{project_id}/work-items/bulk",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/watch",
-        WorkItemView
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/release-claim",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/labels",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/projects/{project_id}/labels/{label_id}",
         WorkItemEdit
     ),
     policy_route!(
@@ -1615,18 +1513,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects/{project_id}/sheets/{sheet_id}/changes",
         SheetEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/milestones",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/projects/{project_id}/milestones/{milestone_id}",
-        WorkItemEdit
     ),
     policy_route!(
         "ai/http",
@@ -1708,12 +1594,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     policy_route!(
         "work_items",
-        Patch,
-        "/api/v1/projects/{project_id}/task-templates/{template_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
         Post,
         "/api/v1/projects/{project_id}/task-templates/{template_id}/apply",
         WorkItemCreate
@@ -1747,24 +1627,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Patch,
         "/api/v1/organizations/{organization_id}/project-templates/{template_id}",
         SettingsManage
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/recurring-tasks",
-        WorkItemCreate
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-        WorkItemCreate
-    ),
-    policy_route!(
-        "work_items",
-        Delete,
-        "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-        WorkItemCreate
     ),
     policy_route!(
         "work_items",

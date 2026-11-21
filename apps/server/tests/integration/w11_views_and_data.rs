@@ -420,11 +420,12 @@ async fn a_recurring_task_runs_once_per_occurrence_and_pauses_when_its_owner_lea
     let (status, recurring) = fixture
         .member
         .post(
-            &format!("{base}/recurring-tasks"),
-            json!({"templateId": template_id, "frequency": "weekly", "weekdays": [1, 4], "timezone": "Europe/Amsterdam"}),
+            "/api/v2/ops/recurring_create",
+            json!({"projectId": fixture.project_id, "template": template_id, "frequency": "weekly", "weekdays": [1, 4], "timezone": "Europe/Amsterdam"}),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{recurring}");
+    assert_eq!(status, StatusCode::OK, "{recurring}");
+    let recurring = recurring["value"]["recurring"].clone();
     let recurring_id = recurring["id"]
         .as_str()
         .expect("recurring")
@@ -772,8 +773,8 @@ async fn a_new_project_starts_from_a_saved_setup() {
     let (status, label) = fixture
         .owner
         .post(
-            &format!("{base}/labels"),
-            json!({"name": "Customer", "color": "#aa3366"}),
+            "/api/v2/ops/label_create",
+            json!({"projectId": fixture.project_id, "name": "Customer", "color": "#aa3366"}),
         )
         .await;
     assert!(status.is_success(), "{label}");

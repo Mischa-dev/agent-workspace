@@ -203,16 +203,17 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   const labelIds = new Map<string, string>()
   const palette: Record<string, string> = { rose: 'red', teal: 'teal', blue: 'blue', indigo: 'purple', green: 'green', rust: 'orange', slate: 'gray', orchid: 'pink' }
   for (const label of labels) {
-    const created = await me.write('POST', `/api/v1/projects/${projectId}/labels`, { name: label.name, color: palette[label.color] })
-    labelIds.set(label.name, String(created.id))
+    const created = await me.write('POST', '/api/v2/ops/label_create', { projectId, name: label.name, color: palette[label.color] })
+    labelIds.set(label.name, String((created.value as { label: { id: string } }).label.id))
   }
   const milestoneIds = new Map<string, string>()
   for (const [index, name] of milestones.entries()) {
-    const created = await me.write('POST', `/api/v1/projects/${projectId}/milestones`, {
+    const created = await me.write('POST', '/api/v2/ops/milestone_create', {
+      projectId,
       name,
       targetDate: `2026-${String(11 + Math.min(index, 1)).padStart(2, '0')}-${index === 2 ? '20' : '07'}`,
     })
-    milestoneIds.set(name, String(created.id))
+    milestoneIds.set(name, String((created.value as { id: string }).id))
   }
   const workflow = (await me.get(`/api/v1/projects/${projectId}/work-item-workflow`)) as {
     statuses?: Array<{ id: string; name: string }>
@@ -263,12 +264,12 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   let version = Number(opened.version ?? opened.workItem?.version ?? 1)
   for (const criterion of opened.acceptanceCriteria ?? []) {
     if (!featuredTask.criteria.find((c) => c.text === criterion.text)?.done) continue
-    const changed = await team[3].write(
-      'PATCH',
-      `/api/v1/projects/${projectId}/work-items/${featuredId}/acceptance-criteria/${criterion.id}`,
-      { expectedVersion: version, completed: true },
-    )
-    version = Number(changed.version ?? changed.workItemVersion ?? version + 1)
+    const changed = await team[3].write('POST', '/api/v2/ops/task_criteria_update', {
+      taskId: featuredId,
+      expectedVersion: version,
+      operations: [{ op: 'check', criterion: criterion.id }],
+    })
+    version = Number((changed.value as { version?: number }).version ?? version + 1)
   }
   for (const [index, text] of featuredTask.comments.entries()) {
     await team[[2, 0, 3][index]].write('POST', `/api/v1/projects/${projectId}/work-items/${featuredId}/comments`, {

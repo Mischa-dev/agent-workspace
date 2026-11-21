@@ -1535,16 +1535,14 @@ async fn task_link_repositories_pull_requests_and_threads() {
         "/api/v1/projects/{repo}/work-items/{task}/threads/{}",
         threads[1].1
     );
-    let (status, unlinked) = send(
-        app,
-        setup.browser.request(
-            "DELETE",
-            &thread_link,
-            Some("board-web-archived-unlink"),
-            json!({}),
-        ),
-    )
-    .await;
+    let (status, unlinked) = setup
+        .browser
+        .op(
+            app,
+            "task_link",
+            json!({"taskId": task, "conversationId": threads[1].1, "remove": true}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{unlinked}");
     let (status, refused) = send(
         app,

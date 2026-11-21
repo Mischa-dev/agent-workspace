@@ -78,7 +78,6 @@
     "/api/v1/projects/{project_id}/milestones*",
     "/api/v1/projects/{project_id}/timeline",
     "/api/v1/projects/{project_id}/task-templates*",
-    "/api/v1/projects/{project_id}/recurring-tasks*",
     "/api/v1/projects/{project_id}/imports*",
     "/api/v1/projects/{project_id}/ai/plans*",
     "/api/v1/projects/{project_id}/ai/graph",
