@@ -90,8 +90,9 @@ Raw method names, response shapes, and provider requests remain in the Codex
 adapter. The rest of the application receives typed thread IDs, turn IDs,
 normalized activity events, approval/question requests, recovery summaries,
 and redacted account status. Authenticated profile status exposes only
-`stopped`, `ready`, or `circuit_open`, a bounded failure count, and process
-start count; it does not expose PIDs, environment, filesystem paths, stderr,
+`stopped`, `ready`, `circuit_open`, or `unknown` (the built-in host runs in
+another process, which doesn't report its processes), a bounded failure
+count, and process start count; it does not expose PIDs, environment, filesystem paths, stderr,
 provider JSON, or credentials.
 
 Production mode never uses the bridge spike's automatic approval helper.

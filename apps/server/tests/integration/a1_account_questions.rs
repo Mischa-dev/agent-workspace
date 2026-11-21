@@ -290,10 +290,15 @@ async fn the_built_in_host_may_answer_a_question_with_a_large_catalog() {
         })
     };
 
-    // A catalog past 64 KiB is kept, as an action's answer.
+    // A catalog past 64 KiB is kept, as an action's answer, sent the way
+    // the host sends it (through the server's routes).
     let (host, action) = issue(CommandKind::Action).await;
     assert!(host.builtin);
-    let kept = ack(host.clone(), action, 300 * 1024).await;
+    let client = hosts::builtin::transport::client(&world.state);
+    let kept = tenancy::system("runs.host", async move {
+        client.ack(action, &answer_of(300 * 1024)).await
+    })
+    .await;
     assert!(kept.is_ok(), "{kept:?}");
     let answer = tenancy::system("runs.host", commands::answer_of(&world.pool, action))
         .await

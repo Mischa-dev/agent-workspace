@@ -46,6 +46,9 @@ const MAX_ACK_BYTES: usize = 65_536;
 /// account's catalog of up to `model_catalog::MAX_CATALOG_MODELS` models
 /// with their descriptions). It is read once and the row deleted.
 const MAX_BUILTIN_ACTION_ACK_BYTES: usize = 1024 * 1024;
+/// The biggest acknowledgement request taken over HTTP: the largest answer
+/// with room for its envelope.
+pub const MAX_ACK_BODY_BYTES: usize = MAX_BUILTIN_ACTION_ACK_BYTES + 64 * 1024;
 /// How often a waiting long-poll or stream looks again.
 const POLL_EVERY: Duration = Duration::from_secs(1);
 

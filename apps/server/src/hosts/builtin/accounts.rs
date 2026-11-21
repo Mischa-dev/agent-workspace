@@ -32,6 +32,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     error::AppError,
+    harness::manifest::ModelEntry,
     hosts::commands::{self, NewCommand},
     provider::{AccountHandle, HarnessError, LoginStart, RateLimitSummary, adapter::ResetOutcome},
 };
@@ -46,9 +47,11 @@ const IN_FLIGHT_MARGIN: Duration = Duration::from_secs(15);
 /// account, then its usage windows), each within the harness's limit.
 const REQUESTS_PER_QUESTION: u32 = 2;
 const LOOK_EVERY: Duration = Duration::from_millis(200);
-/// The longest model description an answer carries: a whole catalog of
-/// them stays well under the mebibyte an action's answer may hold.
+/// The longest model description an answer carries.
 const MAX_DESCRIPTION_CHARS: usize = 1_000;
+/// The most a model list may take in an answer, under the mebibyte an
+/// action's answer may hold.
+const MAX_MODELS_BYTES: usize = 900 * 1024;
 
 /// What the host made of a question.
 #[derive(Debug)]
@@ -418,24 +421,42 @@ async fn carry_out(
             },
         },
         AccountQuestion::Models => {
-            // No more than the catalog keeps, with descriptions of a few
-            // lines, so the answer fits in an acknowledgement.
-            let mut models = session.list_models().await?;
-            models.truncate(crate::model_catalog::MAX_CATALOG_MODELS);
-            for model in &mut models {
-                if let Some(description) = &mut model.description
-                    && let Some((cut, _)) = description.char_indices().nth(MAX_DESCRIPTION_CHARS)
-                {
-                    description.truncate(cut);
-                }
+            // The whole list, so the catalog chooses what it keeps (it saves
+            // room for models people edited); only its size is bounded.
+            AccountAnswer::Models {
+                models: fit_models(session.list_models().await?),
             }
-            AccountAnswer::Models { models }
         }
         AccountQuestion::CheckEnvironment { .. } => {
             return Err(HarnessError::Unsupported("environments").into());
         }
     };
     Ok(answer)
+}
+
+/// A model list that fits in an answer: descriptions are cut to a few
+/// lines; if the list is still too big they go, and only then do models
+/// at the end of the list.
+fn fit_models(mut models: Vec<ModelEntry>) -> Vec<ModelEntry> {
+    let size = |models: &[ModelEntry]| serde_json::to_vec(models).map_or(usize::MAX, |b| b.len());
+    for model in &mut models {
+        if let Some(description) = &mut model.description
+            && let Some((cut, _)) = description.char_indices().nth(MAX_DESCRIPTION_CHARS)
+        {
+            description.truncate(cut);
+        }
+    }
+    if size(&models) <= MAX_MODELS_BYTES {
+        return models;
+    }
+    for model in &mut models {
+        model.description = None;
+    }
+    while models.len() > 1 && size(&models) > MAX_MODELS_BYTES {
+        let keep = models.len() * MAX_MODELS_BYTES / size(&models).max(1);
+        models.truncate(keep.clamp(1, models.len() - 1));
+    }
+    models
 }
 
 fn login_started(start: LoginStart) -> LoginStarted {
@@ -568,4 +589,40 @@ pub async fn health(
             .await
             .unwrap_or_default(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model(n: usize, description: usize) -> ModelEntry {
+        ModelEntry {
+            id: format!("model-{n}"),
+            display_name: format!("Model {n}"),
+            description: Some("d".repeat(description)),
+            ..ModelEntry::default()
+        }
+    }
+
+    #[test]
+    fn a_long_model_list_is_kept_whole_with_short_descriptions() {
+        // More models than the catalog keeps: all of them reach it, so it
+        // can keep room for the ones people edited.
+        let fitted = fit_models((0..500).map(|n| model(n, 1_500)).collect());
+        assert_eq!(fitted.len(), 500);
+        assert!(fitted.iter().all(|model| {
+            model.description.as_ref().map(|d| d.chars().count()) == Some(MAX_DESCRIPTION_CHARS)
+        }));
+    }
+
+    #[test]
+    fn a_list_too_big_even_so_loses_descriptions_then_its_tail() {
+        let fitted = fit_models((0..1_500).map(|n| model(n, 900)).collect());
+        assert_eq!(fitted.len(), 1_500);
+        assert!(fitted.iter().all(|model| model.description.is_none()));
+        let huge = fit_models((0..20_000).map(|n| model(n, 10)).collect());
+        assert!(huge.len() < 20_000 && !huge.is_empty());
+        assert!(serde_json::to_vec(&huge).expect("json").len() <= MAX_MODELS_BYTES);
+        assert_eq!(huge[0].id, "model-0");
+    }
 }

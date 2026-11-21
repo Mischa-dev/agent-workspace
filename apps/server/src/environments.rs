@@ -320,6 +320,13 @@ fn optional_text(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// Whether the redaction rewrites `id` (it reads like a credential, such
+/// as `Basic production`): it would reach the host changed, so a new or
+/// changed one isn't taken, and a check of one saved earlier says so.
+fn rewritten_on_the_way(id: Option<&str>) -> bool {
+    id.is_some_and(|id| crate::run_log::redact(id) != id)
+}
+
 async fn clean(
     state: &AppState,
     project_id: Uuid,
@@ -339,14 +346,10 @@ async fn clean(
         .manifest(&request.harness)
         .ok_or(AppError::Validation("harness"))?;
     let provider_environment_id = optional_text(request.provider_environment_id);
-    // An id the redaction would rewrite (one that reads like a credential,
-    // such as `Basic production`) would reach the host changed, so it isn't
-    // taken.
-    if provider_environment_id.as_deref().is_some_and(|id| {
-        id.chars().count() > 200
-            || id.chars().any(char::is_control)
-            || crate::run_log::redact(id) != id
-    }) {
+    if provider_environment_id
+        .as_deref()
+        .is_some_and(|id| id.chars().count() > 200 || id.chars().any(char::is_control))
+    {
         return Err(AppError::Validation("providerEnvironmentId"));
     }
     if manifest.runs_on == RunLocation::Cloud && provider_environment_id.is_none() {
@@ -493,6 +496,9 @@ pub(crate) async fn create_in(
 ) -> Result<EnvironmentRow, AppError> {
     let make_default = request.make_default;
     let clean = clean(state, project_id, request).await?;
+    if rewritten_on_the_way(clean.provider_environment_id.as_deref()) {
+        return Err(AppError::Validation("providerEnvironmentId"));
+    }
     let id = Uuid::now_v7();
     let row = sqlx::query_as::<_, EnvironmentRow>(&format!(
         r#"
@@ -602,14 +608,20 @@ pub(crate) async fn update_in(
         .ok_or(AppError::Validation("expectedVersion"))?;
     let make_default = request.make_default;
     let clean = clean(state, project_id, request).await?;
-    let current = sqlx::query_scalar::<_, i64>(
-        "SELECT version FROM project_environments WHERE project_id = $1 AND id = $2 AND archived_at IS NULL FOR UPDATE",
+    let (current, current_target) = sqlx::query_as::<_, (i64, Option<String>)>(
+        "SELECT version, provider_environment_id FROM project_environments WHERE project_id = $1 AND id = $2 AND archived_at IS NULL FOR UPDATE",
     )
     .bind(project_id)
     .bind(environment_id)
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("environment"))?;
+    // One saved before this rule stays, so other edits still go through.
+    if clean.provider_environment_id != current_target
+        && rewritten_on_the_way(clean.provider_environment_id.as_deref())
+    {
+        return Err(AppError::Validation("providerEnvironmentId"));
+    }
     if current != expected_version {
         return Err(AppError::VersionConflict {
             resource: "environment",
@@ -895,6 +907,15 @@ pub(crate) async fn check_in(
                 manifest.display_name
             ),
         ),
+        (Some(manifest), Some(_))
+            if manifest.runs_on == RunLocation::Cloud
+                && rewritten_on_the_way(environment.provider_environment_id.as_deref()) =>
+        {
+            (
+                false,
+                "This environment's ID reads like a password, so it can't be sent as it is. Change it in the environment's settings.".to_owned(),
+            )
+        }
         (Some(manifest), Some(account)) if manifest.runs_on == RunLocation::Cloud => {
             let provider_environment = environment
                 .provider_environment_id
