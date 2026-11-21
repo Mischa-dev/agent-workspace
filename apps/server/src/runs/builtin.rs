@@ -59,6 +59,21 @@ pub async fn open(
     transaction: &mut Transaction<'_, Postgres>,
     run: &NewBuiltinRun<'_>,
 ) -> Result<(), AppError> {
+    // A2.14: refused once its agent's budget on what runs cost is used up,
+    // as a run on any host is (`runs::ops::open_with`).
+    let account =
+        sqlx::query_scalar::<_, Uuid>("SELECT actor_id FROM execution_workers WHERE id = $1")
+            .bind(run.execution_worker_id)
+            .fetch_optional(&mut **transaction)
+            .await?
+            .ok_or(AppError::NotFound("execution_worker"))?;
+    Box::pin(crate::budgets::admit_run(
+        transaction,
+        run.project_id,
+        Some(run.conversation_id),
+        account,
+    ))
+    .await?;
     let opened = sqlx::query(
         r#"
         INSERT INTO runs (

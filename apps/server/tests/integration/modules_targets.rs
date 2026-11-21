@@ -145,13 +145,12 @@ async fn task_and_board_tools_check_the_module_where_they_act() {
     )
     .await;
     assert_module_off(&linked, "Whiteboards");
-    let links = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM whiteboard_links WHERE whiteboard_id = $1",
-    )
-    .bind(board.parse::<Uuid>().expect("board"))
-    .fetch_one(&setup.pool)
-    .await
-    .expect("links");
+    let links =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM board_links WHERE whiteboard_id = $1")
+            .bind(board.parse::<Uuid>().expect("board"))
+            .fetch_one(&setup.pool)
+            .await
+            .expect("links");
     assert_eq!(links, 0, "a board was linked where Whiteboards is off");
     for arguments in [
         json!({"title": "Named here", "workspaceId": setup.organization_id}),

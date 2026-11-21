@@ -19,9 +19,13 @@ pub mod assistant;
 pub mod capacity;
 pub mod driver;
 pub mod http;
+pub mod install;
+pub mod program;
+pub mod recovery;
 pub mod report;
 pub mod requests;
 pub mod transport;
+pub mod worktrees;
 
 use crate::{
     AppState,

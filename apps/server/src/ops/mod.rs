@@ -48,6 +48,7 @@ pub mod refs;
 pub mod registry;
 pub mod target;
 pub mod web;
+pub mod wrapped;
 
 pub use context::{Caller, Edge, OpCall, OpContext};
 pub use dispatch::{Answer, DispatchRequest, Unkeyed, dispatch, may_run};
@@ -108,6 +109,18 @@ pub enum Idempotency {
     None,
 }
 
+/// Where a describe operation's thing reads as an MCP resource (K2.20).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResourceAddress {
+    /// Under the server's scheme, naming the one input field in braces:
+    /// `pages/{pageId}`.
+    pub path: &'static str,
+    pub mime_type: &'static str,
+    /// Where the value keeps the text served (a JSON pointer); without one
+    /// the whole value is served as JSON.
+    pub text_at: Option<&'static str>,
+}
+
 /// One operation. A unit struct implements it; `registry::entry::<O>()`
 /// erases it into the registry.
 pub trait Operation: Send + Sync + 'static {
@@ -139,6 +152,13 @@ pub trait Operation: Send + Sync + 'static {
     /// lists across all of them (each filtered by the caller's access
     /// there) instead of asking which. Only reads may span.
     const SPANS_WORKSPACES: bool = false;
+    /// A call that names no workspace, from a caller who reaches several,
+    /// acts in the one its credential was made in (as the hand-written tool
+    /// it replaced did), when it was made in one of them.
+    const HOME_WORKSPACE_BY_DEFAULT: bool = false;
+    /// Reads as an MCP resource at this address (a describe operation
+    /// whose input is one id).
+    const RESOURCE: Option<ResourceAddress> = None;
     /// Removes or overwrites something a person would miss.
     const DESTRUCTIVE: bool = false;
     /// Offered as an automation action. Writes are by default.
@@ -156,6 +176,10 @@ pub trait Operation: Send + Sync + 'static {
     /// transaction's scope is every workspace the caller belongs to, not
     /// only the one it is called in.
     const ACROSS_WORKSPACES: bool = false;
+    /// The kind of thing the workspace's guards see it change, when its
+    /// target is wider than what it writes (a bulk record write aimed at
+    /// its space is still a change to records).
+    const GUARD_KIND: Option<&'static str> = None;
 
     type Input: DeserializeOwned + Serialize + JsonSchema + Targeted + Send + 'static;
     type Output: Serialize + JsonSchema + Send + 'static;
@@ -164,6 +188,20 @@ pub trait Operation: Send + Sync + 'static {
     /// batch, say, where a small one answers at once. Never a preview.
     fn runs_long(_input: &Self::Input) -> bool {
         Self::LONG
+    }
+
+    /// Turns what the input names by something other than its id (a link,
+    /// say) into the id, before the call is located and checked, so a
+    /// reference by link is checked exactly as one by id. `workspace` is
+    /// the one the call named, if any. Leaves anything it can't find (or
+    /// the caller can't see) as written, which then isn't found.
+    fn resolve_refs(
+        _state: &crate::AppState,
+        _caller: &Caller,
+        _workspace: Option<uuid::Uuid>,
+        _input: &mut serde_json::Value,
+    ) -> impl Future<Output = Result<(), OpError>> + Send {
+        async { Ok(()) }
     }
 
     /// Does the work. Writes run inside the dispatcher's transaction

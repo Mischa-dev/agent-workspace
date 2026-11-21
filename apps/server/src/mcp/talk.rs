@@ -159,9 +159,9 @@ pub(super) struct MarkReadArguments {
     pub from_message_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PeopleSearchArguments {
+pub(crate) struct PeopleSearchArguments {
     /// Part of a name or handle. Leave it out to list everyone.
     pub query: Option<String>,
     // Read by the MCP middleware, which scopes the call to this project.
@@ -494,7 +494,7 @@ pub struct ReadMark {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct Person {
+pub(crate) struct PersonFound {
     pub id: String,
     pub name: String,
     pub handle: String,
@@ -505,8 +505,8 @@ pub(super) struct Person {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PeopleValue {
-    pub people: Vec<Person>,
+pub(crate) struct PeopleValue {
+    pub people: Vec<PersonFound>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -1364,8 +1364,12 @@ pub(super) async fn pinned_items(
                         'Message from ' || COALESCE(author.display_name, 'someone')) AS title,
                COALESCE(page.body, decision.detail, message.plain_text, '') AS text
         FROM conversation_pins pin
+        -- A page shows while it is in the conversation's space: one moved
+        -- out since it was pinned is no longer the conversation's to show.
         LEFT JOIN project_pages page
           ON pin.target_kind = 'page' AND page.id = pin.target_id AND page.archived_at IS NULL
+         AND page.project_id = (SELECT pinned_in.project_id FROM conversations pinned_in
+                                WHERE pinned_in.id = pin.conversation_id)
         LEFT JOIN project_decisions decision
           ON pin.target_kind = 'decision' AND decision.id = pin.target_id
          AND decision.status = 'active'
@@ -2062,7 +2066,7 @@ struct PersonRow {
     projects: Vec<String>,
 }
 
-pub(super) async fn people_search(
+pub(crate) async fn people_search(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PeopleSearchArguments,
@@ -2129,7 +2133,7 @@ pub(super) async fn people_search(
         Ok::<_, AppError>(ToolResult::ok(PeopleValue {
             people: rows
                 .into_iter()
-                .map(|row| Person {
+                .map(|row| PersonFound {
                     id: row.id.to_string(),
                     name: row.name,
                     handle: row.handle,

@@ -72,14 +72,9 @@ fn named(state: &AppState, mut session: SessionView) -> SessionView {
 /// knows, otherwise the runner's own word with each part capitalised
 /// (`night_runner` reads "Night Runner").
 pub(crate) fn harness_name(state: &AppState, harness: &str) -> String {
-    if let Some(manifest) = state.supervisors.manifest(harness) {
-        return manifest.display_name.clone();
-    }
-    match harness {
-        // The usual runner kinds, named as their adapters name themselves.
-        "claude_code" => crate::provider::claude_code::claude_code_manifest().display_name,
-        "codex" => crate::provider::codex_manifest().display_name,
-        other => readable(other),
+    match state.supervisors.manifest(harness) {
+        Some(manifest) => manifest.display_name.clone(),
+        None => readable(harness),
     }
 }
 

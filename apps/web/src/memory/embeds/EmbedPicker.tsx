@@ -8,19 +8,17 @@ import { embedPath, moduleEmbedTarget } from './moduleEmbed'
 /**
  * Embeds something of the app in a page (AWD-53), from the page editor's
  * toolbar: a pasted address of a task, page, whiteboard, thread or task list
- * becomes the piece its module declares. `onCollection` offers a collection
- * view instead, where collections are on, and `onSheet` a sheet's range.
+ * becomes the piece its module declares. `others` are the modules' own
+ * pickers (M1.5), such as a collection's view or a sheet's range.
  */
 export default function EmbedPicker({
   onClose,
-  onCollection,
   onPick,
-  onSheet,
+  others,
 }: {
   onClose: () => void
-  onCollection: (() => void) | null
   onPick: (embed: { href: string; label: string }) => void
-  onSheet: (() => void) | null
+  others: { id: string; label: string; onOpen: () => void }[]
 }) {
   const [address, setAddress] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -76,16 +74,11 @@ export default function EmbedPicker({
         <Button busy={busy} disabled={!address.trim()} size="sm" type="submit" variant="primary">
           Add to page
         </Button>
-        {onCollection ? (
-          <Button onClick={onCollection} size="sm">
-            Collection view…
+        {others.map((other) => (
+          <Button key={other.id} onClick={other.onOpen} size="sm">
+            {other.label}
           </Button>
-        ) : null}
-        {onSheet ? (
-          <Button onClick={onSheet} size="sm">
-            Sheet…
-          </Button>
-        ) : null}
+        ))}
         <Button onClick={onClose} size="sm" variant="ghost">
           Cancel
         </Button>

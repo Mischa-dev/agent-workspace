@@ -55,6 +55,15 @@ impl FromStr for Environment {
 #[derive(Clone)]
 pub struct SecretString(String);
 
+/// Where the built-in host's own program sends its protocol calls.
+#[derive(Clone, Debug)]
+pub struct BuiltinHostRemote {
+    /// The server's address, such as `http://server:3100`.
+    pub server_url: String,
+    /// The install's built-in host token.
+    pub token: SecretString,
+}
+
 impl SecretString {
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
@@ -93,6 +102,10 @@ pub struct AppConfig {
     pub server_addr: SocketAddr,
     pub webhook_addr: SocketAddr,
     pub allowed_origins: Vec<String>,
+    /// Extra names (`host` or `host:port`) MCP accepts as the address it is
+    /// called by, besides loopback and the configured origins: an internal
+    /// name such as a container's, used by a host program beside the server.
+    pub mcp_hosts: Vec<String>,
     /// Operator-set webhook origins (`scheme://host[:port]`) that may use
     /// http and private or tailnet addresses, such as an agent host's wakeup
     /// listener on a Tailscale IP. Every other webhook must be public https.
@@ -229,6 +242,10 @@ pub struct AppConfig {
     /// repositories on this machine's disk): `AGENT_WORKSPACE_BUILTIN_HOST`,
     /// default on.
     pub builtin_host: bool,
+    /// A1.17: set only in the built-in host's own program
+    /// (`agent-workspace-host`): the server it serves and the install's
+    /// token, so its protocol calls go over HTTP instead of in process.
+    pub builtin_host_remote: Option<BuiltinHostRemote>,
     /// How long a stopping instance answers "not ready" before it closes its
     /// sockets and stops taking requests, so the balancer moves off it
     /// first: `AGENT_WORKSPACE_DRAIN_SECONDS`, default 5.
@@ -551,6 +568,7 @@ impl AppConfig {
         let public_origin = public_origin(values)?;
         let live_origin = live_origin(values, public_origin.as_deref())?;
         let allowed_origins = allowed_origins(values, environment, public_origin.as_deref())?;
+        let mcp_hosts = mcp_hosts(values)?;
 
         validate_loopback("SERVER_ADDR", server_addr, environment)?;
         validate_loopback("WEBHOOK_ADDR", webhook_addr, environment)?;
@@ -881,6 +899,7 @@ impl AppConfig {
             server_addr,
             webhook_addr,
             allowed_origins,
+            mcp_hosts,
             webhook_trusted_origins,
             public_origin,
             database_listen_url: crate::realtime::wake::listen_url(
@@ -937,6 +956,7 @@ impl AppConfig {
             directory_workspace_sources,
             roles,
             builtin_host,
+            builtin_host_remote: None,
             drain: Duration::from_secs(drain_seconds),
             startup_wait: Duration::from_secs(startup_wait_seconds),
             update_check_url,
@@ -1486,6 +1506,34 @@ fn client_address_header(values: &BTreeMap<String, String>) -> Result<Option<Str
         });
     }
     Ok(Some(name))
+}
+
+fn mcp_hosts(values: &BTreeMap<String, String>) -> Result<Vec<String>, ConfigError> {
+    let key = format!("{PREFIX}MCP_HOSTS");
+    let configured = values.get(&key).map(String::as_str).unwrap_or_default();
+    let mut hosts = Vec::new();
+    for candidate in configured
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let authority = candidate
+            .parse::<http::uri::Authority>()
+            .ok()
+            .filter(|authority| {
+                authority.as_str() == candidate
+                    && !candidate.contains('@')
+                    && !authority.host().is_empty()
+            });
+        let Some(authority) = authority else {
+            return Err(ConfigError::Invalid {
+                key: key.clone(),
+                reason: format!("{candidate}: use a name such as app or app:3100"),
+            });
+        };
+        hosts.push(authority.as_str().to_ascii_lowercase());
+    }
+    Ok(hosts)
 }
 
 fn webhook_trusted_origins(values: &BTreeMap<String, String>) -> Result<Vec<String>, ConfigError> {
@@ -2708,6 +2756,24 @@ mod tests {
                 "AGENT_WORKSPACE_WEBHOOK_TRUSTED_ORIGINS".to_owned(),
                 invalid.to_owned(),
             );
+            assert!(
+                AppConfig::from_values(&values).is_err(),
+                "accepted {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_hosts_are_bare_names() {
+        let mut values = base_values();
+        values.insert(
+            "AGENT_WORKSPACE_MCP_HOSTS".to_owned(),
+            " app , App:3100 ".to_owned(),
+        );
+        let config = AppConfig::from_values(&values).expect("config");
+        assert_eq!(config.mcp_hosts, ["app", "app:3100"]);
+        for invalid in ["http://app:3100", "app/mcp", "user@app", ":3100"] {
+            values.insert("AGENT_WORKSPACE_MCP_HOSTS".to_owned(), invalid.to_owned());
             assert!(
                 AppConfig::from_values(&values).is_err(),
                 "accepted {invalid}"

@@ -4,7 +4,9 @@ import { toastError } from '../app/mutations'
 import { useWorkspaceId } from '../app/workspace'
 import { useOp } from '../api/ops'
 import { Button, showToast } from '../ui'
+import type { ModulePanelRef } from '../api/generated/operations'
 import { useHostOffers } from './addPaths'
+import { HostPanel } from './HostPanel'
 
 /**
  * A2.20: "Start one on a linked host": the offers of the hosts you may use
@@ -20,6 +22,7 @@ export function HostOfferList() {
   const workspaceId = useWorkspaceId() ?? undefined
   const listed = useHostOffers()
   const [page, setPage] = useState<{ hostName: string; url: string } | null>(null)
+  const [panel, setPanel] = useState<{ ref: ModulePanelRef; title: string } | null>(null)
   const start = useOp('agent_offer_start', { workspaceId })
   if (listed.length === 0) return null
   return (
@@ -54,6 +57,11 @@ export function HostOfferList() {
                       onError: (error) =>
                         toastError(adds ? `${title} wasn’t added` : `${hostName} wasn’t reached`, error),
                       onSuccess: (result) => {
+                        if (result.panel) {
+                          setPage(null)
+                          setPanel({ ref: result.panel, title })
+                          return
+                        }
                         setPage(result.page ? { hostName, url: result.page } : null)
                         showToast(
                           result.accountId
@@ -85,6 +93,9 @@ export function HostOfferList() {
           </a>
           ; anything secret, like a model key, is entered there and never passes through here.
         </p>
+      )}
+      {panel && (
+        <HostPanel onClose={() => setPanel(null)} panel={panel.ref} title={panel.title} workspaceId={workspaceId} />
       )}
     </>
   )

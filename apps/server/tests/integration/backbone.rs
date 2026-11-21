@@ -1655,6 +1655,9 @@ async fn retention_runs_as_scheduled_jobs() {
     .await
     .expect("finished deliveries");
     let registry = jobs::default_registry();
+    // The worktrees' upkeep is the built-in host's own job: only the
+    // process holding its lease, where the worktrees are, runs it.
+    assert!(registry.host_kinds().contains(&"retention.worktrees"));
     jobs::ensure_recurring(&setup.pool, &registry)
         .await
         .expect("schedule");

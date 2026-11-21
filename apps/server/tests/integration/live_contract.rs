@@ -415,6 +415,8 @@ async fn conformance(name: &str, target: Target) {
         say(&world, &owner, general, "live-missed-0").await,
         say(&world, &owner, general, "live-missed-1").await,
     ];
+    // Missed means in the log: a message still being sequenced comes live.
+    world.cluster.sequenced().await;
     let resumed = call(
         api,
         &owner,

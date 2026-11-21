@@ -15,6 +15,7 @@ impl CoreModule for Module {
     fn register(&self, module: &mut Registrar<'_>) {
         module.routes(crate::collections::http::router);
         module.operations(crate::collections::ops::register_ops);
+        module.operations(crate::collections::tool_ops::register_ops);
         module.operations(crate::forms::register_ops);
         module.operations(crate::collections::record_templates::register_ops);
         module.operations(crate::views::ops::register_ops);

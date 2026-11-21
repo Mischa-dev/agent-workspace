@@ -511,7 +511,7 @@ pub(crate) struct ProjectOverview {
     /// Collections whose records act like tasks, such as "Bugs": make one
     /// with task_create (collection: "Bugs") and list them with task_list
     /// (collection); their fields are the collection's own
-    /// (collection_describe).
+    /// (collection_get).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub task_collections: Vec<String>,
 }

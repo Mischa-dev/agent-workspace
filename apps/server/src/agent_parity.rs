@@ -40,26 +40,26 @@ mod tests {
 
     /// Every web write, in `MUTATING_ENTRY_POINTS` order.
     const WEB_WRITES: &[(MutationMethod, &str, Parity)] = &[
-        (Put, "/api/v1/settings/values/{key}", Tool("settings_set")),
+        (Put, "/api/v1/settings/values/{key}", Tool("setting_update")),
         (
             Post,
             "/api/v1/settings/values/{key}/reset",
-            Tool("settings_set"),
+            Tool("setting_update"),
         ),
         (
             Put,
             "/api/v1/projects/{project_id}/layout",
-            Tool("project_layout_set"),
+            Tool("layout_update"),
         ),
         (
             Put,
             "/api/v1/projects/{project_id}/layout/rules",
-            Tool("project_layout_set"),
+            Tool("layout_update"),
         ),
         (
             Put,
             "/api/v1/organizations/{organization_id}/layout",
-            Tool("project_layout_set"),
+            Tool("layout_update"),
         ),
         (
             Put,
@@ -74,17 +74,17 @@ mod tests {
         (
             Post,
             "/api/v1/organizations/{organization_id}/layout/presets",
-            Tool("layout_preset_write"),
+            Tool("layout_preset_create"),
         ),
         (
             Patch,
             "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-            Tool("layout_preset_write"),
+            Tool("layout_preset_update"),
         ),
         (
             Delete,
             "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-            Tool("layout_preset_write"),
+            Tool("layout_preset_update"),
         ),
         (
             Post,
@@ -129,17 +129,17 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/agent-profiles",
-            Tool("agent_profile_write"),
+            Tool("agent_profile_set"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            Tool("agent_profile_write"),
+            Tool("agent_profile_set"),
         ),
         (
             Delete,
             "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            Tool("agent_profile_write"),
+            Tool("agent_profile_set"),
         ),
         (
             Put,
@@ -226,17 +226,17 @@ mod tests {
         (
             Post,
             "/api/v1/organizations/{organization_id}/roles",
-            Tool("role_write"),
+            Tool("role_create"),
         ),
         (
             Patch,
             "/api/v1/organizations/{organization_id}/roles/{role_id}",
-            Tool("role_write"),
+            Tool("role_update"),
         ),
         (
             Delete,
             "/api/v1/organizations/{organization_id}/roles/{role_id}",
-            Tool("role_write"),
+            Tool("role_delete"),
         ),
         (
             Put,
@@ -246,7 +246,7 @@ mod tests {
         (
             Put,
             "/api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
-            Tool("role_assign"),
+            Tool("app_limit_set"),
         ),
         (
             Post,
@@ -271,12 +271,12 @@ mod tests {
         (
             Post,
             "/api/v1/organizations/{organization_id}/invitations",
-            Tool("invitation_write"),
+            Tool("invitation_create"),
         ),
         (
             Post,
             "/api/v1/workspace-invitations/{invitation_id}/revoke",
-            Tool("invitation_write"),
+            Tool("invitation_update"),
         ),
         (
             Post,
@@ -452,7 +452,7 @@ mod tests {
         (
             Post,
             "/api/v1/agent-runs/{id}/acknowledge-failure",
-            Tool("run_dismiss_failure"),
+            Tool("run_failure_hide"),
         ),
         (
             Post,
@@ -534,32 +534,32 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
-            Tool("model_catalog_write"),
+            Tool("model_catalog_set"),
         ),
         (
             Put,
             "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-            Tool("model_catalog_write"),
+            Tool("model_catalog_set"),
         ),
         (
             Delete,
             "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-            Tool("model_catalog_write"),
+            Tool("model_catalog_set"),
         ),
         (
             Post,
             "/api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
-            Tool("model_catalog_write"),
+            Tool("model_catalog_set"),
         ),
         (
             Put,
             "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-            Tool("model_catalog_write"),
+            Tool("model_catalog_set"),
         ),
         (
             Delete,
             "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-            Tool("model_catalog_write"),
+            Tool("model_catalog_set"),
         ),
         (
             Post,
@@ -610,13 +610,13 @@ mod tests {
             Tool("thread_start"),
         ),
         (Patch, "/api/v1/threads/{id}", Tool("thread_update")),
-        (Post, "/api/v1/projects/{id}/pages", Tool("page_write")),
+        (Post, "/api/v1/projects/{id}/pages", Tool("page_create")),
         (
             Post,
             "/api/v1/projects/{id}/pages/import",
-            Person("a file from the person's own computer; agents write the page with page_write"),
+            Person("a file from the person's own computer; agents write the page with page_create"),
         ),
-        (Patch, "/api/v1/pages/{id}", Tool("page_write")),
+        (Patch, "/api/v1/pages/{id}", Tool("page_update")),
         (
             Post,
             "/api/v1/pages/{id}/document/sync",
@@ -625,9 +625,13 @@ mod tests {
         (
             Post,
             "/api/v1/pages/{id}/document/updates",
-            Tool("page_edit"),
+            Tool("page_update_blocks"),
         ),
-        (Post, "/api/v1/pages/{id}/comments", Tool("page_comment")),
+        (
+            Post,
+            "/api/v1/pages/{id}/comments",
+            Tool("page_comment_create"),
+        ),
         (
             Patch,
             "/api/v1/pages/{id}/comments/{comment_id}",
@@ -962,17 +966,17 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/invitations",
-            Tool("invitation_write"),
+            Tool("invitation_create"),
         ),
         (
             Post,
             "/api/v1/project-invitations/{invitation_id}/revoke",
-            Tool("invitation_write"),
+            Tool("invitation_update"),
         ),
         (
             Post,
             "/api/v1/project-invitations/{invitation_id}/replace",
-            Tool("invitation_write"),
+            Tool("invitation_update"),
         ),
         (
             Post,
@@ -1051,6 +1055,28 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/host/builtin/enrol",
+            Plumbing("the built-in host's own program enrolling with the code its operator wrote"),
+        ),
+        (
+            Post,
+            "/api/v1/connected-modules/token",
+            Plumbing("a connected module trading its one-time install code"),
+        ),
+        (
+            Post,
+            "/api/v1/modules/{module_id}/events",
+            Plumbing("a connected module sending in an event signed with its install's secret"),
+        ),
+        (
+            Post,
+            "/api/v1/modules/{module_id}/frames/redeem",
+            Plumbing(
+                "a connected module redeeming a framed panel's launch token, signed with its install's secret",
+            ),
+        ),
+        (
+            Post,
             "/api/v1/host/describe",
             Plumbing("a host describing itself with its own credential"),
         ),
@@ -1090,6 +1116,11 @@ mod tests {
             Plumbing(
                 "a built-in assistant run asking for its next model turn, with its own credential",
             ),
+        ),
+        (
+            Post,
+            "/api/v1/host/runs/{run_id}/stream",
+            Plumbing("a run's reply shown live as it arrives, with the run's own credential"),
         ),
         (Post, "/oauth/register", Plumbing("OAuth")),
         (Post, "/oauth/authorize", Plumbing("OAuth")),
@@ -1300,52 +1331,52 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/collections",
-            Tool("collection_write"),
+            Tool("collection_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/collections/{collection_id}",
-            Tool("collection_write"),
+            Tool("collection_update"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/collections/{collection_id}/fields",
-            Tool("collection_write"),
+            Tool("collection_update"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/collections/{collection_id}/fields/{field_id}",
-            Tool("collection_write"),
+            Tool("collection_update"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/collections/{collection_id}/records",
-            Tool("record_write"),
+            Tool("record_create_many"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/collections/{collection_id}/records/{record_id}",
-            Tool("record_write"),
+            Tool("record_update_many"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/sheets",
-            Tool("sheet_write"),
+            Tool("sheet_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/sheets/{sheet_id}",
-            Tool("sheet_write"),
+            Tool("sheet_update"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/sheets/import",
-            Tool("sheet_write"),
+            Tool("sheet_create"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/sheets/{sheet_id}/changes",
-            Tool("sheet_write"),
+            Tool("sheet_update"),
         ),
         (
             Post,
@@ -1450,12 +1481,12 @@ mod tests {
         (
             Post,
             "/api/v1/projects/{project_id}/save-as-template",
-            Tool("project_template_write"),
+            Tool("project_template_create"),
         ),
         (
             Patch,
             "/api/v1/organizations/{organization_id}/project-templates/{template_id}",
-            Tool("project_template_write"),
+            Tool("project_template_update"),
         ),
         (
             Post,

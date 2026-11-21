@@ -96,6 +96,7 @@ pub fn tool_of(meta: &OpMeta) -> Tool {
                 "description": "The workspace to act in, by id or slug. Needed only when you reach more than one and the target doesn't say which.",
             }),
         );
+        properties.insert("context".into(), crate::replies::asker::schema());
         if meta.kind.writes() {
             properties.insert(
                 "clientRequestId".into(),
@@ -261,6 +262,13 @@ async fn request(
                 .await
                 .map_err(|error| OpError::logged("workspace", &error.into()))?;
             Some(target::workspace_named(&mut connection, &text).await?)
+        }
+        Some(Value::Bool(_)) => {
+            return Err(OpError::invalid(
+                "workspace",
+                "workspace is a workspace's id or slug; for the whole workspace, say \
+                 wholeWorkspace: true.",
+            ));
         }
         Some(_) => {
             return Err(OpError::invalid(

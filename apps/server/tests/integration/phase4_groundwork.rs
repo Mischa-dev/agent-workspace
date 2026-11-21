@@ -193,6 +193,24 @@ async fn a_pull_request_from_a_private_thread_stays_private() {
     assert_eq!(hidden, missing);
     let public = mara_call("pull_request_get", json!({"identifier": open_url})).await;
     assert_eq!(public["outcome"], "ok", "{public}");
+    // A link works through the web's and the v2 API's edge too, not only
+    // MCP's.
+    let (status, through_web) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/pull_request_get", setup.organization_id),
+            None,
+            json!({"identifier": private_url}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{through_web}");
+    assert_eq!(
+        through_web["value"]["id"],
+        private.to_string(),
+        "{through_web}"
+    );
 
     // task_link: nobody links a PR they can't see.
     let created = call(

@@ -87,7 +87,9 @@ export function documentCss(document: ThemeDocument): string {
 
 /**
  * Puts a theme's CSS last in <head>, after the app's own stylesheets, so it
- * wins ties; '' removes it.
+ * wins ties; '' removes it. A page loaded later adds its stylesheet after
+ * it, so the theme's style element is moved back to the end each time one
+ * arrives.
  */
 export function applyThemeCss(css: string) {
   const existing = document.getElementById(THEME_STYLE_ID)
@@ -98,5 +100,20 @@ export function applyThemeCss(css: string) {
   const style = existing ?? document.createElement('style')
   style.id = THEME_STYLE_ID
   if (style.textContent !== css) style.textContent = css
-  if (document.head.lastElementChild !== style) document.head.appendChild(style)
+  keepLast(style)
+  keepLastAfterLaterStylesheets()
+}
+
+function keepLast(style: HTMLElement | null) {
+  if (style && document.head.lastElementChild !== style) document.head.appendChild(style)
+}
+
+let headObserver: MutationObserver | null = null
+
+function keepLastAfterLaterStylesheets() {
+  if (headObserver || typeof MutationObserver === 'undefined') return
+  headObserver = new MutationObserver((changes) => {
+    if (changes.some((change) => [...change.addedNodes].some((node) => node instanceof HTMLStyleElement || node instanceof HTMLLinkElement))) keepLast(document.getElementById(THEME_STYLE_ID))
+  })
+  headObserver.observe(document.head, { childList: true })
 }

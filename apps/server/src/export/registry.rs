@@ -197,6 +197,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("package_id", "packages"),
                     ("installed_by_actor_id", "actors"),
                     ("via_app_actor_id", "actors"),
+                    ("upgraded_from", "package_installs"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -294,6 +295,26 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             ),
             (
                 "invite_tokens",
+                "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
+            ),
+            (
+                "module_apps",
+                "a connected module's app account and secrets; connect it again after import",
+            ),
+            (
+                "module_kinds",
+                "read from a connected module's manifest; made again when it is connected again",
+            ),
+            (
+                "module_things",
+                "which connected module owns a thing; set again when it is connected again",
+            ),
+            (
+                "module_event_receipts",
+                "runtime state of this server (signed events already taken, so replays are refused)",
+            ),
+            (
+                "module_frame_launches",
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
             (
@@ -1024,18 +1045,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
-                kind: "work_item_conversation_links",
-                table: "work_item_conversation_links",
-                references: &[
-                    ("project_id", "projects"),
-                    ("work_item_id", "work_items"),
-                    ("conversation_id", "conversations"),
-                    ("created_by_actor_id", "actors"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
                 kind: "work_item_handoffs",
                 table: "work_item_handoffs",
                 references: &[
@@ -1066,17 +1075,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("work_item_id", "work_items"),
                     ("label_id", "project_labels"),
                     ("added_by_actor_id", "actors"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
-                kind: "work_item_links",
-                table: "work_item_links",
-                references: &[
-                    ("work_item_id", "work_items"),
-                    ("project_id", "projects"),
-                    ("created_by_actor_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -1227,6 +1225,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 table: "project_pages",
                 references: &[
                     ("project_id", "projects"),
+                    ("parent_page_id", "project_pages"),
                     ("created_by_actor_id", "actors"),
                     ("updated_by_actor_id", "actors"),
                 ],
@@ -1425,6 +1424,17 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "sheet_charts",
+                table: "sheet_charts",
+                references: &[
+                    ("space_id", "projects"),
+                    ("sheet_id", "sheets"),
+                    ("created_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "sheet_named_ranges",
                 table: "sheet_named_ranges",
                 references: &[
@@ -1510,17 +1520,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 table: "whiteboard_files",
                 references: &[
                     ("whiteboard_id", "whiteboards"),
-                    ("created_by_actor_id", "actors"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
-                kind: "whiteboard_links",
-                table: "whiteboard_links",
-                references: &[
-                    ("whiteboard_id", "whiteboards"),
-                    ("target_project_id", "projects"),
                     ("created_by_actor_id", "actors"),
                 ],
                 text_references: &[],
@@ -1913,6 +1912,17 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 kind: "run_activities",
                 table: "run_activities",
                 references: &[("run_id", "runs"), ("reported_by_account_id", "actors")],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
+                kind: "run_changes",
+                table: "run_changes",
+                references: &[
+                    ("run_id", "runs"),
+                    ("space_id", "projects"),
+                    ("reported_by_account_id", "actors"),
+                ],
                 text_references: &[],
                 exclude: &[],
             },

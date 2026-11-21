@@ -242,3 +242,129 @@ fn the_harness_hears_what_was_answered() {
         Outcome::Deny
     );
 }
+
+/// A1.17: a built-in run's tokens go through the host protocol like any
+/// host's, so they count against budgets, and the workspace's catalog
+/// prices what a report doesn't, adding what one brought. A retry adds nothing.
+#[tokio::test]
+async fn built_in_tokens_are_reported_priced_and_counted_once() {
+    let Some((setup, seed, _temporary)) = seeded("a1_builtin_tokens").await else {
+        return;
+    };
+    let pool = &setup.pool;
+    let run_id = blocked_run(pool, &seed, "builtin-tokens").await;
+    sqlx::query(
+        r#"
+        INSERT INTO harness_models (id, organization_id, adapter_kind, model_id, provider_data)
+        SELECT gen_random_uuid(), $1, account.adapter_kind, 'priced-model',
+               '{"id": "priced-model", "displayName": "Priced",
+                 "prices": {"currency": "USD", "inputPerMillion": 2.0, "outputPerMillion": 10.0}}'::jsonb
+        FROM execution_profiles profile
+        JOIN provider_accounts account ON account.id = profile.provider_account_id
+        WHERE profile.id = $2
+        "#,
+    )
+    .bind(seed.organization_id)
+    .bind(seed.execution_profile_id)
+    .execute(pool)
+    .await
+    .expect("a priced model");
+    let state = app_state(pool);
+    started(&state, run_id).await;
+    let reports = agent_workspace_server::hosts::builtin::report::open(&state, run_id)
+        .await
+        .expect("the run's reports");
+    let tokens = agent_workspace_builtin_host::runtime::report::Usage {
+        model: "priced-model",
+        input_tokens: 1_000_000,
+        output_tokens: 100_000,
+        cached_input_tokens: 0,
+        cost_usd: None,
+    };
+    reports.usage("turn-1", &tokens).await.expect("reported");
+    // The same report again (a retry) adds nothing.
+    reports
+        .usage("turn-1", &tokens)
+        .await
+        .expect("reported again");
+    // A later report that brings its own cost adds that cost, and one with
+    // only a cost adds it too, so the estimate the totals show covers every
+    // report of the model.
+    let with_cost = agent_workspace_builtin_host::runtime::report::Usage {
+        cost_usd: Some(0.5),
+        ..tokens
+    };
+    reports
+        .usage("turn-2", &with_cost)
+        .await
+        .expect("reported with a cost");
+    let cost_only = agent_workspace_builtin_host::runtime::report::Usage {
+        model: "priced-model",
+        input_tokens: 0,
+        output_tokens: 0,
+        cached_input_tokens: 0,
+        cost_usd: Some(0.25),
+    };
+    reports
+        .usage("turn-3", &cost_only)
+        .await
+        .expect("reported with only a cost");
+
+    let (input, output, estimated, currency) =
+        sqlx::query_as::<_, (i64, i64, Option<f64>, Option<String>)>(
+            "SELECT input_tokens, output_tokens, estimated_cost, currency FROM run_usage WHERE run_id = $1 AND model = 'priced-model'",
+        )
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .expect("the run's usage");
+    assert_eq!((input, output), (2_000_000, 200_000));
+    // 1M input at 2.00 and 100k output at 10.00 a million (3.00), then the
+    // 0.50 and 0.25 the later reports brought.
+    assert!(
+        estimated.is_some_and(|cost| (cost - 3.75).abs() < 1e-9),
+        "{estimated:?}"
+    );
+    assert_eq!(currency.as_deref(), Some("USD"));
+    let counted = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT sum(quantity)::bigint FROM usage_events WHERE workspace_id = $1 AND meter = 'reported_tokens'",
+    )
+    .bind(seed.organization_id)
+    .fetch_one(pool)
+    .await
+    .expect("the budget meter");
+    assert_eq!(counted, Some(2_200_000));
+}
+
+/// A1.17: a run's reply streams live only while its agent can read the
+/// conversation. One taken out of it (the channel made private without
+/// it) streams nothing more there, though its token still holds.
+#[tokio::test]
+async fn a_reply_streams_only_while_its_agent_can_read_the_conversation() {
+    let Some((setup, seed, _temporary)) = seeded("a1_builtin_stream_gate").await else {
+        return;
+    };
+    let pool = &setup.pool;
+    let run_id = blocked_run(pool, &seed, "builtin-stream").await;
+    let state = app_state(pool);
+    started(&state, run_id).await;
+    let reports = agent_workspace_server::hosts::builtin::report::open(&state, run_id)
+        .await
+        .expect("the run's reports");
+    reports
+        .stream(Uuid::now_v7(), "Working on it".to_owned())
+        .await
+        .expect("shown while the agent reads the channel");
+    sqlx::query("UPDATE conversations SET visibility = 'members' WHERE id = $1")
+        .bind(seed.channel_id)
+        .execute(pool)
+        .await
+        .expect("the channel made private");
+    assert!(
+        reports
+            .stream(Uuid::now_v7(), "Still here".to_owned())
+            .await
+            .is_err(),
+        "a run whose agent can't read its conversation streams nothing there"
+    );
+}

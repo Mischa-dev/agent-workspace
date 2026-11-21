@@ -82,7 +82,15 @@ function RunNotFound() {
 function ReportedRunPage({ onRefresh, run }: { onRefresh: () => void; run: RunView }) {
   const now = useNow(isLiveRun(run.state))
   const experience = useProjectExperience(run.projectId ?? undefined)
-  return <ReportedRun now={now} onRefresh={onRefresh} run={run} usage={experience.shows('tech.run_usage')} />
+  return (
+    <ReportedRun
+      files={experience.shows('tech.run_files')}
+      now={now}
+      onRefresh={onRefresh}
+      run={run}
+      usage={experience.shows('tech.run_usage')}
+    />
+  )
 }
 
 /** A run on this server's own host: its full page. */
@@ -271,11 +279,11 @@ function RunBody({ run }: { run: RunDetail }) {
         <DetailList items={details} />
       </div>
       {/* Empty sections on a run still working are promises, not news: they appear once there's something in them. */}
-      {live && !run.files?.length ? null : (
+      {experience.shows('tech.run_files') && !(live && !run.files?.length) ? (
         <Section id="run-files" title="Files changed">
           <RunDiff live={live} run={run} />
         </Section>
-      )}
+      ) : null}
       {run.tests.runs === 0 ? null : (
         <Section id="run-tests" title="Tests">
           <TestsSummary run={run} />

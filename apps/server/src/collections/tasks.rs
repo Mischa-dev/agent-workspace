@@ -825,5 +825,5 @@ pub async fn ensure(
 
 /// What to say when a write asks to change the Tasks collection itself.
 pub const READ_ONLY_MESSAGE: &str = "Tasks is the built-in collection of this project's tasks: \
-     its name and settings don't change. Its records are the tasks (record_write or the task \
-     tools), and its fields change with collection_write.";
+     its name and settings don't change. Its records are the tasks (record_update_many or the task \
+     tools), and its fields change with collection_update.";

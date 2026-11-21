@@ -169,7 +169,8 @@ impl RunState {
 }
 
 /// The reason `hosts::builtin::http::interrupt_run_in` gives a built-in run a person stopped.
-pub const STOPPED_BY_REQUESTER: &str = "Interrupted by the requesting Actor.";
+pub const STOPPED_BY_REQUESTER: &str =
+    agent_workspace_builtin_host::runtime::start::STOPPED_BY_REQUESTER;
 
 impl fmt::Display for RunState {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

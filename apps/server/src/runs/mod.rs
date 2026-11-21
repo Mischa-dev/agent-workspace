@@ -28,6 +28,7 @@ use crate::{
 pub mod activities;
 pub mod brief;
 pub mod builtin;
+pub mod changes;
 pub mod credentials;
 pub mod finished;
 #[cfg(test)]
@@ -44,6 +45,7 @@ pub mod sql;
 pub mod state;
 pub mod steps;
 pub mod store;
+pub mod tool_ops;
 pub mod usage;
 pub mod views;
 

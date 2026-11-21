@@ -67,6 +67,11 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
     // digest names says whose it is, and the lookup checks that account's
     // standing before the request takes the account's scope.
     ("auth.credential", &["mcp.rs", "mcp/oauth.rs"]),
+    // A sign-in revoking the session its cookie still names: the revoke
+    // stages `session.revoked` in a workspace of that session's account,
+    // which the anonymous sign-in can't see (`widen_to_system`, one
+    // statement keyed by the cookie's digest).
+    ("auth.rotate", &["auth/mod.rs"]),
     // The built-in host's scheduler, recovery and host jobs: they claim runs
     // of every workspace, and check each against its run's space.
     (
@@ -74,7 +79,8 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
         &[
             "server.rs",
             "scheduler.rs",
-            "recovery.rs",
+            "hosts/builtin/recovery.rs",
+            "hosts/builtin/report.rs",
             "launch.rs",
             "runs/liveness.rs",
             "runs/usage.rs",
@@ -208,6 +214,15 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
     // Moving files between stores: a whole server's, or one workspace's
     // into its own bucket.
     ("files.move", &["files/migrate.rs"]),
+    // Redeeming a connected module's one-time install code (M1.12), before
+    // the app's workspace is known: one lookup by the code's digest.
+    ("modules.install_code", &["modules/connected/mod.rs"]),
+    // An event a connected module sends in (M1.13), before its workspace
+    // is known: one lookup of the install by its id.
+    ("modules.events_in", &["modules/connected/http.rs"]),
+    // A connected module redeeming a frame's launch token (M1.15), before
+    // its workspace is known: one lookup of the install by its id.
+    ("modules.frame_redeem", &["modules/connected/http.rs"]),
     // Whether an agent is also in another workspace (A2.15's scope screen
     // says yes or no, never which, R19): one count across workspaces the
     // viewer may not be in.

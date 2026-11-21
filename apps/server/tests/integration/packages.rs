@@ -100,8 +100,8 @@ async fn an_exported_space_carries_its_setup_and_nothing_private() {
     .await;
     assert_eq!(hook["outcome"], "ok", "{hook}");
     let role = call(
-        "role_write",
-        json!({"projectId": "PKG", "name": "Tester", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
+        "role_create",
+        json!({"name": "Tester", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
     )
     .await;
     assert_eq!(role["outcome"], "ok", "{role}");

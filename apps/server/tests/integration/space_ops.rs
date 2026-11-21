@@ -635,3 +635,38 @@ async fn spaces_start_from_their_shape_once() {
     assert_eq!(channels, vec!["alerts".to_owned()]);
     assert_eq!(pages, vec![("Runbook".to_owned(), false)]);
 }
+
+/// "workspace" names the workspace's own space on the web and v2 edge, as
+/// it does for MCP tools: a page made there is listed there.
+#[tokio::test]
+async fn the_workspace_space_is_named_on_every_edge() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .build("awd96_workspace_space_web")
+        .await
+    else {
+        return;
+    };
+    let made = op(
+        &world,
+        "lena",
+        "page_create",
+        json!({"projectId": "workspace", "title": "Handbook", "body": "Hello.",
+               "clientRequestId": Uuid::now_v7().to_string()}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let listed = op(
+        &world,
+        "lena",
+        "page_list",
+        json!({"projectId": "Workspace"}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(
+        listed.to_string().contains("Handbook"),
+        "the page is listed in the workspace's space: {listed}"
+    );
+}

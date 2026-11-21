@@ -179,10 +179,17 @@ async fn read_and_store(state: &AppState, account: &UsageAccount) -> Result<bool
     }
     .await;
     match result {
+        // A1.17: stored the way any host's windows are, through the host
+        // protocol.
         Ok(report) => {
-            let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-            store_report(&mut transaction, account, &report, true).await?;
-            transaction.commit().await?;
+            agent_workspace_builtin_host::runtime::windows::report(
+                &crate::hosts::builtin::transport::client(state),
+                account.id,
+                &report,
+                false,
+            )
+            .await
+            .map_err(|_| JobError::retry("plan windows not taken"))?;
             Ok(true)
         }
         // Every control slot is busy with account pages: try again soon.
@@ -353,26 +360,6 @@ pub(crate) async fn store_report(
     .execute(&mut **transaction)
     .await?;
     Ok(())
-}
-
-/// A run reported usage while it ran. Stored at once, then the alert rules
-/// run shortly after (one evaluation per account at a time, however many
-/// updates arrive). Failures are logged, never the run's.
-pub async fn record_run_report(state: &AppState, account_id: Uuid, report: UsageReport) {
-    let result = async {
-        let Some(account) = load_account(&state.pool, account_id).await? else {
-            return Ok(());
-        };
-        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        store_report(&mut transaction, &account, &report, false).await?;
-        evaluate_soon(&mut transaction, &account).await?;
-        transaction.commit().await?;
-        Ok::<_, AppError>(())
-    }
-    .await;
-    if let Err(error) = result {
-        tracing::warn!(%account_id, category = error.log_category(), "run usage not recorded");
-    }
 }
 
 /// Run the account's alert rules shortly (one evaluation per account at a

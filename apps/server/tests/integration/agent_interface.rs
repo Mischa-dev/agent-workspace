@@ -559,7 +559,7 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
     .await;
     assert_eq!(linked["outcome"], "ok", "{linked}");
     assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM work_item_links")
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM task_links")
             .fetch_one(&pool)
             .await
             .expect("links"),

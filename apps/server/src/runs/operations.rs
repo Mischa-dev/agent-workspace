@@ -47,6 +47,7 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<RunActivityReport>()
         .add::<RunUsageReport>()
         .add::<RunResultReport>()
+        .add::<RunChangesReport>()
         .add::<RunCancel>()
         .add::<RunMarkNotStarted>()
         .add::<super::pages::RunDetailGet>()
@@ -830,7 +831,7 @@ impl Operation for RunUsageReport {
     const TITLE: &'static str = "Report usage";
     const DESCRIPTION: &'static str = "Report tokens (and cost, if you know it) for a run you \
         opened, or for a time window in a space when you meter by time (windowStart and \
-        windowEnd). Each reportKey is recorded once, so a retry adds nothing. run_usage reads the \
+        windowEnd). Each reportKey is recorded once, so a retry adds nothing. run_usage_list reads the \
         totals.";
     const EMITS: &'static [&'static str] = &["run.usage_reported"];
 
@@ -865,6 +866,28 @@ impl Operation for RunUsageReport {
             own_run(call, run_id).await?;
         }
         let reporter = reporter(call);
+        // A built-in run's harness rarely knows its cost: the workspace's
+        // catalog prices it, as the catalog page shows them. Each report adds
+        // its own share to the estimate the totals show: the cost it brought
+        // when it brought one in the catalog's currency, the catalog price of
+        // its tokens otherwise. So a model's estimate covers every report,
+        // whether it came with a cost, with tokens, or with both.
+        let catalog = match run_id {
+            Some(run_id) => crate::run_log::builtin_estimate(
+                call.state,
+                run_id,
+                &input.model,
+                crate::run_log::Tokens {
+                    input: input.input_tokens.unwrap_or(0),
+                    output: input.output_tokens.unwrap_or(0),
+                    cached_input: input.cached_input_tokens.unwrap_or(0),
+                },
+            )
+            .await
+            .map_err(|error| OpError::logged("run_usage_report", &error))?,
+            _ => None,
+        };
+        let estimate = report_share(catalog, input.cost, input.currency.as_deref());
         let tx = call.tx().await?;
         let recorded = ops::record_usage(
             tx,
@@ -880,6 +903,7 @@ impl Operation for RunUsageReport {
                 cached_input_tokens: input.cached_input_tokens.unwrap_or(0),
                 cost: input.cost,
                 currency: input.currency,
+                estimate,
             },
         )
         .await?;
@@ -896,6 +920,29 @@ impl Operation for RunUsageReport {
             duplicate: recorded.duplicate,
             run_id: recorded.run_id.map(|id| id.to_string()),
         })
+    }
+}
+
+/// One usage report's share of a built-in run's estimate: the cost it
+/// brought, when it brought one in the catalog's currency (USD unless
+/// named); the catalog price of its tokens otherwise. `None` when the
+/// catalog has no price for the model.
+fn report_share(
+    catalog: Option<(f64, String)>,
+    cost: Option<f64>,
+    currency: Option<&str>,
+) -> Option<(f64, String)> {
+    let (priced, catalog_currency) = catalog?;
+    match cost {
+        Some(cost)
+            if currency
+                .unwrap_or("USD")
+                .trim()
+                .eq_ignore_ascii_case(&catalog_currency) =>
+        {
+            Some((cost, catalog_currency))
+        }
+        _ => Some((priced, catalog_currency)),
     }
 }
 
@@ -995,6 +1042,89 @@ impl Operation for RunResultReport {
         Ok(RunResultOutput {
             added,
             run: RunRecord::from(&run),
+        })
+    }
+}
+
+// ------------------------------------------------------ run_changes_report
+
+pub struct RunChangesReport;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunChangesReportInput {
+    /// The run (one you opened).
+    pub run_id: IdRef,
+    /// Each file the run changed against where it started: at most 2,000.
+    pub files: Vec<super::changes::ChangedFile>,
+    /// The unified diff. One over 768 KB is dropped and the report kept as
+    /// truncated.
+    #[serde(default)]
+    pub patch: String,
+    /// Set when files or the patch were left out for size.
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+impl Targeted for RunChangesReportInput {
+    fn target(&self) -> Target {
+        Target::thing("run", self.run_id.id())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RunChangesOutput {
+    /// How many files the run's changes now list.
+    pub files: usize,
+    /// Whether the patch was kept whole.
+    pub truncated: bool,
+}
+
+impl Operation for RunChangesReport {
+    const NAME: &'static str = "run_changes_report";
+    const KIND: OpKind = OpKind::Create;
+    const MODULE: &'static str = "runs";
+    const PERMISSION: Option<Perm> = Some(Perm::RunsReport);
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const TITLE: &'static str = "Report a run's changes";
+    const DESCRIPTION: &'static str = "Say what a run of yours has changed in its repository \
+        so far: the files and the unified diff against where it started. Each report replaces \
+        the last, so send the whole picture each time (after a turn, and when the run ends); \
+        the run's page shows the latest.";
+    const EMITS: &'static [&'static str] = &["run.changes_reported"];
+    const MAX_BODY_BYTES: usize = super::changes::MAX_REPORT_BYTES;
+
+    type Input = RunChangesReportInput;
+    type Output = RunChangesOutput;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: RunChangesReportInput,
+    ) -> Result<RunChangesOutput, OpError> {
+        report_rate(call).await?;
+        if let Some((field, message)) = super::changes::problem(&input.files) {
+            return Err(OpError::invalid(field, message));
+        }
+        let run_id = input.run_id.id();
+        own_run(call, run_id).await?;
+        let reporter = call.account_id();
+        let tx = call.tx().await?;
+        super::changes::put(
+            tx,
+            run_id,
+            reporter,
+            &input.files,
+            &input.patch,
+            input.truncated,
+        )
+        .await?;
+        super::ops::changes_reported(tx, run_id).await?;
+        let truncated = input.truncated || input.patch.len() > super::changes::MAX_PATCH_BYTES;
+        call.audit_target("run", run_id, json!({ "files": input.files.len() }));
+        Ok(RunChangesOutput {
+            files: input.files.len(),
+            truncated,
         })
     }
 }
@@ -1123,5 +1253,27 @@ impl Operation for RunMarkNotStarted {
         let run = ops::mark_not_started(tx, input.run_id.id()).await?;
         call.audit_target("run", run.id, json!({}));
         Ok(RunRecordValue::of(&run))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::report_share;
+
+    #[test]
+    fn a_report_adds_the_cost_it_brought_or_its_catalog_price() {
+        let catalog = || Some((3.0, "USD".to_owned()));
+        assert_eq!(report_share(catalog(), None, None), catalog());
+        assert_eq!(
+            report_share(catalog(), Some(0.5), None),
+            Some((0.5, "USD".to_owned()))
+        );
+        // A cost in another currency can't be added: the catalog prices it.
+        assert_eq!(report_share(catalog(), Some(0.5), Some("EUR")), catalog());
+        assert_eq!(
+            report_share(catalog(), Some(0.5), Some(" usd ")),
+            Some((0.5, "USD".to_owned()))
+        );
+        assert_eq!(report_share(None, Some(0.5), None), None);
     }
 }

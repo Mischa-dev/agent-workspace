@@ -28,6 +28,7 @@ pub mod migrate;
 pub mod object;
 pub mod ops;
 pub mod store;
+pub mod tool_ops;
 pub mod upload;
 pub mod workspace_store;
 
@@ -439,15 +440,20 @@ impl Destination {
 }
 
 /// The things other than conversations and tasks that keep files of their
-/// own. Board images move here with C1.29.
+/// own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ThingKind {
     Page,
+    /// A board's images (C1.29), each under the id the board's elements
+    /// name it by.
+    Whiteboard,
     /// A collection record: its file fields hold its files (T1.20).
     Record,
 }
 
 impl ThingKind {
+    /// The kinds the upload route takes. A board's images come in through
+    /// the board, named by their content (`whiteboards::store::put_file`).
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "page" => Some(Self::Page),
@@ -459,6 +465,7 @@ impl ThingKind {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Page => "page",
+            Self::Whiteboard => "whiteboard",
             Self::Record => "record",
         }
     }
@@ -467,6 +474,7 @@ impl ThingKind {
     pub(crate) fn edit_action(self) -> crate::policy::Action {
         match self {
             Self::Page => crate::policy::Action::PageEdit,
+            Self::Whiteboard => crate::policy::Action::WhiteboardEdit,
             Self::Record => crate::policy::Action::CollectionRecordEdit,
         }
     }
@@ -500,6 +508,7 @@ pub(crate) async fn thing_destination(
     thing_id: Uuid,
 ) -> Result<Destination, AppError> {
     match thing {
+        ThingKind::Whiteboard => Err(AppError::NotFound("thing")),
         ThingKind::Page => {
             let project_id = crate::memory::page_project(pool, thing_id, editor).await?;
             crate::memory::project_access(
@@ -721,7 +730,7 @@ pub(crate) struct StagedUpload {
 }
 
 impl StagedUpload {
-    fn incoming(&self) -> u64 {
+    pub(crate) fn incoming(&self) -> u64 {
         self.byte_size
             .saturating_add(self.thumbnail_bytes.unwrap_or(0))
     }
@@ -1172,6 +1181,231 @@ async fn insert_file(
     Ok(row)
 }
 
+/// A thing's file kept under a key named by its content: board images
+/// (C1.29). The same bytes in a workspace are stored once however many
+/// boards show them (a duplicated board adds rows, not bytes), and bytes a
+/// write left behind when it didn't commit are found again by the next
+/// write of the same image rather than stored a second time.
+pub(crate) struct ContentFile<'a> {
+    pub(crate) project_id: Uuid,
+    pub(crate) thing: ThingKind,
+    pub(crate) thing_id: Uuid,
+    pub(crate) purpose: Purpose,
+    /// The thing's own name for it, unique among its live files.
+    pub(crate) external_key: &'a str,
+    pub(crate) name: &'a str,
+    pub(crate) content_type: &'a str,
+    pub(crate) bytes: &'a [u8],
+}
+
+/// The store key for content `sha256` in a workspace.
+fn content_key(organization_id: Uuid, sha256: &str) -> String {
+    format!("{}/c-{sha256}", organization_id.simple())
+}
+
+/// A [`ContentFile`]'s bytes, written by [`stage_content`] before any
+/// transaction opens.
+pub(crate) struct StagedContent {
+    organization_id: Uuid,
+    sha256: String,
+    store_id: String,
+    key: String,
+}
+
+/// Writes the bytes of content files for a workspace to the file store
+/// before the write's transaction opens (no transaction is held across the
+/// store's network call), after the workspace's room check. Bytes a live
+/// row already holds aren't written again. Bytes no row then claims (the
+/// write was refused or didn't commit) stay noted as pending, and the
+/// sweep takes them away unless a row came to hold them.
+pub(crate) async fn stage_content(
+    state: &AppState,
+    organization_id: Uuid,
+    bytes: &[u8],
+) -> Result<StagedContent, AppError> {
+    let sha256 = hex::encode(Sha256::digest(bytes));
+    let key = content_key(organization_id, &sha256);
+    let store = FileStore::from_config(&state.config);
+    // Under the workspace's files lock, which cleanup takes too: the bytes
+    // are pinned by a pending note whether they're written now or a row
+    // already holds them, and cleanup leaves pinned bytes alone until the
+    // row that claims them is in.
+    let fresh = {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!("files-quota:{organization_id}"))
+            .execute(&mut *transaction)
+            .await?;
+        let fresh = !content_stored(&mut transaction, store.id(), &key).await?;
+        if fresh {
+            require_room(state, &mut transaction, organization_id, size, 0).await?;
+        }
+        sqlx::query(
+            r#"
+            INSERT INTO file_objects_pending (storage_key, workspace_id, store_id)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (storage_key) DO UPDATE SET started_at = now()
+            "#,
+        )
+        .bind(&key)
+        .bind(organization_id)
+        .bind(store.id())
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        fresh
+    };
+    if fresh {
+        store.put(&key, bytes).await?;
+    }
+    Ok(StagedContent {
+        organization_id,
+        sha256,
+        store_id: store.id().to_owned(),
+        key,
+    })
+}
+
+/// Records a [`ContentFile`] for `uploader` in `transaction`, over the
+/// bytes [`stage_content`] wrote or pinned for its workspace. No network
+/// call here.
+pub(crate) async fn store_content(
+    state: &AppState,
+    transaction: &mut Transaction<'_, Postgres>,
+    uploader: Uuid,
+    file: ContentFile<'_>,
+    staged: &StagedContent,
+) -> Result<FileRow, AppError> {
+    if organization_of(&mut **transaction, file.project_id).await? != staged.organization_id {
+        return Err(AppError::NotFound("thing"));
+    }
+    // The room check again, under the lock, now the bytes count: staged
+    // uploads side by side each passed theirs before any row was in.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("files-quota:{}", staged.organization_id))
+        .execute(&mut **transaction)
+        .await?;
+    if !content_stored(transaction, &staged.store_id, &staged.key).await? {
+        let size = u64::try_from(file.bytes.len()).unwrap_or(u64::MAX);
+        require_room(state, transaction, staged.organization_id, size, size).await?;
+    }
+    let row = insert_content_row(
+        transaction,
+        staged.organization_id,
+        uploader,
+        &file,
+        &staged.sha256,
+        (&staged.store_id, &staged.key),
+        None,
+    )
+    .await?
+    .ok_or(AppError::Conflict(
+        "file",
+        "That file was added a moment ago.",
+    ))?;
+    sqlx::query("DELETE FROM file_objects_pending WHERE store_id = $1 AND storage_key = $2")
+        .bind(&staged.store_id)
+        .bind(&staged.key)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(row)
+}
+
+/// Whether a live row already holds bytes under `key`.
+async fn content_stored(
+    connection: &mut PgConnection,
+    store_id: &str,
+    key: &str,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM files \
+         WHERE store_id = $2 AND storage_key = $1 AND blob_deleted_at IS NULL)",
+    )
+    .bind(key)
+    .bind(store_id)
+    .fetch_one(&mut *connection)
+    .await?)
+}
+
+/// Inserts a content file's row, attached at once (or at `attached_at`,
+/// for a row moved from elsewhere). None when the thing already has a live
+/// file under that external key.
+async fn insert_content_row(
+    connection: &mut PgConnection,
+    organization_id: Uuid,
+    uploader: Uuid,
+    file: &ContentFile<'_>,
+    sha256: &str,
+    (store_id, key): (&str, &str),
+    attached_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<Option<FileRow>, AppError> {
+    Ok(sqlx::query_as::<_, FileRow>(&format!(
+        r#"
+        INSERT INTO files AS file (
+            id, organization_id, project_id, uploaded_by_actor_id, name, content_type,
+            byte_size, sha256, storage_key, attached_at, created_at, thing_kind, thing_id,
+            purpose, external_key, store_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, now()), COALESCE($10, now()),
+                $11, $12, $13, $14, $15)
+        ON CONFLICT (thing_kind, thing_id, external_key)
+            WHERE external_key IS NOT NULL AND removed_at IS NULL
+            DO NOTHING
+        RETURNING {FILE_COLUMNS}
+        "#
+    ))
+    .bind(Uuid::now_v7())
+    .bind(organization_id)
+    .bind(file.project_id)
+    .bind(uploader)
+    .bind(clean_name(file.name))
+    .bind(file.content_type)
+    .bind(i64::try_from(file.bytes.len()).unwrap_or(i64::MAX))
+    .bind(sha256)
+    .bind(key)
+    .bind(attached_at)
+    .bind(file.thing.name())
+    .bind(file.thing_id)
+    .bind(file.purpose.name())
+    .bind(file.external_key)
+    .bind(store_id)
+    .fetch_optional(&mut *connection)
+    .await?)
+}
+
+/// Moves one stored file into the file store as a content file, outside any
+/// transaction for the bytes, then inserts its row in `transaction`. Used
+/// by the job that moves board images out of their old table: no room
+/// check, since the bytes were already the workspace's. False when the
+/// thing already had it.
+pub(crate) async fn move_content(
+    state: &AppState,
+    transaction: &mut Transaction<'_, Postgres>,
+    uploader: Uuid,
+    file: ContentFile<'_>,
+    attached_at: chrono::DateTime<chrono::Utc>,
+) -> Result<bool, AppError> {
+    let organization_id = organization_of(&mut **transaction, file.project_id).await?;
+    let sha256 = hex::encode(Sha256::digest(file.bytes));
+    let key = content_key(organization_id, &sha256);
+    let store = FileStore::from_config(&state.config);
+    if !content_stored(transaction, store.id(), &key).await? {
+        store.put(&key, file.bytes).await?;
+    }
+    Ok(insert_content_row(
+        transaction,
+        organization_id,
+        uploader,
+        &file,
+        &sha256,
+        (store.id(), &key),
+        Some(attached_at),
+    )
+    .await?
+    .is_some())
+}
+
 /// Takes away the bytes [`store_prepared`] stored, when the transaction
 /// that held its row didn't commit.
 pub(crate) async fn discard_stored(state: &AppState, row: &FileRow) {
@@ -1210,8 +1444,12 @@ pub(crate) async fn require_room(
     let all_bytes = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT COALESCE(sum(bytes), 0)::bigint FROM (
-            SELECT byte_size + COALESCE(thumbnail_bytes, 0) AS bytes
-            FROM files WHERE blob_deleted_at IS NULL
+            -- Bytes several rows share (content files) count once.
+            SELECT bytes FROM (
+                SELECT DISTINCT ON (store_id, storage_key)
+                       byte_size + COALESCE(thumbnail_bytes, 0) AS bytes
+                FROM files WHERE blob_deleted_at IS NULL
+            ) kept
             UNION ALL
             SELECT image_bytes FROM link_previews WHERE image_key IS NOT NULL
         ) stored
@@ -1440,6 +1678,34 @@ pub(crate) async fn rehome_comment_uploads(
     Ok(())
 }
 
+/// Moves the author's unsent uploads in a thing's discussion to the thread
+/// under it that a comment is posted in.
+pub(crate) async fn rehome_thread_uploads(
+    transaction: &mut Transaction<'_, Postgres>,
+    comments_id: Uuid,
+    thread_id: Uuid,
+    author: Uuid,
+    file_ids: &[Uuid],
+) -> Result<(), AppError> {
+    if file_ids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        r#"
+        UPDATE files SET conversation_id = $2
+        WHERE id = ANY($3) AND conversation_id = $1 AND uploaded_by_actor_id = $4
+          AND attached_at IS NULL AND removed_at IS NULL
+        "#,
+    )
+    .bind(comments_id)
+    .bind(thread_id)
+    .bind(file_ids)
+    .bind(author)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
 fn check_attachment_ids(file_ids: &[Uuid]) -> Result<(), AppError> {
     let mut unique = file_ids.to_vec();
     unique.sort_unstable();
@@ -1561,9 +1827,9 @@ async fn cleanup_here(state: &AppState) -> Result<u64, AppError> {
     .bind(UNSENT_HOURS)
     .execute(crate::db::scoped(&state.pool))
     .await?;
-    let removed = sqlx::query_as::<_, (Uuid, String, Option<String>, String)>(
+    let removed = sqlx::query_as::<_, (Uuid, Uuid, String, Option<String>, String)>(
         r#"
-        SELECT id, storage_key, thumbnail_key, store_id FROM files
+        SELECT id, organization_id, storage_key, thumbnail_key, store_id FROM files
         WHERE removed_at IS NOT NULL AND blob_deleted_at IS NULL
         ORDER BY removed_at
         LIMIT $1
@@ -1573,13 +1839,43 @@ async fn cleanup_here(state: &AppState) -> Result<u64, AppError> {
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let mut deleted = 0;
-    for (id, key, thumbnail_key, store_id) in removed {
+    for (id, organization_id, key, thumbnail_key, store_id) in removed {
+        // Bytes named by content can be another file's too (a duplicated
+        // board's images): they stay while any other row still holds them,
+        // or an upload staging the same content has pinned them.
+        // The check, the delete and the mark happen under the lock
+        // `store_content` takes, so an upload of the same content either
+        // finds this row live and is counted as sharing it, or comes after
+        // the mark and writes the bytes again.
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!("files-quota:{organization_id}"))
+            .execute(&mut *transaction)
+            .await?;
+        let shared = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM files
+                WHERE store_id = $3 AND storage_key = $1 AND id <> $2
+                  AND blob_deleted_at IS NULL
+            ) OR EXISTS (
+                SELECT 1 FROM file_objects_pending
+                WHERE store_id = $3 AND storage_key = $1
+            )
+            "#,
+        )
+        .bind(&key)
+        .bind(id)
+        .bind(&store_id)
+        .fetch_one(&mut *transaction)
+        .await?;
         // One file the store can't delete mustn't stop every later one: it
         // stays in the batch and is tried again next time.
         let mut failed = false;
         match FileStore::resolve(state, &store_id).await {
             Ok(store) => {
-                for key in std::iter::once(key).chain(thumbnail_key) {
+                let keys = if shared { None } else { Some(key) };
+                for key in keys.into_iter().chain(thumbnail_key) {
                     if let Err(error) = store.delete(&key).await {
                         tracing::warn!(file_id = %id, category = error.log_category(), "file bytes not deleted");
                         failed = true;
@@ -1596,8 +1892,9 @@ async fn cleanup_here(state: &AppState) -> Result<u64, AppError> {
         }
         sqlx::query("UPDATE files SET blob_deleted_at = now() WHERE id = $1")
             .bind(id)
-            .execute(crate::db::scoped(&state.pool))
+            .execute(&mut *transaction)
             .await?;
+        transaction.commit().await?;
         deleted += 1;
     }
     for store in FileStore::all(&state.config) {
@@ -1634,9 +1931,9 @@ pub(crate) async fn sweep_pending_objects(
 }
 
 async fn sweep_pending_objects_here(state: &AppState, store: &FileStore) -> Result<u64, AppError> {
-    let due = sqlx::query_scalar::<_, String>(
+    let due = sqlx::query_as::<_, (String, Uuid)>(
         r#"
-        SELECT storage_key FROM file_objects_pending
+        SELECT storage_key, workspace_id FROM file_objects_pending
         WHERE store_id = $1 AND started_at < now() - make_interval(mins => $2)
         ORDER BY started_at
         LIMIT $3
@@ -1647,10 +1944,45 @@ async fn sweep_pending_objects_here(state: &AppState, store: &FileStore) -> Resu
     .bind(CLEANUP_BATCH)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
-    let keys = due.iter().map(String::as_str).collect::<Vec<_>>();
-    let before = keys.len();
+    let (content, own): (Vec<_>, Vec<_>) = due
+        .iter()
+        .partition(|(key, workspace)| is_content_key(*workspace, key));
+    // An upload's own key is never written again: its bytes just go.
+    let keys = own.iter().map(|(key, _)| key.as_str()).collect::<Vec<_>>();
     drop_objects(state, store, &keys).await;
-    Ok(u64::try_from(before).unwrap_or(0))
+    // Bytes named by content may be held by a row another write made, or
+    // pinned again by an upload staging the same content: one at a time,
+    // under the workspace's files lock that staging and cleanup take, the
+    // note goes and the bytes go only if nothing holds or pins them since.
+    for (key, workspace) in content {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!("files-quota:{workspace}"))
+            .execute(&mut *transaction)
+            .await?;
+        let still_due = sqlx::query_scalar::<_, bool>(
+            "DELETE FROM file_objects_pending WHERE store_id = $1 AND storage_key = $2 \
+               AND started_at < now() - make_interval(mins => $3) RETURNING true",
+        )
+        .bind(store.id())
+        .bind(key)
+        .bind(PENDING_OBJECT_MINUTES)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .is_some();
+        if still_due && !content_stored(&mut transaction, store.id(), key).await? {
+            // A delete that fails leaves bytes nothing names: harmless, and
+            // the next write of the same content reuses the key.
+            let _ = store.delete(key).await;
+        }
+        transaction.commit().await?;
+    }
+    Ok(u64::try_from(due.len()).unwrap_or(0))
+}
+
+/// Whether `key` names content of `workspace` ([`content_key`]).
+fn is_content_key(workspace: Uuid, key: &str) -> bool {
+    key.starts_with(&format!("{}/c-", workspace.simple()))
 }
 
 #[cfg(test)]

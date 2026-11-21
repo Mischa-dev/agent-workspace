@@ -113,7 +113,7 @@ fn percent_decode(value: &str) -> anyhow::Result<String> {
 
 /// A command for a PostgreSQL client program, aimed at `database_url`.
 fn pg_command(program: &str, database_url: &str) -> anyhow::Result<Command> {
-    let mut command = Command::new(program);
+    let mut command = Command::new(program); // g10: not an agent (PostgreSQL client)
     for name in [
         "PGHOST",
         "PGHOSTADDR",
@@ -183,7 +183,7 @@ fn write_stream(
                 .spawn()
                 .with_context(|| format!("run {:?}", producer.get_program()))?;
             let stdout = child.stdout.take().context("the producer's output")?;
-            let mut age = Command::new("age");
+            let mut age = Command::new("age"); // g10: not an agent (backup encryption)
             age.arg("--encrypt")
                 .arg("--recipients-file")
                 .arg(recipients)
@@ -220,7 +220,7 @@ fn check_status(command: &Command, status: std::process::ExitStatus) -> anyhow::
 /// `tar` over the folders of `paths` present under `data_root` (an empty
 /// archive when none is), gzip-compressed, to standard output.
 fn tar_command(data_root: &Path, paths: &[String]) -> Command {
-    let mut tar = Command::new("tar");
+    let mut tar = Command::new("tar"); // g10: not an agent (backup archive)
     tar.arg("--create")
         .arg("--gzip")
         .arg("--file=-")
@@ -556,7 +556,7 @@ pub fn key(
     std::fs::create_dir(&work)?;
     set_owner_only(&work);
     let outcome = (|| {
-        let mut cat = Command::new("cat");
+        let mut cat = Command::new("cat"); // g10: not an agent (backup stream)
         cat.arg("--").arg(keyring);
         write_stream(
             cat,
@@ -655,7 +655,7 @@ fn read_stream(
         return check_status(&consumer, status);
     }
     let identity = identity.context("the set is encrypted: pass --identity-file")?;
-    let mut age = Command::new("age");
+    let mut age = Command::new("age"); // g10: not an agent (backup encryption)
     age.arg("--decrypt")
         .arg("--identity")
         .arg(identity)
@@ -733,7 +733,7 @@ async fn restore_set(
     }
     restore_database(&set, database_url, identity).await?;
     std::fs::create_dir_all(data_root)?;
-    let mut tar = Command::new("tar");
+    let mut tar = Command::new("tar"); // g10: not an agent (backup archive)
     tar.arg("--extract")
         .arg("--gzip")
         .arg("--file=-")
@@ -947,7 +947,7 @@ async fn list_archive(set: &CheckedSet, identity: Option<&Path>) -> anyhow::Resu
         uuid::Uuid::now_v7().simple()
     ));
     let file = std::fs::File::create(&listing)?;
-    let mut tar = Command::new("tar");
+    let mut tar = Command::new("tar"); // g10: not an agent (backup archive)
     tar.arg("--list")
         .arg("--gzip")
         .arg("--file=-")

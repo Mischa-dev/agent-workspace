@@ -728,12 +728,13 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
         .to_owned();
     sqlx::query(
         r#"
-        INSERT INTO work_item_links (work_item_id, project_id, target_kind, target_id, created_by_actor_id)
-        SELECT item.id, item.project_id, 'conversation', $2::uuid, membership.actor_id
-        FROM task_rows item
+        INSERT INTO links
+            (workspace_id, from_thing_id, to_thing_id, kind, origin, created_by_account_id)
+        SELECT task.workspace_id, task.id, $2::uuid, 'about', 'explicit', membership.actor_id
+        FROM things task
         JOIN organization_memberships membership
           ON membership.organization_id = $3 AND membership.role = 'owner'
-        WHERE item.id = $1::uuid
+        WHERE task.id = $1::uuid
         "#,
     )
     .bind(&task)

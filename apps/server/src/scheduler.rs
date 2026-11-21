@@ -80,27 +80,43 @@ pub async fn run_host(
 
 async fn host(state: AppState, cluster: Cluster, lease: Lease) -> Result<(), AppError> {
     let result = async {
-        crate::recovery::reconcile_owned(&state, &cluster, &lease).await?;
+        crate::hosts::builtin::recovery::reconcile_owned(&state, &cluster, &lease).await?;
         let jobs = crate::jobs::default_registry();
         let builtin = crate::hosts::builtin::transport::client(&state);
-        let mut interval = tokio::time::interval(Duration::from_secs(1));
-        loop {
-            tokio::select! {
-                _ = interval.tick() => {}
-                // A kick from another instance, or a lease let go.
-                () = cluster.released() => {}
-                () = lease.lost.cancelled() => return Ok(()),
+        // Admission and host jobs take turns on this task without waiting
+        // for each other: a long job (the daily worktree cleanup) never
+        // holds up runs being admitted.
+        let admit = async {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    // A kick from another instance, or a lease let go.
+                    () = cluster.released() => {}
+                    () = lease.lost.cancelled() => return,
+                }
+                if let Err(error) = drain_with(&state, Some((&cluster, &lease)), &builtin).await {
+                    tracing::error!(
+                        error_category = error.log_category(),
+                        "Agent Run scheduler pass failed"
+                    );
+                }
             }
-            if let Err(error) = drain_with(&state, Some((&cluster, &lease)), &builtin).await {
-                tracing::error!(
-                    error_category = error.log_category(),
-                    "Agent Run scheduler pass failed"
-                );
+        };
+        let host_jobs = async {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    () = lease.lost.cancelled() => return,
+                }
+                if let Err(error) = crate::jobs::run_due_host(&state, &jobs, &lease).await {
+                    tracing::warn!(error_category = error.log_category(), "host jobs failed");
+                }
             }
-            if let Err(error) = crate::jobs::run_due_host(&state, &jobs, &lease).await {
-                tracing::warn!(error_category = error.log_category(), "host jobs failed");
-            }
-        }
+        };
+        tokio::join!(admit, host_jobs);
+        Ok::<(), AppError>(())
     }
     .await;
     // Losing the lease stops every local turn before anyone else may

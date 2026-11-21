@@ -134,6 +134,17 @@ pub struct HistoryEntry {
     pub summary: String,
     /// Keys of what changed ("title", "body", a field id, a cell).
     pub changed: Vec<String>,
+    /// On whose request it was made, when an agent worked for someone
+    /// (from the change set it belongs to, C1.34).
+    #[schemars(with = "Option<String>")]
+    pub requested_by_id: Option<Uuid>,
+    pub requested_by: Option<String>,
+    /// The agent run it was made in.
+    #[schemars(with = "Option<String>")]
+    pub run_id: Option<Uuid>,
+    /// The change set it belongs to (change_list, change_undo).
+    #[schemars(with = "Option<String>")]
+    pub change_set_id: Option<Uuid>,
 }
 
 // Who and through what, for every kind: the account's name in the
@@ -147,8 +158,57 @@ const WHO: &str = r#"
       WHERE author.id = h.actor_id) AS actor,
     (SELECT client.client_name FROM mcp_oauth_grants grant_row
        JOIN mcp_oauth_clients client ON client.id = grant_row.client_id
-      WHERE grant_row.id = h.via_id AND grant_row.show_via) AS via
+      WHERE grant_row.id = h.via_id AND grant_row.show_via) AS via,
+    (SELECT COALESCE(profile.display_name, account.display_name)
+       FROM actors requester
+       LEFT JOIN organization_actor_profiles profile
+         ON profile.organization_id = $4 AND profile.actor_id = requester.id
+       LEFT JOIN users account ON account.actor_id = requester.id
+      WHERE requester.id = set_row.requested_by_actor_id) AS requested_by,
+    set_row.requested_by_actor_id AS requested_by_id, set_row.run_id,
+    set_row.id AS change_set_id
 "#;
+
+/// The change set a history entry belongs to: for pages and sheets the one
+/// whose versions span it, for boards the one that started from the
+/// snapshot (a board revision is saved before an edit). Kinds without
+/// change sets have none.
+fn change_set_join(kind: &str) -> &'static str {
+    match kind {
+        "page" | "sheet" => {
+            r#"
+            LEFT JOIN LATERAL (
+                SELECT change_set.id, change_set.requested_by_actor_id, change_set.run_id
+                FROM document_change_sets change_set
+                WHERE change_set.thing_kind = $5 AND change_set.thing_id = $1
+                  AND change_set.version_from < h.version AND change_set.version_to >= h.version
+                ORDER BY change_set.created_at DESC
+                LIMIT 1
+            ) set_row ON true
+            "#
+        }
+        "whiteboard" => {
+            r#"
+            LEFT JOIN LATERAL (
+                SELECT change_set.id, change_set.requested_by_actor_id, change_set.run_id
+                FROM document_change_sets change_set
+                WHERE change_set.thing_kind = $5 AND change_set.thing_id = $1
+                  AND change_set.version_from <= h.scene_seq AND change_set.version_to > h.scene_seq
+                ORDER BY change_set.created_at DESC
+                LIMIT 1
+            ) set_row ON true
+            "#
+        }
+        _ => {
+            r#"
+            LEFT JOIN LATERAL (
+                SELECT NULL::uuid AS id, NULL::uuid AS requested_by_actor_id, NULL::uuid AS run_id
+                WHERE $5::text IS NOT NULL
+            ) set_row ON true
+            "#
+        }
+    }
+}
 
 fn at(column: &str) -> String {
     format!("to_char({column} AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')")
@@ -184,7 +244,7 @@ fn list_sql(kind: &str) -> Option<String> {
             SELECT revision::bigint AS version, {at} AS at, actor_id,
                    via_oauth_grant_id AS via_id, NULL::uuid AS accepted_by_id,
                    COALESCE(note, 'Saved ' || element_count || ' elements') AS summary,
-                   ARRAY['scene'] AS changed
+                   ARRAY['scene'] AS changed, scene_seq
             FROM whiteboard_revisions WHERE whiteboard_id = $1
             "#,
             at = at("created_at")
@@ -257,6 +317,7 @@ fn list_sql(kind: &str) -> Option<String> {
         ),
         _ => return None,
     };
+    let join = change_set_join(kind);
     Some(format!(
         r#"
         SELECT h.version, h.at, h.actor_id, h.summary, h.changed, {WHO},
@@ -267,6 +328,7 @@ fn list_sql(kind: &str) -> Option<String> {
                   LEFT JOIN users account ON account.actor_id = accepter.id
                  WHERE accepter.id = h.accepted_by_id) AS accepted_by
         FROM ({rows}) h
+        {join}
         WHERE $2::bigint IS NULL OR h.version < $2
         ORDER BY h.version DESC
         LIMIT $3
@@ -292,6 +354,7 @@ pub async fn list(
         .bind(before)
         .bind(limit.clamp(1, 200))
         .bind(workspace_id)
+        .bind(kind)
         .fetch_all(connection)
         .await?)
 }
@@ -299,6 +362,7 @@ pub async fn list(
 /// One version as it was, or None when there is no such version. Kinds
 /// that can't show a version are refused before this is called.
 pub async fn show(
+    store: &crate::files::FileStore,
     connection: &mut PgConnection,
     kind: &str,
     id: Uuid,
@@ -313,19 +377,28 @@ pub async fn show(
         .fetch_optional(connection)
         .await?
         .map(|(title, body)| json!({ "title": title, "body": body })),
-        "whiteboard" => sqlx::query_as::<_, (Value, i32, i64)>(
-            "SELECT elements, element_count, scene_seq FROM whiteboard_revisions \
-             WHERE whiteboard_id = $1 AND revision = $2",
-        )
-        .bind(id)
-        .bind(i32::try_from(version).unwrap_or(-1))
-        .fetch_optional(connection)
-        .await?
-        .map(|(elements, count, scene_seq)| {
-            json!({ "elements": elements, "elementCount": count, "sceneSeq": scene_seq })
-        }),
+        "whiteboard" => {
+            let revision = i32::try_from(version).unwrap_or(-1);
+            let Some(elements) =
+                crate::whiteboards::store::revision_elements(store, connection, id, revision)
+                    .await?
+            else {
+                return Ok(None);
+            };
+            sqlx::query_as::<_, (i32, i64)>(
+                "SELECT element_count, scene_seq FROM whiteboard_revisions \
+                 WHERE whiteboard_id = $1 AND revision = $2",
+            )
+            .bind(id)
+            .bind(revision)
+            .fetch_optional(connection)
+            .await?
+            .map(|(count, scene_seq)| {
+                json!({ "elements": elements, "elementCount": count, "sceneSeq": scene_seq })
+            })
+        }
         // A removed message's versions are gone with its text.
-        "sheet" => crate::sheets::history::state_at(connection, id, version)
+        "sheet" => crate::sheets::history::state_at(store, connection, id, version)
             .await?
             .map(|state| state.to_json(version)),
         "message" => sqlx::query_as::<_, (Option<String>, Option<Value>)>(
@@ -351,6 +424,8 @@ pub struct Restorer {
     pub space_id: Option<Uuid>,
     pub workspace_id: Uuid,
     pub actor_id: Uuid,
+    /// Where a board version's moved elements are read from.
+    pub files: crate::files::FileStore,
 }
 
 /// Put back `version` as a new version; the thing's version after. Refuses
@@ -371,7 +446,8 @@ pub async fn restore(
                 expected_version: Some(expected_version),
                 ..Default::default()
             };
-            crate::memory::update_page(transaction, restorer.page, id, &input).await?;
+            let space = restorer.space_id.ok_or(AppError::NotFound("page"))?;
+            crate::memory::update_page(transaction, restorer.page, space, id, &input).await?;
             let now =
                 sqlx::query_scalar::<_, i64>("SELECT version FROM project_pages WHERE id = $1")
                     .bind(id)
@@ -397,6 +473,7 @@ pub async fn restore(
                 i32::try_from(version).map_err(|_| AppError::NotFound("whiteboard revision"))?;
             crate::whiteboards::access(transaction, &restorer.board, id, true).await?;
             let outcome = crate::whiteboards::store::restore_revision(
+                &restorer.files,
                 transaction,
                 &restorer.board,
                 id,
@@ -425,6 +502,7 @@ pub async fn restore(
                 return Err(AppError::Conflict("sheet", "archived"));
             }
             let applied = match crate::sheets::history::restore(
+                &restorer.files,
                 transaction,
                 &sheet,
                 restorer.actor_id,

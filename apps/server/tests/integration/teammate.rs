@@ -336,11 +336,13 @@ async fn person_op(
     body
 }
 
-/// A2.27: the tools that aren't operations yet are guarded too. A deny
-/// guard on everything stops a page written by hand-written tool; a review
-/// guard holds it, and once allowed the same call goes through once.
+/// A2.27: a tool called by its old name is guarded like the operation it
+/// runs, and a guard may name the old tool (`page_write` stands for
+/// `page_create` and `page_update`). A deny guard on everything stops the
+/// page; a review guard holds it, and once allowed the same call goes
+/// through once.
 #[tokio::test]
-async fn guards_hold_hand_written_tools_too() {
+async fn guards_hold_tools_called_by_their_old_names() {
     let Some(world) = WorldBuilder::default()
         .project("WORK")
         .agent("rook", "member")
@@ -388,19 +390,270 @@ async fn guards_hold_hand_written_tools_too() {
     )
     .await;
     let held = tool(&world, rook, "page_write", write("Plan")).await;
-    assert_eq!(held["pendingReview"], true, "{held}");
+    assert_eq!(held["value"]["status"], "pending_review", "{held}");
     assert_eq!(pages().await, 0);
     op(
         &world,
         "request_respond",
-        json!({"requestId": held["requestId"], "optionId": "allow"}),
+        json!({"requestId": held["value"]["requestId"], "optionId": "allow"}),
     )
     .await;
     let made = tool(&world, rook, "page_write", write("Plan")).await;
     assert_eq!(made["outcome"], "ok", "{made}");
     assert_eq!(pages().await, 1);
     let next = tool(&world, rook, "page_write", write("Plan")).await;
-    assert_eq!(next["pendingReview"], true, "{next}");
+    assert_eq!(next["value"]["status"], "pending_review", "{next}");
+}
+
+/// A review given back after the same call asked again while the first
+/// ran (the first then made nothing): the unanswered second ask is
+/// withdrawn, and the allowed review is used by the next call. Once a
+/// reviewer has answered the second ask, that answer stands instead.
+#[tokio::test]
+async fn a_review_given_back_replaces_the_ask_a_retry_raised_meanwhile() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .build("teammate_guards_give_back")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let space = world.project("WORK");
+    op(
+        &world,
+        "guard_set",
+        json!({"name": "Pages get a look", "action": "review",
+               "operations": ["page_write"], "reviewers": [world.owner.actor]}),
+    )
+    .await;
+    for (title, second_answered) in [("Plan", false), ("Notes", true)] {
+        let write = json!({"projectId": space, "title": title, "body": "Notes."});
+        let held = tool(&world, rook, "page_write", write.clone()).await;
+        let first_request = held["value"]["requestId"]
+            .as_str()
+            .expect("request")
+            .to_owned();
+        op(
+            &world,
+            "request_respond",
+            json!({"requestId": first_request, "optionId": "allow"}),
+        )
+        .await;
+        // The first call has used the review and is still running.
+        let first = sqlx::query_scalar::<_, Uuid>(
+            "UPDATE guard_holds SET state = 'used' WHERE request_id = $1::uuid RETURNING id",
+        )
+        .bind(&first_request)
+        .fetch_one(world.pool())
+        .await
+        .expect("the first call uses its review");
+        let again = tool(&world, rook, "page_write", write.clone()).await;
+        assert_eq!(again["value"]["status"], "pending_review", "{again}");
+        let second_request = again["value"]["requestId"]
+            .as_str()
+            .expect("request")
+            .to_owned();
+        assert_ne!(second_request, first_request);
+        if second_answered {
+            op(
+                &world,
+                "request_respond",
+                json!({"requestId": second_request, "optionId": "deny"}),
+            )
+            .await;
+        }
+        // The first call made nothing, so its review comes back.
+        agent_workspace_server::tenancy::system("runs.host", async {
+            let mut transaction = agent_workspace_server::db::scoped_tx(world.pool())
+                .await
+                .expect("transaction");
+            agent_workspace_server::guards::give_back_hold(&mut transaction, first)
+                .await
+                .expect("given back");
+            transaction.commit().await.expect("commit");
+        })
+        .await;
+        let status =
+            sqlx::query_scalar::<_, String>("SELECT status FROM requests WHERE id = $1::uuid")
+                .bind(&second_request)
+                .fetch_one(world.pool())
+                .await
+                .expect("the second ask");
+        let made = tool(&world, rook, "page_write", write).await;
+        let pages =
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM project_pages WHERE title = $1")
+                .bind(title)
+                .fetch_one(world.pool())
+                .await
+                .expect("pages");
+        if second_answered {
+            assert_eq!(status, "answered", "the reviewer's answer stands");
+            assert_ne!(made["outcome"], "ok", "{made}");
+            assert!(
+                made.to_string().contains("didn't allow this"),
+                "refused by the reviewer's answer, not anything else: {made}"
+            );
+            assert_eq!(pages, 0, "the denial wins over the given-back review");
+        } else {
+            assert_eq!(status, "cancelled", "the second ask is withdrawn");
+            assert_eq!(made["outcome"], "ok", "{made}");
+            assert_eq!(pages, 1);
+        }
+    }
+    world.finish().await;
+}
+
+/// A2.27: a guard on records sees a bulk record write as a change to
+/// records, though the call is aimed at its space; the same for a
+/// collection's and a sheet's writes, under their new and old names.
+#[tokio::test]
+async fn guards_on_records_collections_and_sheets_see_their_writes() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .build("teammate_guards_kinds")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let space = world.project("WORK");
+    let made = tool(
+        &world,
+        rook,
+        "collection_create",
+        json!({"projectId": space, "name": "Bugs", "fields": [{"name": "Size", "type": "number"}]}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let collection = made["value"]["collection"]["id"].clone();
+    let records = json!({"projectId": space, "collection": collection,
+                         "records": [{"title": "Crash"}]});
+
+    let guard = op(
+        &world,
+        "guard_set",
+        json!({"name": "Records stay put", "action": "deny", "targetKinds": ["record"]}),
+    )
+    .await;
+    for name in ["record_create_many", "record_write"] {
+        let refused = tool(&world, rook, name, records.clone()).await;
+        assert_ne!(refused["outcome"], "ok", "{name}: {refused}");
+        assert!(
+            refused.to_string().contains("Records stay put"),
+            "{name}: {refused}"
+        );
+    }
+    // A collection's own change isn't a record's.
+    let described = tool(
+        &world,
+        rook,
+        "collection_update",
+        json!({"projectId": space, "collection": collection, "description": "Triage"}),
+    )
+    .await;
+    assert_eq!(described["outcome"], "ok", "{described}");
+    op(
+        &world,
+        "guard_set",
+        json!({"guardId": guard["guard"]["id"], "remove": true}),
+    )
+    .await;
+    let added = tool(&world, rook, "record_create_many", records).await;
+    assert_eq!(added["outcome"], "ok", "{added}");
+
+    op(
+        &world,
+        "guard_set",
+        json!({"name": "Shapes stay put", "action": "deny",
+               "targetKinds": ["collection", "sheet"]}),
+    )
+    .await;
+    for (name, arguments) in [
+        (
+            "collection_update",
+            json!({"projectId": space, "collection": collection, "description": "Later"}),
+        ),
+        (
+            "sheet_create",
+            json!({"projectId": space, "name": "Budget"}),
+        ),
+        ("sheet_write", json!({"projectId": space, "name": "Budget"})),
+    ] {
+        let refused = tool(&world, rook, name, arguments).await;
+        assert_ne!(refused["outcome"], "ok", "{name}: {refused}");
+        assert!(
+            refused.to_string().contains("Shapes stay put"),
+            "{name}: {refused}"
+        );
+    }
+}
+
+/// A2.27: a keyed write that an allowed review let through, retried after
+/// a lost answer, is answered from its first run: the same records, said
+/// to be a replay, with no second review asked.
+#[tokio::test]
+async fn a_keyed_retry_after_an_allowed_review_replays() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .build("teammate_guards_keyed_retry")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let space = world.project("WORK");
+    let made = tool(
+        &world,
+        rook,
+        "collection_create",
+        json!({"projectId": space, "name": "Bugs"}),
+    )
+    .await;
+    let collection = made["value"]["collection"]["id"].clone();
+    op(
+        &world,
+        "guard_set",
+        json!({"name": "Records get a look", "action": "review",
+               "targetKinds": ["record"], "reviewers": [world.owner.actor]}),
+    )
+    .await;
+    let call = json!({"projectId": space, "collection": collection,
+                      "records": [{"title": "Crash"}], "clientRequestId": "add-crash-1"});
+    let held = tool(&world, rook, "record_create_many", call.clone()).await;
+    assert_eq!(held["value"]["status"], "pending_review", "{held}");
+    op(
+        &world,
+        "request_respond",
+        json!({"requestId": held["value"]["requestId"], "optionId": "allow"}),
+    )
+    .await;
+    let first = tool(&world, rook, "record_create_many", call.clone()).await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert!(first["value"]["records"].is_array(), "{first}");
+    let again = tool(&world, rook, "record_create_many", call).await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    assert_eq!(again["replayed"], true, "{again}");
+    assert_eq!(
+        again["value"]["records"], first["value"]["records"],
+        "{again}"
+    );
+    let pending =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM guard_holds WHERE state = 'pending'")
+            .fetch_one(world.pool())
+            .await
+            .expect("holds");
+    assert_eq!(pending, 0);
+    let kept = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM collection_records WHERE title = 'Crash'",
+    )
+    .fetch_one(world.pool())
+    .await
+    .expect("records");
+    assert_eq!(kept, 1);
 }
 
 /// A conversation's memory page is that conversation's: a change to it held

@@ -151,6 +151,7 @@ pub async fn apply(
                     restore_version: None,
                     archived: None,
                     note: None,
+                    parent_page_id: None,
                 },
             )
             .await?;

@@ -143,6 +143,33 @@ async fn space_keys_to_ids(
     request: &DispatchRequest,
     mut input: Value,
 ) -> Result<Value, OpError> {
+    // AWD-96: "workspace" in `projectId` names the workspace's own space,
+    // as MCP's key resolution reads it; the caller joins it (as everyone in
+    // the workspace is) only when the call could then write there.
+    if input
+        .pointer("/projectId")
+        .and_then(Value::as_str)
+        .is_some_and(|name| name.trim().eq_ignore_ascii_case("workspace"))
+        && let (Some(workspace), None) = (request.workspace, request.caller.confined_space)
+    {
+        let caller = &request.caller;
+        let join = !request.preview && caller.can_write && caller.limits.is_none();
+        let mut tx = crate::db::scoped_tx(&state.pool)
+            .await
+            .map_err(|error| OpError::logged("workspace space", &error.into()))?;
+        let space = if join {
+            crate::spaces::workspace::join(&mut tx, workspace, caller.account_id).await
+        } else {
+            crate::spaces::workspace::find(&mut tx, workspace).await
+        }
+        .map_err(|error| OpError::logged("workspace space", &error))?;
+        tx.commit()
+            .await
+            .map_err(|error| OpError::logged("workspace space", &error.into()))?;
+        if let (Some(space), Some(slot)) = (space, input.pointer_mut("/projectId")) {
+            *slot = Value::String(space.to_string());
+        }
+    }
     for field in ["/spaceId", "/projectId", "/target/spaceId"] {
         // K4.9: "me" is the caller's personal space in the named workspace,
         // made on first use; a credential held to one space never reaches it.
@@ -419,7 +446,10 @@ async fn admit<O: Operation>(
             [only] => *workspace = Some(*only),
             [] => {}
             _ if O::SPANS_WORKSPACES && !writes => spans = true,
-            several => return Err(name_the_workspace(&mut connection, several).await),
+            several => match home_workspace::<O>(&mut connection, caller, several).await? {
+                Some(home) => *workspace = Some(home),
+                None => return Err(name_the_workspace(&mut connection, several).await),
+            },
         }
     }
     if spans {
@@ -526,7 +556,8 @@ async fn pipeline<O: Operation>(
             message: format!("{} has no preview.", O::NAME).into(),
         });
     }
-    let input = space_keys_to_ids(state, &request, input).await?;
+    let mut input = space_keys_to_ids(state, &request, input).await?;
+    O::resolve_refs(state, &request.caller, request.workspace, &mut input).await?;
     let decoded =
         serde_json::from_value::<O::Input>(input).map_err(|error| decode_error(&error))?;
     // The input as the operation reads it: what the request id is held to.
@@ -638,10 +669,20 @@ async fn pipeline<O: Operation>(
         && !request.preview
         && !ctx.workspace_id.is_nil()
     {
+        // A call on a conversation spends a budget on it too.
+        let conversation = match &ctx.target {
+            Target::Thing {
+                kind: "conversation",
+                id,
+                ..
+            } => Some(*id),
+            _ => None,
+        };
         Box::pin(crate::budgets::admit_call(
             &state.pool,
             ctx.workspace_id,
             ctx.space_id,
+            conversation,
             ctx.caller.account_id,
             writes,
         ))
@@ -687,8 +728,12 @@ async fn pipeline<O: Operation>(
             &ctx.caller,
             &located,
             O::NAME,
-            target.audit(&located),
+            {
+                let (kind, id) = target.audit(&located);
+                (O::GUARD_KIND.unwrap_or(kind), id)
+            },
             &canonical,
+            ctx.request_id.as_deref(),
         ))
         .await?
         {
@@ -721,7 +766,7 @@ async fn pipeline<O: Operation>(
     }
     if let Some(hold) = guard_hold {
         let tx = call.tx().await?;
-        crate::guards::use_hold(tx, hold).await?;
+        crate::guards::use_hold(tx, hold, ctx.request_id.as_deref()).await?;
     }
     let output =
         crate::policy::within_agent_limits(ctx.caller.limits.clone(), O::run(&mut call, decoded))
@@ -812,10 +857,37 @@ fn runs_while_paused(name: &str) -> bool {
             | "status_delete"
             | "agent_resume"
             | "run_activity_report"
+            | "run_changes_report"
             | "run_result_report"
             | "run_usage_report"
             | "run_update"
     ) || name.starts_with("connection_")
+}
+
+/// The workspace the caller's credential was made in, among `reach`, for
+/// an operation that defaults to it.
+async fn home_workspace<O: Operation>(
+    connection: &mut sqlx::PgConnection,
+    caller: &Caller,
+    reach: &[Uuid],
+) -> Result<Option<Uuid>, OpError> {
+    let Some(credential) = caller
+        .credential_id
+        .filter(|_| O::HOME_WORKSPACE_BY_DEFAULT)
+    else {
+        return Ok(None);
+    };
+    sqlx::query_scalar::<_, Uuid>(&format!(
+        "SELECT space.organization_id FROM projects space \
+             WHERE space.id = ({}) AND space.organization_id = ANY($3)",
+        super::wrapped::CREDENTIAL_ANCHOR_SQL
+    ))
+    .bind(credential)
+    .bind(caller.account_id)
+    .bind(reach)
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(|error| OpError::logged(O::NAME, &error.into()))
 }
 
 /// A caller reaching several workspaces, calling an operation whose target
@@ -1015,8 +1087,24 @@ async fn audit_row(
     ctx: &OpContext,
     target_kind: &str,
     target_id: Uuid,
-    mut metadata: Value,
+    metadata: Value,
 ) -> Result<(), OpError> {
+    audit_row_as(tx, ctx, ctx.op, target_kind, target_id, metadata)
+        .await
+        .map_err(|error| OpError::logged(ctx.op, &error.into()))
+}
+
+/// The audit row of a command that names its own action (such as
+/// `role.created`), with the columns of the edge the call came by. The
+/// operation then says `audited_by_command`.
+pub(crate) async fn audit_row_as(
+    connection: &mut sqlx::PgConnection,
+    ctx: &OpContext,
+    action: &str,
+    target_kind: &str,
+    target_id: Uuid,
+    mut metadata: Value,
+) -> Result<(), sqlx::Error> {
     struct Columns<'a> {
         session_id: Option<Uuid>,
         authentication_class: &'a str,
@@ -1135,7 +1223,7 @@ async fn audit_row(
     .bind(ctx.workspace_id)
     .bind(columns.session_id)
     .bind(columns.authentication_class)
-    .bind(ctx.op)
+    .bind(action)
     .bind(target_kind)
     .bind(target_id)
     .bind(ctx.request_id.as_deref())
@@ -1153,9 +1241,8 @@ async fn audit_row(
     .bind(ctx.caller.credential_id)
     .bind(ctx.caller.requested_by)
     .bind(ctx.caller.run_id)
-    .execute(&mut **tx)
-    .await
-    .map_err(|error| OpError::logged(ctx.op, &error.into()))?;
+    .execute(connection)
+    .await?;
     Ok(())
 }
 

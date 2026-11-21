@@ -1,22 +1,16 @@
 import { legacyPathOf, spaceHref } from '../../app/href'
 
 /**
- * What an embed in a page shows, from its path (AWD-90). A collection's view
- * is `/projects/{projectId}/collections/{collectionId}`, with `?view=` for a
- * saved view other than the first. A sheet's range (AWD-54) is
- * `/projects/{projectId}/sheets/{sheetId}`, with `?tab=` and `?range=` (such
- * as `A1:D9`). A file of the page (C1.33), such as a pasted picture, is
- * `/files/{fileId}`. Any other path in the app shows as a link to it.
+ * What an embed in a page shows, from its path (either address shape). A
+ * file of the page (C1.33), such as a pasted picture, is `/files/{fileId}`.
+ * Modules read their own
+ * paths through their embed registrations (M1.5: a collection's view, a
+ * sheet's range); any other path in the app shows as a link to it. The
+ * paths a collection's or sheet's picker keeps are built here.
  */
-export type EmbedTarget =
-  | { kind: 'collection'; projectId: string; collectionId: string; viewId: string | null }
-  | { kind: 'sheet'; projectId: string; sheetId: string; tabId: string | null; range: string | null; name: string | null }
-  | { kind: 'file'; fileId: string }
-  | { kind: 'link' }
+export type EmbedTarget = { kind: 'file'; fileId: string } | { kind: 'link' }
 
 const FILE = /^\/files\/([0-9a-f-]{36})\/?$/i
-const COLLECTION = /^\/projects\/([^/]+)\/collections\/([^/]+)\/?$/
-const SHEET = /^\/projects\/([^/]+)\/sheets\/([^/]+)\/?$/
 
 export function embedTarget(href: string): EmbedTarget {
   let url: URL
@@ -29,28 +23,8 @@ export function embedTarget(href: string): EmbedTarget {
   // Either shape of address: /w/<ws>/s/<space>/... or the old /projects/<space>/...
   const path = legacyPathOf(url.pathname)
   try {
-    const collection = COLLECTION.exec(path)
-    if (collection) {
-      return {
-        kind: 'collection',
-        projectId: decodeURIComponent(collection[1]),
-        collectionId: decodeURIComponent(collection[2]),
-        viewId: url.searchParams.get('view') || null,
-      }
-    }
     const file = FILE.exec(path)
     if (file) return { kind: 'file', fileId: file[1].toLowerCase() }
-    const sheet = SHEET.exec(path)
-    if (sheet) {
-      return {
-        kind: 'sheet',
-        projectId: decodeURIComponent(sheet[1]),
-        sheetId: decodeURIComponent(sheet[2]),
-        tabId: url.searchParams.get('tab') || null,
-        range: url.searchParams.get('range') || null,
-        name: url.searchParams.get('name') || null,
-      }
-    }
   } catch {
     return { kind: 'link' }
   }
@@ -85,6 +59,12 @@ export function sheetEmbed(projectId: string, sheet: { id: string; name: string 
     href: search ? `${path}?${search}` : path,
     label: where ? `${sheet.name} · ${where}` : sheet.name,
   }
+}
+
+/** The path an embed of a sheet's chart keeps (C1.18), and its label. */
+export function sheetChartEmbed(projectId: string, sheet: { id: string; name: string }, chart: { id: string; title: string }) {
+  const path = spaceHref(projectId, `/sheets/${encodeURIComponent(sheet.id)}`)
+  return { href: `${path}?chart=${encodeURIComponent(chart.id)}`, label: `${sheet.name} · ${chart.title}` }
 }
 
 /** The path a file of the page keeps, and its label (the file's name). */

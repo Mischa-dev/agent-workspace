@@ -328,9 +328,6 @@ impl JobRegistry {
         self
     }
 
-    /// Also run `kind`, which must be registered, every `interval`. The
-    /// queue holds at most one of it at a time, so restarts and several
-    /// servers don't multiply it.
     /// Run `kind` jobs only on the instance holding the built-in host's
     /// lease; ordinary workers leave them.
     pub fn register_host<F, Fut>(&mut self, kind: &'static str, handler: F) -> &mut Self
@@ -342,10 +339,29 @@ impl JobRegistry {
         self.register(kind, handler)
     }
 
+    /// Like [`register_host`](Self::register_host), with a different time
+    /// limit per attempt.
+    pub fn register_host_with_timeout<F, Fut>(
+        &mut self,
+        kind: &'static str,
+        timeout: Duration,
+        handler: F,
+    ) -> &mut Self
+    where
+        F: Fn(JobContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), JobError>> + Send + 'static,
+    {
+        self.host_kinds.push(kind);
+        self.register_with_timeout(kind, timeout, handler)
+    }
+
     pub fn host_kinds(&self) -> &[&'static str] {
         &self.host_kinds
     }
 
+    /// Also run `kind`, which must be registered, every `interval`. The
+    /// queue holds at most one of it at a time, so restarts and several
+    /// servers don't multiply it.
     pub fn every(&mut self, kind: &'static str, interval: Duration) -> &mut Self {
         assert!(
             self.handlers.contains_key(kind),
@@ -374,6 +390,7 @@ pub fn default_registry() -> JobRegistry {
     crate::hosts::commands::register_jobs(&mut registry);
     crate::hosts::a2a::register_jobs(&mut registry);
     crate::hosts::builtin::assistant::register_jobs(&mut registry);
+    crate::hosts::builtin::worktrees::register_jobs(&mut registry);
     crate::work_items::templates::register_jobs(&mut registry);
     crate::collections::record_templates::register_jobs(&mut registry);
     crate::work_items::imports::register_jobs(&mut registry);
@@ -412,6 +429,9 @@ pub fn default_registry() -> JobRegistry {
     crate::ops::long::register_jobs(&mut registry);
     crate::files::register_jobs(&mut registry);
     crate::packages::directory::register_jobs(&mut registry);
+    crate::modules::connected::register_jobs(&mut registry);
+    crate::whiteboards::store::register_jobs(&mut registry);
+    crate::whiteboards::store::register_compaction(&mut registry);
     crate::link_previews::register_jobs(&mut registry);
     crate::repositories::register_jobs(&mut registry);
     crate::workspace::lifecycle::register_jobs(&mut registry);

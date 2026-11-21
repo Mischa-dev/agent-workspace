@@ -346,3 +346,29 @@ test('the plugin, its manifest and its package agree', () => {
   assert.equal(normalizeTarget(`agent-workspace:${CONVERSATION.toUpperCase()}`), CONVERSATION)
   assert.equal(normalizeTarget('#general'), undefined)
 })
+
+test('a request being given back is not picked up again before the release is in', async () => {
+  // A full page waits, so ending a turn reads the inbox again; the released
+  // request is still listed as claimed until reply_release answers.
+  const waiting = Array.from({ length: INBOX_PAGE }, (_, i) => ({ requestId: `w${i}`, status: 'claimed' }))
+  const workspace = new FakeWorkspace(waiting)
+  let answerRelease: () => void = () => {}
+  const callTool = workspace.callTool.bind(workspace)
+  workspace.callTool = async (name: string, args: Record<string, unknown>) => {
+    if (name === 'reply_release' && args.requestId === 'w0') await new Promise<void>((resolve) => (answerRelease = resolve))
+    return callTool(name, args)
+  }
+  const bridge = new WorkspaceBridge({
+    tools: workspace,
+    runTurn: async (turn, handle) => {
+      if (turn.requestId === 'w0') await handle.finish('declined')
+    },
+  })
+  await bridge.pickUpWaiting()
+  for (let i = 0; i < 5; i++) await settle()
+  await bridge.pickUpWaiting()
+  for (let i = 0; i < 5; i++) await settle()
+  assert.equal(workspace.named('reply_claim').filter((a) => a.requestId === 'w0').length, 1)
+  answerRelease()
+  await settle()
+})

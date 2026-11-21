@@ -204,6 +204,7 @@ pub async fn propose(
         author.actor_id,
     )
     .await?;
+    crate::proposals::announce_fact(transaction, id, false).await?;
     Ok(Proposed::Made {
         id,
         elements: proposed,

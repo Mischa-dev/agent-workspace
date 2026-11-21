@@ -732,7 +732,7 @@ pub(crate) async fn select_run_setup_for(
     .fetch_all(&mut **transaction)
     .await?;
     let linked_work_item_count = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_item_conversation_links WHERE project_id = $1 AND conversation_id = $2",
+        "SELECT count(*) FROM task_threads WHERE project_id = $1 AND conversation_id = $2",
     )
     .bind(project_id)
     .bind(conversation_id)
@@ -742,7 +742,7 @@ pub(crate) async fn select_run_setup_for(
         sqlx::query_scalar::<_, Uuid>(
             r#"
             SELECT repository.id
-            FROM work_item_conversation_links conversation_link
+            FROM task_threads conversation_link
             JOIN work_item_repository_links repository_link
               ON repository_link.project_id = conversation_link.project_id
              AND repository_link.work_item_id = conversation_link.work_item_id
@@ -1019,9 +1019,10 @@ pub(crate) async fn interrupt_run_in(
     )
     .await?;
     transaction.commit().await?;
-    if started {
-        // The built-in host hears the cancel now, not at its next tick.
-        // Otherwise its next tick does.
+    if started && state.config.builtin_host && state.config.builtin_host_remote.is_none() {
+        // The built-in host hears the cancel now, not at its next tick,
+        // when it runs in this process. Otherwise (its own program, or
+        // another instance) its next look does.
         if let Err(error) = crate::hosts::builtin::driver::hear_now(
             state,
             run_id,

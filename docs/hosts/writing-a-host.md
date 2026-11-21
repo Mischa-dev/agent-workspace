@@ -59,9 +59,11 @@ A start carries `workspaceCredential`, a short-lived token for that run.
 Report with it through the run operations on the public API
 (`client.reporter(run_id, &credential)`): `run_activity_report`
 (`run_started`, `text_message`, an `interrupt` that raises a request),
-`run_usage_report`, `run_result_report` and `run_update` (the run's state:
-`working`, `done`, `failed`, `cancelled`). Give each report its own key so
-sending it again changes nothing.
+`run_usage_report`, `run_result_report`, `run_changes_report` (the files
+and diff a run changed in its repository, shown on its page; each replaces
+the last, so send it before the run finishes) and `run_update` (the run's
+state: `working`, `done`, `failed`, `cancelled`). Give each report its own
+key so sending it again changes nothing.
 
 Send a heartbeat (`client.heartbeat`) at your report interval (15 seconds
 to an hour), listing every run you are still doing. A run you stop listing

@@ -244,19 +244,13 @@ async fn every_old_link_reaches_the_store_and_leaves_it() {
     .expect("comment link");
     assert_eq!(text, ("message".to_owned(), comment.parse().expect("id")));
 
-    // A fresh copy from the old stores gives the same set. Dependencies and
-    // relations between tasks are kept in the store alone (K3.16), so they
-    // stay.
-    let cleared = sqlx::query(
-        "DELETE FROM links \
-         WHERE NOT (origin = 'explicit' AND kind IN ('blocks', 'relates_to', 'duplicates') \
-                    AND from_thing_id IN (SELECT id FROM things WHERE kind = 'task') \
-                    AND to_thing_id IN (SELECT id FROM things WHERE kind = 'task'))",
-    )
-    .execute(pool)
-    .await
-    .expect("clear")
-    .rows_affected();
+    // A fresh copy from the old stores gives the same set. Explicit links
+    // are kept in the store alone (K3.16, K3.23), so they stay.
+    let cleared = sqlx::query("DELETE FROM links WHERE origin <> 'explicit'")
+        .execute(pool)
+        .await
+        .expect("clear")
+        .rows_affected();
     let copy_all = || async {
         sqlx::query_scalar::<_, i64>("SELECT links_copy_all()")
             .fetch_one(pool)
@@ -266,7 +260,10 @@ async fn every_old_link_reaches_the_store_and_leaves_it() {
     let added = copy_all().await;
     assert_eq!(links(pool).await, stored);
     assert_eq!(u64::try_from(added).expect("count"), cleared);
-    assert_eq!(stored.len() - usize::try_from(cleared).expect("cleared"), 3);
+    assert_eq!(
+        stored.len() - usize::try_from(cleared).expect("cleared"),
+        stored.iter().filter(|link| link.3 == "explicit").count()
+    );
     assert_eq!(copy_all().await, 0, "a second copy adds nothing");
 
     // Taking each away takes its link.

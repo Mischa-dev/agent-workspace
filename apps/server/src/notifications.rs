@@ -56,6 +56,7 @@ const MAX_CHANGE_EVENTS: usize = 50;
 // ---------------------------------------------------------------------------
 // Kinds
 
+pub mod ops;
 pub mod views;
 
 pub mod kind {
@@ -310,6 +311,22 @@ impl NewNotification {
             dedupe_key,
         )
     }
+}
+
+/// Whether the occurrence `dedupe_key` was already delivered to `recipient`.
+pub async fn delivered(
+    transaction: &mut Transaction<'_, Postgres>,
+    recipient: Uuid,
+    dedupe_key: &str,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM notification_occurrences \
+         WHERE recipient_actor_id = $1 AND dedupe_key = $2)",
+    )
+    .bind(recipient)
+    .bind(dedupe_key)
+    .fetch_one(&mut **transaction)
+    .await?)
 }
 
 /// Delivers one occurrence. Returns whether anything changed (false when
@@ -2273,7 +2290,12 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
         }
         // A2.14: its words come from the budget's numbers (rule 10).
         kind::BUDGET_WARNING => (
-            "A budget you set is nearly used".to_owned(),
+            if row.detail.get("level").and_then(serde_json::Value::as_str) == Some("hard") {
+                "A budget you set is used up"
+            } else {
+                "A budget you set is nearly used"
+            }
+            .to_owned(),
             match (
                 row.detail.get("used").and_then(serde_json::Value::as_i64),
                 row.detail.get("limit").and_then(serde_json::Value::as_i64),

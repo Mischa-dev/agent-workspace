@@ -20,6 +20,7 @@
     "whiteboard_update": "change",
     "whiteboard_trash_empty": "change",
     "whiteboard_duplicate": "create",
+    "whiteboard_ask": "create",
     "whiteboard_link": "change"
   },
   "routes": ["/api/v1/whiteboards*", "/api/v1/whiteboard-links", "/api/v1/whiteboard-trash/*"],
@@ -56,7 +57,7 @@
   "web": { "folder": "whiteboards" },
   "slots": {
     "pages": ["/whiteboards", "/whiteboards/:whiteboardId"],
-    "parts": ["area.whiteboards"],
+    "parts": ["area.whiteboards", "whiteboard.convert"],
     "sidebar": [],
     "home": [],
     "settings": [],

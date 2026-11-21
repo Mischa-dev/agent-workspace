@@ -2,11 +2,11 @@
 //! project makes, so the tool list stays the same however many there are.
 //!
 //! - `collection_list`: a project's collections with their record counts.
-//! - `collection_describe`: one collection's fields, views and definition.
-//! - `collection_write`: create a collection with its fields and views in
+//! - `collection_get`: one collection's fields, views and definition.
+//! - `collection_create` and `collection_update`: create a collection with its fields and views in
 //!   one call, or change any of them (`collections.build`).
-//! - `record_query`: records found on the server, a page at a time.
-//! - `record_write`: add or change up to 100 records, all or nothing
+//! - `record_list`: records found on the server, a page at a time.
+//! - `record_create_many` and `record_update_many`: add or change up to 100 records, all or nothing
 //!   (`collections.edit`).
 //!
 //! The rules are `crate::collections`, the same the web app's routes use.
@@ -53,9 +53,9 @@ use crate::{
 
 const MESSAGES_SPACE_MESSAGE: &str =
     "The Messages space has no collections. Pick a project with projects_list.";
-const BUILD_MESSAGE: &str = "Your role here can't build collections (collections.build): it can't create them or change their fields and views. my_permissions says what it can do.";
+const BUILD_MESSAGE: &str = "Your role here can't build collections (collections.build): it can't create them or change their fields and views. permissions_get says what it can do.";
 const EDIT_MESSAGE: &str =
-    "Your role here can't edit records (collections.edit). my_permissions says what it can do.";
+    "Your role here can't edit records (collections.edit). permissions_get says what it can do.";
 
 fn collection_url(state: &AppState, project_id: Uuid, collection_id: Uuid) -> String {
     link_url(
@@ -223,18 +223,18 @@ async fn find_collection<T>(
 // ---------------------------------------------------------------------------
 // collection_list
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct CollectionListArguments {
+pub(crate) struct CollectionListArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
-    /// Also list archived collections, which collection_write can restore.
+    /// Also list archived collections, which collection_update can restore.
     pub include_archived: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CollectionLine {
+pub(crate) struct CollectionLine {
     #[serde(flatten)]
     pub collection: CollectionSummary,
     pub url: String,
@@ -242,14 +242,14 @@ pub(super) struct CollectionLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CollectionListValue {
+pub(crate) struct CollectionListValue {
     /// The project's collections in order, with how many records each has.
     pub collections: Vec<CollectionLine>,
     /// Whether you can create collections and change their fields and views.
     pub can_build: bool,
 }
 
-pub(super) async fn collection_list(
+pub(crate) async fn collection_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: CollectionListArguments,
@@ -315,20 +315,20 @@ pub(super) async fn collection_list(
 // ---------------------------------------------------------------------------
 // collection_describe
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct CollectionDescribeArguments {
+pub(crate) struct CollectionDescribeArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// The collection, by name or ID.
     pub collection: String,
-    /// Also list archived fields, which collection_write can restore.
+    /// Also list archived fields, which collection_update can restore.
     pub include_archived: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ViewLine {
+pub(crate) struct ViewLine {
     pub id: String,
     pub name: String,
     #[serde(rename = "type")]
@@ -338,16 +338,16 @@ pub(super) struct ViewLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CollectionDescribeValue {
+pub(crate) struct CollectionDescribeValue {
     pub collection: CollectionSummary,
-    /// Its fields in order, each with its type and options. record_write
-    /// sets values by these names; record_query filters on them.
+    /// Its fields in order, each with its type and options. record_update_many
+    /// sets values by these names; record_list filters on them.
     pub fields: Vec<FieldView>,
-    /// Its saved views, in order. record_query reads through one by name.
+    /// Its saved views, in order. record_list reads through one by name.
     pub views: Vec<ViewLine>,
-    /// Records that are archived (record_query with archived: "only").
+    /// Records that are archived (record_list with archived: "only").
     pub archived_records: i64,
-    /// The collection by name, in the shape collection_write takes (name,
+    /// The collection by name, in the shape collection_create takes (name,
     /// description, titleName, fields, views): pass it there to make the
     /// same collection in another project.
     #[schemars(with = "Map<String, Value>")]
@@ -357,7 +357,7 @@ pub(super) struct CollectionDescribeValue {
     pub url: String,
 }
 
-pub(super) async fn collection_describe(
+pub(crate) async fn collection_describe(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: CollectionDescribeArguments,
@@ -446,7 +446,7 @@ pub(super) async fn collection_describe(
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct CollectionWriteArguments {
+pub(crate) struct CollectionWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// The collection to change, by name or ID. Leave it out to create one.
@@ -471,7 +471,7 @@ pub(super) struct CollectionWriteArguments {
     pub archived: Option<bool>,
     /// true makes its records tasks: each gets a status, assignee,
     /// priority, dates, labels and a key like AWD-12, and is then changed
-    /// as a task (record_write, or task_create with collection and
+    /// as a task (record_update_many, or task_create with collection and
     /// task_update).
     /// false turns it off: its tasks are put away with their keys and
     /// history, and come back when it is turned on again. Not while one of
@@ -484,7 +484,7 @@ pub(super) struct CollectionWriteArguments {
     /// The status its new tasks start in, one of taskStatuses. "" starts
     /// them in the space's default (or the first status it uses).
     pub start_status: Option<String>,
-    /// The version from collection_describe: if the collection changed
+    /// The version from collection_get: if the collection changed
     /// since, a write that would change anything (fields and views too) is
     /// a conflict. Leave it out to change the current one.
     pub expected_version: Option<i64>,
@@ -494,7 +494,7 @@ pub(super) struct CollectionWriteArguments {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CollectionWriteValue {
+pub(crate) struct CollectionWriteValue {
     pub collection: CollectionSummary,
     pub created: bool,
     /// What changed, in order, such as `field "Severity" added`. Empty
@@ -507,7 +507,7 @@ pub(super) struct CollectionWriteValue {
 
 fn stale_conflict<T>(name: &str, version: i64) -> ToolResult<T> {
     ToolResult::conflict(format!(
-        "\"{name}\" changed since you read it (now version {version}). Read it again with collection_describe and retry."
+        "\"{name}\" changed since you read it (now version {version}). Read it again with collection_get and retry."
     ))
 }
 
@@ -564,7 +564,7 @@ async fn workflow_change<T>(
     })))
 }
 
-pub(super) async fn collection_write(
+pub(crate) async fn collection_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: CollectionWriteArguments,
@@ -938,9 +938,9 @@ pub(super) async fn collection_write(
 // ---------------------------------------------------------------------------
 // record_query
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct RecordQueryArguments {
+pub(crate) struct RecordQueryArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// The collection, by name or ID.
@@ -985,7 +985,7 @@ pub(super) struct RecordQueryArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct GroupLine {
+pub(crate) struct GroupLine {
     pub name: String,
     pub count: i64,
     /// With a measure: its value over the group's records.
@@ -995,14 +995,14 @@ pub(super) struct GroupLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RecordHistory {
+pub(crate) struct RecordHistory {
     pub number: i64,
     pub history: Vec<HistoryEntry>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RecordQueryValue {
+pub(crate) struct RecordQueryValue {
     pub collection: String,
     /// What the title is called in this collection.
     pub title_name: String,
@@ -1022,7 +1022,7 @@ pub(super) struct RecordQueryValue {
     pub history: Vec<RecordHistory>,
 }
 
-pub(super) async fn record_query(
+pub(crate) async fn record_query(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: RecordQueryArguments,
@@ -1352,7 +1352,7 @@ pub(super) async fn record_query(
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct RecordWriteEntry {
+pub(crate) struct RecordWriteEntry {
     /// The record to change: its number (#12) or ID. Leave it out to add
     /// one.
     #[serde(default, deserialize_with = "string_or_number")]
@@ -1365,14 +1365,14 @@ pub(super) struct RecordWriteEntry {
     pub fields: Option<Map<String, Value>>,
     /// true archives it (hidden, nothing deleted), false restores it.
     pub archived: Option<bool>,
-    /// The version from record_query. Leave it out to change the current
+    /// The version from record_list. Leave it out to change the current
     /// one.
     pub expected_version: Option<i64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct RecordWriteArguments {
+pub(crate) struct RecordWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// The collection, by name or ID.
@@ -1386,7 +1386,7 @@ pub(super) struct RecordWriteArguments {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RecordWriteValue {
+pub(crate) struct RecordWriteValue {
     pub collection: String,
     /// Each record as it is now, in the order written.
     pub records: Vec<RecordLine>,
@@ -1516,7 +1516,7 @@ async fn task_records_write(
     Ok(Ok(written))
 }
 
-pub(super) async fn record_write(
+pub(crate) async fn record_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: RecordWriteArguments,
@@ -1625,7 +1625,7 @@ pub(super) async fn record_write(
         };
         if collection.archived {
             return Ok(ToolResult::conflict(format!(
-                "\"{}\" is archived. Restore it with collection_write (archived: false) first.",
+                "\"{}\" is archived. Restore it with collection_update (archived: false) first.",
                 collection.name
             )));
         }

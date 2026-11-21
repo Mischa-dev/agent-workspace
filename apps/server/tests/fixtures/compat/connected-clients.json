@@ -10,7 +10,7 @@
   ],
   "clients": {
     "always-on-runtime": {
-      "wake": "inbox.available",
+      "wake": "standard-webhooks",
       "tools": {
         "briefing": [],
         "inbox_list": [],

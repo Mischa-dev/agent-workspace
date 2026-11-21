@@ -3879,7 +3879,7 @@ const WORK_ITEM_SELECT: &str = concat!(
                     'href', '/projects/' || item.project_id || '/threads/' || thread.id
                 ) ORDER BY link.created_at, thread.id
             )
-            FROM work_item_conversation_links link
+            FROM task_threads link
             JOIN conversations thread
               ON thread.project_id = link.project_id AND thread.id = link.conversation_id
             JOIN conversations channel

@@ -157,7 +157,7 @@ const LINE_SELECT: &str = r#"
     LEFT JOIN github_pull_requests pull_request
       ON pull_request.id = pull_request_request.github_pull_request_id
     LEFT JOIN LATERAL (
-        SELECT link.work_item_id FROM work_item_conversation_links link
+        SELECT link.work_item_id FROM task_threads link
         WHERE link.project_id = run.space_id AND link.conversation_id = run.conversation_id
         ORDER BY link.created_at, link.work_item_id
         LIMIT 1
@@ -421,9 +421,13 @@ pub struct RunView {
     /// their checks and reviews, newest first.
     pub pull_requests: Vec<crate::code_host::pull_requests::PullRequest>,
     pub usage_by_model: Vec<ModelUsageLine>,
+    /// The files it changed in its repository, as its host last reported
+    /// them (`run_changes_report`), for a viewer who sees code; null before
+    /// the first report. The diff is read on its own.
+    pub files: Option<Vec<super::changes::ChangedFile>>,
 }
 
-async fn visible_line(
+pub(crate) async fn visible_line(
     connection: &mut PgConnection,
     viewer: Uuid,
     run_id: Uuid,
@@ -559,6 +563,13 @@ pub async fn view(
     let mut lines = vec![named(state, line)];
     redact(state, viewer, &mut lines).await?;
     let run = lines.remove(0);
+    let files = if sees_code(&mut *connection, viewer, run.project_id).await? {
+        super::changes::get(&mut *connection, run_id)
+            .await?
+            .map(|changes| changes.files)
+    } else {
+        None
+    };
     Ok(Some(RunView {
         hidden_activities: (total - i64::try_from(activities.len()).unwrap_or(0)).max(0),
         run,
@@ -568,7 +579,28 @@ pub async fn view(
         results,
         pull_requests,
         usage_by_model,
+        files,
     }))
+}
+
+/// Whether `viewer` sees the code of runs in `project` ("see code"): their
+/// branch, pull requests and changes.
+pub(crate) async fn sees_code(
+    connection: &mut PgConnection,
+    viewer: Uuid,
+    project: Option<Uuid>,
+) -> Result<bool, AppError> {
+    let Some(project) = project else {
+        return Ok(false);
+    };
+    Ok(crate::search::projects_allowing_on(
+        connection,
+        viewer,
+        &[project],
+        crate::policy::Permission::CodeView,
+    )
+    .await?
+    .contains(&project))
 }
 
 // ------------------------------------------------------------- operations

@@ -110,7 +110,11 @@ pub mod rate_limit;
 pub mod reactions;
 pub mod read_state;
 pub mod realtime;
-pub mod recovery;
+/// Recovery of the built-in host's runs, which lives with the host
+/// (`hosts::builtin::recovery`).
+pub mod recovery {
+    pub use crate::hosts::builtin::recovery::*;
+}
 pub mod releases;
 pub mod replies;
 pub mod repositories;
@@ -296,7 +300,10 @@ pub fn router(state: AppState) -> Router {
         .layer(PropagateRequestIdLayer::new(request_id.clone()))
         .layer(SetRequestIdLayer::new(request_id, MakeRequestUuid))
         // What each source may load: client_config::content_security_policy.
-        .layer(SetResponseHeaderLayer::overriding(
+        // A response that sets its own keeps it: an avatar's or emoji's
+        // stricter one, and a framed panel's host page (M1.15), which may
+        // frame its app's one origin and be framed by the app's own pages.
+        .layer(SetResponseHeaderLayer::if_not_present(
             HeaderName::from_static("content-security-policy"),
             content_security_policy,
         ))
@@ -309,7 +316,7 @@ pub fn router(state: AppState) -> Router {
             HeaderName::from_static("x-content-type-options"),
             HeaderValue::from_static("nosniff"),
         ))
-        .layer(SetResponseHeaderLayer::overriding(
+        .layer(SetResponseHeaderLayer::if_not_present(
             HeaderName::from_static("x-frame-options"),
             HeaderValue::from_static("DENY"),
         ))

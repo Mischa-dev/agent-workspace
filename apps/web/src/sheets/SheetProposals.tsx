@@ -74,7 +74,7 @@ export function SheetProposalsDialog({
             </p>
             <ul className="aw-sheet__proposal-cells">
               {proposal.cells.map((cell, index) => {
-                const label = `${cell.tab} ${cellName({ row: cell.row, column: cell.column })}`
+                const label = `${cell.tab} ${cellName({ row: cell.row, column: cell.column })}${cell.gone ? ' (deleted since)' : ''}`
                 const change = (
                   <span className="aw-sheet__proposal-change">
                     <span className="aw-sheet__proposal-cell">{label}</span> <del>{cell.before || 'empty'}</del> <ins>{cell.after || 'empty'}</ins>

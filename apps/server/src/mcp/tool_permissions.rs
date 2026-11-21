@@ -15,81 +15,23 @@
 //! ones, so a new tool must say what it needs.
 
 use crate::policy::Permission::{
-    self, ChannelsCreate, ChannelsPost, CodePublish, CollectionsBuild, CollectionsEdit,
-    MembersInvite, MembersView, PagesComment, PagesSuggest, RolesManage, RunsInterrupt, RunsLaunch,
-    SettingsManage, SheetsEdit, TasksCreate, TasksEdit, TasksView, TasksWorkflow, WhiteboardsEdit,
+    self, ChannelsCreate, MembersView, RunsLaunch, TasksCreate, TasksEdit, TasksView,
+    WhiteboardsEdit,
 };
 
 pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
-    ("workflow_get", Some(TasksView)),
-    ("settings_get", None),
-    ("settings_set", None),
-    ("module_list", None),
-    ("workspace_update", Some(SettingsManage)),
-    ("usage_windows", None),
-    ("usage_batch", None),
-    ("usage_batch_launch", Some(RunsLaunch)),
     ("project_members", Some(MembersView)),
-    ("invitation_list", Some(MembersInvite)),
-    ("invitation_write", Some(MembersInvite)),
-    ("role_list", None),
-    ("role_get", None),
-    ("my_permissions", None),
-    ("role_write", Some(RolesManage)),
-    // Anyone may cap their own apps (agentLimit); assigning roles and
-    // changing others' limits is checked inside, against MembersManage.
-    ("role_assign", None),
-    ("workspace_template_list", None),
-    ("workspace_template_apply", Some(SettingsManage)),
-    ("workspace_template_save", Some(SettingsManage)),
-    ("project_template_list", None),
-    ("project_template_write", None),
-    ("project_layout_set", Some(SettingsManage)),
-    ("layout_preset_write", Some(SettingsManage)),
     ("conversation_list", None),
     ("conversation_open", None),
     ("conversation_read", None),
     ("conversation_start", Some(ChannelsCreate)),
-    ("file_upload", Some(ChannelsPost)),
-    ("file_list", None),
     ("file_read", None),
-    ("file_delete", None),
-    ("notification_list", None),
-    ("notification_update", None),
-    ("later_list", None),
-    ("later_save", None),
-    ("later_update", None),
     ("agent_list", None),
-    ("people_search", None),
     ("inbox_list", None),
     ("session_bind", None),
     // Custom fields (AWD-89): reading them is seeing tasks; defining them
     // is the workflow's permission. Values are set through task_update.
-    // Collections (AWD-90): anyone in the project reads them; records need
-    // collections.edit, and fields and views collections.build.
-    ("collection_list", None),
-    ("collection_describe", None),
-    ("collection_write", Some(CollectionsBuild)),
-    ("record_query", None),
-    ("record_write", Some(CollectionsEdit)),
-    // Sheets (AWD-54): anyone in the project reads them; sheets.edit
-    // changes them.
-    ("sheet_list", None),
-    ("sheet_read", None),
-    ("sheet_write", Some(SheetsEdit)),
     ("thing_open", None),
-    ("page_list", None),
-    ("page_get", None),
-    ("page_blocks", None),
-    ("skill_list", None),
-    ("skill_get", None),
-    ("page_write", Some(PagesSuggest)),
-    ("page_edit", Some(PagesSuggest)),
-    ("page_comments", None),
-    ("page_suggestions", None),
-    ("page_comment", Some(PagesComment)),
-    ("page_comment_update", Some(PagesComment)),
-    ("page_suggestion_decide", Some(PagesSuggest)),
     ("whiteboard_list", None),
     ("whiteboard_read", None),
     ("whiteboard_render", None),
@@ -100,42 +42,16 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("ai_suggestion_decide", Some(TasksEdit)),
     ("ai_analyze", Some(TasksEdit)),
     ("ai_summarize", Some(TasksView)),
-    ("workflow_update", Some(TasksWorkflow)),
-    ("run_start", Some(RunsLaunch)),
-    ("task_launch", Some(RunsLaunch)),
-    ("run_get", None),
-    ("run_stop", Some(RunsInterrupt)),
-    ("run_retry", Some(RunsLaunch)),
-    ("run_dismiss_failure", None),
-    ("run_publish", Some(CodePublish)),
-    ("run_list", None),
-    ("run_steps", None),
-    ("run_usage", None),
-    ("agent_profile_list", None),
-    ("agent_profile_write", Some(SettingsManage)),
-    ("launch_list", None),
-    ("launch_cancel", Some(RunsLaunch)),
-    ("model_catalog_write", Some(SettingsManage)),
     ("run_request", Some(RunsLaunch)),
     ("external_event_poll", None),
 ];
-
-/// Tools another permission also opens, for the use the handler then
-/// checks itself: uploading to a task needs only "edit tasks" (the handler
-/// checks "post messages" for a conversation upload).
-const ALSO_OPENED_BY: &[(&str, Permission)] = &[("file_upload", TasksEdit)];
 
 /// Whether a caller holding `reach` may use a tool at all. A tool missing
 /// from the table is never reachable.
 pub(super) fn reachable(tool: &str, reach: crate::policy::PermissionSet) -> bool {
     match needs(tool) {
         Ok(None) => true,
-        Ok(Some(permission)) => {
-            reach.contains(permission)
-                || ALSO_OPENED_BY
-                    .iter()
-                    .any(|(name, also)| *name == tool && reach.contains(*also))
-        }
+        Ok(Some(permission)) => reach.contains(permission),
         Err(()) => false,
     }
 }
@@ -185,19 +101,12 @@ mod tests {
     }
 
     #[test]
-    fn editing_tasks_alone_opens_file_upload() {
-        let task_editor = PermissionSet::from_keys(&["tasks.view", "tasks.edit"]);
-        assert!(super::reachable("file_upload", task_editor));
-        let reader = PermissionSet::from_keys(&["tasks.view"]);
-        assert!(!super::reachable("file_upload", reader));
-    }
-
-    #[test]
     fn viewers_keep_the_read_tools_they_had() {
         let viewer = PermissionSet::built_in(MembershipRole::Viewer);
-        for tool in ["workflow_get", "project_export"] {
-            let need = super::needs(tool).expect("listed");
-            assert!(need.is_none_or(|need| viewer.contains(need)), "{tool}");
-        }
+        let need = super::needs("project_export").expect("listed");
+        assert!(
+            need.is_none_or(|need| viewer.contains(need)),
+            "project_export"
+        );
     }
 }

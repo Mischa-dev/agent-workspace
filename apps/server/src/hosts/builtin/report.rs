@@ -58,6 +58,11 @@ async fn adopt(state: &AppState, run_id: Uuid) -> Result<Uuid, AppError> {
 /// The reports of a run the built-in host started, by its start command
 /// (fetched again for a credential).
 pub async fn open(state: &AppState, run_id: Uuid) -> Result<RunReports, AppError> {
+    // The built-in host reports on runs of every workspace.
+    crate::tenancy::system("runs.host", Box::pin(open_here(state, run_id))).await
+}
+
+async fn open_here(state: &AppState, run_id: Uuid) -> Result<RunReports, AppError> {
     let start_command_id = sqlx::query_scalar::<_, Option<Uuid>>(
         "SELECT start_command_id FROM agent_runs WHERE id = $1",
     )

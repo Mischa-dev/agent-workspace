@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { origins } from '../api/client'
 import { currentQueryScopeGeneration } from '../api/queryScope'
 import { coalesceDeltaBatch } from '../app/streaming'
+import { liveEventRegistered } from '../modules/live'
 import {
   dropRemovedConversation,
   dropRemovedMessage,
@@ -501,7 +502,7 @@ export function useRealtimeConnection(): RealtimeContextValue {
           .catch(() => undefined)
       }
       if (modulesChanged(queryClient, envelope)) return
-      if (SELF_HANDLED.has(envelope.type)) {
+      if (SELF_HANDLED.has(envelope.type) || liveEventRegistered(envelope.type)) {
         // An open board or page fetches what changed itself, and lists
         // (and a collection's records) refetch; that code loads with the
         // first such event.

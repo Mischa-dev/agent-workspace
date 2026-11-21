@@ -25,7 +25,6 @@ pub struct Connection {
     pub is_default: bool,
     pub name: String,
     pub webhook_url: Option<String>,
-    pub webhook_format: String,
     pub cursor_key: Vec<u8>,
     pub push_cursor: i64,
     pub read_cursor: i64,
@@ -51,7 +50,7 @@ pub struct Connection {
 }
 
 pub(crate) const COLUMNS: &str = "id, home_workspace_id, account_id, reaches_all, \
-    source_connection_id, is_default, name, webhook_url, webhook_format, cursor_key, \
+    source_connection_id, is_default, name, webhook_url, cursor_key, \
     push_cursor, read_cursor, state, disabled_reason, consecutive_failures, first_failure_at, \
     last_seen_at, last_delivered_at, last_error, version, created_at, updated_at, \
     made_through_app, via_grant_id, last_test_at, last_test_status, last_test_error";
@@ -417,21 +416,14 @@ pub async fn clear_signing_secrets(
 
 /// Point a connection's pushes at `url`, or stop them (`None`). A new
 /// address gets a new signing secret, returned to be shown once; saving the
-/// same address keeps the secret and turns pushes back on. The format
-/// changes only when `format` says (an older receiver keeps working when
-/// its address is saved again). Pushes start from now, not from history.
+/// same address keeps the secret and turns pushes back on. Pushes start
+/// from now, not from history.
 pub async fn set_webhook(
     connection: &mut PgConnection,
     config: &crate::config::AppConfig,
     delivery: &Connection,
     url: Option<&str>,
-    format: Option<&str>,
 ) -> Result<Option<String>, AppError> {
-    if let Some(format) = format
-        && !matches!(format, "standard" | "typed_v1" | "inbox_v1")
-    {
-        return Err(AppError::Validation("webhookFormat"));
-    }
     if let Some(url) = url {
         crate::outbound::validate_webhook_url(url, &config.webhook_trusted_origins)?;
     }
@@ -459,7 +451,6 @@ pub async fn set_webhook(
                                THEN (SELECT next_position - 1 FROM event_position_counter)
                                ELSE push_cursor END,
             webhook_url = $2,
-            webhook_format = COALESCE($3, webhook_format),
             state = CASE WHEN state = 'push_disabled' THEN 'active' ELSE state END,
             disabled_reason = NULL, consecutive_failures = 0, first_failure_at = NULL,
             last_error = NULL, version = version + 1, updated_at = now()
@@ -468,7 +459,6 @@ pub async fn set_webhook(
     )
     .bind(delivery.id)
     .bind(url)
-    .bind(format)
     .execute(&mut *connection)
     .await?;
     Ok(secret)

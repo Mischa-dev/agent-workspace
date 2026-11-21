@@ -13,16 +13,16 @@ use super::{
 };
 use crate::{AppState, error::AppError, usage};
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct UsageWindowsArguments {
+pub(crate) struct UsageWindowsArguments {
     /// Only this provider account.
     pub account_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct WindowLine {
+pub(crate) struct WindowLine {
     /// Such as 5-hour, Weekly or a schedule's name.
     pub label: String,
     /// reported (by the harness) or schedule (set by you).
@@ -39,7 +39,7 @@ pub(super) struct WindowLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct AccountLine {
+pub(crate) struct AccountLine {
     pub account_id: String,
     pub name: String,
     pub harness: String,
@@ -54,11 +54,11 @@ pub(super) struct AccountLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct UsageWindowsValue {
+pub(crate) struct UsageWindowsValue {
     pub accounts: Vec<AccountLine>,
 }
 
-pub(super) async fn usage_windows(
+pub(crate) async fn usage_windows(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: UsageWindowsArguments,

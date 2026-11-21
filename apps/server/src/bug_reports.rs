@@ -550,6 +550,61 @@ pub(crate) async fn insert_link(
     Ok((link_id, token))
 }
 
+/// A package upgrade (M1.10) giving a form its new name and questions.
+/// Only its maker's: its answers become records as them. False when the
+/// form is gone or someone else's.
+pub(crate) async fn replace_form_in(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    caller: &Caller,
+    project_id: Uuid,
+    link_id: Uuid,
+    name: &str,
+    collection_id: Uuid,
+    form: &FormConfig,
+) -> Result<bool, AppError> {
+    let organization_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        UPDATE bug_report_links
+        SET name = $4, version = version + 1, updated_at = now()
+        WHERE id = $1 AND project_id = $2 AND owner_actor_id = $3
+          AND collection_id = $5 AND form_id IS NOT NULL
+        RETURNING organization_id
+        "#,
+    )
+    .bind(link_id)
+    .bind(project_id)
+    .bind(caller.actor_id)
+    .bind(name)
+    .bind(collection_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(organization_id) = organization_id else {
+        return Ok(false);
+    };
+    // The form is its own definition (T1.28); it keeps its collection.
+    sqlx::query(
+        "UPDATE forms SET definition = $2, name = $3, version = version + 1, updated_at = now() \
+         WHERE id = (SELECT form_id FROM bug_report_links WHERE id = $1)",
+    )
+    .bind(link_id)
+    .bind(serde_json::to_value(form).map_err(|_| AppError::Internal("serialize form"))?)
+    .bind(name)
+    .execute(&mut **transaction)
+    .await?;
+    events::audit(
+        &mut **transaction,
+        caller,
+        organization_id,
+        Some(project_id),
+        "bug_report_link.update",
+        "bug_report_link",
+        link_id,
+        json!({ "name": name, "form": true }),
+    )
+    .await?;
+    Ok(true)
+}
+
 pub(crate) async fn update(
     state: &AppState,
     caller: &Caller,
@@ -1201,7 +1256,7 @@ async fn turned_off_for_maker(pool: &PgPool, link: &ReportLink) -> Result<bool, 
 }
 
 /// A form's answer (AWD-110): one record in its collection, made by
-/// `record_write` as the link's maker, of only the fields the form asks.
+/// `record_create_many` as the link's maker, of only the fields the form asks.
 async fn receive_answer(
     state: &AppState,
     link: &ReportLink,
@@ -1313,14 +1368,14 @@ async fn receive_answer(
     let result = mcp::call_tool_direct(
         state,
         link_principal(link, "Form"),
-        "record_write",
+        "record_create_many",
         arguments,
     )
     .await
     .map_err(|error| match error {
         mcp::DirectCallError::Refused(error) => error,
         mcp::DirectCallError::UnknownTool | mcp::DirectCallError::InvalidArguments(_) => {
-            AppError::Internal("form record_write call")
+            AppError::Internal("form record_create_many call")
         }
     });
     let result = match result {
@@ -1336,7 +1391,7 @@ async fn receive_answer(
             .get("outcome")
             .and_then(Value::as_str)
             .unwrap_or("none");
-        tracing::warn!(outcome, "form answer refused by record_write");
+        tracing::warn!(outcome, "form answer refused by record_create_many");
         // A value the collection refuses (an option that's gone, a bad
         // date) says why; anything else stays general.
         let message = match outcome {
@@ -1348,8 +1403,24 @@ async fn receive_answer(
         };
         return Ok(refused(crate::public_api::status_for(&result), message));
     }
+    // A call set aside is still `ok` but kept nothing: the maker's account
+    // is paused, or a guard holds record writes for review (and only the
+    // same call made again once it's allowed goes through, which a form's
+    // sender won't make). Neither is an answer received.
+    let set_aside = ["paused", "pendingReview"]
+        .iter()
+        .any(|key| result.get(*key).and_then(Value::as_bool) == Some(true));
+    if set_aside || result.pointer("/value/records").is_none() {
+        give_back_todays_answer(&state.pool, link.id).await?;
+        tracing::warn!(set_aside, "form answer not kept by record_create_many");
+        return Ok(refused(
+            StatusCode::FORBIDDEN,
+            "This form isn't taking answers right now.",
+        ));
+    }
+    // The operation's envelope says a retry was answered from the first call.
     let duplicate = result
-        .pointer("/value/idempotentReplay")
+        .get("replayed")
         .and_then(Value::as_bool)
         .unwrap_or(false);
     if duplicate {

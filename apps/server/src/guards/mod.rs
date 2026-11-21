@@ -135,6 +135,11 @@ fn hash_of(input: &Value) -> String {
     hex::encode(Sha256::digest(input.to_string().as_bytes()))
 }
 
+/// A request key as a hold keeps it: its digest, never the key.
+fn key_hash(key: &str) -> String {
+    hex::encode(Sha256::digest(key.as_bytes()))
+}
+
 /// Check a change against the workspace's guards.
 pub async fn check(
     state: &crate::AppState,
@@ -143,6 +148,7 @@ pub async fn check(
     operation: &'static str,
     (kind, target_id): (&str, Uuid),
     input: &Value,
+    request_key: Option<&str>,
 ) -> Result<Verdict, OpError> {
     if exempt(operation) {
         return Ok(Verdict::Allow { hold: None });
@@ -225,6 +231,7 @@ pub async fn check(
             conversation,
             operation,
             input,
+            request_key,
             guard,
             reviewers: &reviewers,
         },
@@ -294,6 +301,8 @@ struct Held<'a> {
     conversation: Option<Uuid>,
     operation: &'static str,
     input: &'a Value,
+    /// The call's request key, when it has one.
+    request_key: Option<&'a str>,
     guard: &'a GuardRow,
     reviewers: &'a [Uuid],
 }
@@ -309,6 +318,7 @@ async fn review(
         conversation,
         operation,
         input,
+        request_key,
         guard,
         reviewers,
     } = held;
@@ -362,6 +372,38 @@ async fn review(
                 })
             }
         };
+    }
+    // The same keyed call that an allowed review already let through goes
+    // on to its command, which answers it from its own record of the first
+    // run (a lost answer doesn't ask the reviewers again). Only while that
+    // record lasts: a receipt lives 24 hours from its reservation, which
+    // comes after the review was used, so a retry inside 24 hours of the
+    // use always finds it and replays rather than writing again.
+    if let Some(key) = request_key {
+        let used = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM guard_holds
+                WHERE account_id = $1 AND operation = $2 AND key_hash = $3
+                  AND input_hash = $4 AND workspace_id = $5 AND guard_id = $6
+                  AND space_id IS NOT DISTINCT FROM $7
+                  AND state = 'used' AND updated_at > now() - interval '24 hours'
+            )
+            "#,
+        )
+        .bind(caller.account_id)
+        .bind(operation)
+        .bind(key_hash(key))
+        .bind(&hash)
+        .bind(located.workspace_id)
+        .bind(guard.id)
+        .bind(located.space_id)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(|error| logged(error.into()))?;
+        if used {
+            return Ok(Verdict::Allow { hold: None });
+        }
     }
     let space_id = match located.space_id {
         Some(space) => space,
@@ -450,12 +492,14 @@ async fn settle(
 pub async fn use_hold(
     transaction: &mut Transaction<'_, Postgres>,
     hold: Uuid,
+    request_key: Option<&str>,
 ) -> Result<(), OpError> {
     let used = sqlx::query(
-        "UPDATE guard_holds SET state = 'used', updated_at = now() \
+        "UPDATE guard_holds SET state = 'used', key_hash = $2, updated_at = now() \
          WHERE id = $1 AND state = 'pending'",
     )
     .bind(hold)
+    .bind(request_key.map(key_hash))
     .execute(&mut **transaction)
     .await
     .map_err(|error| OpError::logged("guard", &error.into()))?
@@ -469,6 +513,57 @@ pub async fn use_hold(
             current: None,
         });
     }
+    Ok(())
+}
+
+/// A review used by a call that then made no change is pending again
+/// (a hand-written tool spends it before it runs, `mcp::call_tool`).
+///
+/// The same call made again while this one ran found no open review and
+/// asked a new one. While nobody has answered that one, it is withdrawn
+/// and this allowed review comes back in its place, so the retry uses it;
+/// once someone has answered it, that answer stands and this one stays
+/// used.
+pub async fn give_back_hold(
+    transaction: &mut Transaction<'_, Postgres>,
+    hold: Uuid,
+) -> Result<(), AppError> {
+    let asked_again = sqlx::query_as::<_, (Uuid, String)>(
+        r#"
+        SELECT newer.id, request.status
+        FROM guard_holds given
+        JOIN guard_holds newer
+          ON newer.workspace_id = given.workspace_id
+         AND newer.guard_id = given.guard_id
+         AND newer.account_id = given.account_id
+         AND newer.operation = given.operation
+         AND newer.input_hash = given.input_hash
+         AND newer.space_id IS NOT DISTINCT FROM given.space_id
+         AND newer.state IN ('pending', 'allowed')
+        JOIN requests request ON request.id = newer.request_id
+        WHERE given.id = $1 AND given.state = 'used'
+        FOR UPDATE OF given, newer, request
+        "#,
+    )
+    .bind(hold)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    // The newer ask's request is locked with the holds, so a reviewer's
+    // answer either lands first (and stands) or waits for the withdrawal.
+    if let Some((newer, status)) = asked_again {
+        if status != "open" {
+            return Ok(());
+        }
+        settle(transaction, newer, "declined").await?;
+        crate::requests::withdraw_about(transaction, "guard_hold", &[newer]).await?;
+    }
+    sqlx::query(
+        "UPDATE guard_holds SET state = 'pending', updated_at = now() \
+         WHERE id = $1 AND state = 'used'",
+    )
+    .bind(hold)
+    .execute(&mut **transaction)
+    .await?;
     Ok(())
 }
 

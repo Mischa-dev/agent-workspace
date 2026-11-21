@@ -214,6 +214,60 @@ async fn a_suggest_only_role_proposes_cells_and_accepting_keeps_newer_work() {
         inputs().await,
         [10, 20, 30, 4, 99].map(|n: i32| json!(f64::from(n)))
     );
+
+    // A waiting proposal's cells move with rows inserted and deleted above
+    // them; a cell whose row went can't be accepted.
+    let third = as_bea(
+        "sheet_write",
+        json!({"projectId": "WORK", "sheet": sheet, "cells": [
+            {"cell": "A2", "input": "22"}, {"cell": "A4", "input": "44"},
+        ], "clientRequestId": "propose-3"}),
+    )
+    .await;
+    let third = third["value"]["proposalId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{third}"))
+        .to_owned();
+    let tab = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM sheet_tabs WHERE sheet_id = $1::uuid ORDER BY name LIMIT 1",
+    )
+    .bind(&sheet)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the tab");
+    for (step, change) in [
+        ("insert", json!({"tab": tab, "insertRowsAt": 1})),
+        ("delete", json!({"tab": tab, "deleteRowsAt": 5})),
+    ] {
+        let moved = as_owner(
+            "sheet_write",
+            json!({"projectId": "WORK", "sheet": sheet, "tabs": [change], "clientRequestId": step}),
+        )
+        .await;
+        assert_eq!(moved["outcome"], "ok", "{moved}");
+    }
+    let whole = as_owner(
+        "proposal_decide",
+        json!({"proposalId": third, "decision": "accept", "clientRequestId": "accept-moved"}),
+    )
+    .await;
+    assert_eq!(whole["outcome"], "conflict", "{whole}");
+    let part = as_owner(
+        "proposal_decide",
+        json!({"proposalId": third, "decision": "accept", "parts": [0], "clientRequestId": "accept-moved-part"}),
+    )
+    .await;
+    assert_eq!(part["outcome"], "ok", "{part}");
+    assert_eq!(
+        inputs().await,
+        [
+            Value::Null,
+            json!(10.0),
+            json!(22.0),
+            json!(30.0),
+            json!(99.0)
+        ]
+    );
 }
 
 #[tokio::test]
@@ -419,6 +473,32 @@ async fn a_suggest_only_role_proposes_drawing_and_accepting_keeps_newer_work() {
     )
     .await;
     assert_eq!(listed["value"]["proposals"], json!([]), "{listed}");
+
+    // A web drawing over a copy of box-a that has changed since it was read
+    // is refused, so accepting it couldn't undo that change.
+    let (current,) = sqlx::query_as::<_, (i32,)>(
+        "SELECT version FROM whiteboard_elements WHERE whiteboard_id = $1::uuid AND element_id = 'box-a'",
+    )
+    .bind(&board)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("box-a");
+    assert!(current > 1, "box-a was moved");
+    let (status, stale) = send(
+        app,
+        bea_browser.request(
+            "POST",
+            "/api/v2/ops/whiteboard_propose",
+            Some("bea-web-stale"),
+            json!({"whiteboardId": board, "readVersions": {"box-a": current - 1}, "elements": [{
+                "id": "box-a", "type": "rectangle", "x": 900, "y": 0, "width": 80, "height": 40,
+                "version": current + 1, "versionNonce": 9, "isDeleted": false
+            }]}),
+        ),
+    )
+    .await;
+    assert_eq!(stale["outcome"], "conflict", "{status} {stale}");
+    assert_eq!(x_of(&element("box-a").await), 50.0);
 }
 
 /// Listing one's own proposals keeps to what the credential reaches: one

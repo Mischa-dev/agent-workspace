@@ -633,7 +633,7 @@ async fn forwarding_posts_only_where_the_sender_can_and_quotes_only_to_who_can_s
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");
     let links = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_item_links WHERE target_kind = 'message' AND target_id = $1",
+        "SELECT count(*) FROM task_links WHERE target_kind = 'message' AND target_id = $1",
     )
     .bind(open.parse::<Uuid>().expect("message"))
     .fetch_one(pool)

@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish = false
+default-run = "agent-workspace-server"
 
 [dependencies]
 anyhow = "1.0.100"

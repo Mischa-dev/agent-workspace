@@ -32,9 +32,7 @@ use axum::{
     body::Body,
     http::{HeaderMap, Request, StatusCode, header},
 };
-use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
-use sha2::Sha256;
 use sqlx::{Executor, PgPool};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -133,18 +131,22 @@ async fn bearer(
 }
 
 fn signature_ok(secret: &str, headers: &HeaderMap, body: &str) -> bool {
-    let timestamp = headers["x-workspace-timestamp"]
-        .to_str()
-        .expect("timestamp");
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("hmac");
-    mac.update(timestamp.as_bytes());
-    mac.update(b".");
-    mac.update(body.as_bytes());
-    let expected = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
-    headers["x-workspace-signature"]
-        .to_str()
-        .expect("signature")
-        == expected
+    let header = |name: &str| headers[name].to_str().expect("header");
+    header("webhook-signature")
+        == agent_workspace_server::delivery::sign::standard(
+            secret,
+            header("webhook-id"),
+            header("webhook-timestamp"),
+            body,
+        )
+        .expect("sign")
+}
+
+fn event_type(body: &str) -> String {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|body| body["type"].as_str().map(str::to_owned))
+        .unwrap_or_default()
 }
 
 // The walk is one long async body, and an unoptimized build polls it in a
@@ -546,19 +548,19 @@ async fn webhooks_and_automations_walk() {
     );
     let (message_headers, message_body) = deliveries
         .iter()
-        .find(|(headers, _)| headers["x-workspace-event"] == "message.created")
+        .find(|(_, body)| event_type(body) == "message.created")
         .expect("the public message was delivered");
     // Ids only: the receiver reads the text with its own access.
     assert!(!message_body.contains("Public hello"), "{message_body}");
     assert!(signature_ok(&secret, message_headers, message_body));
     let finished = deliveries
         .iter()
-        .find(|(headers, _)| headers["x-workspace-event"] == "run.finished")
+        .find(|(_, body)| event_type(body) == "run.finished")
         .expect("the finished run was delivered");
     assert!(finished.1.contains(&run_id.to_string()), "{}", finished.1);
     assert!(signature_ok(&secret, &finished.0, &finished.1));
     // Redelivering keeps the delivery's id.
-    let delivery_id = message_headers["x-workspace-delivery"]
+    let delivery_id = message_headers["webhook-id"]
         .to_str()
         .expect("delivery id")
         .to_owned();
@@ -597,7 +599,7 @@ async fn webhooks_and_automations_walk() {
         .lock()
         .expect("received")
         .iter()
-        .filter(|(headers, _)| headers["x-workspace-delivery"] == delivery_id.as_str())
+        .filter(|(headers, _)| headers["webhook-id"] == delivery_id.as_str())
         .count();
     assert_eq!(same_id, 2, "the redelivery carries the same id");
 

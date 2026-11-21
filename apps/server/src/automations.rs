@@ -98,7 +98,9 @@ pub fn router() -> Router<AppState> {
 pub fn register_jobs(registry: &mut JobRegistry) {
     registry.register(FIRE_KIND, |context: JobContext| async move {
         let payload: FirePayload = context.job.payload_as()?;
-        fire(&context.state, payload.run_id)
+        // Boxed: a rule's actions run whole operations, too deep a future
+        // to keep on the job's stack.
+        Box::pin(fire(&context.state, payload.run_id))
             .await
             .map_err(|error| JobError::retry(error.log_category()))
     });
@@ -188,7 +190,7 @@ pub enum Trigger {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(with = "Option<String>")]
         view_id: Option<Uuid>,
-        /// Field filters, as record_query takes them.
+        /// Field filters, as record_list takes them.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         filters: Vec<FilterWrite>,
     },
@@ -228,6 +230,33 @@ pub enum Trigger {
         #[serde(default)]
         #[schemars(with = "Option<String>")]
         whiteboard_id: Option<Uuid>,
+    },
+    /// A connected module sends in an event its manifest declares, about
+    /// one of its things in the project. eventType narrows it to one
+    /// declared type (`acme.build.finished`); left out, any. Takes no task
+    /// conditions; its actions notify or post a message.
+    ModuleEvent {
+        #[serde(default)]
+        event_type: Option<String>,
+    },
+    /// Someone else comments on a task, page, sheet, whiteboard or record
+    /// (C1.28): on things of one kind (task, page, sheet, whiteboard,
+    /// record), or on this one. Takes no task conditions.
+    CommentPosted {
+        #[serde(default)]
+        thing_kind: Option<String>,
+        #[serde(default)]
+        #[schemars(with = "Option<String>")]
+        thing_id: Option<Uuid>,
+    },
+    /// Someone proposes a change to a page, sheet or whiteboard, of one kind
+    /// or to this one (C1.28). Takes no task conditions.
+    ProposalMade {
+        #[serde(default)]
+        thing_kind: Option<String>,
+        #[serde(default)]
+        #[schemars(with = "Option<String>")]
+        thing_id: Option<Uuid>,
     },
     /// An outside service posts to an incoming hook in the project (K3.26),
     /// with a delivery whose signature checks out. Takes no task conditions;
@@ -269,6 +298,9 @@ pub const TRIGGER_KINDS: &[&str] = &[
     "page_changed",
     "sheet_changed",
     "whiteboard_changed",
+    "module_event",
+    "comment_posted",
+    "proposal_made",
     "incoming_hook",
     "schedule",
     "capacity_window",
@@ -299,6 +331,9 @@ impl Trigger {
             Self::PageChanged { .. } => "page_changed",
             Self::SheetChanged { .. } => "sheet_changed",
             Self::WhiteboardChanged { .. } => "whiteboard_changed",
+            Self::ModuleEvent { .. } => "module_event",
+            Self::CommentPosted { .. } => "comment_posted",
+            Self::ProposalMade { .. } => "proposal_made",
             Self::IncomingHook { .. } => "incoming_hook",
             Self::Schedule { .. } => "schedule",
             Self::CapacityWindow { .. } => "capacity_window",
@@ -317,6 +352,9 @@ impl Trigger {
                 | Self::PageChanged { .. }
                 | Self::SheetChanged { .. }
                 | Self::WhiteboardChanged { .. }
+                | Self::ModuleEvent { .. }
+                | Self::CommentPosted { .. }
+                | Self::ProposalMade { .. }
                 | Self::IncomingHook { .. }
         )
     }
@@ -345,6 +383,21 @@ impl Trigger {
             Self::WhiteboardChanged {
                 whiteboard_id: Some(id),
             } => Some(("whiteboard", "whiteboards", "deleted_at", *id)),
+            Self::CommentPosted {
+                thing_kind: Some(kind),
+                thing_id: Some(id),
+            }
+            | Self::ProposalMade {
+                thing_kind: Some(kind),
+                thing_id: Some(id),
+            } => match kind.as_str() {
+                "page" => Some(("page", "project_pages", "archived_at", *id)),
+                "sheet" => Some(("sheet", "sheets", "archived_at", *id)),
+                "whiteboard" => Some(("whiteboard", "whiteboards", "deleted_at", *id)),
+                "task" => Some(("task", "work_items", "archived_at", *id)),
+                "record" => Some(("record", "collection_records", "archived_at", *id)),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -554,6 +607,25 @@ fn normalize_name(value: &str) -> Result<String, AppError> {
     Ok(name.to_owned())
 }
 
+/// A comment or proposal trigger watches things of one of `kinds`, or one
+/// thing (which needs its kind), and takes no task conditions.
+fn check_thing_trigger(
+    conditions: &Conditions,
+    thing_kind: Option<&str>,
+    one_thing: bool,
+    kinds: &[&str],
+) -> Result<(), AppError> {
+    if !conditions.is_empty() {
+        return Err(AppError::Invalid(
+            "a comment or proposal rule has no task conditions: name the kind of thing or the one it watches instead",
+        ));
+    }
+    if !thing_kind.is_none_or(|kind| kinds.contains(&kind)) || (one_thing && thing_kind.is_none()) {
+        return Err(AppError::Validation("trigger.thingKind"));
+    }
+    Ok(())
+}
+
 /// Checks the parts of a rule that don't need the database.
 fn check_shape(
     trigger: &mut Trigger,
@@ -660,6 +732,40 @@ fn check_shape(
                 ));
             }
         }
+        Trigger::ModuleEvent { event_type } => {
+            if !conditions.is_empty() {
+                return Err(AppError::Invalid(
+                    "a connected module rule has no task conditions: name its event type instead",
+                ));
+            }
+            if let Some(name) = event_type {
+                let name = name.trim().to_owned();
+                if name.is_empty() || name.len() > 100 {
+                    return Err(AppError::Validation("trigger.eventType"));
+                }
+                *event_type = Some(name);
+            }
+        }
+        // Comments go on tasks, pages, sheets, boards and records;
+        // proposals on pages, sheets and boards.
+        Trigger::CommentPosted {
+            thing_kind,
+            thing_id,
+        } => check_thing_trigger(
+            conditions,
+            thing_kind.as_deref(),
+            thing_id.is_some(),
+            &["task", "page", "sheet", "whiteboard", "record"],
+        )?,
+        Trigger::ProposalMade {
+            thing_kind,
+            thing_id,
+        } => check_thing_trigger(
+            conditions,
+            thing_kind.as_deref(),
+            thing_id.is_some(),
+            &["page", "sheet", "whiteboard"],
+        )?,
         Trigger::TaskMatches {} => {
             if conditions.is_empty() {
                 return Err(AppError::Invalid(
@@ -1499,6 +1605,63 @@ pub(crate) async fn insert(
     Ok(id)
 }
 
+/// A package upgrade (M1.10) giving a rule the new version's definition,
+/// checked by [`prepare_in`]. Only its maker's: it acts as them. False when
+/// the rule is gone or someone else's.
+pub(crate) async fn replace_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    caller: &Caller,
+    project_id: Uuid,
+    rule_id: Uuid,
+    prepared: &PreparedRule,
+) -> Result<bool, AppError> {
+    let PreparedRule {
+        name,
+        request,
+        enabled,
+        next_run_at,
+    } = prepared;
+    let organization_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        UPDATE automation_rules
+        SET name = $4, trigger_kind = $5, trigger = $6, view_id = $7, conditions = $8,
+            actions = $9, enabled = $10, next_run_at = $11,
+            disabled_reason = CASE WHEN $10 THEN NULL ELSE disabled_reason END,
+            version = version + 1, updated_at = now()
+        WHERE project_id = $1 AND id = $2 AND owner_actor_id = $3
+        RETURNING organization_id
+        "#,
+    )
+    .bind(project_id)
+    .bind(rule_id)
+    .bind(caller.actor_id)
+    .bind(name)
+    .bind(request.trigger.kind())
+    .bind(serde_json::to_value(&request.trigger).map_err(|_| AppError::Validation("trigger"))?)
+    .bind(request.conditions.view_id)
+    .bind(json!(request.conditions.filters))
+    .bind(serde_json::to_value(&request.actions).map_err(|_| AppError::Validation("actions"))?)
+    .bind(enabled)
+    .bind(next_run_at)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(organization_id) = organization_id else {
+        return Ok(false);
+    };
+    events::audit(
+        &mut **transaction,
+        caller,
+        organization_id,
+        Some(project_id),
+        "automation.updated",
+        "automation_rule",
+        rule_id,
+        json!({ "enabled": enabled }),
+    )
+    .await?;
+    Ok(true)
+}
+
 pub(crate) async fn update(
     state: &AppState,
     caller: &Caller,
@@ -1952,6 +2115,12 @@ fn summary_for(event: &Event) -> String {
         ),
         "pull_request.checks_failed" => "Checks failed on a pull request".to_owned(),
         "message.created" => "A message was posted".to_owned(),
+        "module.event" => format!(
+            "A connected module sent {}",
+            event.subject.state.as_deref().unwrap_or("an event")
+        ),
+        "comment.created" => "Someone commented".to_owned(),
+        "proposal.created" => "Someone proposed a change".to_owned(),
         "incoming_hook.received" => "A delivery came in".to_owned(),
         other => other.to_owned(),
     }
@@ -1970,6 +2139,9 @@ fn kinds_for(event_type: &str) -> &'static [&'static str] {
         "page.updated" => &["page_changed"],
         "sheet.updated" => &["sheet_changed"],
         "whiteboard.updated" => &["whiteboard_changed"],
+        "module.event" => &["module_event"],
+        "comment.created" => &["comment_posted"],
+        "proposal.created" => &["proposal_made"],
         "incoming_hook.received" => &["incoming_hook"],
         _ => &[],
     }
@@ -2154,6 +2326,24 @@ pub async fn on_event(state: &AppState, event: &Event) -> Result<usize, AppError
             }
             Trigger::WhiteboardChanged { whiteboard_id } => {
                 whiteboard_id.is_none_or(|only| subject.whiteboard_id == Some(only))
+            }
+            Trigger::ModuleEvent { event_type } => event_type
+                .as_deref()
+                .is_none_or(|only| subject.state.as_deref() == Some(only)),
+            Trigger::CommentPosted {
+                thing_kind,
+                thing_id,
+            }
+            | Trigger::ProposalMade {
+                thing_kind,
+                thing_id,
+            } => {
+                let on = event.thing.as_ref();
+                event.actor_id != Some(rule.owner_actor_id)
+                    && thing_kind
+                        .as_deref()
+                        .is_none_or(|kind| on.is_some_and(|thing| thing.kind == kind))
+                    && thing_id.is_none_or(|only| on.is_some_and(|thing| thing.id == only))
             }
             Trigger::IncomingHook { hook_id } => subject.hook_id == Some(*hook_id),
             Trigger::Schedule { .. } | Trigger::CapacityWindow { .. } => false,
@@ -2797,7 +2987,7 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
                 return finish(pool, run_id, state_name, Some(&reason), &results).await;
             }
         };
-        let outcome = with_limits(
+        let outcome = Box::pin(with_limits(
             limits,
             run_action(
                 state,
@@ -2810,7 +3000,7 @@ async fn fire(state: &AppState, run_id: Uuid) -> Result<(), AppError> {
                 index,
                 action,
             ),
-        )
+        ))
         .await;
         results.push(match outcome {
             Ok(detail) => json!({ "kind": action.kind(), "ok": true, "detail": detail }),

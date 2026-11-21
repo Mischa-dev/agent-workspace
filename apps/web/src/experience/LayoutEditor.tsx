@@ -6,7 +6,7 @@ import { ownerOf } from '../modules/ownership'
 import type { Word } from './layout'
 import type { NounId, PartId } from './parts'
 import { presetChoices, type PresetChoice } from './presetChoices'
-import { REGISTRY, everything, layoutFrom, layoutShape, presetShape, shapeWord, type Layout, type SavedPreset, type Shape } from './registry'
+import { REGISTRY, everything, keepModuleChanges, layoutFrom, layoutShape, presetShape, shapeWord, type Layout, type SavedPreset, type Shape } from './registry'
 import './layout.css'
 import '../styles/pages.css'
 
@@ -343,7 +343,7 @@ export function LayoutEditor({
   // Words and switches change from the preset picked, or from what applies without one.
   const base = draft.preset ? (presetShape(draft.preset, saved) ?? everything()) : fallbackShape
   const startFrom = draft.preset ?? fallback.layout?.preset ?? 'software_team'
-  const current = draft.preset === null ? null : layoutFrom(draft.preset, draft.visible, draft.words, saved)
+  const current = draft.preset === null ? null : keepModuleChanges(layoutFrom(draft.preset, draft.visible, draft.words, saved), stored)
   const dirty = !sameLayout(current, stored)
   const shape: Shape = { visible: draft.visible, words: { ...base.words, ...draft.words }, lead: base.lead }
 

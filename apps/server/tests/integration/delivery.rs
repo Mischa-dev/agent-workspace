@@ -466,7 +466,7 @@ async fn pushes_are_signed_the_standard_way_and_carry_no_text() {
         axum::serve(listener, receiver).await.expect("serve");
     });
 
-    // A connection of Rook's own, pushing in the standard format.
+    // A connection of Rook's own, with a webhook.
     let (_, made) = rook
         .call(
             &world.app,
@@ -475,7 +475,6 @@ async fn pushes_are_signed_the_standard_way_and_carry_no_text() {
                 arguments: json!({
                     "name": "Runner",
                     "webhookUrl": "https://hooks.example.test/rook",
-                    "webhookFormat": "standard",
                     "clientRequestId": "rook-runner",
                 }),
             },
@@ -898,11 +897,11 @@ async fn the_delivery_contract_holds_over_http() {
     world.finish().await;
 }
 
-/// A2.7: what the server pushes in each format passes the receiver's
-/// checks: signatures, headers and a body shaped like the fixture.
+/// A2.7: what the server pushes passes the receiver's checks: signatures,
+/// headers and a body shaped like the fixture.
 #[tokio::test]
-async fn pushes_in_every_format_meet_the_contract() {
-    use agent_workspace_delivery_contract::webhook::{Format, Received, check_webhook};
+async fn pushes_meet_the_contract() {
+    use agent_workspace_delivery_contract::webhook::{Received, check_webhook};
 
     let Some(world) = WorldBuilder::default()
         .project("WORK")
@@ -949,7 +948,7 @@ async fn pushes_in_every_format_meet_the_contract() {
     });
 
     let mut connections = Vec::new();
-    for format in ["standard", "typed_v1", "inbox_v1"] {
+    for format in ["first", "second"] {
         let (_, made) = rook
             .call(
                 &world.app,
@@ -958,7 +957,6 @@ async fn pushes_in_every_format_meet_the_contract() {
                     arguments: json!({
                         "name": format!("Receiver {format}"),
                         "webhookUrl": format!("https://hooks.example.test/{format}"),
-                        "webhookFormat": format,
                         "clientRequestId": format!("contract-{format}"),
                     }),
                 },
@@ -982,7 +980,7 @@ async fn pushes_in_every_format_meet_the_contract() {
             .expect("local hook");
         connections.push((format, connection, secret));
     }
-    // A mention asks Rook to reply, so every format has something to carry.
+    // A mention asks Rook to reply, so every connection has something to carry.
     let general = channel(&world, "general").await;
     post(
         &world,
@@ -1018,7 +1016,7 @@ async fn pushes_in_every_format_meet_the_contract() {
             .collect::<Vec<_>>();
         assert!(!mine.is_empty(), "nothing pushed to {format}: {posts:?}");
         for push in mine {
-            let report = check_webhook(Format::parse(format).expect("format"), secret, push, None);
+            let report = check_webhook(secret, push, None);
             assert!(report.passed(), "{format}: {}\n{report}", push.body);
             assert!(!push.body.contains(SECRET_WORD), "ids only: {}", push.body);
         }

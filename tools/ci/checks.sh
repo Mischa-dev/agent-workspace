@@ -5,7 +5,18 @@
 #
 # Quick checks run first so a typo fails in seconds; the web checks then run
 # alongside clippy and the Rust tests, or after them on a small or
-# memory-capped machine. Expects from run.sh: CI_RUN_ID,
+# memory-capped machine.
+#
+# GitHub runs the checks as parallel jobs (.github/workflows/ci.yml), each
+# asking for one part with CI_PART; unset, every part runs here in turn:
+#   lint        the quick checks, cargo fmt, clippy and cargo deny
+#   rust-build  the Rust tests built once into a nextest archive (with the
+#               server binary the browser tests use), doc tests, schema snapshot
+#   rust-tests  one slice of that archive's tests (CI_SHARD=k/n)
+#   web         web licences, lint, types, tests, build and budgets
+#   e2e         one shard of the browser smoke tests (CI_SHARD=k/n), against
+#               a server binary already built
+# Expects from run.sh: CI_RUN_ID,
 # CI_DATABASE_BASE (a PostgreSQL URL without a database) and optionally
 # CI_TARGET_DIR, CI_LOCK_DIR, CI_MEMORY_MAX, CI_CPU_WEIGHT and CI_BUILD_LOCK.
 #
@@ -21,6 +32,20 @@ case "${areas}" in
   *) echo "ci: invalid areas '${areas}' (expected rust,web, rust or web)" >&2; exit 2 ;;
 esac
 has() { [[ ",${areas}," == *",$1,"* ]]; }
+part="${CI_PART:-all}"
+case "${part}" in
+  all|lint|rust-build|rust-tests|web|e2e) ;;
+  *) echo "ci: invalid CI_PART '${part}' (expected lint, rust-build, rust-tests, web or e2e)" >&2; exit 2 ;;
+esac
+# `runs <part>...`: whether this run includes any of those parts.
+runs() { [ "${part}" = all ] || [[ " $* " == *" ${part} "* ]]; }
+shard="${CI_SHARD:-}"
+if [ -n "${shard}" ] && ! [[ "${shard}" =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]]; then
+  echo "ci: invalid CI_SHARD '${shard}' (expected k/n)" >&2
+  exit 2
+fi
+# Where the rust-build part leaves the tests for the rust-tests part.
+nextest_archive="${CI_NEXTEST_ARCHIVE:-}"
 # CI_UI_TOUR=channel (run.sh --host redhat --ui-tour channel, never the
 # default): after the browser smoke tests, the UI tour's seed and its channel
 # screens, in the same step (run_ui_tour).
@@ -282,7 +307,7 @@ report_web() {
 }
 
 # 1. Quick checks: formatting, lint and types, fixtures.
-if has rust; then
+if has rust && runs lint; then
   step "CI script tests" python3 -m unittest discover -s tools/ci -p 'test_*.py'
   step "admission lock tests" tools/ci/test_admission.sh
   step "pinned Node tests" tools/ci/test_pinned_node.sh
@@ -294,7 +319,9 @@ if has rust; then
   step "runner SDK tests (Python)" python3 -m unittest discover -s sdks/runner-python/tests -t sdks/runner-python
   step "Hermes plugin tests" python3 -m unittest discover -s sdks/adapters/hermes/tests -p 'test_*.py'
 fi
-if has web; then
+# The pinned Node and the web dependencies, for the web checks and the browser
+# smoke tests.
+web_toolchain() {
   step "Node toolchain" fetch_pinned_node
   # In this shell, not a step: a step under the build admission lock runs in
   # a subshell, and the PATH has to hold for the steps after it. It never
@@ -311,6 +338,9 @@ if has web; then
     console.log(`Node ${process.version}`);
   '
   step "pnpm install" pnpm install --frozen-lockfile --reporter=silent
+}
+if has web && runs web; then
+  web_toolchain
   step "web licences" node tools/licenses/web-licenses.mjs --check
   step "web lint" pnpm lint
   step "web typecheck" pnpm typecheck
@@ -328,7 +358,7 @@ run_web_checks() {
     web_budget_base &&
     step "web asset budgets" pnpm check:assets &&
     step "performance tools" pnpm check:performance-tools &&
-    step "web browser smoke" run_browser_smoke
+    { [ "${part}" != all ] || step "web browser smoke" run_browser_smoke; }
 }
 # The base commit's asset sizes, so the budget step can print what this change
 # adds (pull requests, where CI sets BUDGET_BASE_SHA). Best effort: a base that
@@ -373,8 +403,9 @@ run_browser_smoke() {
       "or set PLAYWRIGHT_CHROMIUM_EXECUTABLE."
     return
   fi
-  # Build the server from this tree (incremental; waits for any cargo run in progress).
-  if type -P cargo >/dev/null; then
+  # Build the server from this tree (incremental; waits for any cargo run in
+  # progress). The e2e part uses the binary the rust-build job made instead.
+  if [ "${part}" != e2e ] && type -P cargo >/dev/null; then
     cargo build --quiet -p agent-workspace-server --bin agent-workspace-server || return
   fi
   if [ ! -x "${binary}" ]; then
@@ -392,9 +423,25 @@ run_browser_smoke() {
   database_name="aw_e2e_$(printf '%s' "${CI_RUN_ID:-$$}" | tr -c 'a-zA-Z0-9' '_' | tr 'A-Z' 'a-z')"
   # The static-host spec serves this run's web build when there is one, and
   # builds its own otherwise (apps/web/e2e/static-host.spec.ts).
-  E2E_SERVER_BINARY="${binary}" E2E_DATABASE_BASE="${CI_DATABASE_BASE}" CI=1 \
-    E2E_DATABASE_NAME="${database_name}" E2E_STATIC_DIST="${web_built:+dist}" \
-    pnpm test:e2e || return
+  # One shard of the specs (CI_SHARD=k/n) when GitHub splits them across jobs;
+  # each shard seeds its own server and database in the global setup. The
+  # tests are dealt out in turn (tools/ci/e2e_shard.py), not split by file or
+  # into runs of neighbours, which left one shard with all the slow sweeps.
+  if [ -n "${shard}" ]; then
+    local listing test_list
+    listing="$(mktemp)" test_list="$(mktemp)"
+    PLAYWRIGHT_JSON_OUTPUT_NAME="${listing}" \
+      pnpm --filter @agent-workspace/web exec playwright test --list --reporter=json || return
+    python3 -I tools/ci/e2e_shard.py "${shard}" <"${listing}" >"${test_list}" || return
+    head -n 1 "${test_list}"
+    E2E_SERVER_BINARY="${binary}" E2E_DATABASE_BASE="${CI_DATABASE_BASE}" CI=1 \
+      E2E_DATABASE_NAME="${database_name}" E2E_STATIC_DIST="${web_built:+dist}" \
+      pnpm --filter @agent-workspace/web exec playwright test --test-list "${test_list}" || return
+  else
+    E2E_SERVER_BINARY="${binary}" E2E_DATABASE_BASE="${CI_DATABASE_BASE}" CI=1 \
+      E2E_DATABASE_NAME="${database_name}" E2E_STATIC_DIST="${web_built:+dist}" \
+      pnpm test:e2e || return
+  fi
   [ "${CI_UI_TOUR:-}" = channel ] || return 0
   run_ui_tour "${binary}" "${database_name}"
 }
@@ -421,7 +468,10 @@ run_ui_tour() {
 }
 
 # Under an admission lock nothing heavy runs side by side: the web checks wait.
-if has web && has rust && { [ "$(nproc)" -lt 8 ] || [ -n "${CI_MEMORY_MAX:-}" ] || [ -n "${CI_BUILD_LOCK:-}" ]; }; then
+# A part runs alone, in order.
+if [ "${part}" != all ]; then
+  if has web && runs web; then web_later=1; fi
+elif has web && has rust && { [ "$(nproc)" -lt 8 ] || [ -n "${CI_MEMORY_MAX:-}" ] || [ -n "${CI_BUILD_LOCK:-}" ]; }; then
   web_later=1
 elif has web; then
   (
@@ -432,14 +482,48 @@ elif has web; then
   web_pid=$!
 fi
 
-# 3. Clippy, then the Rust tests against a throwaway database.
-if has rust; then
-  step "cargo clippy" cargo clippy --workspace --all-targets --all-features -- -D warnings
-  if web_failed; then report_web; fi
-
-  if ! cargo nextest --version >/dev/null 2>&1; then
-    step "install cargo-nextest" cargo install cargo-nextest --version 0.9.136 --locked
+# `install_tool <cargo-nextest|cargo-deny>`: the pinned version in
+# ~/.cargo/bin. On GitHub's runners, from its release build (checked against
+# the SHA-256 below): seconds, where building it took four minutes. Elsewhere
+# (a NixOS laptop can't run a prebuilt glibc binary), built with cargo install.
+install_tool() {
+  local name="$1" version url sha256 bin tmp
+  case "${name}" in
+    cargo-nextest)
+      version=0.9.136
+      url="https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${version}/cargo-nextest-${version}-x86_64-unknown-linux-gnu.tar.gz"
+      sha256=a098eed56f2dd88c7fdca1e554a6b99fa1ffbd2a7a1c41b865700112981f6f52
+      ;;
+    cargo-deny)
+      version=0.20.2
+      url="https://github.com/EmbarkStudios/cargo-deny/releases/download/${version}/cargo-deny-${version}-x86_64-unknown-linux-musl.tar.gz"
+      sha256=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+      ;;
+    *) echo "install_tool: unknown tool ${name}" >&2; return 2 ;;
+  esac
+  bin="${CARGO_HOME:-${HOME}/.cargo}/bin"
+  if "${bin}/${name}" "${name#cargo-}" --version 2> /dev/null | grep -qF " ${version}"; then
+    return 0
   fi
+  if [ "${GITHUB_ACTIONS:-}" = true ] && [ "$(uname -s)-$(uname -m)" = Linux-x86_64 ]; then
+    tmp="$(mktemp -d)"
+    if curl -fsSL --retry 3 -o "${tmp}/tool.tar.gz" "${url}" &&
+      echo "${sha256}  ${tmp}/tool.tar.gz" | sha256sum -c --strict --quiet - &&
+      tar -xzf "${tmp}/tool.tar.gz" -C "${tmp}"; then
+      mkdir -p "${bin}"
+      find "${tmp}" -type f -name "${name}" -exec install -m 0755 {} "${bin}/${name}" \;
+      rm -rf "${tmp}"
+      "${bin}/${name}" "${name#cargo-}" --version | grep -qF " ${version}" && return 0
+    fi
+    rm -rf "${tmp}" "${bin:?}/${name}"
+    echo "install_tool: the ${name} ${version} release build didn't install; building it" >&2
+  fi
+  cargo install "${name}" --version "${version}" --locked --quiet
+}
+
+# `test_database`: a throwaway database for the Rust tests, after clearing
+# what a killed run left; sets AGENT_WORKSPACE_DATABASE_URL.
+test_database() {
   # Databases left by a run that was killed before it could clean up.
   psql -d "${CI_DATABASE_BASE}/postgres" -Atc \
     "SELECT datname FROM pg_database WHERE datname ~ '^aw_ci_run_'" 2>/dev/null |
@@ -464,6 +548,19 @@ if has rust; then
   database="aw_ci_run_$(printf '%s' "${CI_RUN_ID:-$$}" | tr -c 'a-zA-Z0-9' '_')"
   createdb --maintenance-db="${CI_DATABASE_BASE}/postgres" "${database}"
   export AGENT_WORKSPACE_DATABASE_URL="${CI_DATABASE_BASE}/${database}"
+}
+
+# 3. Clippy, then the Rust tests against a throwaway database.
+if has rust && runs lint; then
+  step "cargo clippy" cargo clippy --workspace --all-targets --all-features -- -D warnings
+  if web_failed; then report_web; fi
+fi
+
+if has rust && [ "${part}" = all ]; then
+  if ! cargo nextest --version >/dev/null 2>&1; then
+    step "install cargo-nextest" install_tool cargo-nextest
+  fi
+  test_database
 
   # Compiling the server library and its unit tests takes about 5 GB each, so
   # side by side they overrun an 8 GB cap. Under a cap, build the library and
@@ -475,7 +572,48 @@ if has rust; then
   step "doc tests" cargo test --workspace --doc --quiet
   step "schema snapshot" tools/db/schema-snapshot.sh
   if web_failed; then report_web; fi
-  step "install cargo-deny" cargo install cargo-deny --version 0.20.2 --locked --quiet
+fi
+
+# The rust-build part: every test binary built once, into an archive the
+# rust-tests jobs each run a slice of, and the server binary the browser
+# tests use (cargo builds a package's binaries for its integration tests).
+if runs rust-build && [ "${part}" != all ]; then
+  : "${nextest_archive:?the rust-build part needs CI_NEXTEST_ARCHIVE}"
+  mkdir -p "$(dirname "${nextest_archive}")"
+  step "install cargo-nextest" install_tool cargo-nextest
+  # The server library and its unit tests take about 5 GB each to compile, so
+  # the library and binaries come first and the tests after: built side by
+  # side they got a 16 GB runner shut down, and with swap added they built no
+  # faster than in order.
+  if has rust; then
+    step "rust build" cargo build --workspace
+    step "rust test build" cargo nextest archive --workspace --archive-file "${nextest_archive}"
+  fi
+  # Built with the tests already (cargo builds a package's binaries for its
+  # integration tests); on its own for a web-only change.
+  step "server build" cargo build -p agent-workspace-server --bin agent-workspace-server
+  if has rust; then
+    step "doc tests" cargo test --workspace --doc --quiet
+    step "schema snapshot" tools/db/schema-snapshot.sh
+  fi
+fi
+
+# The rust-tests part: one slice of the archive's tests. cargo-nextest is
+# called directly, since with an archive nothing needs building.
+if has rust && runs rust-tests && [ "${part}" != all ]; then
+  : "${nextest_archive:?the rust-tests part needs CI_NEXTEST_ARCHIVE}"
+  step "install cargo-nextest" install_tool cargo-nextest
+  test_database
+  extracted="$(mktemp -d)"
+  step "rust tests${shard:+ (slice ${shard})}" \
+    "${CARGO_HOME:-${HOME}/.cargo}/bin/cargo-nextest" nextest run \
+    --archive-file "${nextest_archive}" --workspace-remap . --extract-to "${extracted}" \
+    --profile ci ${shard:+--partition "slice:${shard}"}
+fi
+
+if has rust && runs lint; then
+  if web_failed; then report_web; fi
+  step "install cargo-deny" install_tool cargo-deny
   step "cargo deny" cargo deny check
 fi
 
@@ -484,8 +622,13 @@ if [ -n "${web_later:-}" ]; then run_web_checks; fi
 # The browser smoke tests drive the server as much as the web app, so a change
 # on the Rust side alone runs them too (they need the web dependencies and
 # Vite's dev server, not the web build).
-if has rust && ! has web; then
+if [ "${part}" = all ] && has rust && ! has web; then
   step "pnpm install" pnpm install --frozen-lockfile --reporter=silent
   step "web browser smoke" run_browser_smoke
 fi
-echo "All checks passed (${areas})."
+# The e2e part runs them for a change on either side, as above.
+if [ "${part}" = e2e ]; then
+  web_toolchain
+  step "web browser smoke${shard:+ (shard ${shard})}" run_browser_smoke
+fi
+echo "All checks passed (${areas}${CI_PART:+, ${part}${shard:+ ${shard}}})."

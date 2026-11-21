@@ -851,6 +851,10 @@ pub struct ChangedFile {
     pub removed: Option<u32>,
 }
 
+/// The most files a run's diff lists; past it the diff says it was
+/// truncated.
+pub const MAX_CHANGED_FILES: usize = 2_000;
+
 /// What a run's branch changed against its base commit.
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -901,6 +905,8 @@ pub fn run_diff(
     let numstat = run_git(args(&["--numstat", "-z"]))?;
     let statuses = run_git(args(&["--name-status", "-z"]))?;
     let mut files = parse_numstat(&numstat.stdout);
+    let more_files = files.len() > MAX_CHANGED_FILES;
+    files.truncate(MAX_CHANGED_FILES);
     let status_of = parse_name_status(&statuses.stdout);
     for file in &mut files {
         file.status = status_of
@@ -920,7 +926,7 @@ pub fn run_diff(
     Ok(RunDiff {
         files,
         patch,
-        truncated,
+        truncated: truncated || more_files,
     })
 }
 
@@ -944,7 +950,8 @@ fn parse_numstat(output: &[u8]) -> Vec<ChangedFile> {
                 .map(|to| String::from_utf8_lossy(to).into_owned())
                 .unwrap_or_default();
         }
-        if !path.is_empty() && files.len() < 2_000 {
+        // One past the most listed, so the caller can tell there were more.
+        if !path.is_empty() && files.len() <= MAX_CHANGED_FILES {
             files.push(ChangedFile {
                 path,
                 status: String::new(),
@@ -989,6 +996,24 @@ fn validate_mirror(mirror: &Path) -> Result<(), RuntimeError> {
     Ok(())
 }
 
+/// A clone address without its user information (`user:secret@`), the
+/// form that may be shown or sent: `https://host/path`, or `host:path` for
+/// the scp-like form.
+pub fn without_user_info(value: &str) -> String {
+    match value.split_once("://") {
+        Some((scheme, rest)) => {
+            let (authority, path) = match rest.find('/') {
+                Some(index) => rest.split_at(index),
+                None => (rest, ""),
+            };
+            let host = authority.rsplit('@').next().unwrap_or(authority);
+            format!("{scheme}://{host}{path}")
+        }
+        // scp-style "git@github.com:owner/name.git"
+        None => value.rsplit('@').next().unwrap_or(value).to_owned(),
+    }
+}
+
 fn validate_existing_mirror(mirror: &Path, expected_origin: &str) -> Result<(), RuntimeError> {
     validate_mirror(mirror)?;
     let origin = run_git([
@@ -1000,7 +1025,10 @@ fn validate_existing_mirror(mirror: &Path, expected_origin: &str) -> Result<(), 
     ])?;
     let origin = String::from_utf8(origin.stdout)
         .map_err(|_| RuntimeError::Conflict("repository", "origin is invalid"))?;
-    if origin.trim() != expected_origin {
+    // The start command carries the address without user information
+    // (credentials never travel in a command); an older mirror's origin may
+    // still have it, so both are compared without it.
+    if without_user_info(origin.trim()) != without_user_info(expected_origin) {
         return Err(RuntimeError::Conflict(
             "repository",
             "mirror origin does not match registration",
@@ -1365,10 +1393,11 @@ impl Drop for RepositoryLock {
 mod tests {
     use super::{
         RegisteredRepository, RepositoryPreparationMode, TemporaryAskpass, create_worktree,
-        expected_repository_mirror_path, inspect_publishable_worktree, inspect_worktree,
-        managed_worktree_path, prepare_repository, prepare_repository_with_token,
+        expected_repository_mirror_path, inspect_prepared_repository, inspect_publishable_worktree,
+        inspect_worktree, managed_worktree_path, prepare_repository, prepare_repository_with_token,
         remove_clean_worktree, remove_published_worktree, repair_and_prune_worktrees,
-        reserve_process_slot, unique_run_branch, validate_branch, validate_ref, worktree_is_dirty,
+        reserve_process_slot, unique_run_branch, validate_branch, validate_ref, without_user_info,
+        worktree_is_dirty,
     };
     use std::{
         fs, os::unix::fs::PermissionsExt, path::Path, process::Command, sync::atomic::AtomicUsize,
@@ -1668,6 +1697,84 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn clone_addresses_lose_their_user_information() {
+        assert_eq!(
+            without_user_info("https://x-access-token:secret@example.test/o/r.git"),
+            "https://example.test/o/r.git"
+        );
+        assert_eq!(
+            without_user_info("git@example.test:o/r.git"),
+            "example.test:o/r.git"
+        );
+    }
+
+    /// A start command carries the clone address without user information;
+    /// a mirror prepared from an older registration that had it still
+    /// passes, and one for another address still doesn't.
+    #[test]
+    fn a_mirror_whose_origin_has_user_information_matches_its_bare_address() {
+        let temporary = tempfile::tempdir().expect("temporary Git runtime root");
+        let data_root = temporary.path().join("data");
+        let source = temporary.path().join("source");
+        fs::create_dir(&source).expect("create source repository");
+        git(&source, ["init", "-b", "main"]);
+        fs::write(source.join("known.txt"), "known\n").expect("write known file");
+        git(&source, ["add", "known.txt"]);
+        git(
+            &source,
+            [
+                "-c",
+                "user.name=Agent Workspace",
+                "-c",
+                "user.email=agent-workspace@example.invalid",
+                "commit",
+                "-m",
+                "baseline",
+            ],
+        );
+        let repository_id = Uuid::now_v7();
+        let mirror = expected_repository_mirror_path(&data_root, repository_id)
+            .expect("expected mirror path");
+        let mirror_path = mirror.to_str().expect("mirror path");
+        git(
+            temporary.path(),
+            [
+                "clone",
+                "--mirror",
+                "--no-local",
+                source.to_str().expect("source path"),
+                mirror_path,
+            ],
+        );
+        git(
+            temporary.path(),
+            [
+                "--git-dir",
+                mirror_path,
+                "remote",
+                "set-url",
+                "origin",
+                "https://git@example.test/team/app.git",
+            ],
+        );
+        let repository = |clone_url: &str| RegisteredRepository {
+            id: repository_id,
+            clone_url: clone_url.to_owned(),
+            default_branch: "main".to_owned(),
+            mirror_path: mirror.clone(),
+        };
+        inspect_prepared_repository(&data_root, &repository("https://example.test/team/app.git"))
+            .expect("the bare address matches");
+        assert!(
+            inspect_prepared_repository(
+                &data_root,
+                &repository("https://example.test/team/other.git")
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn verifies_an_imported_private_mirror_without_network_credentials() {
         let temporary = tempfile::tempdir().expect("temporary Git runtime root");

@@ -1097,7 +1097,7 @@ async fn agents_put_images_on_boards_they_can_edit() {
     .await;
     assert_eq!(again["outcome"], "ok", "{again}");
     let stored = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM whiteboard_files WHERE whiteboard_id = $1::text::uuid",
+        "SELECT count(*) FROM files WHERE thing_kind = 'whiteboard' AND thing_id = $1::text::uuid",
     )
     .bind(&board)
     .fetch_one(&setup.pool)
@@ -1309,4 +1309,477 @@ async fn workspace_boards_and_channels_live_in_the_workspace_space() {
     )
     .await;
     assert_eq!(detail["whiteboard"]["projectId"], Value::Null, "{detail}");
+}
+
+/// C1.32: five notes in two frames become five tasks labelled by frame,
+/// each linking back to the board, and the board becomes a page with a
+/// heading per frame and its notes as bullets. Someone who can't see the
+/// board makes neither.
+#[tokio::test]
+async fn board_notes_become_tasks_and_a_page() {
+    let Some(setup) = setup("c132_board_notes").await else {
+        return;
+    };
+    let space = space(&setup).await;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let other = create_project(&setup, "OTH", "Other").await;
+    let owner = &setup.browser;
+    let (wren, token) = create_agent(&setup.app, owner, &space, "Wren", "wren").await;
+    add_member(&setup, &work, wren, "member").await;
+    let (kite, kite_token) = create_agent(&setup.app, owner, &space, "Kite", "kite").await;
+    add_member(&setup, &other, kite, "member").await;
+    let session = initialize(&setup.app, &token).await.expect("MCP session");
+    let kite_session = initialize(&setup.app, &kite_token)
+        .await
+        .expect("MCP session");
+    let board = tool(
+        &setup.app,
+        &token,
+        &session,
+        "whiteboard_create",
+        json!({"projectId": work, "title": "Retro"}),
+    )
+    .await;
+    assert_eq!(board["outcome"], "ok", "{board}");
+    let board = board["value"]["whiteboard"]["id"]
+        .as_str()
+        .expect("board")
+        .to_owned();
+    let note = |id: &str, frame: &str, y: f64, text: &str| {
+        json!({"op": "add", "type": "rectangle", "id": id, "x": 20, "y": y, "frameId": frame,
+               "text": text, "backgroundColor": "#ffec99"})
+    };
+    let drawn = tool(
+        &setup.app,
+        &token,
+        &session,
+        "whiteboard_edit",
+        json!({"whiteboardId": board, "operations": [
+            {"op": "add", "type": "frame", "id": "went", "x": 0, "y": 0, "name": "Went well"},
+            {"op": "add", "type": "frame", "id": "fix", "x": 1000, "y": 0, "name": "To fix"},
+            note("n1", "went", 40.0, "Fast reviews"),
+            note("n2", "went", 160.0, "Clear plan"),
+            note("n3", "fix", 40.0, "Flaky tests\nThe file tests time out"),
+            note("n4", "fix", 160.0, "Slow deploys"),
+            note("n5", "fix", 280.0, "Missing docs"),
+            {"op": "connect", "id": "arrow", "from": "n1", "to": "n3", "text": "then"},
+        ]}),
+    )
+    .await;
+    assert_eq!(drawn["outcome"], "ok", "{drawn}");
+
+    // Someone outside the board's project makes no tasks of it.
+    let refused = tool(
+        &setup.app,
+        &kite_token,
+        &kite_session,
+        "whiteboard_to_tasks",
+        json!({"whiteboardId": board, "clientRequestId": "kite-retro"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{refused}");
+    let refused = tool(
+        &setup.app,
+        &kite_token,
+        &kite_session,
+        "whiteboard_to_tasks",
+        json!({"whiteboardId": board, "spaceId": other, "clientRequestId": "kite-retro-2"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{refused}");
+
+    let made = tool(
+        &setup.app,
+        &token,
+        &session,
+        "whiteboard_to_tasks",
+        json!({"whiteboardId": board, "clientRequestId": "retro-tasks"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let tasks = made["value"]["tasks"].as_array().expect("tasks");
+    let titles: Vec<&str> = tasks
+        .iter()
+        .map(|task| task["title"].as_str().expect("title"))
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            "Fast reviews",
+            "Clear plan",
+            "Flaky tests",
+            "Slow deploys",
+            "Missing docs"
+        ],
+        "{made}"
+    );
+    let mut created = made["value"]["createdLabels"]
+        .as_array()
+        .expect("labels")
+        .clone();
+    created.sort_by_key(|label| label.as_str().map(str::to_owned));
+    assert_eq!(created, vec![json!("To fix"), json!("Went well")], "{made}");
+    let flaky = tasks[2]["id"].as_str().expect("task");
+    let opened = tool(
+        &setup.app,
+        &token,
+        &session,
+        "task_open",
+        json!({"taskId": flaky}),
+    )
+    .await;
+    assert_eq!(opened["outcome"], "ok", "{opened}");
+    let text = opened.to_string();
+    assert!(text.contains("The file tests time out"), "{opened}");
+    assert!(text.contains(&format!("/whiteboards/{board}")), "{opened}");
+    assert!(text.contains("To fix"), "{opened}");
+
+    // The board as a page.
+    let page = tool(
+        &setup.app,
+        &token,
+        &session,
+        "page_make",
+        json!({"whiteboardId": board, "clientRequestId": "retro-page"}),
+    )
+    .await;
+    assert_eq!(page["outcome"], "ok", "{page}");
+    let read = tool(
+        &setup.app,
+        &token,
+        &session,
+        "page_get",
+        json!({"pageId": page["value"]["id"]}),
+    )
+    .await;
+    let body = read["value"]["page"]["body"]
+        .as_str()
+        .or_else(|| read["value"]["body"].as_str())
+        .expect("body")
+        .to_owned();
+    assert_eq!(
+        body.trim(),
+        "## Went well\n\n- Fast reviews\n- Clear plan\n\n## To fix\n\n- Flaky tests\n  The file tests time out\n- Slow deploys\n- Missing docs",
+        "{read}"
+    );
+    let refused = tool(
+        &setup.app,
+        &kite_token,
+        &kite_session,
+        "page_make",
+        json!({"whiteboardId": board, "spaceId": other, "clientRequestId": "kite-page"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{refused}");
+}
+
+/// C1.10: board writes are changes. An agent's edits are one change each,
+/// a person's drawing joins into one while they keep drawing, and undo puts
+/// back the elements nobody touched since (an added one goes).
+#[tokio::test]
+async fn board_changes_are_listed_and_undone() {
+    let Some(setup) = setup("c110_board_undo").await else {
+        return;
+    };
+    let space = space(&setup).await;
+    let work = create_project(&setup, "WORK", "Work").await;
+    let owner = &setup.browser;
+    let (wren, token) = create_agent(&setup.app, owner, &space, "Wren", "wren").await;
+    add_member(&setup, &work, wren, "member").await;
+    let session = initialize(&setup.app, &token).await.expect("MCP session");
+    let call = |name: &'static str, arguments: Value| {
+        let token = token.clone();
+        let session = session.clone();
+        let app = &setup.app;
+        async move { tool(app, &token, &session, name, arguments).await }
+    };
+    let created = call(
+        "whiteboard_create",
+        json!({"projectId": work, "title": "Flow", "operations": [
+            {"op": "add", "type": "rectangle", "id": "plan", "text": "Plan"},
+        ]}),
+    )
+    .await;
+    assert_eq!(created["outcome"], "ok", "{created}");
+    let board = created["value"]["whiteboard"]["id"]
+        .as_str()
+        .expect("board")
+        .to_owned();
+    let edited = call(
+        "whiteboard_edit",
+        json!({"whiteboardId": board, "operations": [
+            {"op": "update", "id": "plan", "x": 400},
+            {"op": "add", "type": "ellipse", "id": "ship", "x": 800},
+        ]}),
+    )
+    .await;
+    assert_eq!(edited["outcome"], "ok", "{edited}");
+    let listed = call(
+        "change_list",
+        json!({"thingKind": "whiteboard", "thingId": board}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    let changes = listed["value"]["changes"].as_array().expect("changes");
+    assert_eq!(changes.len(), 2, "one change per agent edit: {listed}");
+    let touched = changes[0]["touched"]["elements"]
+        .as_array()
+        .expect("elements");
+    assert!(
+        touched.contains(&json!("plan")) && touched.contains(&json!("ship")),
+        "{listed}"
+    );
+
+    let undo = call(
+        "change_undo",
+        json!({"changeSetId": changes[0]["id"], "clientRequestId": "board-undo"}),
+    )
+    .await;
+    assert_eq!(undo["outcome"], "ok", "{undo}");
+    let now = scene(&setup, owner, &board, None).await;
+    assert_eq!(
+        element(&now, "plan").expect("plan")["x"],
+        json!(0.0),
+        "{now}"
+    );
+    assert!(
+        element(&now, "ship").is_none_or(|ship| ship["isDeleted"] == true),
+        "{now}"
+    );
+
+    // A person's drawing joins one change while they keep at it.
+    let raw = call(
+        "whiteboard_read",
+        json!({"whiteboardId": board, "elementIds": ["plan"], "raw": true}),
+    )
+    .await;
+    let mut plan = raw["value"]["raw"][0].clone();
+    for step in 1..=3 {
+        plan["y"] = json!(step * 100);
+        plan["version"] = json!(plan["version"].as_i64().expect("version") + 1);
+        write(&setup, owner, &board, vec![plan.clone()]).await;
+    }
+    let listed = call(
+        "change_list",
+        json!({"thingKind": "whiteboard", "thingId": board}),
+    )
+    .await;
+    let changes = listed["value"]["changes"].as_array().expect("changes");
+    assert_eq!(changes.len(), 4, "three strokes, one change: {listed}");
+    let undo = call(
+        "change_undo",
+        json!({"changeSetId": changes[0]["id"], "clientRequestId": "board-undo-2"}),
+    )
+    .await;
+    assert_eq!(undo["outcome"], "ok", "{undo}");
+    let now = scene(&setup, owner, &board, None).await;
+    assert_eq!(
+        element(&now, "plan").expect("plan")["y"],
+        json!(0.0),
+        "{now}"
+    );
+
+    // C1.34: history lists each version with its change set; a month on, old
+    // versions move out of the table into the file store and still show and
+    // restore.
+    let history = call("history_list", json!({"thing": board})).await;
+    assert_eq!(history["outcome"], "ok", "{history}");
+    let entries = history["value"]["entries"].as_array().expect("entries");
+    assert!(
+        entries.iter().any(|entry| entry["changeSetId"].is_string()),
+        "versions name their change: {history}"
+    );
+    let first = entries
+        .iter()
+        .filter_map(|entry| entry["version"].as_i64())
+        .min()
+        .expect("a first version");
+    sqlx::query(
+        "UPDATE whiteboard_revisions SET created_at = now() - interval '40 days' WHERE whiteboard_id::text = $1",
+    )
+    .bind(&board)
+    .execute(&setup.pool)
+    .await
+    .expect("age the versions");
+    let state = crate::support::app::state_on(&setup.pool);
+    let compacted = crate::support::as_server_job(
+        agent_workspace_server::whiteboards::store::compact_revisions(&state),
+    )
+    .await
+    .expect("compact");
+    assert!(compacted > 0, "old versions move out");
+    let inline = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM whiteboard_revisions WHERE whiteboard_id::text = $1 AND payload_key IS NULL AND jsonb_array_length(elements) > 0",
+    )
+    .bind(&board)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("left inline");
+    assert_eq!(inline, 0);
+    let shown = call("history_show", json!({"thing": board, "version": first})).await;
+    assert_eq!(shown["outcome"], "ok", "{shown}");
+    assert!(shown.to_string().contains("plan"), "{shown}");
+    let at = scene(&setup, owner, &board, None).await["sceneSeq"]
+        .as_i64()
+        .expect("scene seq");
+    let restored = call(
+        "history_restore",
+        json!({"thing": board, "version": first, "expectedVersion": at,
+               "clientRequestId": "board-restore-compacted"}),
+    )
+    .await;
+    assert_eq!(restored["outcome"], "ok", "{restored}");
+    let now = scene(&setup, owner, &board, None).await;
+    assert_eq!(
+        element(&now, "plan").expect("plan")["x"],
+        json!(0.0),
+        "{now}"
+    );
+}
+
+/// C1.29: a board's images are files of the board in the file store. A
+/// duplicate adds rows over the same bytes, an image still in the old table
+/// is read from there until the move job takes it, and deleting a board
+/// for good leaves the bytes its copy still shows.
+#[tokio::test]
+async fn board_images_live_in_the_file_store() {
+    let Some(setup) = setup("w16_images").await else {
+        return;
+    };
+    let state = crate::support::app::state_on(&setup.pool);
+    let work = create_project(&setup, "IMG", "Images").await;
+    let owner = &setup.browser;
+    let board = create_board(
+        &setup,
+        owner,
+        json!({"title": "Moodboard", "projectId": work}),
+    )
+    .await;
+    let (status, stored) = request(
+        &setup,
+        owner,
+        "POST",
+        &format!("/api/v1/whiteboards/{board}/files"),
+        json!({"id": "photo1", "mimeType": "image/png", "dataURL": TINY_PNG}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    let (kind, purpose, key) = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT thing_kind, purpose, storage_key FROM files WHERE thing_id::text = $1 AND external_key = 'photo1'",
+    )
+    .bind(&board)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the image is a file of the board");
+    assert_eq!((kind.as_str(), purpose.as_str()), ("whiteboard", "inline"));
+    let file_url = |board: &str, file: &str| format!("/api/v1/whiteboards/{board}/files/{file}");
+    let (status, file) = request(
+        &setup,
+        owner,
+        "GET",
+        &file_url(&board, "photo1"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{file}");
+    assert_eq!(file["dataURL"], TINY_PNG);
+
+    // A copy shows the image over the same stored bytes.
+    let (status, copy) = request(
+        &setup,
+        owner,
+        "POST",
+        &format!("/api/v1/whiteboards/{board}/duplicate"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{copy}");
+    let copy = copy["whiteboard"]["id"].as_str().expect("copy").to_owned();
+    let copied_key = sqlx::query_scalar::<_, String>(
+        "SELECT storage_key FROM files WHERE thing_id::text = $1 AND external_key = 'photo1'",
+    )
+    .bind(&copy)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the copy's image");
+    assert_eq!(copied_key, key, "no bytes copied");
+
+    // An image from before the move is read from the old table, then moved.
+    const GIF: &str = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+    let gif = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, GIF).expect("gif");
+    sqlx::query(
+        r#"
+        INSERT INTO whiteboard_files (whiteboard_id, file_id, mime_type, data, created_by_actor_id)
+        SELECT id, 'legacy1', 'image/gif', $2, created_by_actor_id FROM whiteboards WHERE id::text = $1
+        "#,
+    )
+    .bind(&board)
+    .bind(&gif)
+    .execute(&setup.pool)
+    .await
+    .expect("an old image");
+    let gif_url = format!("data:image/gif;base64,{GIF}");
+    let (_, before) = request(
+        &setup,
+        owner,
+        "GET",
+        &file_url(&board, "legacy1"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(before["dataURL"], gif_url.as_str(), "{before}");
+    let listed = scene(&setup, owner, &board, None).await;
+    assert_eq!(
+        listed["files"].as_array().map(Vec::len),
+        Some(2),
+        "{listed}"
+    );
+    let more =
+        crate::support::as_server_job(agent_workspace_server::whiteboards::store::move_images(
+            &state,
+            std::time::Duration::from_secs(30),
+        ))
+        .await
+        .expect("move");
+    assert!(!more);
+    let left = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM whiteboard_files")
+        .fetch_one(&setup.pool)
+        .await
+        .expect("left");
+    assert_eq!(left, 0);
+    let (_, after) = request(
+        &setup,
+        owner,
+        "GET",
+        &file_url(&board, "legacy1"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(after["dataURL"], gif_url.as_str(), "{after}");
+    let listed = scene(&setup, owner, &board, None).await;
+    assert_eq!(
+        listed["files"].as_array().map(Vec::len),
+        Some(2),
+        "{listed}"
+    );
+
+    // Deleting the original for good keeps the bytes its copy shows.
+    let path = format!("/api/v1/whiteboards/{board}");
+    let (status, _) = request(&setup, owner, "PATCH", &path, json!({"deleted": true})).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = request(&setup, owner, "DELETE", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    agent_workspace_server::files::cleanup(&state)
+        .await
+        .expect("cleanup");
+    let (status, kept) = request(
+        &setup,
+        owner,
+        "GET",
+        &file_url(&copy, "photo1"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!(kept["dataURL"], TINY_PNG);
 }

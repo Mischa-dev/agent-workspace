@@ -2454,7 +2454,7 @@ async fn links_left_behind(
         r#"
         SELECT 'Conversation' AS kind, conversation.name AS label,
                COALESCE(parent.visibility, conversation.visibility) = 'project' AS shared
-        FROM work_item_conversation_links link
+        FROM task_threads link
         JOIN conversations conversation ON conversation.id = link.conversation_id
         LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
         WHERE link.project_id = $1 AND link.work_item_id = $2
