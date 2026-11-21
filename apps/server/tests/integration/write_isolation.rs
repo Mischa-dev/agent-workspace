@@ -168,8 +168,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{id}/pages",
     "POST /api/v1/projects/{id}/pages/import",
     "POST /api/v1/projects/{id}/switch",
-    "POST /api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
-    "POST /api/v1/projects/{project_id}/agent-runs/{run_id}/pull-request",
     "POST /api/v1/projects/{project_id}/ai/analyze",
     "POST /api/v1/projects/{project_id}/ai/plans",
     "PUT /api/v1/projects/{project_id}/ai/plans/{import_id}",
@@ -209,7 +207,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/sheets/import",
     "POST /api/v1/projects/{project_id}/sheets/{sheet_id}/changes",
     "POST /api/v1/projects/{project_id}/launches",
-    "POST /api/v1/projects/{project_id}/launches/{launch_id}/cancel",
     "PUT /api/v1/projects/{project_id}/layout",
     "PUT /api/v1/projects/{project_id}/layout/rules",
     "POST /api/v1/projects/{project_id}/provider-accounts",
@@ -221,9 +218,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/provider-accounts/{account_id}/login/device-code",
     "POST /api/v1/projects/{project_id}/provider-accounts/{account_id}/logout",
     "POST /api/v1/projects/{project_id}/provider-accounts/{account_id}/use",
-    "POST /api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
-    "POST /api/v1/projects/{project_id}/repositories",
-    "POST /api/v1/projects/{project_id}/repositories/{repository_id}/archive",
     "DELETE /api/v1/projects/{project_id}/secrets/{name}",
     "PUT /api/v1/projects/{project_id}/secrets/{name}",
     "POST /api/v1/projects/{project_id}/task-templates/{template_id}/apply",
@@ -2311,8 +2305,6 @@ struct Spares {
     session: Uuid,
     /// An agent in A's project that may ask a person to run Codex.
     requester_token: String,
-    /// A repository with no runs, archived.
-    repository: Uuid,
     /// The owner's comments on the task, deleted over HTTP and through MCP.
     comments: [Uuid; 2],
     /// A board in the trash, deleted for good.
@@ -2556,25 +2548,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     )
     .await;
     let requester_token = string_at(&requester, "/oneTimeCredential/token");
-
-    // A repository with no runs, to archive (one with a run that hasn't
-    // finished stays). It isn't prepared, so runs never pick it.
-    let repository = ok(
-        app,
-        browser,
-        "POST",
-        &format!("/api/v1/projects/{project}/repositories"),
-        json!({
-            "githubRepositoryId": 9002,
-            "owner": "acme",
-            "name": "net-spare",
-            "cloneUrl": "https://github.com/acme/net-spare.git",
-            "defaultBranch": "main",
-            "trustAcknowledged": true,
-        }),
-    )
-    .await;
-    let repository = Uuid::parse_str(&string_at(&repository, "/id")).expect("repository");
 
     let mut comments = Vec::new();
     for text_value in ["Net spare comment one", "Net spare comment two"] {
@@ -2969,7 +2942,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         types,
         session,
         requester_token,
-        repository,
         comments: [comments[0], comments[1]],
         trashed_whiteboard,
         provider_account,
@@ -4650,18 +4622,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             Payload::Json(json!({"expectedVersion": navigation_version(&values[0])}))
         }),
         // Runs
-        path_case(
-            "POST /api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
-            &[project(), id(a.run, b.run)],
-            empty(),
-        )
-        .without_own("publishing pushes to GitHub, which tests can't reach"),
-        path_case(
-            "POST /api/v1/projects/{project_id}/agent-runs/{run_id}/pull-request",
-            &[project(), looked_up(a.run, b.run)],
-            json_body(json!({"title": "Net pull request", "body": "Net"})),
-        )
-        .without_own("opening a pull request asks GitHub, which tests can't reach"),
         // AI
         path_case(
             "POST /api/v1/projects/{project_id}/ai/analyze",
@@ -4993,11 +4953,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             json!({"workItemIds": [a.subtask], "startWhen": "at", "startAt": far, "providerAccountId": b.provider_account}),
             json!({"workItemIds": [a.subtask], "startWhen": "at", "startAt": far, "agentProfileId": bx.agent_profile}),
         ]),
-        path_case(
-            "POST /api/v1/projects/{project_id}/launches/{launch_id}/cancel",
-            &[project(), id(ax.launch, bx.launch)],
-            empty(),
-        ),
         // Layouts
         path_case(
             "PUT /api/v1/projects/{project_id}/layout",
@@ -5088,12 +5043,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         )
         .without_own(NEEDS_CLI),
-        path_case(
-            "POST /api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
-            &[project(), id(a.pull_request, b.pull_request)],
-            empty(),
-        )
-        .without_own(NEEDS_GITHUB),
         // Recurring tasks and templates
         path_case(
             "POST /api/v1/projects/{project_id}/task-templates/{template_id}/apply",
@@ -5105,24 +5054,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             json!({"title": "Net applied", "milestoneId": bx.milestone}),
         ]),
         // Repositories
-        path_case(
-            "POST /api/v1/projects/{project_id}/repositories",
-            &[project()],
-            json_body(json!({
-                "githubRepositoryId": 9001,
-                "owner": "acme",
-                "name": "net",
-                "cloneUrl": "https://github.com/acme/net.git",
-                "defaultBranch": "main",
-                "trustAcknowledged": true,
-            })),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/repositories/{repository_id}/archive",
-            &[project(), id(sp.repository, b.repository)],
-            versioned("repositories", 1, json!({})),
-        )
-        .last(),
         // Project secrets
         path_case(
             "PUT /api/v1/projects/{project_id}/secrets/{name}",

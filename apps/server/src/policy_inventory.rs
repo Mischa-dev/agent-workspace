@@ -945,18 +945,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         SessionAuthentication
     ),
     policy_route!(
-        "repositories",
-        Post,
-        "/api/v1/projects/{project_id}/repositories",
-        RepositoryManage
-    ),
-    policy_route!(
-        "repositories",
-        Post,
-        "/api/v1/projects/{project_id}/repositories/{repository_id}/archive",
-        RepositoryManage
-    ),
-    policy_route!(
         "github/connect",
         Post,
         "/api/v1/projects/{project_id}/integrations/github/connect",
@@ -967,24 +955,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects/{project_id}/integrations/github/repositories",
         RepositoryManage
-    ),
-    policy_route!(
-        "github",
-        Post,
-        "/api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
-        RepositoryPublish
-    ),
-    policy_route!(
-        "github",
-        Post,
-        "/api/v1/projects/{project_id}/agent-runs/{run_id}/pull-request",
-        PullRequestCreate
-    ),
-    policy_route!(
-        "github",
-        Post,
-        "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
-        PullRequestRefresh
     ),
     boundary_route!(
         "github",
@@ -1238,12 +1208,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "launch",
         Post,
         "/api/v1/projects/{project_id}/launches",
-        WorkerInvoke
-    ),
-    policy_route!(
-        "launch",
-        Post,
-        "/api/v1/projects/{project_id}/launches/{launch_id}/cancel",
         WorkerInvoke
     ),
     policy_route!(

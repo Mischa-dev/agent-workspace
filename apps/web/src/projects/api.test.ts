@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { archiveProject, normalizeNavigation, normalizeProject } from './api'
+import { archiveProject, createProject, normalizeNavigation, normalizeProject } from './api'
 
 function projectWithCapabilities(capabilities: unknown) {
   return normalizeProject({
@@ -132,5 +132,33 @@ describe('archiveProject', () => {
       ),
     )
     await expect(archiveProject('project-a', 1)).rejects.toMatchObject({ code: 'not_found' })
+  })
+})
+
+describe('createProject', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const json = (body: unknown, status = 200) =>
+    Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }))
+  const input = { organizationId: 'organization-a', key: 'NEW', name: 'New', idempotencyKey: 'create-1' }
+
+  it('says a create held for review waits, without reading a project', async () => {
+    const fetchMock = vi.fn(() => json({ outcome: 'ok', value: { status: 'pending_review', requestId: 'review-1' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(createProject(input)).rejects.toThrow(/waits for a reviewer/)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a made space when the read after it fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: RequestInfo | URL) =>
+        String(url).endsWith('/ops/space_create')
+          ? json({ outcome: 'ok', value: { id: 'space-new', key: 'NEW', name: 'New', version: 1 } })
+          : json({ error: { code: 'internal_error', message: 'Down' } }, 500),
+      ),
+    )
+    const project = await createProject(input)
+    expect(project).toMatchObject({ id: 'space-new', organizationId: 'organization-a', key: 'NEW' })
   })
 })

@@ -35,9 +35,6 @@ use crate::{
     config::{GITHUB_API_VERSION, GitHubConfig},
     error::{ApiJson, ApiPath, AppError},
     hosts::builtin::repositories::{Publication, PublicationCheck},
-    idempotency::{
-        IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
-    },
     outbox,
     policy::{Action, Permission, RoleGrant},
     work_item_commands::{self, AuditAttribution, CommandActor, record_audit_for},
@@ -75,18 +72,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/integrations/github/automation",
             get(github_automation_settings),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
-            post(publish_agent_run),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/agent-runs/{run_id}/pull-request",
-            post(create_pull_request),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
-            post(refresh_pull_request),
         )
 }
 
@@ -265,16 +250,6 @@ pub(crate) struct PublishJobView {
     pub intended_commit: String,
     pub state: String,
     pub failure_category: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CreatePullRequestRequest {
-    title: String,
-    #[serde(default)]
-    body: String,
-    #[serde(default)]
-    work_item_ids: Vec<Uuid>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, FromRow)]
@@ -1724,94 +1699,6 @@ pub(crate) async fn queue_publish_in(
     Ok(Queued { view, new: true })
 }
 
-async fn publish_agent_run(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, run_id)): ApiPath<(Uuid, Uuid)>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    if state.config.github.is_none() {
-        return Err(AppError::Conflict("github_integration", "not_configured"));
-    }
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let scope = resource_bound_scope("agent_runs", run_id, "publish")?;
-    let request_hash = RequestHash::for_value(&json!({ "agentRunId": run_id }))?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::RepositoryPublish,
-    )
-    .await?;
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let view: PublishJobView = replay.decode()?;
-            transaction.commit().await?;
-            return Ok((replay.status(), Json(view)).into_response());
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let Queued { view, new } = queue_publish_in(
-        &state,
-        &mut transaction,
-        principal.actor_id,
-        project_id,
-        run_id,
-    )
-    .await?;
-    if !new {
-        let status = if view.state == "completed" {
-            StatusCode::OK
-        } else {
-            StatusCode::ACCEPTED
-        };
-        complete(&mut transaction, &reservation, status, &view).await?;
-        transaction.commit().await?;
-        return Ok((status, Json(view)).into_response());
-    }
-    let request_id = headers
-        .get(crate::REQUEST_ID_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| value.len() <= 128);
-    sqlx::query(
-        r#"
-        INSERT INTO audit_events (
-            id, actor_id, project_id, session_id, authentication_class,
-            action, target_kind, target_id, outcome, request_id, metadata
-        ) VALUES (
-            $1, $2, $3, $4, 'password_session',
-            'github.workspace_publish_queued', 'github_job', $5,
-            'succeeded', $6,
-            jsonb_build_object('agent_run_id', $7::uuid, 'repository_workspace_id', $8::uuid)
-        )
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(principal.actor_id)
-    .bind(project_id)
-    .bind(principal.session_id)
-    .bind(view.job_id)
-    .bind(request_id)
-    .bind(view.agent_run_id)
-    .bind(view.repository_workspace_id)
-    .execute(&mut *transaction)
-    .await?;
-    complete(&mut transaction, &reservation, StatusCode::ACCEPTED, &view).await?;
-    transaction.commit().await?;
-    kick_jobs(state);
-    Ok((StatusCode::ACCEPTED, Json(view)).into_response())
-}
-
 /// A pull request's title (trimmed), body and tasks, as GitHub and the app
 /// take them.
 pub(crate) fn checked_pull_request_input(
@@ -1994,100 +1881,6 @@ pub(crate) async fn queue_pull_request_in(
     Ok(Queued { view, new: true })
 }
 
-async fn create_pull_request(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, run_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(mut request): ApiJson<CreatePullRequestRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    if state.config.github.is_none() {
-        return Err(AppError::Conflict("github_integration", "not_configured"));
-    }
-    request.title =
-        checked_pull_request_input(&request.title, &request.body, &request.work_item_ids)?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let scope = resource_bound_scope("agent_runs", run_id, "pull_request")?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::PullRequestCreate,
-    )
-    .await?;
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let view: PullRequestRequestView = replay.decode()?;
-            transaction.commit().await?;
-            return Ok((replay.status(), Json(view)).into_response());
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let Queued { view, new } = queue_pull_request_in(
-        &mut transaction,
-        principal.actor_id,
-        project_id,
-        run_id,
-        &request.title,
-        &request.body,
-        &request.work_item_ids,
-    )
-    .await?;
-    if !new {
-        let status = if view.state == "completed" {
-            StatusCode::OK
-        } else {
-            StatusCode::ACCEPTED
-        };
-        complete(&mut transaction, &reservation, status, &view).await?;
-        transaction.commit().await?;
-        return Ok((status, Json(view)).into_response());
-    }
-    sqlx::query(
-        r#"
-        INSERT INTO audit_events (
-            id, actor_id, project_id, session_id, authentication_class,
-            action, target_kind, target_id, outcome, request_id, metadata
-        ) VALUES (
-            $1, $2, $3, $4, 'password_session',
-            'github.pull_request_queued', 'github_pull_request_request', $5,
-            'succeeded', $6,
-            jsonb_build_object('agent_run_id', $7::uuid, 'repository_workspace_id', $8::uuid)
-        )
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(principal.actor_id)
-    .bind(project_id)
-    .bind(principal.session_id)
-    .bind(view.request_id)
-    .bind(
-        headers
-            .get(crate::REQUEST_ID_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .filter(|value| value.len() <= 128),
-    )
-    .bind(run_id)
-    .bind(view.repository_workspace_id)
-    .execute(&mut *transaction)
-    .await?;
-    complete(&mut transaction, &reservation, StatusCode::ACCEPTED, &view).await?;
-    transaction.commit().await?;
-    kick_jobs(state);
-    Ok((StatusCode::ACCEPTED, Json(view)).into_response())
-}
-
 /// Queues reading a pull request's checks and review from GitHub again,
 /// for a caller allowed to refresh pull requests in the project who can see
 /// this one. The caller commits and then calls `kick_jobs`.
@@ -2171,56 +1964,6 @@ pub(crate) async fn queue_refresh_in(
     .execute(&mut **transaction)
     .await?;
     Ok(Queued { view, new: true })
-}
-
-async fn refresh_pull_request(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, pull_request_id)): ApiPath<(Uuid, Uuid)>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    if state.config.github.is_none() {
-        return Err(AppError::Conflict("github_integration", "not_configured"));
-    }
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let scope = resource_bound_scope("github_pull_requests", pull_request_id, "refresh")?;
-    let request_hash = RequestHash::for_value(&json!({}))?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::PullRequestRefresh,
-    )
-    .await?;
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let view: PullRequestRefreshView = replay.decode()?;
-            transaction.commit().await?;
-            return Ok((replay.status(), Json(view)).into_response());
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let Queued { view, .. } = queue_refresh_in(
-        &mut transaction,
-        principal.actor_id,
-        project_id,
-        pull_request_id,
-    )
-    .await?;
-    complete(&mut transaction, &reservation, StatusCode::ACCEPTED, &view).await?;
-    transaction.commit().await?;
-    kick_jobs(state);
-    Ok((StatusCode::ACCEPTED, Json(view)).into_response())
 }
 
 pub(crate) async fn drain_jobs(state: &AppState) -> Result<(), AppError> {

@@ -193,12 +193,9 @@ export function listLaunches(projectId: string) {
   return requestJson<LaunchList>(projectPath(projectId, 'launches'))
 }
 
-export function cancelLaunch(projectId: string, launchId: string) {
-  return requestJson<Launch>(projectPath(projectId, `launches/${encodeURIComponent(launchId)}/cancel`), {
-    method: 'POST',
-    json: {},
-    idempotencyKey: crypto.randomUUID(),
-  })
+/** Cancels a queued launch; the queue reads it again. */
+export function cancelLaunch(launchId: string) {
+  return callOp('launch_cancel', { launchId })
 }
 
 export function listEnvironments(projectId: string) {

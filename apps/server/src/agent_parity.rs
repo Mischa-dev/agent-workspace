@@ -711,16 +711,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/repositories",
-            Tool("repository_create"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/repositories/{repository_id}/archive",
-            Tool("repository_archive"),
-        ),
-        (
-            Post,
             "/api/v1/projects/{project_id}/integrations/github/connect",
             Person("installs the GitHub app as a person"),
         ),
@@ -728,21 +718,6 @@ mod tests {
             Post,
             "/api/v1/projects/{project_id}/integrations/github/repositories",
             Tool("repository_create"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
-            Tool("run_publish"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/agent-runs/{run_id}/pull-request",
-            Tool("pull_request_create"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
-            Tool("pull_request_refresh"),
         ),
         (
             Post,
@@ -974,11 +949,6 @@ mod tests {
             Post,
             "/api/v1/projects/{project_id}/launches",
             Tool("task_launch"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/launches/{launch_id}/cancel",
-            Tool("launch_cancel"),
         ),
         (
             Post,
@@ -1217,7 +1187,7 @@ mod tests {
     /// Hand-written web writes whose tool is already an operation: each is a
     /// second edge for something the generated route does (K2.22). The
     /// number only goes down; when you delete one, lower it.
-    const HAND_WRITTEN_OPERATION_ROUTES: usize = 94;
+    const HAND_WRITTEN_OPERATION_ROUTES: usize = 88;
 
     #[test]
     fn hand_written_routes_for_operations_only_go_down() {

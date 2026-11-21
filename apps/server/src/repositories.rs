@@ -1,36 +1,25 @@
 use std::path::PathBuf;
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    routing::{get, post},
-};
+use axum::{Json, Router, extract::State, routing::get};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
-    error::{ApiJson, ApiPath, AppError},
+    auth::AuthenticatedActor,
+    error::{ApiPath, AppError},
     hosts::builtin::repositories::{self as host_repositories, Mirror},
-    idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     policy::{Action, Permission, RoleGrant},
 };
 
 const MAX_REPOSITORIES: i64 = 100;
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/api/v1/projects/{project_id}/repositories",
-            get(list_repositories).post(register_repository),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/repositories/{repository_id}/archive",
-            post(archive_repository),
-        )
+    Router::new().route(
+        "/api/v1/projects/{project_id}/repositories",
+        get(list_repositories),
+    )
 }
 
 #[derive(Debug, FromRow)]
@@ -74,17 +63,6 @@ struct RegisterRepositoryRequest {
     clone_url: String,
     default_branch: String,
     trust_acknowledged: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ArchiveRepositoryRequest {
-    expected_version: i64,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct RepositoryCommandReference {
-    repository_id: Uuid,
 }
 
 #[derive(Debug, Serialize)]
@@ -149,79 +127,6 @@ async fn list_repositories(
             .collect::<Result<_, _>>()?,
         capabilities: RepositoryCapabilities { manage },
     }))
-}
-
-async fn register_repository(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<RegisterRepositoryRequest>,
-) -> Result<(StatusCode, Json<RepositoryView>), AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let request = validate_registration(request)?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let scope = idempotency::resource_bound_scope("project", project_id, "repository_register")?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let role = require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::RepositoryManage,
-    )
-    .await?;
-    // The answer is the repository (owner, name, clone URL, branch): only
-    // for someone who also sees code here.
-    require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::RepositoryView,
-    )
-    .await?;
-    let reservation = match idempotency::reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let reference: RepositoryCommandReference = replay.decode()?;
-            let row = fetch_repository(&mut transaction, project_id, reference.repository_id)
-                .await?
-                .ok_or(AppError::NotFound("repository"))?;
-            transaction.commit().await?;
-            return Ok((
-                replay.status(),
-                Json(repository_view(row, role_allows_manage(role))?),
-            ));
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let repository_id = insert_repository(&state, &mut transaction, project_id, &request).await?;
-    let reference = RepositoryCommandReference { repository_id };
-    idempotency::complete(
-        &mut transaction,
-        &reservation,
-        StatusCode::CREATED,
-        &reference,
-    )
-    .await?;
-    transaction.commit().await?;
-
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let row = fetch_repository(&mut transaction, project_id, repository_id)
-        .await?
-        .ok_or(AppError::NotFound("repository"))?;
-    transaction.commit().await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(repository_view(row, role_allows_manage(role))?),
-    ))
 }
 
 /// Add a trusted repository row to a project. The caller has checked the
@@ -421,73 +326,6 @@ pub(crate) async fn repository_json(
         .ok_or(AppError::NotFound("repository"))?;
     serde_json::to_value(repository_view(row, manage)?)
         .map_err(|_| AppError::Internal("repository view"))
-}
-
-async fn archive_repository(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath((project_id, repository_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<ArchiveRepositoryRequest>,
-) -> Result<Json<RepositoryView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    if request.expected_version < 1 {
-        return Err(AppError::Validation("expectedVersion"));
-    }
-    let scope = idempotency::resource_bound_scope("repository", repository_id, "archive")?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let role = require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::RepositoryManage,
-    )
-    .await?;
-    // The answer is the repository (owner, name, clone URL, branch): only
-    // for someone who also sees code here.
-    require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::RepositoryView,
-    )
-    .await?;
-    let reservation = match idempotency::reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let reference: RepositoryCommandReference = replay.decode()?;
-            let row = fetch_repository(&mut transaction, project_id, reference.repository_id)
-                .await?
-                .ok_or(AppError::NotFound("repository"))?;
-            transaction.commit().await?;
-            return Ok(Json(repository_view(row, role_allows_manage(role))?));
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    archive_in(
-        &mut transaction,
-        principal.actor_id,
-        project_id,
-        repository_id,
-        request.expected_version,
-    )
-    .await?;
-    let reference = RepositoryCommandReference { repository_id };
-    idempotency::complete(&mut transaction, &reservation, StatusCode::OK, &reference).await?;
-    let row = fetch_repository(&mut transaction, project_id, repository_id)
-        .await?
-        .ok_or(AppError::NotFound("repository"))?;
-    transaction.commit().await?;
-    Ok(Json(repository_view(row, role_allows_manage(role))?))
 }
 
 /// Archive a repository of the project (refused while a run uses it), for

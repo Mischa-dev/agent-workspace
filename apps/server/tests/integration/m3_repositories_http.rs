@@ -171,11 +171,12 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
 
     let cookie = login(&application).await;
     let csrf = csrf_from_cookie(&cookie);
+    let create = "/api/v2/ops/repository_create";
     let registration = json!({
+        "projectId": seed.project_id,
         "githubRepositoryId": 9000000002_i64,
         "owner": "example-org",
         "name": "m3-registration-fixture",
-        "cloneUrl": "https://github.com/example-org/m3-registration-fixture.git",
         "defaultBranch": "main",
         "trustAcknowledged": true
     });
@@ -184,7 +185,7 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
         &cookie,
         None,
         Some("register-key"),
-        &base,
+        create,
         registration.clone(),
     )
     .await;
@@ -195,11 +196,12 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
         &cookie,
         Some(&csrf),
         Some("register-key"),
-        &base,
+        create,
         registration.clone(),
     )
     .await;
-    assert_eq!(created_status, StatusCode::CREATED);
+    assert_eq!(created_status, StatusCode::OK, "{created_text}");
+    let created = created["value"]["repository"].clone();
     assert_eq!(created["preparationState"], "pending");
     assert_eq!(created["trusted"], true);
     assert!(created.get("mirrorPath").is_none());
@@ -210,19 +212,29 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
         &cookie,
         Some(&csrf),
         Some("register-key"),
-        &base,
+        create,
         registration.clone(),
     )
     .await;
-    assert_eq!(replay.0, StatusCode::CREATED);
-    assert_eq!(replay.2["id"], created["id"]);
+    // A space holds a repository once: the retry is told it's there.
+    assert_eq!(replay.0, StatusCode::CONFLICT, "{}", replay.1);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM repositories WHERE project_id = $1 AND github_repository_id = 9000000002"
+        )
+        .bind(seed.project_id)
+        .fetch_one(&pool)
+        .await
+        .expect("count registered repositories"),
+        1
+    );
 
     let duplicate = post_json(
         &application,
         &cookie,
         Some(&csrf),
         Some("duplicate-key"),
-        &base,
+        create,
         registration,
     )
     .await;
@@ -233,18 +245,23 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
         &cookie,
         Some(&csrf),
         Some("unsafe-key"),
-        &base,
+        create,
         json!({
+            "projectId": seed.project_id,
             "githubRepositoryId": 9000000003_i64,
             "owner": "example-org",
             "name": "unsafe",
-            "cloneUrl": "https://token@github.com/example-org/unsafe.git",
             "defaultBranch": "-upload-pack",
             "trustAcknowledged": true
         }),
     )
     .await;
-    assert_eq!(unsafe_registration.0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        unsafe_registration.0,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        unsafe_registration.2
+    );
 
     let prepared = post_json(
         &application,
@@ -393,12 +410,12 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
         &cookie,
         Some(&csrf),
         Some("archive-active-key"),
-        &format!("{base}/{created_id}/archive"),
-        json!({"expectedVersion": created_version}),
+        "/api/v2/ops/repository_archive",
+        json!({"projectId": seed.project_id, "repository": created_id, "expectedVersion": created_version}),
     )
     .await;
     assert_eq!(refused.0, StatusCode::CONFLICT, "{}", refused.1);
-    assert_eq!(refused.2["error"]["code"], "repository_has_active_runs");
+    assert_eq!(refused.2["outcome"], "conflict", "{}", refused.1);
     sqlx::query("UPDATE agent_runs SET state = 'failed', finished_at = now() WHERE id = $1")
         .bind(run)
         .execute(&pool)
@@ -411,25 +428,29 @@ async fn repository_registration_preparation_archive_and_policy_are_safe_and_ide
         &cookie,
         Some(&csrf),
         Some("archive-key"),
-        &format!("{base}/{created_id}/archive"),
-        json!({"expectedVersion": created_version}),
+        "/api/v2/ops/repository_archive",
+        json!({"projectId": seed.project_id, "repository": created_id, "expectedVersion": created_version}),
     )
     .await;
-    assert_eq!(archived.0, StatusCode::OK);
-    assert_eq!(archived.2["enabled"], false);
-    assert!(archived.2["archivedAt"].is_string());
+    assert_eq!(archived.0, StatusCode::OK, "{}", archived.1);
+    let archived = archived.2["value"]["repository"].clone();
+    assert_eq!(archived["enabled"], false, "{archived}");
+    assert!(archived["archivedAt"].is_string(), "{archived}");
 
     let archived_replay = post_json(
         &application,
         &cookie,
         Some(&csrf),
         Some("archive-key"),
-        &format!("{base}/{created_id}/archive"),
-        json!({"expectedVersion": created_version}),
+        "/api/v2/ops/repository_archive",
+        json!({"projectId": seed.project_id, "repository": created_id, "expectedVersion": created_version}),
     )
     .await;
     assert_eq!(archived_replay.0, StatusCode::OK);
-    assert_eq!(archived_replay.2["version"], archived.2["version"]);
+    assert_eq!(
+        archived_replay.2["value"]["repository"]["version"],
+        archived["version"]
+    );
 
     let (_, list_text, list) = get_json(&application, &cookie, &base).await;
     assert!(

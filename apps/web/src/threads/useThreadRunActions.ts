@@ -30,12 +30,10 @@ const threadApi = {
   // Stopping or dismissing twice changes nothing, so each try is its own request.
   interrupt: (runId: string) => callOp('run_stop', { runId }),
   retry: (runId: string) => post(`/api/v1/agent-runs/${encodeURIComponent(runId)}/retry`, `retry-${runId}`),
-  publish: (projectId: string, runId: string, key: string) =>
-    post(`/api/v1/projects/${encodeURIComponent(projectId)}/agent-runs/${encodeURIComponent(runId)}/publish`, key),
-  createPullRequest: (projectId: string, runId: string, key: string, json: { title: string; body: string; workItemIds: string[] }) =>
-    post(`/api/v1/projects/${encodeURIComponent(projectId)}/agent-runs/${encodeURIComponent(runId)}/pull-request`, key, json),
-  refreshPullRequest: (projectId: string, pullRequestId: string) =>
-    post(`/api/v1/projects/${encodeURIComponent(projectId)}/pull-requests/${encodeURIComponent(pullRequestId)}/refresh`, crypto.randomUUID()),
+  publish: (runId: string, key: string) => callOp('run_publish', { runId }, { requestId: key }),
+  createPullRequest: (runId: string, key: string, input: { title: string; body: string; taskIds: string[] }) =>
+    callOp('pull_request_create', { runId, ...input }, { requestId: key }),
+  refreshPullRequest: (pullRequestId: string) => callOp('pull_request_refresh', { pullRequestId }),
   acknowledgeFailure: (runId: string) => callOp('run_failure_hide', { runId }),
 }
 
@@ -140,7 +138,7 @@ export function useThreadRunActions({
     }
     const commandKey = publishIdempotencyKey ?? crypto.randomUUID()
     if (!publishIdempotencyKey) setPublishIdempotencyKey(commandKey)
-    void perform('publish', () => threadApi.publish(projectId, runId, commandKey)).then((succeeded) => {
+    void perform('publish', () => threadApi.publish(runId, commandKey)).then((succeeded) => {
       if (succeeded) setPublishIdempotencyKey(null)
     })
   }
@@ -167,10 +165,10 @@ export function useThreadRunActions({
     const commandKey = pullRequestIdempotencyKey ?? crypto.randomUUID()
     if (!pullRequestIdempotencyKey) setPullRequestIdempotencyKey(commandKey)
     void perform('pull-request', () =>
-      threadApi.createPullRequest(projectId, runId, commandKey, {
+      threadApi.createPullRequest(runId, commandKey, {
         title,
         body: 'Created from an explicitly published Agent Workspace run.',
-        workItemIds: activeWorkItems.map((item) => item.id),
+        taskIds: activeWorkItems.map((item) => item.id),
       }),
     ).then((succeeded) => {
       if (succeeded) setPullRequestIdempotencyKey(null)
@@ -185,7 +183,7 @@ export function useThreadRunActions({
     ) {
       return
     }
-    void perform('pull-request-refresh', () => threadApi.refreshPullRequest(projectId, pullRequestId))
+    void perform('pull-request-refresh', () => threadApi.refreshPullRequest(pullRequestId))
   }
 
   const acknowledgeFailure = () => {

@@ -1,6 +1,6 @@
 import { requestJson } from '../api/client'
 import { isApiError } from '../api/errors'
-import { callOp } from '../api/ops'
+import { callOp, heldForReview } from '../api/ops'
 import { normalizeLocation, safeProjectHref } from './locations'
 import type {
   Project,
@@ -136,7 +136,13 @@ export async function createProject(input: {
     },
     { workspaceId: input.organizationId, requestId: input.idempotencyKey },
   )
-  return getProject(space.id)
+  // A workspace guard can hold it for a reviewer: nothing is made yet, and
+  // sending the same form again (same request id) once they allow it makes it.
+  if (heldForReview(space)) {
+    throw new Error('This project waits for a reviewer to allow it. Once they have, create it again.')
+  }
+  // It's made: a failed read afterwards doesn't undo that.
+  return getProject(space.id).catch(() => normalizeProject({ ...space, organizationId: input.organizationId }))
 }
 
 export async function getProject(projectId: string): Promise<Project> {

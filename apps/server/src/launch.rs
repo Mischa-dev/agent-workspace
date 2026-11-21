@@ -13,7 +13,7 @@ use axum::{
     Json, Router,
     extract::State,
     http::{HeaderMap, StatusCode},
-    routing::{get, post},
+    routing::get,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -62,10 +62,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/launches",
             get(list_launches).post(create_launches),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/launches/{launch_id}/cancel",
-            post(cancel_launch),
         )
 }
 
@@ -2871,10 +2867,6 @@ async fn list_launches(
     Ok(Json(list_for(&state, &caller, project_id).await?))
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct EmptyRequest {}
-
 pub(crate) async fn cancel(
     state: &AppState,
     caller: &LaunchCaller,
@@ -2927,18 +2919,6 @@ pub(crate) async fn cancel(
         .await?
         .pop()
         .ok_or(AppError::NotFound("launch"))
-}
-
-async fn cancel_launch(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, launch_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(_request): ApiJson<EmptyRequest>,
-) -> Result<Json<LaunchView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = LaunchCaller::browser(&principal, &headers)?;
-    Ok(Json(cancel(&state, &caller, project_id, launch_id).await?))
 }
 
 // ---------------------------------------------------------------------------
