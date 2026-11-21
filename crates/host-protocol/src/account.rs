@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::harness::manifest::LoginKind;
+use crate::harness::manifest::{LoginKind, ModelEntry};
 
 /// The `action` an account question is written as.
 pub const ACCOUNT_ACTION: &str = "account";
@@ -65,10 +65,16 @@ pub enum AccountQuestion {
         /// The same key for a retry of the same attempt.
         attempt_key: String,
     },
+    /// The models the account can run, as the harness lists them now.
+    Models,
+    /// Whether the harness can reach a cloud environment by this id or
+    /// label with the account. Refused as unsupported by a harness that
+    /// has no environments of its own.
+    CheckEnvironment { environment: String },
 }
 
 /// The host's answer, in the acknowledgement's `result`.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "answer", rename_all = "snake_case")]
 pub enum AccountAnswer {
     #[serde(rename_all = "camelCase")]
@@ -89,6 +95,13 @@ pub enum AccountAnswer {
     Done,
     ResetSpent {
         outcome: ResetSpent,
+    },
+    Models {
+        models: Vec<ModelEntry>,
+    },
+    /// Whether a cloud environment was found for the account.
+    Environment {
+        found: bool,
     },
 }
 

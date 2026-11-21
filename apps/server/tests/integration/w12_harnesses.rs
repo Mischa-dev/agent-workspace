@@ -11,7 +11,7 @@ use agent_workspace_server::{
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
     git_runtime::expected_repository_mirror_path,
-    harness_host::ServerHost,
+    hosts::builtin::harness_host::ServerHost,
     jobs::{self, WorkerOptions},
     launch,
     provider::{SupervisorRegistry, host::HarnessHost},

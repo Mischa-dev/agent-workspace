@@ -315,7 +315,7 @@ async fn dev_seed_here(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, App
     .await?;
 
     crate::execution_setup::lock_project_setup(&mut transaction, project_id).await?;
-    let codex_manifest = crate::provider::codex_manifest();
+    let codex_manifest = crate::hosts::builtin::default_manifest();
     // Upgrade tests seed schemas from before provider accounts (S6), where
     // the profile itself held the private home directory, and from before
     // connections recorded a binary version.

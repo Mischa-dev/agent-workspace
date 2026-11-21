@@ -7,7 +7,7 @@ use std::{convert::Infallible, time::Duration};
 use agent_workspace_host_protocol::{Ack, AckReply, CommandList};
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, StatusCode, header::ACCEPT},
     response::{
         IntoResponse, Response,
@@ -50,7 +50,13 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/host/runs/{run_id}/stream", post(stream_route))
         .route("/api/v1/host/commands", get(commands_route))
         .route("/api/v1/host/commands/{command_id}", get(command_route))
-        .route("/api/v1/host/commands/{command_id}/ack", post(ack_route))
+        // An action's answer may outgrow the usual request size (a model
+        // account's catalog); `commands::ack` holds each answer to its own
+        // limit.
+        .route(
+            "/api/v1/host/commands/{command_id}/ack",
+            post(ack_route).layer(DefaultBodyLimit::max(commands::MAX_ACK_BODY_BYTES)),
+        )
 }
 
 // ---------------------------------------------------------------- hosts

@@ -47,7 +47,7 @@ pub const CODEX_CLOUD_KIND: &str = "codex_cloud";
 
 /// How long one command may take. `exec` uploads the prompt and resolves
 /// the environment; `diff` downloads the result.
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ERROR_BYTES: usize = 8 * 1024;
 /// Status reads that may fail in a row (network blips, a sign-in refresh)

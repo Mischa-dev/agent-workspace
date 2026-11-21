@@ -32,8 +32,8 @@ use crate::{
     error::AppError,
     github,
     health::{self, HealthState, Process},
+    hosts::builtin::SupervisorRegistry,
     jobs,
-    provider::SupervisorRegistry,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
     router,
@@ -61,14 +61,11 @@ impl Server {
             realtime: RealtimeHub::with_contract(256, config.live_url.is_some()),
             supervisors,
         };
-        state
-            .supervisors
-            .set_host(Arc::new(crate::harness_host::ServerHost::new(
-                pool.clone(),
-                Arc::clone(&config),
-            )));
+        state.supervisors.set_host(Arc::new(
+            crate::hosts::builtin::harness_host::ServerHost::new(pool.clone(), Arc::clone(&config)),
+        ));
         // Registered harnesses load before runs of their kinds are recovered.
-        if let Err(error) = crate::harnesses::reload(&state).await {
+        if let Err(error) = crate::hosts::builtin::custom::reload(&state).await {
             tracing::warn!(
                 error_category = error.log_category(),
                 "registered harnesses not loaded"
@@ -183,7 +180,7 @@ impl Server {
         // Every instance serves harness manifests (launches, catalogues,
         // accounts), so each reloads them: one registered or switched off
         // through another instance shows here too.
-        crate::harnesses::spawn_reloader(state.clone());
+        crate::hosts::builtin::custom::spawn_reloader(state.clone());
         // Every instance knows its cluster, host or not, so a run started
         // through this one's API wakes the lease holder instead of being
         // admitted here without the lease.

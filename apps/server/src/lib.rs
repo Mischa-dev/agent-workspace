@@ -60,7 +60,6 @@ pub mod groups;
 /// configuration): shared with every host.
 pub use agent_workspace_host_protocol::harness;
 pub mod harness_catalog;
-pub mod harness_host;
 pub mod harnesses;
 pub mod health;
 pub mod history;
@@ -195,7 +194,7 @@ pub struct AppState {
     pub pool: PgPool,
     pub rate_limits: RateLimiters,
     pub realtime: RealtimeHub,
-    pub supervisors: provider::SupervisorRegistry,
+    pub supervisors: hosts::builtin::SupervisorRegistry,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -204,7 +203,7 @@ pub fn router(state: AppState) -> Router {
     state.rate_limits.attach(&state.pool);
     state
         .supervisors
-        .set_host(Arc::new(harness_host::ServerHost::new(
+        .set_host(Arc::new(hosts::builtin::harness_host::ServerHost::new(
             state.pool.clone(),
             Arc::clone(&state.config),
         )));
@@ -424,8 +423,8 @@ mod tests {
         let pool = PgPoolOptions::new()
             .connect_lazy(config.database_url.expose())
             .expect("lazy PostgreSQL pool");
-        let supervisors =
-            crate::provider::SupervisorRegistry::new(&config).expect("test supervisor registry");
+        let supervisors = crate::hosts::builtin::SupervisorRegistry::new(&config)
+            .expect("test supervisor registry");
         let application = router(AppState {
             config: Arc::new(config),
             pool,
@@ -492,8 +491,8 @@ mod tests {
         let pool = PgPoolOptions::new()
             .connect_lazy(config.database_url.expose())
             .expect("lazy PostgreSQL pool");
-        let supervisors =
-            crate::provider::SupervisorRegistry::new(&config).expect("test supervisor registry");
+        let supervisors = crate::hosts::builtin::SupervisorRegistry::new(&config)
+            .expect("test supervisor registry");
         let application = router(AppState {
             config: Arc::new(config),
             pool,

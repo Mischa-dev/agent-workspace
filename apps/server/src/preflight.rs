@@ -7,10 +7,7 @@
 //! checks free disk, and compares the build's migrations with the ones the
 //! database has run. Settings > Workspace > Server shows the same report. It never prints a configuration value or secret.
 
-use std::{path::Path, process::Stdio, time::Duration};
-
 use sqlx::PgPool;
-use tokio::process::Command;
 
 use crate::{config::AppConfig, secrets, storage_admission};
 
@@ -73,11 +70,8 @@ pub async fn run(config: &AppConfig, pool: &PgPool) -> anyhow::Result<Report> {
         ),
     }
 
-    for (name, binary) in [
-        ("codex", &config.codex_binary),
-        ("claude", &config.claude_binary),
-    ] {
-        match cli_version(binary).await {
+    for (name, version) in crate::hosts::builtin::preflight::harness_programs(config).await {
+        match version {
             Some(version) => report.push(Level::Ok, format!("{name} CLI: {version}")),
             None => report.push(
                 Level::Warn,
@@ -234,37 +228,6 @@ async fn migrations_table_exists(pool: &PgPool) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations') IS NOT NULL")
         .fetch_one(crate::db::scoped(pool))
         .await
-}
-
-/// The first line of `<binary> --version`, or None when it can't run.
-async fn cli_version(binary: &Path) -> Option<String> {
-    let output = tokio::time::timeout(
-        Duration::from_secs(20),
-        Command::new(binary)
-            .arg("--version")
-            .stdin(Stdio::null())
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .ok()?
-    .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let line = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .chars()
-        .take(120)
-        .collect::<String>();
-    Some(if line.is_empty() {
-        "installed".into()
-    } else {
-        line
-    })
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]

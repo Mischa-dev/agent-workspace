@@ -1,7 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use serde_json::{Value, json};
-use sqlx::{FromRow, Postgres, Transaction};
+use sqlx::{Postgres, Transaction};
 use tokio::time::sleep;
 use uuid::Uuid;
 
@@ -30,7 +30,11 @@ pub use adapter::{
     AccountHandle, AccountSummary, HarnessError, HarnessSession, LoginKind, LoginStart,
     ProfileHealth, RateLimitSummary, RateLimitWindow,
 };
+/// The most pages a harness reads when it lists models, one request each.
+pub use codex_app_server::MAX_MODEL_PAGES;
 pub use codex_app_server::{CODEX_KIND, codex_manifest};
+/// The longest an environment check's command may run.
+pub use codex_cloud::COMMAND_TIMEOUT as ENVIRONMENT_CHECK_TIMEOUT;
 pub use codex_cloud::{CODEX_CLOUD_KIND, codex_cloud_manifest};
 pub use registry::SupervisorRegistry;
 use run_config::RunConfig;
@@ -43,43 +47,7 @@ pub struct StartedProviderRun {
 
 pub(crate) use agent_workspace_builtin_host::runtime::recovery::HarnessRecovery as ProviderRecovery;
 
-/// The provider account behind an execution profile, and the adapter that
-/// runs it.
-#[derive(Clone, Debug, FromRow)]
-pub(crate) struct ProfileAccount {
-    pub(crate) account_id: Uuid,
-    pub(crate) adapter_kind: String,
-    pub(crate) home_path: String,
-    pub(crate) max_concurrent_runs: i16,
-}
-
-impl ProfileAccount {
-    pub(crate) fn handle(&self) -> AccountHandle {
-        AccountHandle {
-            id: self.account_id,
-            home: PathBuf::from(&self.home_path),
-            max_concurrent_runs: u16::try_from(self.max_concurrent_runs).unwrap_or(1),
-        }
-    }
-
-    pub(crate) async fn for_profile(
-        pool: &sqlx::PgPool,
-        execution_profile_id: Uuid,
-    ) -> Result<Self, AppError> {
-        Ok(sqlx::query_as::<_, Self>(
-            r#"
-            SELECT account.id AS account_id, account.adapter_kind, account.home_path,
-                   account.max_concurrent_runs
-            FROM execution_profiles profile
-            JOIN provider_accounts account ON account.id = profile.provider_account_id
-            WHERE profile.id = $1
-            "#,
-        )
-        .bind(execution_profile_id)
-        .fetch_one(crate::db::scoped(pool))
-        .await?)
-    }
-}
+pub(crate) use crate::hosts::builtin::accounts::ProfileAccount;
 
 async fn run_config(state: &AppState, run_id: Uuid) -> Result<RunConfig, AppError> {
     let config = sqlx::query_scalar::<_, Value>("SELECT config FROM agent_runs WHERE id = $1")

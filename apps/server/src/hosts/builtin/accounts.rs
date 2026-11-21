@@ -1,5 +1,6 @@
 //! A1.17 step 4: model accounts are the built-in host's. The server asks
-//! about one (its status, a sign-in, a sign-out, a banked reset) with an
+//! about one (its status, a sign-in, a sign-out, a banked reset, its models,
+//! whether a cloud environment is there) with an
 //! `action` command to the workspace's built-in host row
 //! ([`agent_workspace_host_protocol::account`]), and the host carries it out
 //! with the account's harness and answers in its acknowledgement.
@@ -25,11 +26,13 @@ use agent_workspace_host_protocol::{
     },
 };
 use serde_json::{Value, json};
+use sqlx::FromRow;
 use uuid::Uuid;
 
 use crate::{
     AppState,
     error::AppError,
+    harness::manifest::ModelEntry,
     hosts::commands::{self, NewCommand},
     provider::{AccountHandle, HarnessError, LoginStart, RateLimitSummary, adapter::ResetOutcome},
 };
@@ -44,6 +47,11 @@ const IN_FLIGHT_MARGIN: Duration = Duration::from_secs(15);
 /// account, then its usage windows), each within the harness's limit.
 const REQUESTS_PER_QUESTION: u32 = 2;
 const LOOK_EVERY: Duration = Duration::from_millis(200);
+/// The longest model description an answer carries.
+const MAX_DESCRIPTION_CHARS: usize = 1_000;
+/// The most a model list may take in an answer, under the mebibyte an
+/// action's answer may hold.
+const MAX_MODELS_BYTES: usize = 900 * 1024;
 
 /// What the host made of a question.
 #[derive(Debug)]
@@ -120,6 +128,7 @@ pub async fn ask_with_key(
         )
         .await?;
     }
+    let question = ask.question.clone();
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let host_id = super::assistant::builtin_host_id(&mut transaction, workspace_id)
         .await?
@@ -157,7 +166,7 @@ pub async fn ask_with_key(
         .await;
         carried.ok()
     } else {
-        wait_for_answer(state, command.id).await?
+        wait_for_answer(state, command.id, &question).await?
     };
     commands::forget_answered(&state.pool, command.id).await?;
     Ok(match ack {
@@ -172,9 +181,12 @@ pub async fn ask_with_key(
 /// one. One it has taken is never closed under it (a sign-in or a spent
 /// reset may already have happened): it is waited for as long as the
 /// harness may take, and its answer still lands if it comes later.
-async fn wait_for_answer(state: &AppState, command_id: Uuid) -> Result<Option<Ack>, AppError> {
-    let started = tokio::time::Instant::now();
-    let mut deadline = started + PICKUP_WAIT;
+async fn wait_for_answer(
+    state: &AppState,
+    command_id: Uuid,
+    question: &AccountQuestion,
+) -> Result<Option<Ack>, AppError> {
+    let mut deadline = tokio::time::Instant::now() + PICKUP_WAIT;
     let mut taken = false;
     loop {
         if let Some(ack) = commands::answer_of(&state.pool, command_id).await? {
@@ -185,12 +197,27 @@ async fn wait_for_answer(state: &AppState, command_id: Uuid) -> Result<Option<Ac
                 return commands::answer_of(&state.pool, command_id).await;
             }
             taken = true;
-            deadline = started
-                + state.config.codex_request_timeout * REQUESTS_PER_QUESTION
-                + IN_FLIGHT_MARGIN;
+            // The host took it during the pickup wait: its requests may
+            // have only just started, so their budget counts from now.
+            deadline = tokio::time::Instant::now() + answer_budget(state, question);
         }
         tokio::time::sleep(LOOK_EVERY).await;
     }
+}
+
+/// How long a question the host has taken may still take: its harness
+/// requests, each within the harness's limit (a model list reads up to a
+/// few pages), or an environment check's command, plus the margin.
+fn answer_budget(state: &AppState, question: &AccountQuestion) -> Duration {
+    let request = state.config.codex_request_timeout;
+    let work = match question {
+        AccountQuestion::Models => {
+            request * u32::try_from(crate::provider::MAX_MODEL_PAGES).unwrap_or(u32::MAX)
+        }
+        AccountQuestion::CheckEnvironment { .. } => crate::provider::ENVIRONMENT_CHECK_TIMEOUT,
+        _ => request * REQUESTS_PER_QUESTION,
+    };
+    work + IN_FLIGHT_MARGIN
 }
 
 fn read_ack(ack: Ack) -> Asked {
@@ -310,6 +337,20 @@ async fn carry_out(
             .shutdown_account(harness, account_id)
             .await;
     }
+    if let AccountQuestion::CheckEnvironment { environment } = &question {
+        // Only a cloud harness has environments of its own; it checks
+        // with its command line, not a control session.
+        if harness != crate::provider::CODEX_CLOUD_KIND {
+            return Err(HarnessError::Unsupported("environments").into());
+        }
+        let found = state
+            .supervisors
+            .codex_cloud()
+            .check_environment(&handle, environment)
+            .await
+            .is_ok();
+        return Ok(AccountAnswer::Environment { found });
+    }
     let mut session = state.supervisors.acquire_control(harness, handle).await?;
     let answer = match question {
         AccountQuestion::Status => {
@@ -379,8 +420,43 @@ async fn carry_out(
                 ResetOutcome::AlreadyRedeemed => ResetSpent::AlreadyRedeemed,
             },
         },
+        AccountQuestion::Models => {
+            // The whole list, so the catalog chooses what it keeps (it saves
+            // room for models people edited); only its size is bounded.
+            AccountAnswer::Models {
+                models: fit_models(session.list_models().await?),
+            }
+        }
+        AccountQuestion::CheckEnvironment { .. } => {
+            return Err(HarnessError::Unsupported("environments").into());
+        }
     };
     Ok(answer)
+}
+
+/// A model list that fits in an answer: descriptions are cut to a few
+/// lines; if the list is still too big they go, and only then do models
+/// at the end of the list.
+fn fit_models(mut models: Vec<ModelEntry>) -> Vec<ModelEntry> {
+    let size = |models: &[ModelEntry]| serde_json::to_vec(models).map_or(usize::MAX, |b| b.len());
+    for model in &mut models {
+        if let Some(description) = &mut model.description
+            && let Some((cut, _)) = description.char_indices().nth(MAX_DESCRIPTION_CHARS)
+        {
+            description.truncate(cut);
+        }
+    }
+    if size(&models) <= MAX_MODELS_BYTES {
+        return models;
+    }
+    for model in &mut models {
+        model.description = None;
+    }
+    while models.len() > 1 && size(&models) > MAX_MODELS_BYTES {
+        let keep = models.len() * MAX_MODELS_BYTES / size(&models).max(1);
+        models.truncate(keep.clamp(1, models.len() - 1));
+    }
+    models
 }
 
 fn login_started(start: LoginStart) -> LoginStarted {
@@ -443,4 +519,110 @@ pub async fn attach_secret(
         command.insert("apiKey".into(), Value::String(key.as_str().to_owned()));
     }
     Ok(())
+}
+
+/// The provider account behind an execution profile, and the adapter that
+/// runs it.
+#[derive(Clone, Debug, FromRow)]
+pub struct ProfileAccount {
+    pub account_id: Uuid,
+    pub adapter_kind: String,
+    pub home_path: String,
+    pub max_concurrent_runs: i16,
+}
+
+impl ProfileAccount {
+    /// A question for the built-in host about this account.
+    pub fn ask(&self, question: AccountQuestion) -> AccountAsk {
+        AccountAsk {
+            account_id: self.account_id,
+            harness: self.adapter_kind.clone(),
+            home: self.home_path.clone(),
+            max_concurrent_runs: u16::try_from(self.max_concurrent_runs).unwrap_or(1),
+            question,
+        }
+    }
+
+    pub(crate) fn handle(&self) -> AccountHandle {
+        AccountHandle {
+            id: self.account_id,
+            home: PathBuf::from(&self.home_path),
+            max_concurrent_runs: u16::try_from(self.max_concurrent_runs).unwrap_or(1),
+        }
+    }
+
+    pub(crate) async fn for_profile(
+        pool: &sqlx::PgPool,
+        execution_profile_id: Uuid,
+    ) -> Result<Self, AppError> {
+        Ok(sqlx::query_as::<_, Self>(
+            r#"
+            SELECT account.id AS account_id, account.adapter_kind, account.home_path,
+                   account.max_concurrent_runs
+            FROM execution_profiles profile
+            JOIN provider_accounts account ON account.id = profile.provider_account_id
+            WHERE profile.id = $1
+            "#,
+        )
+        .bind(execution_profile_id)
+        .fetch_one(crate::db::scoped(pool))
+        .await?)
+    }
+}
+
+/// How the harness process for an account is doing, when this process
+/// carries the built-in host; `None` from anywhere else, since a host
+/// elsewhere doesn't report its processes.
+pub async fn health(
+    state: &AppState,
+    harness: &str,
+    account_id: Uuid,
+) -> Option<crate::harness::report::ProfileHealth> {
+    if !host_is_here(state) {
+        return None;
+    }
+    // Here, an account with no process yet is plainly stopped.
+    Some(
+        state
+            .supervisors
+            .health(harness, account_id)
+            .await
+            .unwrap_or_default(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model(n: usize, description: usize) -> ModelEntry {
+        ModelEntry {
+            id: format!("model-{n}"),
+            display_name: format!("Model {n}"),
+            description: Some("d".repeat(description)),
+            ..ModelEntry::default()
+        }
+    }
+
+    #[test]
+    fn a_long_model_list_is_kept_whole_with_short_descriptions() {
+        // More models than the catalog keeps: all of them reach it, so it
+        // can keep room for the ones people edited.
+        let fitted = fit_models((0..500).map(|n| model(n, 1_500)).collect());
+        assert_eq!(fitted.len(), 500);
+        assert!(fitted.iter().all(|model| {
+            model.description.as_ref().map(|d| d.chars().count()) == Some(MAX_DESCRIPTION_CHARS)
+        }));
+    }
+
+    #[test]
+    fn a_list_too_big_even_so_loses_descriptions_then_its_tail() {
+        let fitted = fit_models((0..1_500).map(|n| model(n, 900)).collect());
+        assert_eq!(fitted.len(), 1_500);
+        assert!(fitted.iter().all(|model| model.description.is_none()));
+        let huge = fit_models((0..20_000).map(|n| model(n, 10)).collect());
+        assert!(huge.len() < 20_000 && !huge.is_empty());
+        assert!(serde_json::to_vec(&huge).expect("json").len() <= MAX_MODELS_BYTES);
+        assert_eq!(huge[0].id, "model-0");
+    }
 }

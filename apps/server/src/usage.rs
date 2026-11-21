@@ -38,11 +38,11 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
+    harness::report::UsageReport,
     harness_catalog::Harnesses,
     hosts::builtin::accounts::{self as host_accounts, Asked},
     idempotency::IdempotencyKey,
     jobs::{self, JobError, JobRegistry, NewJob},
-    provider::adapter::UsageReport,
 };
 use agent_workspace_host_protocol::account::{
     AccountAnswer, AccountAsk, AccountQuestion, ResetSpent,

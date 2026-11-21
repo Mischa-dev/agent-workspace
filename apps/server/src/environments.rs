@@ -23,15 +23,17 @@ use serde_json::{Value, json};
 use sqlx::{FromRow, PgExecutor};
 use uuid::Uuid;
 
+use agent_workspace_host_protocol::account::{AccountAnswer, AccountQuestion};
+
 use crate::harness_catalog::Harnesses;
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
     harness::manifest::RunLocation,
+    hosts::builtin::accounts::{Asked, ProfileAccount},
     memory,
     policy::{Action, ActorKind},
-    provider::ProfileAccount,
     settings,
 };
 
@@ -318,6 +320,13 @@ fn optional_text(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// Whether the redaction rewrites `id` (it reads like a credential, such
+/// as `Basic production`): it would reach the host changed, so a new or
+/// changed one isn't taken, and a check of one saved earlier says so.
+fn rewritten_on_the_way(id: Option<&str>) -> bool {
+    id.is_some_and(|id| crate::run_log::redact(id) != id)
+}
+
 async fn clean(
     state: &AppState,
     project_id: Uuid,
@@ -487,6 +496,9 @@ pub(crate) async fn create_in(
 ) -> Result<EnvironmentRow, AppError> {
     let make_default = request.make_default;
     let clean = clean(state, project_id, request).await?;
+    if rewritten_on_the_way(clean.provider_environment_id.as_deref()) {
+        return Err(AppError::Validation("providerEnvironmentId"));
+    }
     let id = Uuid::now_v7();
     let row = sqlx::query_as::<_, EnvironmentRow>(&format!(
         r#"
@@ -596,14 +608,20 @@ pub(crate) async fn update_in(
         .ok_or(AppError::Validation("expectedVersion"))?;
     let make_default = request.make_default;
     let clean = clean(state, project_id, request).await?;
-    let current = sqlx::query_scalar::<_, i64>(
-        "SELECT version FROM project_environments WHERE project_id = $1 AND id = $2 AND archived_at IS NULL FOR UPDATE",
+    let (current, current_target) = sqlx::query_as::<_, (i64, Option<String>)>(
+        "SELECT version, provider_environment_id FROM project_environments WHERE project_id = $1 AND id = $2 AND archived_at IS NULL FOR UPDATE",
     )
     .bind(project_id)
     .bind(environment_id)
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("environment"))?;
+    // One saved before this rule stays, so other edits still go through.
+    if clean.provider_environment_id != current_target
+        && rewritten_on_the_way(clean.provider_environment_id.as_deref())
+    {
+        return Err(AppError::Validation("providerEnvironmentId"));
+    }
     if current != expected_version {
         return Err(AppError::VersionConflict {
             resource: "environment",
@@ -889,34 +907,47 @@ pub(crate) async fn check_in(
                 manifest.display_name
             ),
         ),
+        (Some(manifest), Some(_))
+            if manifest.runs_on == RunLocation::Cloud
+                && rewritten_on_the_way(environment.provider_environment_id.as_deref()) =>
+        {
+            (
+                false,
+                "This environment's ID reads like a password, so it can't be sent as it is. Change it in the environment's settings.".to_owned(),
+            )
+        }
         (Some(manifest), Some(account)) if manifest.runs_on == RunLocation::Cloud => {
             let provider_environment = environment
                 .provider_environment_id
                 .clone()
                 .unwrap_or_default();
-            if environment.harness == crate::provider::CODEX_CLOUD_KIND {
-                match state
-                    .supervisors
-                    .codex_cloud()
-                    .check_environment(&account.handle(), &provider_environment)
-                    .await
-                {
-                    Ok(()) => (
-                        true,
-                        format!("Codex Cloud found {provider_environment} for your account."),
-                    ),
-                    Err(_) => (
-                        false,
-                        format!(
-                            "Codex Cloud couldn't find {provider_environment} for your account. Check the ID or label in Codex Cloud's environment settings."
-                        ),
-                    ),
-                }
-            } else {
-                (
+            let asked = crate::hosts::builtin::accounts::ask(
+                state,
+                organization_id,
+                account.ask(AccountQuestion::CheckEnvironment {
+                    environment: provider_environment.clone(),
+                }),
+            )
+            .await?;
+            let name = &manifest.display_name;
+            match asked {
+                Asked::Answered(AccountAnswer::Environment { found: true }) => (
                     true,
-                    format!("Your {} account is signed in.", manifest.display_name),
-                )
+                    format!("{name} found {provider_environment} for your account."),
+                ),
+                Asked::Answered(AccountAnswer::Environment { found: false }) => (
+                    false,
+                    format!(
+                        "{name} couldn't find {provider_environment} for your account. Check the ID or label in its environment settings."
+                    ),
+                ),
+                // A harness with no environments of its own: signing in is
+                // all it needs.
+                Asked::Unsupported => (true, format!("Your {name} account is signed in.")),
+                _ => (
+                    false,
+                    format!("{name} couldn't be asked about {provider_environment}; try again."),
+                ),
             }
         }
         (Some(manifest), Some(_)) => (

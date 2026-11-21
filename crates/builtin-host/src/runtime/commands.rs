@@ -3,7 +3,9 @@
 //! carries each out. What carrying out means for a start, a stop, an
 //! answer or an inspection is the host's own work, behind [`CommandHost`].
 
-use std::future::Future;
+use std::{collections::HashSet, future::Future, time::Duration};
+
+use futures_util::stream::{FuturesUnordered, StreamExt};
 
 use agent_workspace_host_protocol::{Ack, AckOutcome, Command, CommandKind, HostClient};
 use uuid::Uuid;
@@ -33,25 +35,75 @@ pub fn refused(reason: &str, message: &str) -> Ack {
     ack
 }
 
-/// Carry out every command waiting for this host. Returns how many.
+/// How many commands the host carries out at once. A slow one (an account
+/// question waits on its harness) doesn't hold up the rest.
+pub const IN_FLIGHT: usize = 8;
+/// How often the host looks for new commands while some are in flight.
+const LOOK_AGAIN: Duration = Duration::from_millis(250);
+/// The most commands one pass starts, so a pass ends under steady traffic
+/// and what runs between passes (admitting runs) gets its turn.
+pub const PER_PASS: usize = 4 * IN_FLIGHT;
+
+/// Carry out the commands waiting for this host, up to [`IN_FLIGHT`] at
+/// once and [`PER_PASS`] in all, until none is waiting or in flight.
+/// Commands for one run are carried out one at a time, in order. Returns
+/// how many.
 pub async fn pump<H: CommandHost>(host: &H, client: &HostClient) -> Result<usize, RuntimeError> {
     let mut handled = 0;
+    let mut running = FuturesUnordered::new();
+    let mut busy_runs = HashSet::new();
+    // A command whose acknowledgement is overdue is listed again as
+    // uncertain; one still in flight here isn't carried out twice.
+    let mut in_flight = HashSet::new();
+    let mut started = 0;
     loop {
-        let listed = client
-            .commands(0, 0)
-            .await
-            .map_err(|_| RuntimeError::Internal("read the built-in host's commands"))?;
-        if listed.commands.is_empty() {
+        if running.len() < IN_FLIGHT && started < PER_PASS {
+            match client.commands(0, 0).await {
+                Ok(listed) => {
+                    for summary in listed.commands {
+                        if running.len() >= IN_FLIGHT || started >= PER_PASS {
+                            break;
+                        }
+                        if in_flight.contains(&summary.command_id)
+                            || summary.run_id.is_some_and(|run| busy_runs.contains(&run))
+                        {
+                            continue;
+                        }
+                        let Ok(command) = client.command(summary.command_id).await else {
+                            // Closed since it was listed: nothing to do.
+                            continue;
+                        };
+                        if let Some(run) = command.run_id {
+                            busy_runs.insert(run);
+                        }
+                        in_flight.insert(command.command_id);
+                        started += 1;
+                        running.push(async move {
+                            let ack = carry_out(host, client, &command).await;
+                            let _ = client.ack(command.command_id, &ack).await;
+                            (command.command_id, command.run_id)
+                        });
+                    }
+                }
+                Err(_) if running.is_empty() => {
+                    return Err(RuntimeError::Internal("read the built-in host's commands"));
+                }
+                // The ones in flight still finish; the list is read again.
+                Err(_) => {}
+            }
+        }
+        if running.is_empty() {
             return Ok(handled);
         }
-        for summary in listed.commands {
-            let Ok(command) = client.command(summary.command_id).await else {
-                // Closed since it was listed: nothing to do.
-                continue;
-            };
-            let ack = carry_out(host, client, &command).await;
-            let _ = client.ack(command.command_id, &ack).await;
-            handled += 1;
+        tokio::select! {
+            Some((command_id, run)) = running.next() => {
+                handled += 1;
+                in_flight.remove(&command_id);
+                if let Some(run) = run {
+                    busy_runs.remove(&run);
+                }
+            }
+            () = tokio::time::sleep(LOOK_AGAIN) => {}
         }
     }
 }
@@ -116,4 +168,194 @@ pub async fn carry_out_one<H: CommandHost>(
         .await
         .map_err(|_| RuntimeError::Internal("acknowledge the built-in host's command"))?;
     Ok(ack)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use agent_workspace_host_protocol::{
+        AckReply, ClientError, CommandList, CommandSummary, HttpRequest, HttpResponse, Transport,
+        TransportFuture,
+    };
+    use serde_json::json;
+    use tokio::sync::Notify;
+
+    use super::*;
+
+    /// A server holding two `action` commands, the first carried out only
+    /// once the second has been.
+    #[derive(Debug, Default)]
+    struct TwoCommands {
+        fetched: Mutex<Vec<Uuid>>,
+        acked: Mutex<Vec<Uuid>>,
+    }
+
+    const SLOW: Uuid = Uuid::from_u128(1);
+    const QUICK: Uuid = Uuid::from_u128(2);
+
+    fn command(command_id: Uuid) -> Command {
+        Command {
+            command_id,
+            seq: i64::try_from(command_id.as_u128()).unwrap_or_default(),
+            kind: CommandKind::Action,
+            run_id: None,
+            request_id: None,
+            start_key: None,
+            issued_at: String::new(),
+            expires_at: String::new(),
+            workspace_credential: None,
+            detail: serde_json::Map::new(),
+        }
+    }
+
+    fn ok(value: &impl serde::Serialize) -> Result<HttpResponse, ClientError> {
+        Ok(HttpResponse {
+            status: 200,
+            body: serde_json::to_vec(value).expect("a body"),
+            headers: Vec::new(),
+        })
+    }
+
+    impl Transport for TwoCommands {
+        fn send(&self, request: HttpRequest) -> TransportFuture<'_> {
+            Box::pin(async move {
+                let id = |path: &str| {
+                    path.trim_start_matches("/api/v1/host/commands/")
+                        .trim_end_matches("/ack")
+                        .parse::<Uuid>()
+                        .expect("a command id")
+                };
+                if request.path.starts_with("/api/v1/host/commands?") {
+                    let fetched = self.fetched.lock().expect("fetched").clone();
+                    let commands = [SLOW, QUICK]
+                        .into_iter()
+                        .filter(|command_id| !fetched.contains(command_id))
+                        .map(|command_id| CommandSummary {
+                            command_id,
+                            seq: 0,
+                            kind: CommandKind::Action,
+                            run_id: None,
+                            offer: 1,
+                        })
+                        .collect();
+                    return ok(&CommandList { commands, next: 0 });
+                }
+                let command_id = id(&request.path);
+                if request.method == "POST" {
+                    self.acked.lock().expect("acked").push(command_id);
+                    return ok(&AckReply {
+                        command_id,
+                        state: "acked".to_owned(),
+                        run_state: None,
+                    });
+                }
+                self.fetched.lock().expect("fetched").push(command_id);
+                ok(&command(command_id))
+            })
+        }
+    }
+
+    struct Host {
+        quick_done: Notify,
+    }
+
+    impl CommandHost for Host {
+        async fn start(&self, _: &HostClient, _: &Command) -> Ack {
+            refused("unused", "unused")
+        }
+        async fn inspect(&self, _: &Command) -> Ack {
+            refused("unused", "unused")
+        }
+        async fn answered(&self, _: &Command) -> Ack {
+            refused("unused", "unused")
+        }
+        async fn cancelled(&self, _: &Command) -> Ack {
+            refused("unused", "unused")
+        }
+        async fn action(&self, command: &Command) -> Ack {
+            if command.command_id == SLOW {
+                self.quick_done.notified().await;
+            } else {
+                self.quick_done.notify_one();
+            }
+            let mut ack = Ack::new(AckOutcome::Accepted);
+            ack.result = Some(json!({}));
+            ack
+        }
+    }
+
+    #[tokio::test]
+    async fn a_slow_command_does_not_hold_up_the_next() {
+        let server = Arc::new(TwoCommands::default());
+        let client = HostClient::with_transport("http://localhost", "token", server.clone());
+        let host = Host {
+            quick_done: Notify::new(),
+        };
+        let handled = tokio::time::timeout(Duration::from_secs(10), pump(&host, &client))
+            .await
+            .expect("the slow command waits only for the quick one")
+            .expect("the pump");
+        assert_eq!(handled, 2);
+        assert_eq!(*server.acked.lock().expect("acked"), vec![QUICK, SLOW]);
+    }
+
+    /// A server that always has one more command waiting.
+    #[derive(Debug, Default)]
+    struct EndlessCommands {
+        listed: Mutex<u128>,
+    }
+
+    impl Transport for EndlessCommands {
+        fn send(&self, request: HttpRequest) -> TransportFuture<'_> {
+            Box::pin(async move {
+                if request.path.starts_with("/api/v1/host/commands?") {
+                    let mut listed = self.listed.lock().expect("listed");
+                    *listed += 1;
+                    let command_id = Uuid::from_u128(1000 + *listed);
+                    return ok(&CommandList {
+                        commands: vec![CommandSummary {
+                            command_id,
+                            seq: 0,
+                            kind: CommandKind::Action,
+                            run_id: None,
+                            offer: 1,
+                        }],
+                        next: 0,
+                    });
+                }
+                let command_id = request
+                    .path
+                    .trim_start_matches("/api/v1/host/commands/")
+                    .trim_end_matches("/ack")
+                    .parse::<Uuid>()
+                    .expect("a command id");
+                if request.method == "POST" {
+                    return ok(&AckReply {
+                        command_id,
+                        state: "acked".to_owned(),
+                        run_state: None,
+                    });
+                }
+                ok(&command(command_id))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_pass_ends_under_steady_traffic() {
+        let client = HostClient::with_transport(
+            "http://localhost",
+            "token",
+            Arc::new(EndlessCommands::default()),
+        );
+        let host = Host {
+            quick_done: Notify::new(),
+        };
+        let handled = tokio::time::timeout(Duration::from_secs(30), pump(&host, &client))
+            .await
+            .expect("the pass ends")
+            .expect("the pump");
+        assert_eq!(handled, PER_PASS);
+    }
 }

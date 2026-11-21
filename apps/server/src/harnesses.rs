@@ -6,10 +6,9 @@
 //! Launch dialog treat it like Codex. Only its own workspace sees it.
 //!
 //! Workspace admins register and change harnesses; every member can see
-//! them. The registry is reloaded from the database after each change and
-//! every half minute, so every server process agrees.
-
-use std::{sync::Arc, time::Duration};
+//! them. The built-in host runs them (`hosts::builtin::custom`), reloading
+//! them from the database after each change and every half minute, so
+//! every server process agrees.
 
 use axum::{
     Json, Router,
@@ -32,14 +31,10 @@ use crate::{
         manifest::{AdapterManifest, RunLocation},
         registered,
     },
-    provider::{
-        command_line::{self, CommandAdapter, CommandSpec, RunnerAdapter},
-        registry::CustomAdapter,
-    },
+    hosts::builtin::custom,
 };
 
 const MAX_HARNESSES: i64 = 50;
-const RELOAD_EVERY: Duration = Duration::from_secs(30);
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -95,80 +90,6 @@ pub fn manifest_of(
     }
 }
 
-fn adapter_for(state: &AppState, row: &HarnessRow) -> Result<CustomAdapter, String> {
-    let spec = |manifest| CommandSpec {
-        manifest,
-        command: command_of(row),
-        secret_names: row.secret_names.clone(),
-        allowed_dirs: state.config.command_harness_dirs.clone(),
-    };
-    let manifest = manifest_of(&row.kind, &row.name, &row.transport, &row.manifest)?;
-    let adapter: Arc<dyn crate::provider::adapter::HarnessAdapter> = match row.transport.as_str() {
-        "runner" => Arc::new(RunnerAdapter::new(manifest)),
-        "acp" => Arc::new(crate::provider::acp::AcpAdapter::new(
-            spec(manifest),
-            state.config.codex_host_concurrency_limit,
-            state.supervisors.host_cell(),
-        )),
-        _ => Arc::new(CommandAdapter::new(
-            spec(manifest),
-            state.config.codex_host_concurrency_limit,
-            state.supervisors.host_cell(),
-        )),
-    };
-    Ok(CustomAdapter {
-        organization_id: row.organization_id,
-        enabled: row.enabled,
-        runner_actor_id: row.runner_actor_id,
-        adapter,
-    })
-}
-
-/// Loads every registered harness into the registry.
-pub async fn reload(state: &AppState) -> Result<(), AppError> {
-    // Every workspace's registered harnesses.
-    crate::tenancy::system("harnesses.reload", Box::pin(reload_here(state))).await
-}
-
-async fn reload_here(state: &AppState) -> Result<(), AppError> {
-    let rows = sqlx::query_as::<_, HarnessRow>(&format!(
-        "SELECT {COLUMNS} FROM custom_harnesses ORDER BY created_at"
-    ))
-    .fetch_all(crate::db::scoped(&state.pool))
-    .await?;
-    let adapters = rows
-        .iter()
-        .filter_map(|row| match adapter_for(state, row) {
-            Ok(adapter) => Some(adapter),
-            Err(_) => {
-                tracing::warn!(harness_id = %row.id, "a registered harness's manifest no longer loads");
-                None
-            }
-        })
-        .collect();
-    state.supervisors.replace_custom(adapters);
-    Ok(())
-}
-
-/// Keeps the registry in step with the database for the life of the server.
-pub fn spawn_reloader(state: AppState) {
-    tokio::spawn(async move {
-        loop {
-            // Every workspace's registered harnesses.
-            if let Err(error) = crate::tenancy::system("harnesses.reload", reload(&state)).await {
-                tracing::warn!(
-                    error_category = error.log_category(),
-                    "registered harnesses not reloaded"
-                );
-            }
-            tokio::select! {
-                () = tokio::time::sleep(RELOAD_EVERY) => {}
-                () = state.supervisors.shutdown_requested() => return,
-            }
-        }
-    });
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HarnessView {
@@ -209,9 +130,7 @@ pub struct RunnerChoice {
 }
 
 async fn view(state: &AppState, row: HarnessRow) -> Result<HarnessView, AppError> {
-    let resolved = adapter_for(state, &row)
-        .ok()
-        .map(|custom| custom.adapter.manifest().clone());
+    let resolved = manifest_of(&row.kind, &row.name, &row.transport, &row.manifest).ok();
     let runner_name = match row.runner_actor_id {
         Some(actor_id) => {
             sqlx::query_scalar::<_, String>(
@@ -403,7 +322,7 @@ async fn check(state: &AppState, row: &HarnessRow) -> Result<(), AppError> {
     valid_secret_names(&row.secret_names)?;
     match row.transport.as_str() {
         "command" | "acp" => {
-            command_line::validate_command(&command_of(row), &state.config.command_harness_dirs)
+            custom::validate_command(&command_of(row), &state.config.command_harness_dirs)
                 .map_err(|_| AppError::Validation("command"))?;
         }
         "runner" => {
@@ -414,7 +333,8 @@ async fn check(state: &AppState, row: &HarnessRow) -> Result<(), AppError> {
         }
         _ => return Err(AppError::Validation("transport")),
     }
-    adapter_for(state, row).map_err(|_| AppError::Validation("manifest"))?;
+    manifest_of(&row.kind, &row.name, &row.transport, &row.manifest)
+        .map_err(|_| AppError::Validation("manifest"))?;
     Ok(())
 }
 
@@ -422,7 +342,7 @@ async fn check(state: &AppState, row: &HarnessRow) -> Result<(), AppError> {
 fn explain(state: &AppState, row: &HarnessRow) -> Option<String> {
     if runs_program(&row.transport)
         && let Err(reason) =
-            command_line::validate_command(&command_of(row), &state.config.command_harness_dirs)
+            custom::validate_command(&command_of(row), &state.config.command_harness_dirs)
     {
         return Some(reason);
     }
@@ -558,7 +478,7 @@ async fn create(
     )
     .await?;
     transaction.commit().await?;
-    reload(&state).await?;
+    custom::reload(&state).await?;
     let stored = load(&state, organization_id, row.id).await?;
     Ok((StatusCode::CREATED, Json(view(&state, stored).await?)).into_response())
 }
@@ -669,7 +589,7 @@ async fn update(
     )
     .await?;
     transaction.commit().await?;
-    reload(&state).await?;
+    custom::reload(&state).await?;
     let stored = load(&state, organization_id, harness_id).await?;
     Ok(Json(view(&state, stored).await?).into_response())
 }
@@ -715,7 +635,7 @@ async fn remove(
     )
     .await?;
     transaction.commit().await?;
-    reload(&state).await?;
+    custom::reload(&state).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

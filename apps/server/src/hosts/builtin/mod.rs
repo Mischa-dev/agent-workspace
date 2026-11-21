@@ -18,15 +18,31 @@ use uuid::Uuid;
 pub mod accounts;
 pub mod assistant;
 pub mod capacity;
+pub mod custom;
 pub mod driver;
+pub mod harness_host;
 pub mod http;
 pub mod install;
+pub mod preflight;
 pub mod program;
 pub mod recovery;
 pub mod report;
 pub mod requests;
 pub mod transport;
 pub mod worktrees;
+
+/// The registry of harness processes the embedded built-in host runs. The
+/// server's state carries it only so this process can be the host.
+pub use crate::provider::SupervisorRegistry;
+
+/// The harness a personal profile gets when its owner names neither a
+/// harness nor an account: the built-in host's first choice.
+pub const DEFAULT_HARNESS: &str = crate::provider::CODEX_KIND;
+
+/// The manifest of [`DEFAULT_HARNESS`], for seeding a demo project.
+pub fn default_manifest() -> crate::harness::manifest::AdapterManifest {
+    crate::provider::codex_manifest()
+}
 
 use crate::{
     AppState,
