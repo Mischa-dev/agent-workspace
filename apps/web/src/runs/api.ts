@@ -1,4 +1,3 @@
-import { requestJson } from '../api/client'
 import { callOp, type OpOutput } from '../api/ops'
 
 /**
@@ -239,7 +238,6 @@ export type UsageRow = UsageTotals & { key: string; label: string; runs: number 
 export type UsageReport = { groupBy: UsageGroup; since: string; rows: UsageRow[]; totals: UsageTotals; runs: number }
 
 export type RunListFilter = {
-  organizationId?: string
   projectId?: string
   status?: RunStatusFilter
   agentId?: string
@@ -248,36 +246,28 @@ export type RunListFilter = {
   mine?: boolean
 }
 
-export type UsageFilter = { organizationId?: string; projectId?: string; groupBy: UsageGroup; days?: number }
+export type UsageFilter = { projectId?: string; groupBy: UsageGroup; days?: number }
 
 export const RUN_PAGE_SIZE = 50
 
 /** Runs cross projects, so their keys sit outside any one project's. */
 export { runKeys } from './keys'
 
-function query(values: Record<string, string | number | boolean | undefined>) {
-  const params = new URLSearchParams()
-  for (const [key, value] of Object.entries(values)) {
-    if (value === undefined || value === '' || value === false) continue
-    params.set(key, String(value))
-  }
-  return params.size ? `?${params.toString()}` : ''
-}
-
-export function listRuns(filter: RunListFilter, cursor?: string) {
-  return requestJson<RunList>(
-    `/api/v1/runs${query({
-      organizationId: filter.organizationId,
-      projectId: filter.projectId,
+export function listRuns(filter: RunListFilter, cursor?: string, signal?: AbortSignal) {
+  return callOp(
+    'run_line_list',
+    {
+      spaceId: filter.projectId,
       status: filter.status === 'all' ? undefined : filter.status,
       agentId: filter.agentId,
       hostId: filter.hostId,
       harness: filter.harness,
-      mine: filter.mine,
+      mine: filter.mine || undefined,
       cursor,
       limit: RUN_PAGE_SIZE,
-    })}`,
-  )
+    },
+    { signal },
+  ).then((value) => value as unknown as RunList)
 }
 
 export function viewRun(runId: string, signal?: AbortSignal) {
@@ -298,14 +288,17 @@ export function markRunNotStarted(runId: string) {
   return callOp('run_mark_not_started', { runId })
 }
 
-export function getRun(runId: string) {
-  return requestJson<RunDetail>(`/api/v1/agent-runs/${encodeURIComponent(runId)}`)
+/** A run on this server's own host: its full record (steps, tests, files). */
+export function getRun(runId: string, signal?: AbortSignal) {
+  return callOp('run_step_list', { runId }, { signal }).then((value) => value.run as unknown as RunDetail)
 }
 
-export function getRunDiff(runId: string) {
-  return requestJson<RunDiff>(`/api/v1/agent-runs/${encodeURIComponent(runId)}/diff`)
+export function getRunDiff(runId: string, signal?: AbortSignal) {
+  return callOp('run_diff_get', { runId }, { signal }).then((value) => value as unknown as RunDiff)
 }
 
-export function getUsage(filter: UsageFilter) {
-  return requestJson<UsageReport>(`/api/v1/runs/usage${query(filter)}`)
+export function getUsage(filter: UsageFilter, signal?: AbortSignal) {
+  return callOp('run_usage_list', { projectId: filter.projectId, groupBy: filter.groupBy, days: filter.days }, { signal }).then(
+    (value) => value.usage as unknown as UsageReport,
+  )
 }

@@ -628,6 +628,8 @@ export type RunActivityInput = { at?: string | null; id: string; kind: string; p
 
 export type RunCauseInput = { conversationId?: string | null; kind: string; messageId?: string | null; ref?: string | null; taskId?: string | null }
 
+export type RunLine = { agentActorId: string; agentName: string; backend?: string | null; branch?: string | null; builtin: boolean; cachedInputTokens: number; causeKind: string; causeRef?: string | null; conversationId?: string | null; cost?: number | null; costConfidence?: string | null; createdAt: string; currency?: string | null; externalUrl?: string | null; failureReason?: string | null; finishedAt?: string | null; gapCount: number; harness?: string | null; harnessName?: string | null; hostId?: string | null; hostName?: string | null; id: string; inputTokens: number; lastReportAt?: string | null; liveness: string; model?: string | null; organizationId: string; outcomeSummary?: string | null; outputTokens: number; projectId?: string | null; projectKey?: string | null; projectName?: string | null; pullRequestNumber?: number | null; pullRequestState?: string | null; pullRequestUrl?: string | null; requestedByActorId?: string | null; requestedByName?: string | null; startedAt?: string | null; state: string; statusLine?: string | null; taskId?: string | null; taskKey?: string | null; taskTitle?: string | null; threadName?: string | null; title: string; updatedAt: string; waitingOnRequestId?: string | null; waitingOnTitle?: string | null }
+
 export type RunPullRequestLine = { checks?: string | null; number: number; review?: string | null; state: string; title: string; url: string }
 
 export type RunRecord = { activityCount: number; cancelRequestedAt?: string | null; clientRunId?: string | null; externalUrl?: string | null; finishedAt?: string | null; liveness: string; reportIntervalSeconds: number; runId: string; state: string; statusLine?: string | null; title: string; version: number }
@@ -2106,6 +2108,10 @@ export type RunDetailGetInput = { runId: string }
 
 export type RunDetailGetOutput = { activities: ActivityLine[]; agentActorId: string; agentName: string; backend?: string | null; branch?: string | null; builtin: boolean; cachedInputTokens: number; causeKind: string; causeRef?: string | null; changesTruncated: boolean; conversationId?: string | null; cost?: number | null; costConfidence?: string | null; createdAt: string; currency?: string | null; externalUrl?: string | null; failureReason?: string | null; files?: ChangedFile[] | null; finishedAt?: string | null; gapCount: number; harness?: string | null; harnessName?: string | null; hiddenActivities: number; hostId?: string | null; hostName?: string | null; id: string; inputTokens: number; lastReportAt?: string | null; liveness: string; model?: string | null; organizationId: string; outcomeSummary?: string | null; outputTokens: number; plan?: unknown; projectId?: string | null; projectKey?: string | null; projectName?: string | null; pullRequestNumber?: number | null; pullRequestState?: string | null; pullRequestUrl?: string | null; pullRequests: PullRequest[]; requestedByActorId?: string | null; requestedByName?: string | null; requests: RequestLine[]; results: unknown[]; startedAt?: string | null; state: string; statusLine?: string | null; taskId?: string | null; taskKey?: string | null; taskTitle?: string | null; threadName?: string | null; title: string; updatedAt: string; usageByModel: ModelUsageLine[]; waitingOnRequestId?: string | null; waitingOnTitle?: string | null }
 
+export type RunDiffGetInput = { runId: string }
+
+export type RunDiffGetOutput = { files?: ChangedFile[]; patch?: string; reportedAt?: string; state: string; truncated?: boolean }
+
 export type RunFailureHideInput = { runId: string }
 
 export type RunFailureHideOutput = { approvalsWaiting: number; branch?: string | null; createdAt: string; failure?: string | null; id: string; liveness: string; next: string; pollAfterSeconds?: number | null; projectId?: string | null; prompt: string; pullRequest?: RunPullRequestLine | null; queuePosition?: number | null; stage: string; startedBy: string; state: string; statusLine?: string | null; threadId?: string | null; updatedAt: string; url: string }
@@ -2113,6 +2119,10 @@ export type RunFailureHideOutput = { approvalsWaiting: number; branch?: string |
 export type RunGetInput = { runId: string }
 
 export type RunGetOutput = { approvalsWaiting: number; branch?: string | null; createdAt: string; failure?: string | null; id: string; liveness: string; next: string; pollAfterSeconds?: number | null; projectId?: string | null; prompt: string; pullRequest?: RunPullRequestLine | null; queuePosition?: number | null; stage: string; startedBy: string; state: string; statusLine?: string | null; threadId?: string | null; updatedAt: string; url: string }
+
+export type RunLineListInput = { agentId?: string | null; cursor?: string | null; harness?: string | null; hostId?: string | null; limit?: number | null; mine?: boolean | null; spaceId?: string | null; status?: string | null }
+
+export type RunLineListOutput = { nextCursor?: string | null; runs: RunLine[] }
 
 export type RunListInput = { limit?: number | null; mine?: boolean | null; projectId?: string | null; state?: string | null }
 
@@ -2963,8 +2973,10 @@ export type Operations = {
   run_changes_report: { input: RunChangesReportInput; output: RunChangesReportOutput }
   run_create: { input: RunCreateInput; output: RunCreateOutput }
   run_detail_get: { input: RunDetailGetInput; output: RunDetailGetOutput }
+  run_diff_get: { input: RunDiffGetInput; output: RunDiffGetOutput }
   run_failure_hide: { input: RunFailureHideInput; output: RunFailureHideOutput }
   run_get: { input: RunGetInput; output: RunGetOutput }
+  run_line_list: { input: RunLineListInput; output: RunLineListOutput }
   run_list: { input: RunListInput; output: RunListOutput }
   run_mark_not_started: { input: RunMarkNotStartedInput; output: RunMarkNotStartedOutput }
   run_publish: { input: RunPublishInput; output: RunPublishOutput }

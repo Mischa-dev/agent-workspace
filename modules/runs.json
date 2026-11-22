@@ -14,6 +14,7 @@
     "task_launch": "create",
     "run_get": "describe",
     "run_detail_get": "describe",
+    "run_diff_get": "describe",
     "run_create": "create",
     "run_update": "change",
     "run_activity_report": "create",
@@ -29,6 +30,7 @@
     "run_list": "query",
     "run_step_list": "query",
     "run_activity_list": "query",
+    "run_line_list": "query",
     "run_usage_list": "query",
     "agent_usage_list": "query",
     "run_request": "create",
@@ -50,7 +52,6 @@
     "usage_batch_launch": "create"
   },
   "routes": [
-    "/api/v1/runs*",
     "/api/v1/agent-runs/*",
     "/api/v1/usage*",
     "/api/v1/threads/{id}/agent-runs",

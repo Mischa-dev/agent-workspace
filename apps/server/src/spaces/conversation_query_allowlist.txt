@@ -39,6 +39,6 @@ projects.rs::validate_navigation_location | locks a conversation by id in a spac
 reactions.rs::set_reaction | locks a message by id; lock_message_conversation checks the conversation
 replies.rs::continue_conversation_in | the latest messages of a conversation an agent was asked to continue, after its check
 replies.rs::retry_request_in | the agent's own reply request, by id
-runs/views.rs::router | runs the reader can see, filtered by run access; the thread is joined for its name; K4.4 reviews it
+runs/views.rs::(top level) | the run detail's summary (SUMMARY_SELECT), filtered by run access; the thread is joined for its name; K4.4 reviews it
 scheduler.rs::claim_one | a scheduled message's conversation, locked by id by the scheduler
 workspace_templates.rs::starter_contents | whether a starter channel's name is taken in a space the template sets up

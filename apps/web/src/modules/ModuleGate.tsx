@@ -3,6 +3,7 @@ import { lazy, Suspense, type ReactNode } from 'react'
 import { useLocation, useParams } from 'react-router-dom'
 
 import { requestJson } from '../api/client'
+import { callOp } from '../api/ops'
 import { useWorkspaceId } from '../app/workspace'
 import { useProjectExperience, useWorkspaceExperience } from '../experience/layout'
 import { runKeys } from '../runs/keys'
@@ -34,12 +35,14 @@ export function ModuleGate({ children, waiting }: { children: ReactNode; waiting
   const { projectId, whiteboardId, runId, taskKey } = useParams()
   const homeId = useWorkspaceId()
   // The same request and cache entry as the board's or run's own page
-  // (whiteboardKeys.detail, runKeys.detail), so it's asked for once.
+  // (whiteboardKeys.detail, runKeys.view), so it's asked for once.
   const id = whiteboardId ?? runId ?? ''
   const target = useQuery({
-    queryKey: whiteboardId ? whiteboardKeys.detail(id) : runKeys.detail(id),
-    queryFn: () =>
-      requestJson<Owner & { whiteboard?: Owner }>(`/api/v1/${whiteboardId ? 'whiteboards' : 'agent-runs'}/${encodeURIComponent(id)}`),
+    queryKey: whiteboardId ? whiteboardKeys.detail(id) : runKeys.view(id),
+    queryFn: ({ signal }): Promise<Owner & { whiteboard?: Owner }> =>
+      whiteboardId
+        ? requestJson(`/api/v1/whiteboards/${encodeURIComponent(id)}`)
+        : callOp('run_detail_get', { runId: id }, { signal, retries: 0 }),
     enabled: !!id,
   })
   const shown = target.data?.whiteboard ?? target.data

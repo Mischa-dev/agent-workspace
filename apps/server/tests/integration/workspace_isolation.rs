@@ -99,8 +99,6 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/conversations/{id}/timeline",
     "/api/v1/conversations/{conversation_id}/agent-sessions",
     "/api/v1/custom-emoji/{id}",
-    "/api/v1/agent-runs/{run_id}",
-    "/api/v1/agent-runs/{run_id}/diff",
     "/api/v1/dev/bootstrap",
     "/api/v1/direct",
     "/api/v1/events",
@@ -217,8 +215,6 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}/revisions",
     "/api/v1/push/config",
     "/api/v1/push/subscriptions",
-    "/api/v1/runs",
-    "/api/v1/runs/usage",
     "/api/v1/scheduled-messages",
     "/api/v1/search",
     "/api/v1/settings/effective",
@@ -1357,51 +1353,6 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             "/agent-profiles",
         ),
         project_route("/api/v1/projects/{project_id}/agents", "/agents"),
-        case(
-            "/api/v1/runs",
-            vec![
-                "/api/v1/runs".to_owned(),
-                format!("/api/v1/runs?organizationId={}", a.organization),
-                format!("/api/v1/runs?projectId={}&status=needs_you", a.project),
-            ],
-            vec![],
-            vec![
-                format!("/api/v1/runs?organizationId={}", b.organization),
-                format!("/api/v1/runs?projectId={}", b.project),
-            ],
-        ),
-        case(
-            "/api/v1/runs/usage",
-            vec![
-                "/api/v1/runs/usage".to_owned(),
-                "/api/v1/runs/usage?groupBy=model".to_owned(),
-                "/api/v1/runs/usage?groupBy=account".to_owned(),
-                format!(
-                    "/api/v1/runs/usage?groupBy=project&organizationId={}",
-                    a.organization
-                ),
-            ],
-            vec![],
-            vec![
-                format!(
-                    "/api/v1/runs/usage?organizationId={}&groupBy=model",
-                    b.organization
-                ),
-                format!("/api/v1/runs/usage?projectId={}", b.project),
-            ],
-        ),
-        case(
-            "/api/v1/agent-runs/{run_id}",
-            vec![format!("/api/v1/agent-runs/{}", a.run)],
-            vec![format!("/api/v1/agent-runs/{}", b.run)],
-            vec![],
-        ),
-        case(
-            "/api/v1/agent-runs/{run_id}/diff",
-            vec![format!("/api/v1/agent-runs/{}/diff", a.run)],
-            vec![format!("/api/v1/agent-runs/{}/diff", b.run)],
-            vec![],
-        ),
         project_route(
             "/api/v1/projects/{project_id}/environments",
             "/environments",
@@ -2216,6 +2167,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "role_list",
     "run_activity_list",
     "run_detail_get",
+    "run_diff_get",
+    "run_line_list",
     "run_get",
     "run_list",
     "run_step_list",
@@ -3274,6 +3227,22 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "run_detail_get",
             vec![json!({"runId": a.run.to_string()})],
             vec![json!({"runId": b.run.to_string()})],
+            vec![],
+        ),
+        case(
+            "run_diff_get",
+            vec![json!({"runId": a.run.to_string()})],
+            vec![json!({"runId": b.run.to_string()})],
+            vec![],
+        ),
+        // The Runs page: every run in the workspace, or one space's.
+        case(
+            "run_line_list",
+            vec![
+                json!({}),
+                json!({"spaceId": a.project.to_string(), "status": "needs_you"}),
+            ],
+            vec![json!({"spaceId": b.project.to_string()})],
             vec![],
         ),
         case(

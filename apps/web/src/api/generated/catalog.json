@@ -4794,6 +4794,20 @@
     "title": "View a run"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "runs",
+    "name": "run_diff_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Read a run's diff"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -4822,6 +4836,20 @@
     "preview": false,
     "proposable": false,
     "title": "Get run"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "runs",
+    "name": "run_line_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List all runs"
   },
   {
     "automation": false,

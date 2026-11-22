@@ -17,9 +17,9 @@ const COLUMN: Record<UsageGroup, string> = { day: 'Day', project: 'Project', acc
 const DAYS = 30
 
 /** Tokens and cost of the runs you can see over the last month, totalled the way you pick. */
-export function RunUsage({ organizationId, projectId }: { organizationId?: string; projectId?: string }) {
+export function RunUsage({ projectId }: { projectId?: string }) {
   const [groupBy, setGroupBy] = useState<UsageGroup>('day')
-  const filter = { organizationId, projectId, groupBy, days: DAYS }
+  const filter = { projectId, groupBy, days: DAYS }
   const usage = useQuery({ queryKey: runKeys.usage(filter), queryFn: () => getUsage(filter) })
 
   return (
