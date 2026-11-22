@@ -155,24 +155,33 @@ impl RecoveryHost for Recovery<'_> {
     }
 
     async fn owned_worktree(&self, run_id: Uuid) -> Result<Option<OwnedWorktree>, AppError> {
-        let found = sqlx::query_as::<_, (Uuid, String, String, String)>(
+        let found = sqlx::query_as::<_, (Uuid, String, Uuid, String)>(
             r#"
-            SELECT gw.id, gw.path, repository.mirror_path, rw.branch_name
+            SELECT gw.id, gw.path, ar.repository_id, rw.branch_name
             FROM agent_runs ar
             JOIN repository_workspaces rw ON rw.id = ar.repository_workspace_id
             JOIN git_worktrees gw ON gw.repository_workspace_id = rw.id
-            JOIN repositories repository ON repository.id = ar.repository_id
             WHERE ar.id = $1
+              AND ar.repository_id IS NOT NULL
               AND gw.state IN ('creating', 'ready', 'dirty', 'missing', 'failed')
             "#,
         )
         .bind(run_id)
         .fetch_optional(crate::db::scoped(&self.state.pool))
         .await?;
-        Ok(found.map(|(id, path, mirror, branch)| OwnedWorktree {
+        let Some((id, path, repository_id, branch)) = found else {
+            return Ok(None);
+        };
+        // The mirror is wherever this host keeps it, not where the server
+        // that registered the repository would.
+        let mirror = crate::hosts::builtin::git::repository_mirror_path_here(
+            &self.state.config.data_root,
+            repository_id,
+        )?;
+        Ok(Some(OwnedWorktree {
             id,
             path: PathBuf::from(path),
-            mirror: PathBuf::from(mirror),
+            mirror,
             branch,
         }))
     }

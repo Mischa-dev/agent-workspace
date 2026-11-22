@@ -834,6 +834,9 @@ async fn delete_in_scope(
         for store in crate::files::workspace_store::all_of(state, workspace).await? {
             store.delete_workspace(workspace).await?;
         }
+        // So are its repositories on the built-in host's disk: the host is
+        // asked while its row (and the workspace's) still exists.
+        remove_repositories(state, workspace).await?;
     }
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let connection = &mut *transaction;
@@ -861,15 +864,14 @@ async fn delete_in_scope(
             .fetch_optional(&mut *connection)
             .await?;
             drop(transaction);
-            if let Some(repositories) = repositories {
-                remove_bytes(state, workspace, &repositories).await?;
+            if repositories.is_some() {
+                remove_bytes(state, workspace).await?;
             }
             return Ok(None);
         }
     }
-    // Repository mirrors and worktrees live on disk by repository id, which
-    // the rows below are the only record of: the ids are kept with the
-    // deleted workspace, and the bytes go once the deletion commits.
+    // The repository ids are kept with the deleted workspace for the
+    // record; their bytes went from the built-in host above.
     let repositories = sqlx::query_scalar::<_, Uuid>(
         "SELECT repository.id FROM repositories repository \
          JOIN projects project ON project.id = repository.project_id \
@@ -916,11 +918,10 @@ async fn delete_in_scope(
     .execute(&mut *connection)
     .await?;
     transaction.commit().await?;
-    // The bytes go only once the rows are gone for good, so a kept
-    // workspace never loses a file or a commit. If this fails, the job's
-    // next attempt finds the workspace in `deleted_workspaces` and tries
-    // again.
-    remove_bytes(state, workspace, &repositories).await?;
+    // The server's own files go only once the rows are gone for good, so a
+    // kept workspace never loses a file. If this fails, the job's next
+    // attempt finds the workspace in `deleted_workspaces` and tries again.
+    remove_bytes(state, workspace).await?;
     tracing::info!(
         target: "agent_workspace::lifecycle",
         workspace_id = %workspace,
@@ -964,19 +965,34 @@ async fn start_deletion(
     Ok(due)
 }
 
-/// Remove what a deleted workspace kept on the server's own storage: its
-/// repositories' mirrors and worktrees, and its file folder in each of the
-/// server's stores. (Its own buckets were emptied before its rows went.)
-/// Missing pieces are fine, so a retry finishes a removal that failed part
-/// way.
-async fn remove_bytes(
-    state: &AppState,
-    workspace: Uuid,
-    repositories: &[Uuid],
-) -> Result<(), AppError> {
+/// Have the workspace's built-in host remove its repositories' mirrors and
+/// worktrees, before its rows go. Missing pieces are fine, so a retry
+/// finishes a removal that failed part way; a deletion that is due can't be
+/// cancelled, so a kept workspace never loses a commit.
+async fn remove_repositories(state: &AppState, workspace: Uuid) -> Result<(), AppError> {
+    let repositories = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT repository.id FROM repositories repository \
+             JOIN projects project ON project.id = repository.project_id \
+             WHERE project.organization_id = $1",
+        )
+        .bind(workspace)
+        .fetch_all(&mut *connection)
+        .await
+    })
+    .await?;
     for repository in repositories {
-        crate::hosts::builtin::repositories::remove(&state.config.data_root, *repository).await?;
+        crate::hosts::builtin::repositories::remove(state, workspace, repository).await?;
     }
+    Ok(())
+}
+
+/// Remove what a deleted workspace kept on the server's own storage: its
+/// file folder in each of the server's stores. (Its own buckets were
+/// emptied, and its repositories removed from the built-in host, before its
+/// rows went.) Missing pieces are fine, so a retry finishes a removal that
+/// failed part way.
+async fn remove_bytes(state: &AppState, workspace: Uuid) -> Result<(), AppError> {
     for store in crate::files::store::FileStore::all(&state.config) {
         store.delete_workspace(workspace).await?;
     }

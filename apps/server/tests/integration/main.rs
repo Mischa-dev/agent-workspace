@@ -10,6 +10,7 @@ mod a1_harness_catalog;
 mod a1_host_program;
 mod a1_host_protocol;
 mod a1_launch_paths;
+mod a1_repository_questions;
 mod a1_requests;
 mod a1_requests_by_role;
 mod a1_run_reads;

@@ -83,7 +83,7 @@ impl Asked {
 /// embedded and holds the host's lease (a standby leaves the question to
 /// the holder, so a sign-in and its cancel reach the same harness). A
 /// state without a cluster (a test's) is its own host.
-fn host_is_here(state: &AppState) -> bool {
+pub(super) fn host_is_here(state: &AppState) -> bool {
     state.config.roles.work
         && state.config.builtin_host
         && state.config.builtin_host_remote.is_none()
@@ -186,6 +186,16 @@ async fn wait_for_answer(
     command_id: Uuid,
     question: &AccountQuestion,
 ) -> Result<Option<Ack>, AppError> {
+    wait_for(state, command_id, answer_budget(state, question)).await
+}
+
+/// [`wait_for_answer`] for any question to the built-in host: one the host
+/// has taken may take `budget` from then.
+pub(super) async fn wait_for(
+    state: &AppState,
+    command_id: Uuid,
+    budget: Duration,
+) -> Result<Option<Ack>, AppError> {
     let mut deadline = tokio::time::Instant::now() + PICKUP_WAIT;
     let mut taken = false;
     loop {
@@ -199,7 +209,7 @@ async fn wait_for_answer(
             taken = true;
             // The host took it during the pickup wait: its requests may
             // have only just started, so their budget counts from now.
-            deadline = tokio::time::Instant::now() + answer_budget(state, question);
+            deadline = tokio::time::Instant::now() + budget;
         }
         tokio::time::sleep(LOOK_EVERY).await;
     }

@@ -134,12 +134,25 @@ pub(crate) async fn run_publish(
             Action::RepositoryPublish,
         )
         .await?;
+        transaction.commit().await?;
+        // The host looks at the branch first, with no transaction open while
+        // it does; the queueing then checks again under its locks.
+        let inspected =
+            github::inspect_for_publish(state, principal.actor_id, project_id, run_id).await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        github::require_project_access_as(
+            &mut transaction,
+            principal.actor_id,
+            project_id,
+            Action::RepositoryPublish,
+        )
+        .await?;
         let queued = github::queue_publish_in(
-            state,
             &mut transaction,
             principal.actor_id,
             project_id,
             run_id,
+            inspected,
         )
         .await?;
         if queued.new {

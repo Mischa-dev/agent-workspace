@@ -21,7 +21,6 @@ struct WorktreeCandidate {
     worktree_id: Uuid,
     workspace_id: Uuid,
     repository_id: Uuid,
-    mirror_path: String,
     worktree_path: String,
     branch_name: String,
     base_commit: String,
@@ -91,11 +90,12 @@ async fn clean_worktrees_here(
     let mut eligible = 0_u64;
     let mut removed = 0_u64;
     for candidate in candidates {
-        if !candidate_paths_match(data_root, &candidate) {
+        // The mirror is wherever this host keeps it; the worktree must be
+        // the one the server recorded.
+        let Some(mirror) = candidate_mirror(data_root, &candidate) else {
             continue;
-        }
+        };
         if !apply {
-            let mirror = PathBuf::from(&candidate.mirror_path);
             let worktree = PathBuf::from(&candidate.worktree_path);
             let inspection = crate::hosts::builtin::git::inspect_worktree(&mirror, &worktree);
             if inspection.is_ok_and(|value| !value.dirty && value.branch == candidate.branch_name)
@@ -126,7 +126,6 @@ async fn clean_worktrees_here(
             transaction.rollback().await?;
             continue;
         }
-        let mirror = PathBuf::from(&candidate.mirror_path);
         let worktree = PathBuf::from(&candidate.worktree_path);
         let branch_name = candidate.branch_name.clone();
         let published_commit = candidate.published_commit.clone();
@@ -204,7 +203,7 @@ fn candidate_query() -> String {
     format!(
         r#"
     SELECT worktree.id AS worktree_id, workspace.id AS workspace_id,
-           repository.id AS repository_id, repository.mirror_path,
+           repository.id AS repository_id,
            worktree.path AS worktree_path, workspace.branch_name, workspace.base_commit,
            workspace.published_commit
     FROM git_worktrees worktree
@@ -227,22 +226,20 @@ fn candidate_query() -> String {
     )
 }
 
-fn candidate_paths_match(data_root: &Path, candidate: &WorktreeCandidate) -> bool {
-    let Ok(expected_mirror) = crate::hosts::builtin::git::expected_repository_mirror_path(
-        data_root,
-        candidate.repository_id,
-    ) else {
-        return false;
-    };
-    let Ok(expected_worktree) = crate::hosts::builtin::git::managed_worktree_path(
+/// The mirror this host keeps for a candidate's repository, when the
+/// candidate's worktree is where this host keeps it. The stored mirror path
+/// is the registering server's and isn't read.
+fn candidate_mirror(data_root: &Path, candidate: &WorktreeCandidate) -> Option<PathBuf> {
+    let mirror =
+        crate::hosts::builtin::git::repository_mirror_path_here(data_root, candidate.repository_id)
+            .ok()?;
+    let expected_worktree = crate::hosts::builtin::git::managed_worktree_path(
         data_root,
         candidate.repository_id,
         candidate.workspace_id,
-    ) else {
-        return false;
-    };
-    Path::new(&candidate.mirror_path) == expected_mirror
-        && Path::new(&candidate.worktree_path) == expected_worktree
+    )
+    .ok()?;
+    (Path::new(&candidate.worktree_path) == expected_worktree).then_some(mirror)
 }
 
 /// Removes retained worktrees past their retention, daily.

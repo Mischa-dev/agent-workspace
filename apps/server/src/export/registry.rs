@@ -2072,6 +2072,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "an outside agent's task for a run in flight; a run that moves ends rather than resumes",
             ),
             (
+                "host_command_secrets",
+                "a token handed to a host with one command, taken when fetched; never exported",
+            ),
+            (
                 "host_commands",
                 "requests to a host for runs in flight; a run that moves ends rather than resumes",
             ),

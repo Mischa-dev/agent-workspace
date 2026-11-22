@@ -367,7 +367,6 @@ struct PublishCandidate {
     repository_id: Uuid,
     repository_workspace_id: Uuid,
     run_state: String,
-    mirror_path: String,
     worktree_path: String,
     branch_name: String,
     base_commit: String,
@@ -376,6 +375,7 @@ struct PublishCandidate {
 #[derive(Debug, FromRow)]
 struct ClaimedPublishJob {
     job_id: Uuid,
+    workspace_id: Uuid,
     project_id: Uuid,
     repository_id: Uuid,
     repository_workspace_id: Uuid,
@@ -391,7 +391,6 @@ struct ClaimedPublishJob {
     owner: String,
     repository_name: String,
     clone_url: String,
-    mirror_path: String,
     worktree_path: String,
     branch_name: String,
     base_commit: String,
@@ -1503,29 +1502,80 @@ pub(crate) struct Queued<T> {
     pub new: bool,
 }
 
-/// Queues pushing a finished run's branch to GitHub, for a caller allowed to
-/// publish in the project who can see the run's thread. Not audited here;
-/// the caller commits and then calls `kick_jobs`.
-pub(crate) async fn queue_publish_in(
+/// The built-in host's look at a finished run's branch, taken before the
+/// publication is queued: a question to the host waits for its answer, so
+/// it is asked outside any transaction (rule 14), and the queueing checks
+/// the run's workspace is still the one looked at.
+pub(crate) struct Inspected {
+    repository_workspace_id: Uuid,
+    worktree_path: String,
+    branch_name: String,
+    base_commit: String,
+    head_commit: String,
+}
+
+/// Ask the built-in host whether a finished run's branch can be published,
+/// and at which commit, for a caller who can see the run's thread.
+pub(crate) async fn inspect_for_publish(
     state: &AppState,
-    transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
     project_id: Uuid,
     run_id: Uuid,
-) -> Result<Queued<PublishJobView>, AppError> {
-    // The worktree is inspected here, and it is on the built-in host's
-    // disk: another instance can't see it (K5.3).
-    if state.supervisors.host_lease_lost().is_cancelled() {
-        return Err(AppError::Conflict(
-            "repository_workspace",
-            "this server doesn't hold the run's worktree; try again",
-        ));
+) -> Result<Inspected, AppError> {
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let candidate = publish_candidate(&mut transaction, actor_id, project_id, run_id).await?;
+    if !matches!(
+        candidate.run_state.as_str(),
+        "completed" | "failed" | "canceled" | "interrupted"
+    ) {
+        return Err(AppError::Conflict("agent_run", "not_terminal"));
     }
-    let candidate = sqlx::query_as::<_, PublishCandidate>(
+    let workspace_id =
+        crate::hosts::builtin::repositories::workspace_of_space(&mut transaction, project_id)
+            .await?;
+    transaction.commit().await?;
+    let head_commit = match (Publication {
+        workspace_id,
+        repository_id: candidate.repository_id,
+        repository_workspace_id: candidate.repository_workspace_id,
+        worktree_path: &candidate.worktree_path,
+        branch: &candidate.branch_name,
+        base_commit: &candidate.base_commit,
+    })
+    .check(state)
+    .await?
+    {
+        PublicationCheck::At(commit) => commit,
+        PublicationCheck::Refused(error) => return Err(error),
+        PublicationCheck::Moved => {
+            return Err(AppError::Conflict(
+                "repository_workspace",
+                "stored runtime path mismatch",
+            ));
+        }
+    };
+    Ok(Inspected {
+        repository_workspace_id: candidate.repository_workspace_id,
+        worktree_path: candidate.worktree_path,
+        branch_name: candidate.branch_name,
+        base_commit: candidate.base_commit,
+        head_commit,
+    })
+}
+
+/// A finished run's workspace and worktree, locked for sharing, when the
+/// caller can see the run's thread.
+async fn publish_candidate(
+    connection: &mut sqlx::PgConnection,
+    actor_id: Uuid,
+    project_id: Uuid,
+    run_id: Uuid,
+) -> Result<PublishCandidate, AppError> {
+    sqlx::query_as::<_, PublishCandidate>(
         r#"
         SELECT run.id AS agent_run_id, run.conversation_id,
                run.repository_id, workspace.id AS repository_workspace_id,
-               run.state AS run_state, repository.mirror_path,
+               run.state AS run_state,
                worktree.path AS worktree_path, workspace.branch_name,
                workspace.base_commit
         FROM agent_runs run
@@ -1553,9 +1603,33 @@ pub(crate) async fn queue_publish_in(
     .bind(project_id)
     .bind(run_id)
     .bind(actor_id)
-    .fetch_optional(&mut **transaction)
+    .fetch_optional(&mut *connection)
     .await?
-    .ok_or(AppError::NotFound("agent_run"))?;
+    .ok_or(AppError::NotFound("agent_run"))
+}
+
+/// Queues pushing a finished run's branch to GitHub, for a caller allowed to
+/// publish in the project who can see the run's thread, at the commit the
+/// host found ([`inspect_for_publish`]). Not audited here; the caller
+/// commits and then calls `kick_jobs`.
+pub(crate) async fn queue_publish_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    project_id: Uuid,
+    run_id: Uuid,
+    inspected: Inspected,
+) -> Result<Queued<PublishJobView>, AppError> {
+    let candidate = publish_candidate(transaction, actor_id, project_id, run_id).await?;
+    if candidate.repository_workspace_id != inspected.repository_workspace_id
+        || candidate.worktree_path != inspected.worktree_path
+        || candidate.branch_name != inspected.branch_name
+        || candidate.base_commit != inspected.base_commit
+    {
+        return Err(AppError::Conflict(
+            "repository_workspace",
+            "the run's workspace changed while it was checked; try again",
+        ));
+    }
     if !matches!(
         candidate.run_state.as_str(),
         "completed" | "failed" | "canceled" | "interrupted"
@@ -1604,26 +1678,7 @@ pub(crate) async fn queue_publish_in(
         "github_installation",
         "repository_unavailable",
     ))?;
-    let head_commit = match (Publication {
-        repository_id: candidate.repository_id,
-        repository_workspace_id: candidate.repository_workspace_id,
-        mirror_path: &candidate.mirror_path,
-        worktree_path: &candidate.worktree_path,
-        branch: &candidate.branch_name,
-        base_commit: &candidate.base_commit,
-    })
-    .check(state)
-    .await?
-    {
-        PublicationCheck::At(commit) => commit,
-        PublicationCheck::Refused(error) => return Err(error),
-        PublicationCheck::Moved => {
-            return Err(AppError::Conflict(
-                "repository_workspace",
-                "stored runtime path mismatch",
-            ));
-        }
-    };
+    let head_commit = inspected.head_commit;
     sqlx::query(
         "UPDATE git_worktrees SET state = 'ready', dirty = false, last_inspected_at = now(), updated_at = now() WHERE repository_workspace_id = $1",
     )
@@ -1976,14 +2031,9 @@ async fn drain_jobs_here(state: &AppState) -> Result<(), AppError> {
         // Each job keeps renewing its lease while it works: a publish alone
         // can take minutes (a token, two ref reads and a push), far past one
         // lease, and an expired lease lets another worker run it again.
-        // A publication reads the run's worktree, which is on the built-in
-        // host's disk: only the instance holding it takes one (K5.3).
-        let host_here = !state.supervisors.host_lease_lost().is_cancelled();
-        if let Some(job) = if host_here {
-            claim_publish_job(state).await?
-        } else {
-            None
-        } {
+        // A publication's git work is the built-in host's, asked of it, so
+        // any instance may take one.
+        if let Some(job) = claim_publish_job(state).await? {
             let job_id = job.job_id;
             match while_leased(
                 state,
@@ -2182,14 +2232,14 @@ async fn claim_publish_job(state: &AppState) -> Result<Option<ClaimedPublishJob>
     let claim_id = Uuid::now_v7();
     let job = sqlx::query_as::<_, ClaimedPublishJob>(
         r#"
-        SELECT job.id AS job_id, job.project_id,
+        SELECT job.id AS job_id, project.organization_id AS workspace_id, job.project_id,
                job.repository_workspace_id, job.agent_run_id,
                job.requesting_actor_id, job.intended_commit,
                job.attempts + 1 AS attempts, job.max_attempts,
                $1::uuid AS claim_id, run.conversation_id,
                installation.installation_id, repository.github_repository_id,
                repository.owner, repository.name AS repository_name,
-               repository.clone_url, repository.mirror_path,
+               repository.clone_url,
                worktree.path AS worktree_path, workspace.branch_name,
                workspace.base_commit,
                COALESCE(installation.enabled
@@ -2207,6 +2257,7 @@ async fn claim_publish_job(state: &AppState) -> Result<Option<ClaimedPublishJob>
                run.state IN ('completed', 'failed', 'canceled', 'interrupted')
                    AS run_terminal
         FROM github_jobs job
+        JOIN projects project ON project.id = job.project_id
         JOIN github_installations installation
           ON installation.project_id = job.project_id
          AND installation.id = job.github_installation_id
@@ -2588,9 +2639,9 @@ async fn process_publish_job(state: &AppState, job: &ClaimedPublishJob) -> Resul
         return fail_publish_job(state, job, "repository_identity_invalid", true).await;
     }
     let publication = Publication {
+        workspace_id: job.workspace_id,
         repository_id: job.repository_id,
         repository_workspace_id: job.repository_workspace_id,
-        mirror_path: &job.mirror_path,
         worktree_path: &job.worktree_path,
         branch: &job.branch_name,
         base_commit: &job.base_commit,

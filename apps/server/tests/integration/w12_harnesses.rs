@@ -411,6 +411,124 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         usage.1
     );
 
+    // Someone in two workspaces sees each one's usage only in it.
+    let member_actor =
+        sqlx::query_scalar::<_, Uuid>("SELECT actor_id FROM users WHERE login_name = $1")
+            .bind(MEMBER_LOGIN)
+            .fetch_one(&pool)
+            .await
+            .expect("the member's account");
+    let elsewhere = Uuid::now_v7();
+    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Elsewhere', $2)")
+        .bind(elsewhere)
+        .bind(format!("elsewhere-{}", elsewhere.simple()))
+        .execute(&pool)
+        .await
+        .expect("a second workspace");
+    sqlx::query(
+        "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'member')",
+    )
+    .bind(elsewhere)
+    .bind(member_actor)
+    .execute(&pool)
+    .await
+    .expect("the member joins it");
+    let mut transaction = pool.begin().await.expect("begin");
+    let elsewhere_space = agent_workspace_server::spaces::manage::create(
+        &mut transaction,
+        agent_workspace_server::spaces::manage::NewSpace {
+            workspace_id: elsewhere,
+            kind: agent_workspace_server::spaces::SpaceKind::Project,
+            key: "ELS",
+            name: "Elsewhere",
+            description: "",
+            visibility: agent_workspace_server::spaces::SpaceVisibility::Members,
+            icon: None,
+            owner: agent_workspace_server::spaces::manage::Owner {
+                account_id: member_actor,
+                display_name: "Member",
+                login_name: MEMBER_LOGIN,
+            },
+        },
+    )
+    .await
+    .expect("a space elsewhere, with the member in it");
+    transaction.commit().await.expect("commit the space");
+    let elsewhere_run = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO runs (id, workspace_id, space_id, account_id, title, cause_kind, state)
+        VALUES ($1, $2, $3, $4, 'A run elsewhere', 'manual', 'working')
+        "#,
+    )
+    .bind(elsewhere_run)
+    .bind(elsewhere)
+    .bind(elsewhere_space)
+    .bind(member_actor)
+    .execute(&pool)
+    .await
+    .expect("a run elsewhere");
+    sqlx::query(
+        r#"
+        INSERT INTO run_usage (
+            run_id, model, attribution, workspace_id, space_id, account_id,
+            usage_date, input_tokens, output_tokens, confidence
+        )
+        VALUES ($1, 'w12-elsewhere', 'reported', $2, $3, $4, current_date, 7777, 7, 'exact')
+        "#,
+    )
+    .bind(elsewhere_run)
+    .bind(elsewhere)
+    .bind(elsewhere_space)
+    .bind(member_actor)
+    .execute(&pool)
+    .await
+    .expect("usage elsewhere");
+    let models = |usage: &Value| -> Vec<String> {
+        usage["rows"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|row| row["key"].as_str().map(str::to_owned))
+            .collect()
+    };
+    let here = send(
+        &application,
+        member,
+        "POST",
+        &format!("/api/v2/w/{}/ops/run_usage_list", seed.organization_id),
+        "w12-usage-here",
+        json!({"groupBy": "model"}),
+    )
+    .await;
+    assert_eq!(here.0, StatusCode::OK, "{}", here.1);
+    let here = models(&here.2["value"]["usage"]);
+    assert!(
+        here.iter().any(|model| model == "w12-no-account"),
+        "{here:?}"
+    );
+    assert!(
+        !here.iter().any(|model| model == "w12-elsewhere"),
+        "{here:?}"
+    );
+    let there = send(
+        &application,
+        member,
+        "POST",
+        &format!("/api/v2/w/{elsewhere}/ops/run_usage_list"),
+        "w12-usage-there",
+        json!({"groupBy": "model"}),
+    )
+    .await;
+    assert_eq!(there.0, StatusCode::OK, "{}", there.1);
+    let there = models(&there.2["value"]["usage"]);
+    assert_eq!(
+        there,
+        vec!["w12-elsewhere".to_owned()],
+        "only that workspace's usage"
+    );
+
     // An automation launches as the agent; another project's agent, or one
     // that doesn't exist, is refused when the rule is saved.
     let automation_create = "/api/v2/ops/automation_create".to_owned();
