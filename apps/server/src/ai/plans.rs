@@ -1709,8 +1709,10 @@ async fn update_existing(
 /// order: a task keeps its current parent unless its draft names one, and
 /// loses it when keeping it would loop (its parent is moved beneath it).
 /// Then the moves run from the final tree's top down, so each task's new
-/// parent already hangs where it will end, and never beneath the task: a
-/// reshuffle that is valid at the end is valid at every step.
+/// parent already hangs where it will end, and never beneath the task; a
+/// task whose old ancestor moves before it leaves that line first, so no
+/// move carries it along. A reshuffle that is valid at the end (no loop,
+/// within the nesting limit) is valid at every step.
 async fn place_matched(
     transaction: &mut Transaction<'_, Postgres>,
     actor: &CommandActor,
@@ -1822,7 +1824,37 @@ fn final_parents(
         .map(|(id, parent)| (*id, *parent))
         .collect::<Vec<_>>();
     moves.sort_by_key(|(id, _)| (depth(*id), *id));
-    (moves, None)
+    // A task whose current ancestor moves before it would ride along under
+    // it, and the tree can pass the nesting limit for a step though the
+    // final tree is within it. Such a task first leaves its parent, so each
+    // move carries only what stays beneath it.
+    let order = moves
+        .iter()
+        .enumerate()
+        .map(|(index, (id, _))| (*id, index))
+        .collect::<HashMap<_, _>>();
+    let rides_along = |id: Uuid, index: usize| {
+        let mut at = current.get(&id).copied().flatten();
+        let mut steps = 0;
+        while let Some(node) = at
+            && steps <= current.len()
+        {
+            if order.get(&node).is_some_and(|before| *before < index) {
+                return true;
+            }
+            at = current.get(&node).copied().flatten();
+            steps += 1;
+        }
+        false
+    };
+    let mut detach = moves
+        .iter()
+        .enumerate()
+        .filter(|(index, (id, parent))| parent.is_some() && rides_along(*id, *index))
+        .map(|(_, (id, _))| (*id, None))
+        .collect::<Vec<_>>();
+    detach.append(&mut moves);
+    (detach, None)
 }
 
 /// Puts a task the plan matched under `parent` (or at the top level),
@@ -2015,6 +2047,25 @@ mod tests {
         );
         assert!(moves.is_empty());
         assert!(stuck.is_some());
+
+        // A > B > C today, X and Y > Z apart. The draft puts C under Z and A
+        // under X. A moves first, so C leaves A's line before it, and A
+        // never carries C's levels on top of its own.
+        let [y, z] = [5, 6].map(Uuid::from_u128);
+        let current = HashMap::from([
+            (a, None),
+            (b, Some(a)),
+            (c, Some(b)),
+            (x, None),
+            (y, None),
+            (z, Some(y)),
+        ]);
+        let (moves, stuck) = final_parents(
+            &current,
+            [(c, Some(Some(z))), (a, Some(Some(x)))].into_iter(),
+        );
+        assert_eq!(stuck, None);
+        assert_eq!(moves, vec![(c, None), (a, Some(x)), (c, Some(z))]);
     }
 
     #[test]
