@@ -202,9 +202,9 @@ describe('layout registry', () => {
     expect(withModuleSwitches(edited, {})).toEqual(edited)
 
     // A saved preset that hides a module: the layout's own switch turns it back on.
-    const saved = [{ id: 'quiet', name: 'Quiet', description: '', base: 'software_team', changes: { 'module.crm': false }, words: {}, version: 1, removed: false }] as SavedPreset[]
+    const saved = [{ id: 'quiet', name: 'Quiet', description: '', base: 'software_team', changes: { 'module.crm': false }, words: {}, version: 1, removed: false }] as unknown as SavedPreset[]
     expect(layoutShowsModule({ preset: 'quiet' }, saved, modulePart('local.crm'))).toBe(false)
-    expect(layoutShowsModule({ preset: 'quiet', changes: { 'module.crm': true } }, saved, modulePart('local.crm'))).toBe(true)
+    expect(layoutShowsModule({ preset: 'quiet', changes: { 'module.crm': true } } as Parameters<typeof layoutShowsModule>[0], saved, modulePart('local.crm'))).toBe(true)
     expect(layoutShowsModule({ preset: 'software_team' }, saved, modulePart('local.crm'))).toBe(true)
   })
 

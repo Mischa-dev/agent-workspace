@@ -483,7 +483,7 @@ export function LayoutEditor({
         <SavePresetDialog
           onClose={() => setNaming(false)}
           onSave={(name, description) =>
-            onSavePreset(name, description, current ?? withModuleSwitches(layoutFrom(startFrom, draft.visible, draft.words, saved), draft.modules)).then(() =>
+            onSavePreset(name, description, current ?? withModuleSwitches(layoutFrom(startFrom, draft.visible, draft.words, saved), moduleSwitches(fallback.layout?.changes))).then(() =>
               setNaming(false),
             )
           }
