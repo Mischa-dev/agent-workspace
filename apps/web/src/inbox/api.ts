@@ -226,7 +226,9 @@ export function noteWorkspaces(queryClient: QueryClient, into: Map<string, strin
     if (project.organizationId) spaces.set(project.id, project.organizationId)
   }
   for (const [, data] of queryClient.getQueriesData<InboxCache>({ queryKey: inboxKeys.root })) {
-    const pages = data && Array.isArray(data.pages) ? data.pages : []
+    // The inbox's pages, or a single page (a space's unread on its overview).
+    const single = data as unknown as InboxPage | undefined
+    const pages = data && Array.isArray(data.pages) ? data.pages : single && Array.isArray(single.notifications) ? [single] : []
     for (const page of pages) {
       for (const notification of Array.isArray(page?.notifications) ? page.notifications : []) {
         const workspace = spaces.get(notification.projectId)
@@ -268,12 +270,19 @@ export function applyUpdate(
 
 type InboxCache = InfiniteData<InboxPage, string | null>
 
-export function useUpdateInbox(view: InboxView, category: InboxCategory, spaces: readonly string[] = []) {
+export function useUpdateInbox(
+  view: InboxView,
+  category: InboxCategory,
+  spaces: readonly string[] = [],
+  shared?: Map<string, string>,
+) {
   const queryClient = useQueryClient()
   const workspaceIds = useSignedInWorkspaceIds()
   // Noted before a change takes its rows out of the cache; only ever added
-  // to, so changes running side by side don't lose each other's.
-  const [known] = useState(() => new Map<string, string>())
+  // to, so changes running side by side don't lose each other's. A page
+  // passes its own to route Undo the same way.
+  const [own] = useState(() => new Map<string, string>())
+  const known = shared ?? own
   const key = inboxKeys.list(view, category, spaces)
   return useMutation({
     mutationFn: (update: InboxUpdate) => postUpdate(update, workspaceIds, known),
@@ -356,6 +365,7 @@ export async function postUpdate(
       result.updated.push(...answer.updated)
       // Each answer counts its workspace and your DMs: the largest is a floor.
       result.unreadCount = Math.max(result.unreadCount, answer.unreadCount)
+      if (answer.refused !== undefined) refused ??= answer.refused
     } catch (error) {
       refused ??= error
     }
@@ -371,7 +381,14 @@ async function postUpdateIn(update: InboxUpdate, workspaceId: string | undefined
   }
   const result: InboxUpdateResult = { updated: [], unreadCount: 0 }
   for (let start = 0; start < update.ids.length; start += MAX_UPDATE_IDS) {
-    const part = await postUpdateIn({ ...update, ids: update.ids.slice(start, start + MAX_UPDATE_IDS) }, workspaceId)
+    let part: InboxUpdateResult
+    try {
+      part = await postUpdateIn({ ...update, ids: update.ids.slice(start, start + MAX_UPDATE_IDS) }, workspaceId)
+    } catch (error) {
+      // Earlier parts landed: they stay done and undoable.
+      if (start === 0) throw error
+      return { ...result, refused: error }
+    }
     result.updated.push(...part.updated)
     result.unreadCount = part.unreadCount
   }

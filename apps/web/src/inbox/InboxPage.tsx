@@ -123,7 +123,10 @@ export function InboxPage() {
   const density = currentView(savedViews.data?.views ?? [], shown)?.density ?? 'detailed'
   const inbox = useInbox(view, category, spaces)
   useTimeToShow('inbox_open', 'inbox', !inbox.isPending)
-  const mutation = useUpdateInbox(view, category, spaces)
+  // Where each notification lives, noted before a change takes its rows
+  // out of the cache, so its Undo goes back to the same workspaces.
+  const [known] = useState(() => new Map<string, string>())
+  const mutation = useUpdateInbox(view, category, spaces, known)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
@@ -222,11 +225,11 @@ export function InboxPage() {
 
   const undo = useCallback(
     (update: InboxUpdate) =>
-      postUpdate(update, workspaceIds, noteWorkspaces(queryClient)).then((result) => {
+      postUpdate(update, workspaceIds, noteWorkspaces(queryClient, known)).then((result) => {
         invalidateInbox(queryClient)
         if (result.refused) throw result.refused
       }),
-    [queryClient, workspaceIds],
+    [known, queryClient, workspaceIds],
   )
 
   const change = useCallback(
@@ -286,7 +289,8 @@ export function InboxPage() {
         change(
           { action: 'restore', ids },
           {
-            success: () => ({ tone: 'success', title: 'Moved back to the inbox', onUndo: () => undo({ action: 'archive', ids }) }),
+            success: (result) =>
+              result.updated.length ? { tone: 'success', title: 'Moved back to the inbox', onUndo: () => undo({ action: 'archive', ids: result.updated }) } : null,
             failed: 'It wasn’t moved back to the inbox',
           },
         )
@@ -294,7 +298,8 @@ export function InboxPage() {
         change(
           { action: 'archive', ids },
           {
-            success: () => ({ tone: 'success', title: 'Archived', onUndo: () => undo({ action: 'restore', ids }) }),
+            success: (result) =>
+              result.updated.length ? { tone: 'success', title: 'Archived', onUndo: () => undo({ action: 'restore', ids: result.updated }) } : null,
             failed: 'It wasn’t archived',
           },
         )
@@ -323,13 +328,18 @@ export function InboxPage() {
     change(
       { action: restoring ? 'restore' : 'archive', ids },
       {
-        success: (result) => ({
-          tone: 'success',
-          title: restoring
-            ? `Moved ${countLabel(result.updated.length || ids.length, 'notification')} back to the inbox`
-            : `Archived ${countLabel(result.updated.length || ids.length, 'notification')}`,
-          onUndo: () => undo({ action: restoring ? 'archive' : 'restore', ids }),
-        }),
+        // Undo changes back only what changed: never a notification another
+        // workspace refused.
+        success: (result) =>
+          result.updated.length
+            ? {
+                tone: 'success',
+                title: restoring
+                  ? `Moved ${countLabel(result.updated.length, 'notification')} back to the inbox`
+                  : `Archived ${countLabel(result.updated.length, 'notification')}`,
+                onUndo: () => undo({ action: restoring ? 'archive' : 'restore', ids: result.updated }),
+              }
+            : null,
         failed: restoring ? 'They weren’t moved back' : 'They weren’t archived',
       },
     )
@@ -356,11 +366,17 @@ export function InboxPage() {
     change(
       until === 'activity' ? { action: 'snooze_until_activity', ids } : { action: 'snooze', ids, snoozeUntil: until.toISOString() },
       {
-        success: () => ({
-          tone: 'success',
-          title: ids.length === 1 ? `Snoozed until ${when}` : `Snoozed ${countLabel(ids.length, 'notification')} until ${when}`,
-          onUndo: () => undo({ action: 'unsnooze', ids }),
-        }),
+        success: (result) =>
+          result.updated.length
+            ? {
+                tone: 'success',
+                title:
+                  result.updated.length === 1
+                    ? `Snoozed until ${when}`
+                    : `Snoozed ${countLabel(result.updated.length, 'notification')} until ${when}`,
+                onUndo: () => undo({ action: 'unsnooze', ids: result.updated }),
+              }
+            : null,
         failed: ids.length === 1 ? 'It wasn’t snoozed' : 'They weren’t snoozed',
       },
     )
