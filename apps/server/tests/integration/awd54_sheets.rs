@@ -1026,7 +1026,7 @@ async fn a_strict_rule_refuses_what_breaks_it_and_names_the_rule() {
     .await;
     assert_eq!(both["outcome"], "ok", "{both}");
     let read = call(
-        "sheet_read",
+        "sheet_get",
         json!({"projectId": "VAL", "sheet": sheet, "tab": "Work"}),
     )
     .await;
