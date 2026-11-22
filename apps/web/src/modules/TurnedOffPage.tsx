@@ -36,7 +36,7 @@ export function TurnedOffPage({ module, scope = 'workspace' }: { module: string;
           icon="info"
           title={`${name} is turned off`}
         >
-          {`${name} is turned off where this lives, so it's hidden from you. Nothing was deleted; whoever manages that space or your role there can turn it back on.`}
+          {`${name} is turned off where this lives, so it's hidden from you. Nothing was deleted, and it comes back when it's turned on again.`}
         </EmptyState>
       </div>
     )
