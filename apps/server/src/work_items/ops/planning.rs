@@ -85,6 +85,7 @@ macro_rules! tool_op {
             const MODULE: &'static str = "tasks";
             const PERMISSION: Option<Perm> = $perm;
             const IDEMPOTENCY: Idempotency = Idempotency::$idem;
+            const OWN_TRANSACTION: bool = true;
             $(const PREVIEW: bool = $preview;)?
             $(const DESTRUCTIVE: bool = $destructive;)?
             $(

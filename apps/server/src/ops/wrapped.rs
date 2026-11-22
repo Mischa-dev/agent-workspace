@@ -39,6 +39,7 @@ macro_rules! tool_op {
             const MODULE: &'static str = $module;
             const PERMISSION: Option<crate::ops::Perm> = $perm;
             const IDEMPOTENCY: crate::ops::Idempotency = crate::ops::Idempotency::$idem;
+            const OWN_TRANSACTION: bool = true;
             $(const DESTRUCTIVE: bool = $destructive;)?
             $(const SPANS_WORKSPACES: bool = $spans;)?
             $(const HOME_WORKSPACE_BY_DEFAULT: bool = $home;)?

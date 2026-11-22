@@ -210,6 +210,55 @@ pub async fn reserve(
 /// A finished answer already kept for this key, read without reserving it
 /// (nothing is held after it returns). For a check that has to run before
 /// the call's own transaction opens; [`reserve`] still settles a race.
+/// As `reserve`, for a command that runs outside the reserving transaction
+/// (it commits before the command starts): the reservation lapses after a
+/// few minutes unless `complete` keeps the answer, so a call that died
+/// midway doesn't refuse its retries for a day.
+pub async fn reserve_briefly(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    scope: &str,
+    key: &IdempotencyKey,
+    request_hash: RequestHash,
+) -> Result<IdempotencyOutcome, AppError> {
+    let outcome = reserve(transaction, actor_id, scope, key, request_hash).await?;
+    if let IdempotencyOutcome::Reserved(reservation) = &outcome {
+        sqlx::query(
+            r#"
+            UPDATE idempotency_keys SET expires_at = now() + interval '10 minutes'
+            WHERE actor_id = $1 AND scope = $2 AND key = $3 AND response_status IS NULL
+            "#,
+        )
+        .bind(reservation.actor_id)
+        .bind(&reservation.scope)
+        .bind(reservation.key.as_str())
+        .execute(&mut **transaction)
+        .await?;
+    }
+    Ok(outcome)
+}
+
+/// Gives up a reservation whose command made nothing, so a retry runs.
+pub async fn release(
+    transaction: &mut Transaction<'_, Postgres>,
+    reservation: &IdempotencyReservation,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        DELETE FROM idempotency_keys
+        WHERE actor_id = $1 AND scope = $2 AND key = $3
+          AND request_hash = $4 AND response_status IS NULL
+        "#,
+    )
+    .bind(reservation.actor_id)
+    .bind(&reservation.scope)
+    .bind(reservation.key.as_str())
+    .bind(reservation.request_hash.as_bytes().as_slice())
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
 pub async fn finished(
     connection: &mut sqlx::PgConnection,
     actor_id: Uuid,
@@ -262,7 +311,8 @@ pub async fn complete<T: Serialize>(
     let updated = sqlx::query(
         r#"
         UPDATE idempotency_keys
-        SET response_status = $5, response_body = $6
+        SET response_status = $5, response_body = $6,
+            expires_at = greatest(expires_at, now() + interval '24 hours')
         WHERE actor_id = $1 AND scope = $2 AND key = $3
           AND request_hash = $4
           AND response_status IS NULL
