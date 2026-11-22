@@ -116,6 +116,7 @@ pub async fn set_context(
         context
             .request_id
             .as_deref()
+            .or(acting.request_id.as_deref())
             .map(|id| id.chars().take(128).collect::<String>())
             .unwrap_or_default(),
     )

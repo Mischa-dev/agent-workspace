@@ -1436,28 +1436,8 @@ async fn commit_step(pool: &PgPool, import_id: Uuid) -> Result<Step, AppError> {
                 by_milestone.entry(milestone).or_default().push(*id);
             }
         }
-        // A matched task goes under the parent its draft names, which may
-        // have been made just now in this batch.
-        let made = batch
-            .iter()
-            .map(|task| task.reference.as_str())
-            .zip(created.iter().copied())
-            .collect::<HashMap<_, _>>();
-        for (task, existing) in &matched {
-            let Some(parent) = task.parent.as_deref().and_then(|parent| {
-                made.get(parent)
-                    .copied()
-                    .or_else(|| tasks.get(parent).copied().flatten())
-            }) else {
-                continue;
-            };
-            if let Err(message) =
-                set_parent(&mut transaction, &actor, task, *existing, parent).await?
-            {
-                transaction.rollback().await?;
-                return Ok(Step::Failed(message));
-            }
-        }
+        // Matched tasks go under their draft's parents once every task is
+        // made or matched (2b), so the moves can follow the final tree.
         for (milestone, ids) in by_milestone {
             planning::move_tasks_to_milestone(
                 &mut transaction,
@@ -1470,6 +1450,16 @@ async fn commit_step(pool: &PgPool, import_id: Uuid) -> Result<Step, AppError> {
         }
         transaction.commit().await?;
         return Ok(Step::Progress);
+    }
+
+    // 2b. Tasks the plan matched go where the draft puts them, in one go
+    // before the first dependency (a resume after that has nothing to move).
+    if dependencies.is_empty()
+        && let Err(message) =
+            place_matched(&mut transaction, &actor, project_id, &draft, &tasks).await?
+    {
+        transaction.rollback().await?;
+        return Ok(Step::Failed(message));
     }
 
     // 3. Dependencies.
@@ -1713,14 +1703,131 @@ async fn update_existing(
     Ok(Ok(()))
 }
 
-/// Puts a task the plan matched under the parent its draft names, unless
-/// it is there already.
+/// Puts the tasks the plan matched under the parents their drafts name.
+///
+/// The moves are worked out against the final tree, not applied in draft
+/// order: a task keeps its current parent unless its draft names one, and
+/// loses it when keeping it would loop (its parent is moved beneath it).
+/// Then the moves run from the final tree's top down, so each task's new
+/// parent already hangs where it will end, and never beneath the task: a
+/// reshuffle that is valid at the end is valid at every step.
+async fn place_matched(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor: &CommandActor,
+    project_id: Uuid,
+    draft: &Draft,
+    tasks: &HashMap<String, Option<Uuid>>,
+) -> Result<Result<(), String>, AppError> {
+    let id_of = |reference: &str| tasks.get(reference).copied().flatten();
+    let current = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+        "SELECT id, parent_work_item_id FROM task_rows WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_all(&mut **transaction)
+    .await?
+    .into_iter()
+    .collect::<HashMap<_, _>>();
+    let (moves, unresolved) = final_parents(
+        &current,
+        draft.tasks.iter().filter_map(|task| {
+            let id = id_of(&task.reference)?;
+            Some((id, task.parent.as_deref().map(&id_of)))
+        }),
+    );
+    let by_id = draft
+        .tasks
+        .iter()
+        .filter_map(|task| Some((id_of(&task.reference)?, task)))
+        .collect::<HashMap<_, _>>();
+    if let Some(task) = unresolved.and_then(|id| by_id.get(&id)) {
+        return Ok(Err(format!(
+            "The existing task for {} couldn't go under its parent {}: that task is beneath it.",
+            task.reference,
+            task.parent.as_deref().unwrap_or_default()
+        )));
+    }
+    for (id, parent) in moves {
+        let Some(task) = by_id.get(&id) else {
+            continue;
+        };
+        if let Err(message) = set_parent(transaction, actor, task, id, parent).await? {
+            return Ok(Err(message));
+        }
+    }
+    Ok(Ok(()))
+}
+
+/// The moves that take the tree `current` (task to parent) to where the
+/// draft puts its tasks (`drafted`: a task and the parent its draft names,
+/// `Some(None)` for one that names a parent the plan has no task for), top
+/// down; and a task whose drafted parent stays beneath it whatever moves,
+/// if there is one.
+fn final_parents(
+    current: &HashMap<Uuid, Option<Uuid>>,
+    drafted: impl Iterator<Item = (Uuid, Option<Option<Uuid>>)>,
+) -> (Vec<(Uuid, Option<Uuid>)>, Option<Uuid>) {
+    let mut wanted = current.clone();
+    let mut unnamed = Vec::new();
+    let mut named = Vec::new();
+    for (id, parent) in drafted {
+        match parent {
+            Some(Some(parent)) if parent != id => {
+                wanted.insert(id, Some(parent));
+                named.push(id);
+            }
+            Some(_) => {}
+            None => unnamed.push(id),
+        }
+    }
+    let loops = |tree: &HashMap<Uuid, Option<Uuid>>, start: Uuid| {
+        let mut at = tree.get(&start).copied().flatten();
+        let mut steps = 0;
+        while let Some(node) = at {
+            if node == start || steps > tree.len() {
+                return true;
+            }
+            at = tree.get(&node).copied().flatten();
+            steps += 1;
+        }
+        false
+    };
+    // A parent the draft doesn't name is kept, unless it was moved beneath.
+    for id in unnamed {
+        if loops(&wanted, id) {
+            wanted.insert(id, None);
+        }
+    }
+    if let Some(stuck) = named.iter().copied().find(|id| loops(&wanted, *id)) {
+        return (Vec::new(), Some(stuck));
+    }
+    let depth = |id: Uuid| {
+        let mut depth = 0;
+        let mut at = wanted.get(&id).copied().flatten();
+        while let Some(node) = at
+            && depth <= wanted.len()
+        {
+            depth += 1;
+            at = wanted.get(&node).copied().flatten();
+        }
+        depth
+    };
+    let mut moves = wanted
+        .iter()
+        .filter(|(id, parent)| current.get(*id).copied().flatten() != **parent)
+        .map(|(id, parent)| (*id, *parent))
+        .collect::<Vec<_>>();
+    moves.sort_by_key(|(id, _)| (depth(*id), *id));
+    (moves, None)
+}
+
+/// Puts a task the plan matched under `parent` (or at the top level),
+/// unless it is there already.
 async fn set_parent(
     transaction: &mut Transaction<'_, Postgres>,
     actor: &CommandActor,
     task: &DraftTask,
     work_item_id: Uuid,
-    parent: Uuid,
+    parent: Option<Uuid>,
 ) -> Result<Result<(), String>, AppError> {
     use crate::work_item_commands::{
         AuditVersionMetadata, UpdateWorkItemCommand, UpdateWorkItemOutcome, lock_work_item,
@@ -1729,7 +1836,7 @@ async fn set_parent(
     let Some(current) = lock_work_item(transaction, actor.project_id, work_item_id).await? else {
         return Ok(Ok(()));
     };
-    if current.parent_work_item_id == Some(parent) || parent == work_item_id {
+    if current.parent_work_item_id == parent || parent == Some(work_item_id) {
         return Ok(Ok(()));
     }
     let version = current.version;
@@ -1745,12 +1852,16 @@ async fn set_parent(
             status_id: None,
             priority: None,
             assignee_actor_id: None,
-            parent_work_item_id: Some(Some(parent)),
+            parent_work_item_id: Some(parent),
             board_placement: None,
             labels: None,
             fields: Default::default(),
             field_values: None,
-            summary: "Moved under its parent from a plan",
+            summary: if parent.is_some() {
+                "Moved under its parent from a plan"
+            } else {
+                "Taken out from under its parent by a plan"
+            },
             audit_action: "work_item.updated",
             audit_version_metadata: AuditVersionMetadata::Omit,
         },
@@ -1760,6 +1871,10 @@ async fn set_parent(
         UpdateWorkItemOutcome::Applied { .. }
         | UpdateWorkItemOutcome::Noop(_)
         | UpdateWorkItemOutcome::NotFound => Ok(()),
+        _ if parent.is_none() => Err(format!(
+            "The existing task for {} couldn't leave its parent.",
+            task.reference
+        )),
         _ => Err(format!(
             "The existing task for {} couldn't go under its parent {}.",
             task.reference,
@@ -1849,6 +1964,42 @@ mod tests {
         };
         assert_eq!(check(&fine), Vec::<String>::new());
         assert_eq!(parent_order(&fine), Some(vec![1, 0]));
+    }
+
+    #[test]
+    fn matched_tasks_move_against_the_final_tree() {
+        let [a, b, c, x] = [1, 2, 3, 4].map(Uuid::from_u128);
+        // A > B > C today. The draft puts A under C and B under X: applied in
+        // draft order, A under C would loop until B leaves. Top down, B (and
+        // its C) leaves first.
+        let current = HashMap::from([(a, None), (b, Some(a)), (c, Some(b)), (x, None)]);
+        let (moves, stuck) = final_parents(
+            &current,
+            [(a, Some(Some(c))), (b, Some(Some(x)))].into_iter(),
+        );
+        assert_eq!(stuck, None);
+        assert_eq!(moves, vec![(b, Some(x)), (a, Some(c))]);
+
+        // B > A today. The draft names no parent for A and puts B under it:
+        // A's parent B is obsolete and is cleared first.
+        let current = HashMap::from([(a, Some(b)), (b, None)]);
+        let (moves, stuck) = final_parents(&current, [(a, None), (b, Some(Some(a)))].into_iter());
+        assert_eq!(stuck, None);
+        assert_eq!(moves, vec![(a, None), (b, Some(a))]);
+
+        // A parent the draft doesn't name stays when nothing loops.
+        let current = HashMap::from([(a, Some(x)), (b, None), (x, None)]);
+        let (moves, _) = final_parents(&current, [(a, None), (b, Some(Some(a)))].into_iter());
+        assert_eq!(moves, vec![(b, Some(a))]);
+
+        // A loop the draft itself names stays a loop.
+        let current = HashMap::from([(a, None), (b, None)]);
+        let (moves, stuck) = final_parents(
+            &current,
+            [(a, Some(Some(b))), (b, Some(Some(a)))].into_iter(),
+        );
+        assert!(moves.is_empty());
+        assert!(stuck.is_some());
     }
 
     #[test]

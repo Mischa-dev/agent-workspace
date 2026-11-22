@@ -1,5 +1,5 @@
 import { requestJson } from '../api/client'
-import { callOp, ranOrThrow } from '../api/ops'
+import { callOp, heldForReview } from '../api/ops'
 import { legacyPathOf } from '../app/href'
 import type { FieldType, FieldValue } from '../fields/fieldModel'
 
@@ -78,7 +78,16 @@ export async function moveTask(
     { taskId, toProjectId: input.targetProjectId, snapshot: input.snapshot, resolutions: input.resolutions, leaveUnresolved: input.leaveUnresolved },
     { requestId: idempotencyKey },
   )
-  return ranOrThrow(done, 'Moving it') as unknown as MoveDone
+  if (heldForReview(done)) throw new MoveHeldForReview()
+  return done as unknown as MoveDone
+}
+
+/** A team's review guard holds the move: nothing moved yet. Sending the same request once a reviewer allows it goes through. */
+export class MoveHeldForReview extends Error {
+  constructor() {
+    super('Moving it waits for a reviewer to allow it.')
+    this.name = 'MoveHeldForReview'
+  }
 }
 
 export type MoveDestination = { id: string; key: string; name: string }

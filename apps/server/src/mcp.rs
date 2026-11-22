@@ -1943,6 +1943,7 @@ pub(crate) async fn acting_of(
         credential: Some(principal.credential_id),
         requested_by,
         run,
+        request_id: None,
     })
 }
 

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/errors'
 import { AuthenticatedSessionProvider, clearAuthenticatedQueryCache, type AuthenticatedSession } from '../auth/session'
 import MoveTaskDialog from './MoveTaskDialog'
-import { listMoveDestinations, moveTask, previewMove, type MoveDone, type MovePlan } from './moveApi'
+import { listMoveDestinations, MoveHeldForReview, moveTask, previewMove, type MoveDone, type MovePlan } from './moveApi'
 import { clearPendingMoves } from './moveRecovery'
 import { FieldEditor } from '../fields/FieldEditor'
 import { clearToasts, useToasts } from '../ui/toastStore'
@@ -283,6 +283,40 @@ describe('MoveTaskDialog (AWD-102)', () => {
     await screen.findByRole('heading', { name: 'That move request wasn’t carried out' })
     fireEvent.click(screen.getByRole('button', { name: 'Start over' }))
     expect(screen.getByLabelText('Project')).toBeTruthy()
+  })
+
+  it('a move a reviewer holds waits with its request, goes through once allowed, and starts over once declined', async () => {
+    vi.mocked(moveTask).mockRejectedValueOnce(new MoveHeldForReview())
+    renderHost()
+    await openReview()
+    fireEvent.click(screen.getByRole('button', { name: 'Leave all unresolved' }))
+    fireEvent.click(confirmButton())
+    await screen.findByRole('heading', { name: 'Moving SRC-1 to DST waits for a reviewer' })
+    // Still held: the same request again, and still waiting.
+    vi.mocked(moveTask).mockRejectedValueOnce(new MoveHeldForReview())
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    await waitFor(() => expect(moveTask).toHaveBeenCalledTimes(2))
+    await screen.findByRole('heading', { name: 'Moving SRC-1 to DST waits for a reviewer' })
+    expect(calls()[1]).toEqual(calls()[0])
+    // Declined: a settled refusal, not an unknown answer.
+    vi.mocked(moveTask).mockRejectedValueOnce(new ApiError({ status: 403, code: 'forbidden', message: 'A reviewer declined this.' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    await screen.findByRole('heading', { name: 'That move request wasn’t carried out' })
+    fireEvent.click(screen.getByRole('button', { name: 'Start over' }))
+    expect(screen.getByLabelText('Project')).toBeTruthy()
+  })
+
+  it('a held move goes through once a reviewer allows it', async () => {
+    vi.mocked(moveTask).mockRejectedValueOnce(new MoveHeldForReview())
+    renderHost()
+    await openReview()
+    fireEvent.click(screen.getByRole('button', { name: 'Leave all unresolved' }))
+    fireEvent.click(confirmButton())
+    await screen.findByRole('heading', { name: 'Moving SRC-1 to DST waits for a reviewer' })
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    await waitFor(() => expect(moveTask).toHaveBeenCalledTimes(2))
+    expect(calls()[1]).toEqual(calls()[0])
+    await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/w/-/s/dst/tasks/new-root'))
   })
 
   it('asks for a fresh preview, and allows nothing until one arrives', async () => {
