@@ -24,7 +24,7 @@ use crate::{
 /// AWD-75: the projects the caller belongs to where `module` is off for
 /// them, for lists that reach projects through membership rather than a
 /// list of projects; they leave these out before counting or limiting.
-pub(super) async fn projects_with_module_off(
+pub(crate) async fn projects_with_module_off(
     state: &AppState,
     actor_id: Uuid,
     module: &str,

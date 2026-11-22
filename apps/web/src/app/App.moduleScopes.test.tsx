@@ -31,7 +31,7 @@ type Scopes = {
   /** Projects only search finds, beyond the first page of the list. */
   found?: Array<typeof projectA>
   /** Answers some requests first, such as a run or a task key. */
-  extra?: (path: string) => Promise<Response> | undefined
+  extra?: (path: string, init?: RequestInit) => Promise<Response> | undefined
   /** Holds Home's layout (or with 'all', every layout) until the returned function is called. */
   homeLater?: boolean | 'all'
   /** Layouts fail instead, as when the settings can't load. */
@@ -50,7 +50,7 @@ function withScopes({ home, projects = {}, found = [], extra, homeLater, layouts
   }
   vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
-    const answered = extra?.(path)
+    const answered = extra?.(path, init)
     if (answered) return answered
     const project = /\/projects\/([^/]+)\/layout$/.exec(path)?.[1]
     if (project) return layout(projects[project] ?? [], homeLater === 'all')
@@ -71,6 +71,12 @@ function withScopes({ home, projects = {}, found = [], extra, homeLater, layouts
     })
   }
 }
+
+/** A request for the run `runId`'s view. */
+const asksFor = (path: string, init: RequestInit | undefined, runId: string) =>
+  path.endsWith('/ops/run_detail_get') && String(init?.body ?? '').includes(runId)
+
+const opAnswer = (value: unknown) => jsonResponse({ outcome: 'ok', value })
 
 const settle = () =>
   act(async () => {
@@ -112,9 +118,9 @@ describe('entry points follow the modules where they lead', () => {
     withScopes({
       home: [],
       projects: { [projectAId]: ['runs'] },
-      extra: (path) =>
-        path.endsWith(`/agent-runs/${runId}`)
-          ? new Promise<Response>((resolve) => (answer = () => void jsonResponse(run).then(resolve)))
+      extra: (path, init) =>
+        asksFor(path, init, runId)
+          ? new Promise<Response>((resolve) => (answer = () => void opAnswer(run).then(resolve)))
           : undefined,
     })
     window.history.replaceState({}, '', `/w/-/runs/${runId}`)
@@ -126,11 +132,25 @@ describe('entry points follow the modules where they lead', () => {
     first.unmount()
 
     // Off at Home, on in the run's project: the run's page, not the turned-off one.
-    withScopes({ home: ['runs'], extra: (path) => (path.endsWith(`/agent-runs/${runId}`) ? jsonResponse(run) : undefined) })
+    withScopes({ home: ['runs'], extra: (path, init) => (asksFor(path, init, runId) ? opAnswer(run) : undefined) })
     render(<App />)
     await settle()
     await settle()
     expect(turnedOff('Runs')).toBeNull()
+  })
+
+  it('a run whose space has Runs off, refused by the server, shows the turned-off page', async () => {
+    const refused = () =>
+      jsonResponse(
+        { outcome: 'permission_denied', code: 'module_off', message: 'Runs is off here.', details: { module: 'runs' } },
+        403,
+      )
+    withScopes({ home: [], extra: (path, init) => (asksFor(path, init, runId) ? refused() : undefined) })
+    window.history.replaceState({}, '', `/w/-/runs/${runId}`)
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: 'Runs is turned off' })).toBeVisible()
+    // The refusal doesn't say which switch turned it off, so no workspace switch is offered.
+    expect(screen.queryByRole('link', { name: 'Turn modules on or off' })).toBeNull()
   })
 
   it('a task key leaves the decision to the task’s project', async () => {
@@ -275,8 +295,8 @@ describe('entry points follow the modules where they lead', () => {
     // Runs and Whiteboards off at Home, on in AW.
     withScopes({
       home: ['runs', 'whiteboards'],
-      extra: (path) => {
-        if (path.endsWith(`/agent-runs/${runAw}`)) return jsonResponse({ ...run, id: runAw })
+      extra: (path, init) => {
+        if (asksFor(path, init, runAw)) return opAnswer({ ...run, id: runAw })
         if (path.endsWith(`/whiteboards/${boardAw}`)) return jsonResponse(board(boardAw, projectAId))
         if (path.endsWith(`/whiteboards/${boardHome}`)) return jsonResponse(board(boardHome, null))
         return undefined

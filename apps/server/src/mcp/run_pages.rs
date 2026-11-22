@@ -123,7 +123,8 @@ pub(crate) async fn run_usage(
             Err(error) => return ToolResult::from_error(error, "run_usage"),
         };
     let query = crate::runs::views::UsageQuery {
-        organization_id: None,
+        // The call's workspace, unless it spans every one the caller reaches.
+        organization_id: principal.workspace_id,
         project_id: project_is_chosen(principal).then_some(principal.project_id),
         group_by: arguments.group_by,
         days: arguments.days,

@@ -327,16 +327,25 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         "{agent}"
     );
     assert_eq!(agent["runId"], json!(run_id));
-    let run = send_get(
+    let run = send_op(
         &application,
         member,
-        &format!("/api/v1/agent-runs/{run_id}"),
+        "run_step_list",
+        "w12-run-steps",
+        json!({"runId": run_id}),
     )
     .await;
     assert_eq!(run.0, StatusCode::OK, "{}", run.1);
-    assert_eq!(run.2["agentProfileId"], json!(profile_id));
-    assert_eq!(run.2["agentName"], "Reviewer");
-    let runs = send_get(&application, member, "/api/v1/runs?status=active").await;
+    assert_eq!(run.2["run"]["agentProfileId"], json!(profile_id));
+    assert_eq!(run.2["run"]["agentName"], "Reviewer");
+    let runs = send_op(
+        &application,
+        member,
+        "run_line_list",
+        "w12-run-lines",
+        json!({"status": "active"}),
+    )
+    .await;
     assert!(
         runs.2["runs"]
             .as_array()
@@ -376,9 +385,19 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
     .execute(&pool)
     .await
     .expect("usage without an account");
-    let usage = send_get(&application, member, "/api/v1/runs/usage?groupBy=account").await;
+    let usage = send_op(
+        &application,
+        member,
+        "run_usage_list",
+        "w12-usage",
+        json!({"groupBy": "account"}),
+    )
+    .await;
     assert_eq!(usage.0, StatusCode::OK, "{}", usage.1);
-    let rows = usage.2["rows"].as_array().cloned().unwrap_or_default();
+    let rows = usage.2["usage"]["rows"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     let none = rows
         .iter()
         .find(|row| row["key"] == "none")
@@ -779,15 +798,17 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         "a hidden agent is still listed: {}",
         listed.1
     );
-    let run = send_get(
+    let run = send_op(
         &application,
         member,
-        &format!("/api/v1/agent-runs/{run_id}"),
+        "run_step_list",
+        "w12-past-run",
+        json!({"runId": run_id}),
     )
     .await;
     assert_eq!(run.0, StatusCode::OK, "{}", run.1);
     assert_eq!(
-        run.2["agentName"], "Reviewer",
+        run.2["run"]["agentName"], "Reviewer",
         "a past run lost its agent's name"
     );
 

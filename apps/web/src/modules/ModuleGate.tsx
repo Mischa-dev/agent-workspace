@@ -3,6 +3,8 @@ import { lazy, Suspense, type ReactNode } from 'react'
 import { useLocation, useParams } from 'react-router-dom'
 
 import { requestJson } from '../api/client'
+import { isApiError } from '../api/errors'
+import { callOp } from '../api/ops'
 import { useWorkspaceId } from '../app/workspace'
 import { useProjectExperience, useWorkspaceExperience } from '../experience/layout'
 import { runKeys } from '../runs/keys'
@@ -15,7 +17,7 @@ import { moduleOfPath } from './pageOwners'
 const TurnedOffPage = lazy(() => import('./TurnedOffPage').then((module) => ({ default: module.TurnedOffPage })))
 
 /** Where a board or run is. */
-type Owner = { projectId: string | null; organizationId: string }
+type Owner = { projectId?: string | null; organizationId: string }
 
 /**
  * Renders `children`, or the turned-off page when the page's module is off for
@@ -34,12 +36,14 @@ export function ModuleGate({ children, waiting }: { children: ReactNode; waiting
   const { projectId, whiteboardId, runId, taskKey } = useParams()
   const homeId = useWorkspaceId()
   // The same request and cache entry as the board's or run's own page
-  // (whiteboardKeys.detail, runKeys.detail), so it's asked for once.
+  // (whiteboardKeys.detail, runKeys.view), so it's asked for once.
   const id = whiteboardId ?? runId ?? ''
   const target = useQuery({
-    queryKey: whiteboardId ? whiteboardKeys.detail(id) : runKeys.detail(id),
-    queryFn: () =>
-      requestJson<Owner & { whiteboard?: Owner }>(`/api/v1/${whiteboardId ? 'whiteboards' : 'agent-runs'}/${encodeURIComponent(id)}`),
+    queryKey: whiteboardId ? whiteboardKeys.detail(id) : runKeys.view(id),
+    queryFn: ({ signal }): Promise<Owner & { whiteboard?: Owner }> =>
+      whiteboardId
+        ? requestJson(`/api/v1/whiteboards/${encodeURIComponent(id)}`)
+        : callOp('run_detail_get', { runId: id }, { signal, retries: 0 }),
     enabled: !!id,
   })
   const shown = target.data?.whiteboard ?? target.data
@@ -49,6 +53,15 @@ export function ModuleGate({ children, waiting }: { children: ReactNode; waiting
   const module = moduleOfPath(pathname)
   const experience = inProject ? project : workspace
   if (module && moduleSwitchable(module) && !taskKey) {
+    // The server refused the lookup because the module is off where the
+    // thing is: that is the answer.
+    if (id && !shown && refusedAsOff(target.error, module)) {
+      return (
+        <Suspense fallback={waiting}>
+          <TurnedOffPage module={module} scope="unknown" />
+        </Suspense>
+      )
+    }
     if (id && !shown) return target.isError ? children : waiting
     if (experience.modules === 'loading') return waiting
     if (!experience.moduleOn(module)) {
@@ -60,4 +73,11 @@ export function ModuleGate({ children, waiting }: { children: ReactNode; waiting
     }
   }
   return children
+}
+
+/** Whether `error` is the server saying `module` is off where the thing is. */
+function refusedAsOff(error: unknown, module: string): boolean {
+  if (!isApiError(error) || !error.details || typeof error.details !== 'object') return false
+  const details = error.details as { reason?: unknown; module?: unknown }
+  return details.reason === 'module_off' && (details.module === undefined || details.module === module)
 }

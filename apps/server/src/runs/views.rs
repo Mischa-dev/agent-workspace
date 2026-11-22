@@ -1,5 +1,5 @@
-//! What a run did (H5) and what it cost (U2), for the run page, the Runs
-//! page across projects and the usage totals.
+//! What a run did (H5) and what it cost (U2): the built-in run's record
+//! (`run_step_list`) and the usage totals (`run_usage_list`).
 //!
 //! Every read checks the reader can open the run's project
 //! (`actor_can_access_project`) and see its thread (`conversation_visible_to`):
@@ -7,8 +7,8 @@
 //! capped when they were stored (`run_log`); the changes are what the
 //! run's host last reported (`runs::changes`).
 
-use axum::{Json, Router, extract::State, routing::get};
 use chrono::{DateTime, NaiveDate, Utc};
+use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::FromRow;
@@ -16,8 +16,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::AuthenticatedActor,
-    error::{ApiPath, ApiQuery, AppError},
+    error::AppError,
     harness_catalog::Harnesses,
     run_log::{TOTALS, UsageTotals},
     runs::changes::{self, ChangedFile, Changes},
@@ -26,14 +25,6 @@ use crate::{
 /// The most steps the run page shows; long runs show their last ones.
 const MAX_STEPS: i64 = 2_000;
 const MAX_USAGE_DAYS: i64 = 400;
-
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/v1/runs", get(list_http))
-        .route("/api/v1/runs/usage", get(usage_http))
-        .route("/api/v1/agent-runs/{run_id}", get(detail_http))
-        .route("/api/v1/agent-runs/{run_id}/diff", get(diff_http))
-}
 
 /// A run as lists and the run page's header show it.
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -134,19 +125,6 @@ fn named(harnesses: &Harnesses, mut run: RunSummary) -> RunSummary {
         .as_deref()
         .map(|harness| harnesses.name(harness));
     run
-}
-
-// ---------------------------------------------------------------------------
-// Runs page: every run, read by `runs::pages` (A1.5).
-
-async fn list_http(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    ApiQuery(query): ApiQuery<super::pages::RunListQuery>,
-) -> Result<Json<super::pages::RunList>, AppError> {
-    Ok(Json(
-        super::pages::list(&state, principal.actor_id, &query).await?,
-    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -363,15 +341,7 @@ pub async fn run_detail(
     })
 }
 
-async fn detail_http(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    ApiPath(run_id): ApiPath<Uuid>,
-) -> Result<Json<RunDetail>, AppError> {
-    Ok(Json(run_detail(&state, principal.actor_id, run_id).await?))
-}
-
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RunDiffView {
     /// ready, or unavailable when the run's host hasn't reported its
@@ -405,14 +375,6 @@ pub async fn run_diff(
         },
         diff,
     })
-}
-
-async fn diff_http(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    ApiPath(run_id): ApiPath<Uuid>,
-) -> Result<Json<RunDiffView>, AppError> {
-    Ok(Json(run_diff(&state, principal.actor_id, run_id).await?))
 }
 
 // ---------------------------------------------------------------------------
@@ -548,14 +510,4 @@ pub async fn usage_report(
         totals,
         runs,
     })
-}
-
-async fn usage_http(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    ApiQuery(query): ApiQuery<UsageQuery>,
-) -> Result<Json<UsageReport>, AppError> {
-    Ok(Json(
-        usage_report(&state, principal.actor_id, &query).await?,
-    ))
 }
