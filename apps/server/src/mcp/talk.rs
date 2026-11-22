@@ -2252,7 +2252,7 @@ async fn thread_start_once(
                             principal,
                             kept.id,
                             arguments.text.as_deref(),
-                            true,
+                            request_key.as_ref(),
                         )
                         .await?;
                         return Ok(ToolResult::ok(ThreadValue {
@@ -2323,7 +2323,7 @@ async fn thread_start_once(
             principal,
             created.id,
             arguments.text.as_deref(),
-            reservation.is_some(),
+            request_key.as_ref(),
         )
         .await?;
         Ok::<_, AppError>(ToolResult::ok(ThreadValue {
@@ -2346,28 +2346,38 @@ async fn post_optional(
     principal: &McpPrincipal,
     conversation_id: Uuid,
     text: Option<&str>,
-    keyed: bool,
+    request_key: Option<&IdempotencyKey>,
 ) -> Result<Option<SentMessage>, AppError> {
     let Some(text) = text.map(str::trim).filter(|v| !v.is_empty()) else {
         return Ok(None);
     };
     // A retry finds the same thread (from the same message, or by the
     // call's key), so the opening message gets a key from the thread:
-    // retrying replays it instead of posting it twice. A keyed call made
-    // the thread and names its one text, so the thread alone is the key,
-    // which survives the message's removal (its replay is then refused, so
-    // a retry can't post the removed text again). Without a call key the
-    // same thread can be found again with other words, so the key also
-    // holds the text's digest, renamed when the message is removed.
-    let key = if keyed {
-        Some(format!("thread-open.{conversation_id}"))
-    } else {
-        let digest = <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes());
-        Some(format!(
-            "thread-start.{conversation_id}.{}",
-            hex::encode(&digest[..16])
-        ))
+    // retrying replays it instead of posting it twice. A keyed call names
+    // its one text, so the thread and the call's key are the key, which
+    // survives the message's removal (its replay is then refused, so a
+    // retry can't post the removed text again), while another call that
+    // finds the same thread sends its own. Without a call key the same
+    // thread can be found again with other words, so the key holds the
+    // text's digest, renamed when the message is removed.
+    let key = match request_key {
+        Some(request_key) => {
+            let digest = <sha2::Sha256 as sha2::Digest>::digest(request_key.as_str().as_bytes());
+            format!(
+                "thread-open.{}.{}",
+                conversation_id.simple(),
+                hex::encode(&digest[..16])
+            )
+        }
+        None => {
+            let digest = <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes());
+            format!(
+                "thread-start.{conversation_id}.{}",
+                hex::encode(&digest[..16])
+            )
+        }
     };
+    let key = Some(key);
     let content =
         content_from_text(state, principal.project_id, Some(conversation_id), text).await?;
     Ok(

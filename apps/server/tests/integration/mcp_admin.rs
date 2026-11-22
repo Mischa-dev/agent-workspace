@@ -346,6 +346,24 @@ async fn channels_threads_pins_and_decisions_can_be_shaped() {
     .await;
     assert_eq!(read["outcome"], "ok", "{read}");
     assert!(!read.to_string().contains("Starting here."), "{read}");
+    // Two calls with their own keys that find the same thread each send
+    // their own opening message.
+    let mut opened = Vec::new();
+    for (key, text) in [("from-a", "First words."), ("from-b", "Second words.")] {
+        let call = tool(
+            app,
+            &codex,
+            &session,
+            "thread_start",
+            json!({"conversationId": design_id, "fromMessageId": message_id,
+                   "text": text, "clientRequestId": key}),
+        )
+        .await;
+        assert_eq!(call["value"]["id"], thread_id, "{call}");
+        assert!(call["value"]["message"]["messageId"].is_string(), "{call}");
+        opened.push(call["value"]["message"]["messageId"].clone());
+    }
+    assert_ne!(opened[0], opened[1]);
     let decided = tool(
         app,
         &codex,
