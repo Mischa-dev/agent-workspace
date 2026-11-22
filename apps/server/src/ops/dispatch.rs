@@ -943,6 +943,22 @@ async fn module_here<O: Operation>(
     located: &target::Located,
 ) -> Result<&'static str, OpError> {
     let registry = crate::modules::registry::Registry::global();
+    // In the workspace's own space, an operation it is home to keeps to the
+    // home module while its own module is on for the workspace.
+    if located.direct.is_none()
+        && let Some(space) = located.space_id
+        && let Some(home) = registry.home_of(O::NAME)
+        && crate::spaces::workspace::find(connection, located.workspace_id)
+            .await
+            .map_err(|error| OpError::logged(O::NAME, &error))?
+            == Some(space)
+        && crate::modules::state::for_member(connection, located.workspace_id, caller.account_id)
+            .await
+            .map_err(|error| OpError::logged(O::NAME, &error))?
+            .contains(O::MODULE)
+    {
+        return Ok(home);
+    }
     if located.direct.is_none() && registry.also_serving(O::NAME).next().is_some() {
         let modules = match located.space_id {
             Some(space) => {
