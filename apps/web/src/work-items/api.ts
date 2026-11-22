@@ -2,7 +2,7 @@ import { isSpaceAddress } from '../app/href'
 import { workItemHref } from './links'
 import { requestJson } from '../api/client'
 import { ApiError, isApiError } from '../api/errors'
-import { callOp, type OpInput } from '../api/ops'
+import { callOp, ranOrThrow, type OpInput } from '../api/ops'
 import { queueOp } from '../data/outbound'
 import type { CriterionOperationArgument, TaskUpdateInput } from '../api/generated/operations'
 import type { ConversationWorkItemReference } from '../conversations/types'
@@ -278,8 +278,11 @@ async function linkOnTask(
   input: { projectId: string; workItemId: string; idempotencyKey: string; expectedVersion?: number },
   link: Omit<OpInput<'task_link'>, 'taskId' | 'expectedVersion'>,
 ) {
-  await callOp('task_link', { taskId: input.workItemId, ...link }, { requestId: input.idempotencyKey, expectedVersion: input.expectedVersion }).catch(
-    (error: unknown) => refuseAsMovedOn(error, input),
+  ranOrThrow(
+    await callOp('task_link', { taskId: input.workItemId, ...link }, { requestId: input.idempotencyKey, expectedVersion: input.expectedVersion }).catch(
+      (error: unknown) => refuseAsMovedOn(error, input),
+    ),
+    'Linking it',
   )
   return getWorkItem(input.projectId, input.workItemId)
 }
@@ -492,7 +495,10 @@ export async function moveWorkItem(input: {
   if (input.beforeId) operation.beforeTaskId = input.beforeId
   else if (input.afterId) operation.afterTaskId = input.afterId
   else if (input.targetPosition !== undefined) operation.position = String(input.targetPosition)
-  await callOp('task_update', operation, { requestId: input.idempotencyKey }).catch((error: unknown) => refuseAsMovedOn(error, input))
+  ranOrThrow(
+    await callOp('task_update', operation, { requestId: input.idempotencyKey }).catch((error: unknown) => refuseAsMovedOn(error, input)),
+    'Moving it',
+  )
   return getWorkItem(input.projectId, input.workItemId)
 }
 
@@ -600,6 +606,7 @@ export async function createWorkItem(input: {
       },
       { requestId: idempotencyKey },
     )
+  ranOrThrow(created, 'Creating it')
   return getWorkItem(projectId, created.workItemId)
 }
 
@@ -681,14 +688,21 @@ export async function updateWorkItem(input: {
   let version = rest.expectedVersion
   const changesMore = Object.keys(rest).some((key) => key !== 'expectedVersion')
   if (changesMore || blockedReason === undefined) {
-    const written = await callOp('task_update', taskUpdateInput(input.workItemId, rest) as TaskUpdateInput, { requestId: input.idempotencyKey }).catch(
-      refuse(version),
+    const written = ranOrThrow(
+      await callOp('task_update', taskUpdateInput(input.workItemId, rest) as TaskUpdateInput, { requestId: input.idempotencyKey }).catch(
+        refuse(version),
+      ),
+      'Saving it',
     )
     version = written.version
   }
   if (blockedReason !== undefined) {
-    const requestId = changesMore ? `${input.idempotencyKey}:blocker` : input.idempotencyKey
-    await callOp('task_update', blockerInput(input.workItemId, version, blockedReason), { requestId }).catch(refuse(version))
+    // Request ids take letters, digits, dashes, underscores and dots.
+    const requestId = changesMore ? `${input.idempotencyKey}-blocker` : input.idempotencyKey
+    ranOrThrow(
+      await callOp('task_update', blockerInput(input.workItemId, version, blockedReason), { requestId }).catch(refuse(version)),
+      blockedReason === null ? 'Unblocking it' : 'Marking it blocked',
+    )
   }
   return getWorkItem(input.projectId, input.workItemId)
 }
@@ -704,8 +718,11 @@ export async function setWorkItemArchived(input: {
   idempotencyKey: string
 }) {
   const task = { taskId: input.workItemId, expectedVersion: input.expectedVersion }
-  await callOp(input.archived ? 'task_archive' : 'task_restore', task, { requestId: input.idempotencyKey }).catch((error: unknown) =>
-    refuseAsMovedOn(error, input),
+  ranOrThrow(
+    await callOp(input.archived ? 'task_archive' : 'task_restore', task, { requestId: input.idempotencyKey }).catch((error: unknown) =>
+      refuseAsMovedOn(error, input),
+    ),
+    input.archived ? 'Archiving it' : 'Restoring it',
   )
   return getWorkItem(input.projectId, input.workItemId)
 }

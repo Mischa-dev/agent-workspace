@@ -1492,15 +1492,8 @@ pub async fn mark_blocked(
     principal: &McpPrincipal,
     arguments: MarkBlockedArguments,
 ) -> WriteResult {
-    let Some(reason) = normalize_text(
-        arguments.reason.clone(),
-        MAX_BLOCKED_REASON_CHARACTERS,
-        false,
-    ) else {
-        return WriteResult::invalid(
-            "reason",
-            "Say what's blocking it in 1 to 2,000 characters, on one line.",
-        );
+    let Some(reason) = normalize_blocked_reason(&arguments.reason) else {
+        return WriteResult::invalid("reason", "Say what's blocking it in 1 to 2,000 characters.");
     };
     set_blocker(state, principal, &arguments, Some(reason)).await
 }
@@ -2795,6 +2788,21 @@ pub(super) fn valid_priority(value: &str) -> bool {
 
 fn normalize_text(value: String, max_characters: usize, allow_empty: bool) -> Option<String> {
     crate::work_item_commands::normalize_single_line(&value, max_characters, allow_empty).ok()
+}
+
+/// A blocker note may span lines, as the web's note does; no other control
+/// characters.
+fn normalize_blocked_reason(value: &str) -> Option<String> {
+    let value = value.trim().replace("\r\n", "\n");
+    if value.is_empty()
+        || value.chars().count() > MAX_BLOCKED_REASON_CHARACTERS
+        || value
+            .chars()
+            .any(|character| character.is_control() && character != '\n')
+    {
+        return None;
+    }
+    Some(value)
 }
 
 /// Comments may span lines and carry Markdown, as they can in the web app.

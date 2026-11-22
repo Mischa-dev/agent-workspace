@@ -494,7 +494,9 @@ tool_op!(TaskWatchSet {
 tool_op!(TaskMove {
     name: "task_move",
     kind: Change,
-    permission: Some(Perm::TasksEdit),
+    // A move archives the task here and creates it there; the command
+    // checks both projects.
+    permission: Some(Perm::TasksDelete),
     idempotency: Command,
     preview: true,
     destructive: true,

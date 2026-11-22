@@ -1,5 +1,5 @@
 import { requestJson } from '../api/client'
-import { callOp } from '../api/ops'
+import { callOp, ranOrThrow } from '../api/ops'
 import { legacyPathOf } from '../app/href'
 import type { FieldType, FieldValue } from '../fields/fieldModel'
 
@@ -78,7 +78,7 @@ export async function moveTask(
     { taskId, toProjectId: input.targetProjectId, snapshot: input.snapshot, resolutions: input.resolutions, leaveUnresolved: input.leaveUnresolved },
     { requestId: idempotencyKey },
   )
-  return done as unknown as MoveDone
+  return ranOrThrow(done, 'Moving it') as unknown as MoveDone
 }
 
 export type MoveDestination = { id: string; key: string; name: string }

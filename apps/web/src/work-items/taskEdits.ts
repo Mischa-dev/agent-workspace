@@ -56,16 +56,19 @@ export function conflictCurrent(error: unknown): WorkItem | null {
 }
 
 export function bulkProblems(error: unknown): BulkProblem[] {
-  if (!isApiError(error) || error.code !== 'bulk_rejected') return []
-  const details = error.details
-  const problems = details && typeof details === 'object' && 'problems' in details ? (details as { problems: unknown }).problems : []
+  // task_update_many refuses the whole change as a conflict whose reason is
+  // "rejected", with one problem per task under details.current.
+  if (!isApiError(error) || error.code !== 'conflict') return []
+  const details = (error.details ?? {}) as { reason?: unknown; current?: { problems?: unknown } }
+  if (details.reason !== 'rejected') return []
+  const problems = details.current?.problems
   return (Array.isArray(problems) ? problems : []).flatMap((value) => {
     if (!value || typeof value !== 'object') return []
     const problem = value as Record<string, unknown>
     return [
       {
         id: typeof problem.id === 'string' ? problem.id : '',
-        key: typeof problem.key === 'string' ? problem.key : null,
+        key: typeof problem.task === 'string' ? problem.task : null,
         code: typeof problem.code === 'string' ? problem.code : '',
         message: typeof problem.message === 'string' ? problem.message : '',
       },

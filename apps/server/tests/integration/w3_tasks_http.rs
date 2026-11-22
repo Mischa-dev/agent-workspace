@@ -464,12 +464,16 @@ async fn planning_fields_dependencies_and_history_work_over_http() {
             &format!("{base}/work-items/{design_id}"),
             json!({
                 "expectedVersion": changed["version"],
-                "blockedReason": "Waiting on a decision"
+                "blockedReason": "Waiting on a decision\nFollow up Friday"
             }),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
-    assert_eq!(changed["blocked"]["reason"], "Waiting on a decision");
+    // A note may span lines.
+    assert_eq!(
+        changed["blocked"]["reason"],
+        "Waiting on a decision\nFollow up Friday"
+    );
     assert_eq!(changed["dueDate"], Value::Null);
     let (_, timeline) = owner
         .get(&format!("{base}/work-items/{design_id}/timeline"))

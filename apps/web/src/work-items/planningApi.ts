@@ -1,5 +1,5 @@
 import { requestJson } from '../api/client'
-import { callOp } from '../api/ops'
+import { callOp, ranOrThrow } from '../api/ops'
 import { getWorkItem, getWorkItemWorkflow } from './api'
 import type { TaskUpdateManyInput } from '../api/generated/operations'
 import type { BulkChanges, Milestone, ProjectLabel, TaskRelationKind, WorkflowUpdate } from './types'
@@ -33,7 +33,7 @@ export async function bulkUpdateWorkItems(input: {
   if (changes.archived !== undefined) operation.archived = changes.archived
   // Fields go by ID or name; null clears one.
   if (changes.fieldValues !== undefined) operation.fields = changes.fieldValues
-  const { tasks } = await callOp('task_update_many', operation, { requestId: input.idempotencyKey })
+  const { tasks } = ranOrThrow(await callOp('task_update_many', operation, { requestId: input.idempotencyKey }), 'This change')
   // Each task as it is now: its id, key and version, for an undo.
   return { items: tasks }
 }

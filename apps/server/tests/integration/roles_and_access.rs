@@ -5312,6 +5312,51 @@ async fn moving_a_task_needs_its_contents_and_code_to_be_seen() {
         in_target("move-repo").await > 0,
         "the owner's note names it"
     );
+
+    // Through the web, archiving and seeing tasks here and creating them
+    // there is enough: no "edit tasks" in either project.
+    set_work_role(
+        "Web movers",
+        json!(["tasks.view", "tasks.delete"]),
+        Value::Null,
+        "bea-web-movers",
+    )
+    .await;
+    let (status, creators) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Creators", "baseRole": "member", "permissions": ["tasks.view", "tasks.create"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{creators}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &dest,
+        bea,
+        "bea-dest-creators",
+        json!({"roleId": creators["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let web = linked_task("Moved through the web").await;
+    let (status, done) = crate::support::tasks::send(
+        app,
+        &bea_browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items/{web}/project-move"),
+        None,
+        json!({"targetProjectId": dest}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let arrived = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM task_rows WHERE project_id = $1 AND title = 'Moved through the web'",
+    )
+    .bind(target)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("moved");
+    assert_eq!(arrived, 1, "{done}");
 }
 
 /// Changing a task's links (task_relate, task_depend) answers with the task
