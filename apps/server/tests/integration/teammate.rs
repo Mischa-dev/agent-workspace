@@ -656,6 +656,71 @@ async fn a_keyed_retry_after_an_allowed_review_replays() {
     assert_eq!(kept, 1);
 }
 
+/// Identical calls that overlap (a retry sent while the first attempt is
+/// still being checked) share one review: each is told it waits on the same
+/// request, none fails on the second ask.
+#[tokio::test]
+async fn overlapping_identical_calls_share_one_review() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .build("teammate_guards_overlapping_retries")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let space = world.project("WORK");
+    let made = tool(
+        &world,
+        rook,
+        "collection_create",
+        json!({"projectId": space, "name": "Bugs"}),
+    )
+    .await;
+    let collection = made["value"]["collection"]["id"].clone();
+    op(
+        &world,
+        "guard_set",
+        json!({"name": "Records get a look", "action": "review",
+               "targetKinds": ["record"], "reviewers": [world.owner.actor]}),
+    )
+    .await;
+    let call = json!({"projectId": space, "collection": collection,
+                      "records": [{"title": "Crash"}]});
+    // Over the API, so each attempt is a request of its own.
+    let path = format!("/api/v2/w/{}/ops/record_create_many", world.organization);
+    let key = Uuid::now_v7().to_string();
+    let answers = futures_util::future::join_all((0..3).map(|_| async {
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri(&path)
+            .header("authorization", format!("Bearer {}", rook.token))
+            .header("content-type", "application/json")
+            .header("idempotency-key", &key)
+            .body(axum::body::Body::from(call.to_string()))
+            .expect("request");
+        let (status, body) = send(&world.app, request).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body
+    }))
+    .await;
+    let first = &answers[0];
+    for answer in &answers {
+        assert_eq!(answer["value"]["status"], "pending_review", "{answer}");
+        assert_eq!(
+            answer["value"]["requestId"], first["value"]["requestId"],
+            "{answer}"
+        );
+    }
+    let pending =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM guard_holds WHERE state = 'pending'")
+            .fetch_one(world.pool())
+            .await
+            .expect("holds");
+    assert_eq!(pending, 1);
+}
+
 /// A conversation's memory page is that conversation's: a change to it held
 /// for review goes only to reviewers who can read the conversation, and
 /// with none who can, it is refused rather than shown to the others.

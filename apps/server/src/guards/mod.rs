@@ -350,6 +350,23 @@ async fn review(
     } = held;
     let logged = |error: AppError| OpError::logged(operation, &error);
     let hash = hash_of(input);
+    // Identical calls (a retry overlapping the first attempt) take turns
+    // here until this transaction ends, so the second finds the review the
+    // first asked rather than racing it to open another.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!(
+            "guard-review:{}:{}:{}:{operation}:{hash}:{}",
+            located.workspace_id,
+            guard.id,
+            caller.account_id,
+            located
+                .space_id
+                .map(|space| space.to_string())
+                .unwrap_or_default(),
+        ))
+        .execute(&mut **transaction)
+        .await
+        .map_err(|error| logged(error.into()))?;
     let held = sqlx::query_as::<_, (Uuid, Uuid, String, Option<Value>)>(
         r#"
         SELECT hold.id, hold.request_id, request.status, request.answer

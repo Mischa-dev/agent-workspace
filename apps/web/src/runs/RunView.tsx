@@ -53,9 +53,11 @@ export function RunView({ runId }: { runId: string }) {
     queryKey: runKeys.view(runId),
     queryFn: ({ signal }) => viewRun(runId, signal),
     enabled: Boolean(runId),
+    // Polled while live, built-in runs too: their file list's
+    // completeness comes from here.
     refetchInterval: (query) => {
       const data = query.state.data
-      return data && !data.builtin && isLiveRun(data.state) ? LIVE_REFRESH_MS : false
+      return data && isLiveRun(data.state) ? LIVE_REFRESH_MS : false
     },
   })
   const notFound = view.isError && isApiError(view.error) && (view.error.status === 404 || view.error.code === 'not_found')

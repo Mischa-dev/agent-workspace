@@ -112,11 +112,15 @@ async fn clean_worktrees_here(
             continue;
         }
 
-        let mut transaction = crate::db::scoped_tx(pool).await?;
         // Another holder works on this disk now: this sweep stops here.
+        // Checked in a transaction of its own: holding the lease row while
+        // the removal waits on Git would stall the lease's renewal.
         if let Some((cluster, lease)) = holding.as_ref() {
-            cluster.fence(&mut transaction, lease).await?;
+            let mut check = crate::db::scoped_tx(pool).await?;
+            cluster.fence(&mut check, lease).await?;
+            check.commit().await?;
         }
+        let mut transaction = crate::db::scoped_tx(pool).await?;
         lock_repository_retention(&mut transaction, candidate.repository_id).await?;
         if !candidate_is_current(&mut transaction, &candidate).await? {
             transaction.rollback().await?;
@@ -126,6 +130,13 @@ async fn clean_worktrees_here(
         let worktree = PathBuf::from(&candidate.worktree_path);
         let branch_name = candidate.branch_name.clone();
         let published_commit = candidate.published_commit.clone();
+        if holding
+            .as_ref()
+            .is_some_and(|(_, lease)| lease.lost.is_cancelled())
+        {
+            transaction.rollback().await?;
+            return Err(AppError::LeaseLost);
+        }
         let removal = tokio::task::spawn_blocking(move || {
             crate::hosts::builtin::git::remove_published_worktree(
                 &mirror,
