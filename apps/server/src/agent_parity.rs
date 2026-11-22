@@ -994,21 +994,6 @@ mod tests {
             "/api/v1/projects/{project_id}/task-templates/{template_id}/apply",
             Tool("task_from_template"),
         ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/imports",
-            Tool("task_import"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/imports/{import_id}",
-            Tool("task_import"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/imports/{import_id}/commit",
-            Tool("task_import"),
-        ),
     ];
 
     #[test]
@@ -1081,7 +1066,7 @@ mod tests {
     /// Hand-written web writes whose tool is already an operation: each is a
     /// second edge for something the generated route does (K2.22). The
     /// number only goes down; when you delete one, lower it.
-    const HAND_WRITTEN_OPERATION_ROUTES: usize = 66;
+    const HAND_WRITTEN_OPERATION_ROUTES: usize = 63;
 
     #[test]
     fn hand_written_routes_for_operations_only_go_down() {

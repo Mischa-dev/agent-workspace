@@ -91,8 +91,19 @@ impl Client {
         self.send("POST", uri, Some(body)).await
     }
 
-    async fn patch(&self, uri: &str, body: Value) -> (StatusCode, Value) {
-        self.send("PATCH", uri, Some(body)).await
+    /// task_import in `project`: the import on success, else the envelope.
+    async fn import(
+        &self,
+        project: impl std::fmt::Display,
+        mut input: Value,
+    ) -> (StatusCode, Value) {
+        input["projectId"] = json!(project.to_string());
+        let (status, body) = self.post("/api/v2/ops/task_import", input).await;
+        if body["outcome"] == "ok" {
+            (status, body["value"]["import"].clone())
+        } else {
+            (status, body)
+        }
     }
 
     async fn send(&self, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
@@ -521,12 +532,12 @@ async fn an_import_creates_each_row_once_and_exports_back() {
     let base = format!("/api/v1/projects/{}", fixture.project_id);
     let (status, import) = fixture
         .owner
-        .post(
-            &format!("{base}/imports"),
+        .import(
+            fixture.project_id,
             json!({"source": "csv", "text": LINEAR_CSV, "fileName": "linear.csv"}),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{import}");
+    assert_eq!(status, StatusCode::OK, "{import}");
     assert_eq!(import["preview"]["willCreate"], 2, "{import}");
     assert_eq!(import["preview"]["withoutTitle"], 1, "{import}");
     assert_eq!(import["mapping"]["title"], "Title");
@@ -535,27 +546,27 @@ async fn an_import_creates_each_row_once_and_exports_back() {
     // Changing the mapping reads the text again.
     let (status, remapped) = fixture
         .owner
-        .patch(
-            &format!("{base}/imports/{id}"),
-            json!({"expectedVersion": import["version"], "mapping": {"title": "Description", "externalId": "ID"}}),
+        .import(
+            fixture.project_id,
+            json!({"importId": id, "expectedVersion": import["version"], "mapping": {"title": "Description", "externalId": "ID"}}),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{remapped}");
     assert_eq!(remapped["preview"]["willCreate"], 2, "{remapped}");
     let (status, restored) = fixture
         .owner
-        .patch(
-            &format!("{base}/imports/{id}"),
-            json!({"expectedVersion": remapped["version"], "mapping": import["mapping"]}),
+        .import(
+            fixture.project_id,
+            json!({"importId": id, "expectedVersion": remapped["version"], "mapping": import["mapping"]}),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{restored}");
 
     let (status, committed) = fixture
         .owner
-        .post(
-            &format!("{base}/imports/{id}/commit"),
-            json!({"expectedVersion": restored["version"]}),
+        .import(
+            fixture.project_id,
+            json!({"importId": id, "expectedVersion": restored["version"], "commit": true}),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{committed}");
@@ -589,24 +600,24 @@ async fn an_import_creates_each_row_once_and_exports_back() {
     // The same file again: everything is already here.
     let (status, again) = fixture
         .owner
-        .post(
-            &format!("{base}/imports"),
+        .import(
+            fixture.project_id,
             json!({"source": "csv", "text": LINEAR_CSV}),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{again}");
+    assert_eq!(status, StatusCode::OK, "{again}");
     assert_eq!(again["preview"]["willCreate"], 0, "{again}");
     assert_eq!(again["preview"]["alreadyImported"], 2, "{again}");
 
     // Markdown: list items, subtasks and headings as milestones.
     let (status, markdown) = fixture
         .owner
-        .post(
-            &format!("{base}/imports"),
-            json!({"source": "markdown", "text": "# Beta\n- [ ] Invite testers #beta\n  - [ ] Write the email\n", "options": {"headingsAsMilestones": true, "createLabels": true, "createMilestones": true}}),
+        .import(
+            fixture.project_id,
+            json!({"source": "markdown", "text": "# Beta\n- [ ] Invite testers #beta\n  - [ ] Write the email\n", "headingsAsMilestones": true, "createLabels": true, "createMilestones": true}),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{markdown}");
+    assert_eq!(status, StatusCode::OK, "{markdown}");
     assert_eq!(
         markdown["preview"]["newMilestones"],
         json!(["Beta"]),
@@ -708,9 +719,9 @@ async fn a_github_import_stops_when_its_committer_loses_see_code() {
     assert_eq!(draft["repositoryName"], "Mischa-dev/w11-import", "{draft}");
     let (status, committed) = fixture
         .member
-        .post(
-            &format!("{base}/imports/{import}/commit"),
-            json!({"expectedVersion": draft["version"]}),
+        .import(
+            project,
+            json!({"importId": import, "expectedVersion": draft["version"], "commit": true}),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{committed}");

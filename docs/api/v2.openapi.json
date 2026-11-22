@@ -174569,7 +174569,7 @@
     },
     "/api/v2/w/{workspace}/ops/task_import": {
       "post": {
-        "description": "Import tasks from Markdown, CSV (Linear and Jira exports work as they are) or a connected repository's issues. It previews first: each row's status, labels, assignee and milestone, and anything that doesn't match. Call again with the importId and commit: true to create them. Rows imported before from the same source are skipped. Needs \"Create tasks\" where it acts.",
+        "description": "Import tasks from Markdown, CSV (Linear and Jira exports work as they are) or a connected repository's issues. It previews first: each row's status, labels, assignee and milestone, and anything that doesn't match. Call again with the importId to map its columns again, change its options or cancel it, and with commit: true to create them. Rows imported before from the same source are skipped. Needs \"Create tasks\" where it acts.",
         "operationId": "task_import",
         "parameters": [
           {
@@ -174598,10 +174598,58 @@
               "schema": {
                 "additionalProperties": false,
                 "properties": {
+                  "cancel": {
+                    "description": "With importId: stop the import. A draft is dropped; one already\ncreating tasks stops after the chunk it's on, keeping what it made.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
                   "commit": {
                     "description": "false (the default): only preview what would be created. true:\ncreate the tasks. Rows already imported from the same source are\nskipped either way.",
                     "type": [
                       "boolean",
+                      "null"
+                    ]
+                  },
+                  "createLabels": {
+                    "description": "Create labels the project doesn't have yet (default true).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "createMilestones": {
+                    "description": "Create milestones the project doesn't have yet (default true).",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "excludedRows": {
+                    "description": "Rows, by place in the preview, to leave out.",
+                    "items": {
+                      "format": "uint",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "expectedVersion": {
+                    "description": "With importId: the version you read; the call is refused if the\nimport changed since.",
+                    "format": "int64",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "fileName": {
+                    "description": "The uploaded file's name, shown with the import.",
+                    "type": [
+                      "string",
                       "null"
                     ]
                   },
@@ -174630,7 +174678,7 @@
                     "additionalProperties": {
                       "type": "string"
                     },
-                    "description": "For csv: which column fills each task field, such as\n{\"title\": \"Summary\", \"externalId\": \"Issue key\"}. Columns are matched\nby name automatically when left out.",
+                    "description": "For csv: which column fills each task field, such as\n{\"title\": \"Summary\", \"externalId\": \"Issue key\"}. Columns are matched\nby name automatically when left out. With importId, maps a draft's\ncolumns again.",
                     "type": [
                       "object",
                       "null"

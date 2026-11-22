@@ -172,9 +172,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/external-agents/{connection_id}/webhook/test",
     "POST /api/v1/projects/{project_id}/external-agents/{connection_id}/workos",
     "DELETE /api/v1/projects/{project_id}/external-agents/{connection_id}/workos/{binding_id}",
-    "POST /api/v1/projects/{project_id}/imports",
-    "PATCH /api/v1/projects/{project_id}/imports/{import_id}",
-    "POST /api/v1/projects/{project_id}/imports/{import_id}/commit",
     "POST /api/v1/projects/{project_id}/integrations/github/connect",
     "POST /api/v1/projects/{project_id}/integrations/github/repositories",
     "POST /api/v1/projects/{project_id}/collections",
@@ -4596,22 +4593,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             versioned("external_agent_connections", 1, json!({})),
         ),
         // Imports
-        path_case(
-            "POST /api/v1/projects/{project_id}/imports",
-            &[project()],
-            json_body(json!({"source": "markdown", "text": "# Net\n- [ ] Net import\n", "fileName": "net.md"})),
-        )
-        .rejecting(vec![json!({"source": "github", "repositoryId": b.repository})]),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/imports/{import_id}",
-            &[project(), id(&a.import, &b.import)],
-            versioned("task_imports", 1, json!({})),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/imports/{import_id}/commit",
-            &[project(), id(&a.import, &b.import)],
-            versioned("task_imports", 1, json!({})),
-        ),
         // GitHub
         path_case(
             "POST /api/v1/projects/{project_id}/integrations/github/connect",
@@ -7395,6 +7376,9 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .rejecting(vec![
             json!({"projectId": a.project, "importId": b.import}),
+            json!({"projectId": a.project, "importId": b.import, "cancel": true}),
+            json!({"projectId": a.project, "importId": b.import, "createLabels": false}),
+            json!({"projectId": a.project, "importId": b.import, "commit": true}),
             json!({"projectId": a.project, "source": "github", "repositoryId": b.repository}),
         ]),
         // Hosts (A1.11)

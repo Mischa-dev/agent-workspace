@@ -58,7 +58,7 @@
   "threads/ThreadPanel.tsx": 1,
   "threads/threadTimeline.ts": 1,
   "threads/useThreadRunActions.ts": 1,
-  "views/api.ts": 11,
+  "views/api.ts": 8,
   "whiteboards/api.ts": 9,
   "work-items/api.ts": 13,
   "work-items/moveApi.ts": 3,
