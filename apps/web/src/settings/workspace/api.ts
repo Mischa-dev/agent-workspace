@@ -188,7 +188,18 @@ export async function createWorkspaceInvitation(
     { workspaceId: organizationId },
   )
   const { invitation, joinUrl } = ranOrThrow(issued, 'Inviting them')
-  return { id: invitation.id, invitationUrl: joinUrl ?? '' }
+  // The link is shown once: a retried request the server had already done
+  // answers without it.
+  if (!joinUrl) throw new InvitationLinkMissing()
+  return { id: invitation.id, invitationUrl: joinUrl }
+}
+
+/** The invitation was made, but its one-time link didn't reach this page. */
+export class InvitationLinkMissing extends Error {
+  constructor() {
+    super('The invitation was made, but its link didn’t arrive. Revoke it from the list and invite them again.')
+    this.name = 'InvitationLinkMissing'
+  }
 }
 
 export async function revokeWorkspaceInvitation(organizationId: string, invitation: WorkspaceInvitation) {

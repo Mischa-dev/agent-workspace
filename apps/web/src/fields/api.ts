@@ -73,7 +73,10 @@ export async function createField(
       { projectId: scope.projectId, name, type, description, options, target },
       { requestId: idempotencyKey },
     )
-    return normalizeField(ranOrThrow(written, 'Adding the field').field)
+    const result = ranOrThrow(written, 'Adding the field')
+    // field_create answers with the field already called that, unchanged.
+    if (!result.created) throw new Error(result.note ?? `A field is already called “${name}”.`)
+    return normalizeField(result.field)
   }
   return normalizeField(await requestJson<unknown>(scopePath(scope), { method: 'POST', idempotencyKey, json }))
 }

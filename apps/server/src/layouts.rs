@@ -1382,6 +1382,25 @@ pub async fn find_preset(
         .map(|preset| preset.id.to_string()))
 }
 
+/// [`find_preset`] for a preset something already uses (a layout, a rule or
+/// a saved preset's base): one named by its ID may be removed, as removing a
+/// preset only takes it out of pickers and what uses it keeps working.
+pub async fn find_preset_in_use(
+    connection: &mut PgConnection,
+    organization_id: Uuid,
+    text: &str,
+) -> Result<Option<String>, AppError> {
+    if let Some(found) = find_preset(connection, organization_id, text).await? {
+        return Ok(Some(found));
+    }
+    let Ok(id) = Uuid::parse_str(text.trim()) else {
+        return Ok(None);
+    };
+    Ok(saved_preset(connection, organization_id, id)
+        .await?
+        .map(|preset| preset.id.to_string()))
+}
+
 /// Every preset a project in this workspace can pick, by name.
 pub async fn preset_names(
     connection: &mut PgConnection,

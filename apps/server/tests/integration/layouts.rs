@@ -189,6 +189,60 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         "{finch_view}"
     );
     assert_eq!(finch_view["effective"]["words"]["task"]["many"], "chores");
+    // Saving the rules again keeps the one that uses it, as the settings page
+    // sends them all, and so does a layout or a preset based on it.
+    let (status, ruled) = op(
+        app,
+        owner,
+        organization,
+        "layout_update",
+        json!({"projectId": work, "rules": [
+            {"person": rook.to_string(), "preset": "bug_reporting"},
+            {"role": "viewer", "preset": "stakeholder"},
+            {"role": "member", "preset": chores},
+        ]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ruled}");
+    assert_eq!(ruled["value"]["rules"], 3, "{ruled}");
+    let (status, kept) = op(
+        app,
+        owner,
+        organization,
+        "layout_update",
+        json!({"projectId": "workspace", "wholeWorkspace": true, "preset": chores,
+            "show": {"area.runs": false}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    let (status, copied) = op(
+        app,
+        owner,
+        organization,
+        "layout_preset_create",
+        json!({"projectId": "workspace", "name": "Chores again", "base": chores}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{copied}");
+    // By name it's gone from pickers.
+    let (status, refused) = op(
+        app,
+        owner,
+        organization,
+        "layout_update",
+        json!({"projectId": work, "preset": "Chores"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let (status, reset) = op(
+        app,
+        owner,
+        organization,
+        "layout_update",
+        json!({"projectId": "workspace", "wholeWorkspace": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reset}");
 
     // "Show hidden parts" works for owners and admins only; anyone can hide
     // more for themselves.

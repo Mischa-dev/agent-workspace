@@ -391,7 +391,7 @@ pub(super) async fn insert_audit(
             id, actor_id, project_id, authentication_class, action,
             target_kind, target_id, outcome, metadata, channel, client_name,
             mcp_credential_id, mcp_oauth_grant_id, external_agent_connection_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'succeeded', $8, 'mcp', $9, $10, $11, $12)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'succeeded', $8, $13, $9, $10, $11, $12)
         "#,
     )
     .bind(Uuid::now_v7())
@@ -407,9 +407,22 @@ pub(super) async fn insert_audit(
     .bind(principal.mcp_credential_id)
     .bind(principal.oauth_grant_id)
     .bind(principal.external_agent_connection_id)
+    .bind(audit_channel(principal.authentication_class))
     .execute(&mut **transaction)
     .await?;
     Ok(())
+}
+
+/// The channel an audit row names for a tool run on behalf of `class`: an
+/// operation run from the web, a rule or a job runs its tool too, and its
+/// row says where it came from as the operation's own row does.
+fn audit_channel(class: &str) -> &'static str {
+    match class {
+        "password_session" => "browser",
+        "automation" => "automation",
+        "background_job" | "proposal" | "ai_background" => "system",
+        _ => "mcp",
+    }
 }
 
 /// Reads an argument agents send either as a string or as a number (such as

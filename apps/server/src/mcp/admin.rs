@@ -764,7 +764,7 @@ pub(crate) async fn project_layout_set(
         let layout = match wanted {
             Some(text) => {
                 let Some(preset) =
-                    layouts::find_preset(&mut transaction, organization_id, text).await?
+                    layouts::find_preset_in_use(&mut transaction, organization_id, text).await?
                 else {
                     let names = layouts::preset_names(&mut transaction, organization_id).await?;
                     return Ok(ToolResult::invalid(
@@ -882,7 +882,7 @@ async fn layout_rules_set(
     let mut rules = Vec::with_capacity(wanted.len());
     for rule in wanted {
         let Some(preset) =
-            layouts::find_preset(&mut *transaction, organization_id, &rule.preset).await?
+            layouts::find_preset_in_use(&mut *transaction, organization_id, &rule.preset).await?
         else {
             let names = layouts::preset_names(&mut *transaction, organization_id).await?;
             return Ok((
