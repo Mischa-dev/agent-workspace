@@ -199,10 +199,6 @@ pub fn router() -> Router<AppState> {
             "/api/v1/organizations/{organization_id}/project-templates",
             get(project_templates::list_project_templates),
         )
-        .route(
-            "/api/v1/organizations/{organization_id}/project-templates/{template_id}",
-            axum::routing::patch(project_templates::update_project_template),
-        )
         .route("/api/v1/my-work", get(views::get_my_work))
         .route(
             "/api/v1/projects/{project_id}/timeline",

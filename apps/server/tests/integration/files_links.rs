@@ -518,16 +518,9 @@ async fn files_live_in_an_object_store() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
     // Removed (never sent), its bytes leave the bucket at the next cleanup.
-    let (status, removed) = send(
-        &setup.app,
-        owner.request(
-            "DELETE",
-            &format!("/api/v1/files/{small}"),
-            None,
-            Value::Null,
-        ),
-    )
-    .await;
+    let (status, removed) = owner
+        .op(&setup.app, "file_delete", json!({"fileId": small}))
+        .await;
     assert!(status.is_success(), "{removed}");
     files::cleanup(&state).await.expect("cleanup");
     let left = fake

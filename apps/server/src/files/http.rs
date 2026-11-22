@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use super::{
     Destination, FileRow, FileStore, FileView, MAX_UPLOAD_BYTES, Reader, ThingKind, readable_file,
-    remove_file, served_content_type, store_body, task_files, thing_destination, upload_limit,
+    served_content_type, store_body, task_files, thing_destination, upload_limit,
 };
 use crate::{
     AppState,
@@ -46,7 +46,7 @@ pub fn router() -> Router<AppState> {
             "/api/v1/things/{kind}/{id}/files",
             post(upload_to_thing).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
         )
-        .route("/api/v1/files/{id}", get(describe).delete(remove))
+        .route("/api/v1/files/{id}", get(describe))
         .route("/api/v1/files/{id}/content", get(content))
         .route("/api/v1/files/{id}/thumbnail", get(thumbnail))
 }
@@ -228,46 +228,6 @@ async fn list_task_files(
     Ok(Json(TaskFilesResponse {
         files: rows.iter().map(FileRow::view).collect(),
     }))
-}
-
-async fn remove(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(file_id): ApiPath<Uuid>,
-) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let row = readable_file(
-        &state.pool,
-        Reader::Browser {
-            actor_id: principal.actor_id,
-        },
-        file_id,
-    )
-    .await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    // H1.24: the route layer refuses a closed workspace; this holds it open
-    // until the removal commits.
-    crate::workspace::lifecycle::hold_open_for_space(
-        &mut transaction,
-        row.project_id,
-        "file_remove",
-    )
-    .await?;
-    let may_edit_task = match (row.attached_at.as_ref(), row.work_item_id) {
-        (Some(_), Some(work_item_id)) => {
-            authorize_task_change(&mut transaction, &principal, row.project_id, work_item_id)
-                .await
-                .is_ok()
-        }
-        _ => false,
-    };
-    remove_file(&mut transaction, &row, principal.actor_id, may_edit_task).await?;
-    transaction.commit().await?;
-    if let (Some(_), Some(work_item_id)) = (row.attached_at.as_ref(), row.work_item_id) {
-        crate::work_items::notify_files_changed(&state.pool, row.project_id, work_item_id).await?;
-    }
-    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn content(

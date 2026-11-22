@@ -119,6 +119,30 @@ fn change_of(
     Ok(Change::Save(model, Box::new(overrides)))
 }
 
+/// As an operation: a refresh by someone with no signed-in account for the
+/// harness keeps its own code (`execution_profile_required`), so the
+/// settings page can point them at their accounts.
+pub(crate) async fn model_catalog_set(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: ModelCatalogWriteArguments,
+) -> Result<ModelCatalogWriteValue, crate::ops::OpError> {
+    match model_catalog_write(state, principal, arguments).await {
+        ToolResult::Conflict { message } if message == SIGN_IN_FIRST => {
+            Err(crate::ops::OpError::Conflict {
+                reason: crate::ops::ConflictReason::State {
+                    code: "execution_profile_required",
+                },
+                message: SIGN_IN_FIRST.into(),
+                current: None,
+            })
+        }
+        result => crate::mcp::task_commands::tool_answer(result),
+    }
+}
+
+const SIGN_IN_FIRST: &str = "Sign in to an account for that harness first: a refresh lists its models through your own account.";
+
 pub(crate) async fn model_catalog_write(
     state: &AppState,
     principal: &McpPrincipal,
@@ -217,9 +241,7 @@ pub(crate) async fn model_catalog_write(
             ToolResult::not_found("That harness in this workspace")
         }
         Err(AppError::NotFound("harness_model")) => ToolResult::not_found("That model"),
-        Err(AppError::ExecutionProfileRequired) => ToolResult::conflict(
-            "Sign in to an account for that harness first: a refresh lists its models through your own account.",
-        ),
+        Err(AppError::ExecutionProfileRequired) => ToolResult::conflict(SIGN_IN_FIRST),
         Err(error) => ToolResult::from_error(error, "model_catalog_write"),
     }
 }

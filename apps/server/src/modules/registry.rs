@@ -75,6 +75,11 @@ pub enum ModuleFilter {
     /// The module also serves these tools of another module: they work
     /// where either is on, and keep to this module's part.
     AlsoServes(&'static [&'static str]),
+    /// The module's space is home to these tools of another module: they
+    /// run in the workspace's own space while their module is on for the
+    /// workspace (a workspace's project templates while Projects is on),
+    /// and are listed only where their own module is.
+    HomeFor(&'static [&'static str]),
 }
 
 /// A slot in a workspace export the module fills (H1.8, H1.9): declared
@@ -441,6 +446,15 @@ impl Registry {
             })
     }
 
+    /// The module whose space is home to `tool` (`ModuleFilter::HomeFor`).
+    pub fn home_of(&self, tool: &str) -> Option<&str> {
+        self.filters()
+            .find_map(move |(module, filter)| match filter {
+                ModuleFilter::HomeFor(tools) if tools.contains(&tool) => Some(module),
+                _ => None,
+            })
+    }
+
     /// Every module's id-routed families, with the module's id.
     pub fn id_routes(&self) -> impl Iterator<Item = (&str, IdRoute)> {
         self.modules.iter().flat_map(|module| {
@@ -606,7 +620,7 @@ mod tests {
         // A tool another module also serves names a module that isn't its owner.
         for module in registry.modules() {
             for filter in &module.contributions.filters {
-                if let ModuleFilter::AlsoServes(tools) = filter {
+                if let ModuleFilter::AlsoServes(tools) | ModuleFilter::HomeFor(tools) = filter {
                     for tool in *tools {
                         let owner = registry.module_of_tool(tool).map(|owner| owner.id.as_str());
                         assert!(owner.is_some(), "{tool} has no module");

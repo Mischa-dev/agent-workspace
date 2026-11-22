@@ -65,5 +65,11 @@ impl CoreModule for Module {
             "layout_preset_create",
             "layout_preset_update",
         ]));
+        // Its project templates and model lists are too, but only while
+        // Projects or Runs is on for the workspace.
+        module.filter(ModuleFilter::HomeFor(&[
+            "project_template_update",
+            "model_catalog_set",
+        ]));
     }
 }

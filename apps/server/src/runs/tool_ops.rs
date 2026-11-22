@@ -474,5 +474,8 @@ tool_op!(ModelCatalogSet {
     emits: ["setting.changed"],
     input: model_catalog_tools::ModelCatalogWriteArguments,
     output: model_catalog_tools::ModelCatalogWriteValue,
-    run: |call, input| { run_tool!(call, model_catalog_tools::model_catalog_write, input) }
+    run: |call, input| {
+        let principal = crate::mcp::task_commands::principal_for(call.ctx, None);
+        model_catalog_tools::model_catalog_set(call.state, &principal, input).await
+    }
 });
