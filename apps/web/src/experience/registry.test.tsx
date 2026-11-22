@@ -16,7 +16,7 @@ import { MemoryTabs, WorkTabs } from '../shell/ProjectTabs'
 import { authenticatedSession, organization } from '../test/appHarness'
 import { OWN_WORDS, layoutKeys, normalizeEffective, type EffectiveLayout } from './layout'
 import { NOUN_IDS, PART_IDS } from './parts'
-import { REGISTRY, hiddenModules, keepModuleChanges, layoutFrom, modulePart, withModuleSwitches } from './registry'
+import { REGISTRY, keepModuleChanges, layoutFrom, layoutShowsModule, modulePart, moduleSwitches, withModuleSwitches, type SavedPreset } from './registry'
 
 // Keeps layouts (AWD-66) whole as the app grows: the ids the code names
 // match registry.json, presets name only real parts, and every row of a
@@ -193,13 +193,19 @@ describe('layout registry', () => {
     expect(keepModuleChanges(edited, null)).toEqual(edited)
   })
 
-  it('switches built modules off by their part, and keeps the ones it was given', () => {
+  it('keeps built modules’ switches both ways, over what a saved preset says', () => {
     const stored = { preset: 'software_team', changes: { 'module.crm': false, 'module.desk': true } } as Parameters<typeof keepModuleChanges>[1]
-    expect([...hiddenModules(stored)]).toEqual(['module.crm'])
+    expect(moduleSwitches(stored?.changes)).toEqual({ 'module.crm': false, 'module.desk': true })
     const edited = layoutFrom('software_team', new Set(), {}, [])
-    const hidden = new Set([...hiddenModules(stored), modulePart('local.hiring')])
-    expect(withModuleSwitches(edited, hidden).changes).toMatchObject({ 'module.crm': false, 'module.hiring': false })
-    expect(withModuleSwitches(edited, new Set())).toEqual(edited)
+    expect(keepModuleChanges(edited, stored).changes).toMatchObject({ 'module.crm': false, 'module.desk': true })
+    expect(withModuleSwitches(edited, { [modulePart('local.hiring')]: false }).changes).toMatchObject({ 'module.hiring': false })
+    expect(withModuleSwitches(edited, {})).toEqual(edited)
+
+    // A saved preset that hides a module: the layout's own switch turns it back on.
+    const saved = [{ id: 'quiet', name: 'Quiet', description: '', base: 'software_team', changes: { 'module.crm': false }, words: {}, version: 1, removed: false }] as SavedPreset[]
+    expect(layoutShowsModule({ preset: 'quiet' }, saved, modulePart('local.crm'))).toBe(false)
+    expect(layoutShowsModule({ preset: 'quiet', changes: { 'module.crm': true } }, saved, modulePart('local.crm'))).toBe(true)
+    expect(layoutShowsModule({ preset: 'software_team' }, saved, modulePart('local.crm'))).toBe(true)
   })
 
   it('hides every tab whose part is hidden, and the tab bar once one tab is left', () => {

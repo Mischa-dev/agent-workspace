@@ -7,7 +7,7 @@ import type { Word } from './layout'
 import type { NounId, PartId } from './parts'
 import { presetChoices, type PresetChoice } from './presetChoices'
 import type { ModulePart } from './builtParts'
-import { REGISTRY, everything, hiddenModules, layoutFrom, layoutShape, presetShape, shapeWord, withModuleSwitches, type Layout, type SavedPreset, type Shape } from './registry'
+import { REGISTRY, everything, layoutFrom, layoutShape, layoutShowsModule, moduleSwitches, presetShape, presetShowsModule, shapeWord, withModuleSwitches, type Layout, type ModuleSwitches, type SavedPreset, type Shape } from './registry'
 import './layout.css'
 import '../styles/pages.css'
 
@@ -325,12 +325,15 @@ type Draft = {
   preset: string | null
   visible: Set<PartId>
   words: Partial<Record<NounId, Word>>
-  /** Built modules' parts (`module.<key>`) switched off, offered here or not. */
-  hiddenModules: Set<PartId>
+  /**
+   * Built modules' switches (`module.<key>`) this layout sets over its
+   * preset, on or off, offered here or not.
+   */
+  modules: ModuleSwitches
 }
 
 function draftFor(preset: string | null, shape: Shape, stored: Layout | null = null): Draft {
-  return { preset, visible: new Set(shape.visible), words: { ...shape.words }, hiddenModules: hiddenModules(stored) }
+  return { preset, visible: new Set(shape.visible), words: { ...shape.words }, modules: moduleSwitches(stored?.changes) }
 }
 
 /**
@@ -375,25 +378,41 @@ export function LayoutEditor({
   // Words and switches change from the preset picked, or from what applies without one.
   const base = draft.preset ? (presetShape(draft.preset, saved) ?? everything()) : fallbackShape
   const startFrom = draft.preset ?? fallback.layout?.preset ?? 'software_team'
-  const current = draft.preset === null ? null : withModuleSwitches(layoutFrom(draft.preset, draft.visible, draft.words, saved), draft.hiddenModules)
-  // The registry's parts as drafted, and each built module's unless switched off.
-  const switchedOn = new Set([...draft.visible, ...modules.map((part) => part.id).filter((part) => !draft.hiddenModules.has(part))])
+  const current = draft.preset === null ? null : withModuleSwitches(layoutFrom(draft.preset, draft.visible, draft.words, saved), draft.modules)
+  // A built module shows by this layout's own switch, else by its preset's (or, with no layout, by what applies).
+  const moduleShown = (part: PartId) =>
+    draft.preset === null ? layoutShowsModule(fallback.layout, saved, part) : (draft.modules[part] ?? presetShowsModule(draft.preset, saved, part))
+  const switchedOn = new Set([...draft.visible, ...modules.map((part) => part.id).filter(moduleShown)])
   const dirty = !sameLayout(current, stored)
   const shape: Shape = { visible: draft.visible, words: { ...base.words, ...draft.words }, lead: base.lead }
 
   // Changing a part with no layout of its own starts one from what applies now.
   const toggle = (part: PartId, shown: boolean) =>
     setDraft((now) => {
-      const builtModule = part.startsWith('module.')
-      const changed = new Set(builtModule ? now.hiddenModules : now.visible)
-      if (shown === builtModule) changed.delete(part)
-      else changed.add(part)
-      return { ...now, preset: now.preset ?? startFrom, ...(builtModule ? { hiddenModules: changed } : { visible: changed }) }
+      const preset = now.preset ?? startFrom
+      // Starting from what applies keeps its built modules' switches.
+      const switches = { ...(now.preset === null ? moduleSwitches(fallback.layout?.changes) : now.modules) }
+      if (part.startsWith('module.')) {
+        // A switch that says what the preset already does is dropped.
+        if (shown === presetShowsModule(preset, saved, part)) delete switches[part]
+        else switches[part] = shown
+        return { ...now, preset, modules: switches }
+      }
+      const changed = new Set(now.visible)
+      if (shown) changed.add(part)
+      else changed.delete(part)
+      return { ...now, preset, visible: changed, modules: switches }
     })
-  const rename = (noun: NounId, word: Word) => setDraft((now) => ({ ...now, preset: now.preset ?? startFrom, words: { ...now.words, [noun]: word } }))
+  const rename = (noun: NounId, word: Word) =>
+    setDraft((now) => ({
+      ...now,
+      preset: now.preset ?? startFrom,
+      modules: now.preset === null ? moduleSwitches(fallback.layout?.changes) : now.modules,
+      words: { ...now.words, [noun]: word },
+    }))
   // A preset leaves the built modules' switches as they are.
   const pick = (id: string | null) =>
-    setDraft((now) => ({ ...(id ? draftFor(id, presetShape(id, saved) ?? everything()) : draftFor(null, fallbackShape)), hiddenModules: now.hiddenModules }))
+    setDraft((now) => ({ ...(id ? draftFor(id, presetShape(id, saved) ?? everything()) : draftFor(null, fallbackShape)), modules: now.modules }))
 
   const save = () => {
     setSaving(true)
@@ -464,7 +483,7 @@ export function LayoutEditor({
         <SavePresetDialog
           onClose={() => setNaming(false)}
           onSave={(name, description) =>
-            onSavePreset(name, description, current ?? withModuleSwitches(layoutFrom(startFrom, draft.visible, draft.words, saved), draft.hiddenModules)).then(() =>
+            onSavePreset(name, description, current ?? withModuleSwitches(layoutFrom(startFrom, draft.visible, draft.words, saved), draft.modules)).then(() =>
               setNaming(false),
             )
           }

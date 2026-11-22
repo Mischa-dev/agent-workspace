@@ -120,13 +120,23 @@ export function modulePart(key: string): PartId {
   return `module.${key.replace(/^[a-z]+\./, '')}` as PartId
 }
 
-/** The built modules' parts (`module.<key>`) a stored layout switches off. */
-export function hiddenModules(stored: Layout | null): Set<PartId> {
-  return new Set(
-    Object.entries(stored?.changes ?? {})
-      .filter(([part, shown]) => part.startsWith('module.') && shown === false)
-      .map(([part]) => part as PartId),
-  )
+/** A built module part's switch: what a layout (or a saved preset) says about it, true or false. */
+export type ModuleSwitches = Partial<Record<PartId, boolean>>
+
+/** The built modules' switches (`module.<key>`, on or off) that `changes` holds. */
+export function moduleSwitches(changes: Layout['changes'] | null | undefined): ModuleSwitches {
+  return Object.fromEntries(Object.entries(changes ?? {}).filter(([part, shown]) => part.startsWith('module.') && typeof shown === 'boolean'))
+}
+
+/** Whether a preset shows a built module's part: a saved preset may switch it off; built-in ones show it. */
+export function presetShowsModule(reference: string, saved: SavedPreset[], part: PartId): boolean {
+  return saved.find((candidate) => candidate.id === reference)?.changes?.[part] ?? true
+}
+
+/** Whether a layout shows a built module's part: its own switch, else its preset's. */
+export function layoutShowsModule(layout: Layout | null, saved: SavedPreset[], part: PartId): boolean {
+  if (!layout) return true
+  return layout.changes?.[part] ?? presetShowsModule(layout.preset, saved, part)
 }
 
 /**
@@ -134,13 +144,13 @@ export function hiddenModules(stored: Layout | null): Set<PartId> {
  * holds, so a save of anything else keeps them rather than dropping them.
  */
 export function keepModuleChanges(layout: Layout, stored: Layout | null): Layout {
-  return withModuleSwitches(layout, hiddenModules(stored))
+  return withModuleSwitches(layout, moduleSwitches(stored?.changes))
 }
 
-/** `layout` with each of these built modules' parts switched off. */
-export function withModuleSwitches(layout: Layout, hidden: Set<PartId>): Layout {
-  if (!hidden.size) return layout
-  return { ...layout, changes: { ...layout.changes, ...Object.fromEntries([...hidden].map((part) => [part, false])) } }
+/** `layout` with these built modules' switches, on or off. */
+export function withModuleSwitches(layout: Layout, switches: ModuleSwitches): Layout {
+  if (!Object.keys(switches).length) return layout
+  return { ...layout, changes: { ...layout.changes, ...switches } }
 }
 
 /** A preset's name, for a reference that may be built in, saved or gone. */
