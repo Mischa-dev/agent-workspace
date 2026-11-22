@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { opQuery } from '../api/ops'
 import { hrefFor } from '../app/thingHref'
 import { useProjectExperience } from '../experience/layout'
-import type { PartId } from '../experience/parts'
+import { modulePart } from '../experience/registry'
 import { moduleIcon } from '../modules/builtIcons'
 import type { Project } from '../projects/types'
 import { SidebarLink } from './SidebarParts'
@@ -19,11 +19,6 @@ function entryHref(target: unknown, spaceId: string): string | null {
   if (value?.kind === 'collection' && value.collection) return hrefFor({ kind: 'collection', id: value.collection, spaceId })
   if (value?.kind === 'page' && value.page) return hrefFor({ kind: 'page', id: value.page, spaceId })
   return null
-}
-
-/** A built module's layout part: `module.<name>`, its key without the `local.` every built key starts with. */
-function modulePart(key: string): PartId {
-  return `module.${key.replace(/^[a-z]+\./, '')}` as PartId
 }
 
 export default function BuiltModuleRows({ onNavigate, project }: { onNavigate: () => void; project: Project }) {

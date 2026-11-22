@@ -16,7 +16,7 @@ import { MemoryTabs, WorkTabs } from '../shell/ProjectTabs'
 import { authenticatedSession, organization } from '../test/appHarness'
 import { OWN_WORDS, layoutKeys, normalizeEffective, type EffectiveLayout } from './layout'
 import { NOUN_IDS, PART_IDS } from './parts'
-import { REGISTRY, keepModuleChanges, layoutFrom } from './registry'
+import { REGISTRY, hiddenModules, keepModuleChanges, layoutFrom, modulePart, withModuleSwitches } from './registry'
 
 // Keeps layouts (AWD-66) whole as the app grows: the ids the code names
 // match registry.json, presets name only real parts, and every row of a
@@ -191,6 +191,15 @@ describe('layout registry', () => {
     const edited = layoutFrom('software_team', new Set(), {}, [])
     expect(keepModuleChanges(edited, stored).changes).toMatchObject({ 'module.crm': false })
     expect(keepModuleChanges(edited, null)).toEqual(edited)
+  })
+
+  it('switches built modules off by their part, and keeps the ones it was given', () => {
+    const stored = { preset: 'software_team', changes: { 'module.crm': false, 'module.desk': true } } as Parameters<typeof keepModuleChanges>[1]
+    expect([...hiddenModules(stored)]).toEqual(['module.crm'])
+    const edited = layoutFrom('software_team', new Set(), {}, [])
+    const hidden = new Set([...hiddenModules(stored), modulePart('local.hiring')])
+    expect(withModuleSwitches(edited, hidden).changes).toMatchObject({ 'module.crm': false, 'module.hiring': false })
+    expect(withModuleSwitches(edited, new Set())).toEqual(edited)
   })
 
   it('hides every tab whose part is hidden, and the tab bar once one tab is left', () => {

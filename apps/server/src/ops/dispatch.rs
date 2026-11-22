@@ -263,6 +263,9 @@ async fn task_keys_to_ids(
         "/parentWorkItemId",
         "/duplicateOf",
         "/links/0/taskId",
+        // task_get's older name for taskId; other operations' `identifier`
+        // (a pull request's id or link) never has a task key's shape.
+        "/identifier",
     ]
     .iter()
     .map(|field| (*field).to_owned())

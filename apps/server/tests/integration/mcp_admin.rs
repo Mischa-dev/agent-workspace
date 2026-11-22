@@ -306,6 +306,21 @@ async fn channels_threads_pins_and_decisions_can_be_shaped() {
     )
     .await;
     let thread_id = thread["value"]["id"].as_str().expect("thread").to_owned();
+    // A named thread with its first message, sent twice with one key: the
+    // retry answers with the same thread and message, made once.
+    let keyed = json!({"conversationId": design_id, "name": "Tokens plan",
+                       "text": "Starting here.", "clientRequestId": "thread-once-1"});
+    let first = tool(app, &codex, &session, "thread_start", keyed.clone()).await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert_eq!(first["replayed"], false, "{first}");
+    assert_eq!(first["replaySafe"], true, "{first}");
+    let again = tool(app, &codex, &session, "thread_start", keyed).await;
+    assert_eq!(again["replayed"], true, "{again}");
+    assert_eq!(again["value"]["id"], first["value"]["id"], "{again}");
+    assert_eq!(
+        again["value"]["message"]["messageId"], first["value"]["message"]["messageId"],
+        "{again}"
+    );
     let decided = tool(
         app,
         &codex,
@@ -900,6 +915,15 @@ async fn dependencies_refuse_cycles_and_milestones_track_progress() {
     .await;
     assert_eq!(trimmed["value"]["total"], 2, "{trimmed}");
     assert_eq!(trimmed["value"]["overdue"], false);
+    // A keyed change sent again replays instead of changing it twice.
+    let keyed = json!({"projectId": work, "milestoneId": milestone["value"]["id"],
+                       "description": "Keyed", "clientRequestId": "milestone-change-1"});
+    let first = call("milestone_update", keyed.clone()).await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert_eq!(first["replayed"], false, "{first}");
+    let again = call("milestone_update", keyed).await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    assert_eq!(again["replayed"], true, "{again}");
     let listed = call("milestone_list", json!({"projectId": "PLAN"})).await;
     assert_eq!(listed["value"]["milestones"][0]["name"], "v1", "{listed}");
 

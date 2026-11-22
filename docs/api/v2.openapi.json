@@ -97519,7 +97519,7 @@
                     ]
                   },
                   "clientRequestId": {
-                    "description": "Makes creating safe to retry: send the same one again and you get\nthe milestone the first call made. Changes need expectedVersion.",
+                    "description": "Makes the call safe to retry: send the same one again and you get\nwhat the first call did, without making or changing anything twice.",
                     "type": [
                       "string",
                       "null"
@@ -98849,7 +98849,7 @@
                     ]
                   },
                   "clientRequestId": {
-                    "description": "Makes creating safe to retry: send the same one again and you get\nthe milestone the first call made. Changes need expectedVersion.",
+                    "description": "Makes the call safe to retry: send the same one again and you get\nwhat the first call did, without making or changing anything twice.",
                     "type": [
                       "string",
                       "null"

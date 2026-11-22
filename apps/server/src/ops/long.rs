@@ -79,6 +79,8 @@ struct KeptCaller {
     for_run: bool,
     /// The credential the call came through, which must still stand.
     credential_id: Option<Uuid>,
+    #[serde(default)]
+    home_space: Option<Uuid>,
     oauth_grant_id: Option<Uuid>,
 }
 
@@ -127,6 +129,7 @@ impl KeptCaller {
             run_id: caller.run_id,
             for_run: caller.for_run,
             credential_id,
+            home_space: caller.home_space,
             oauth_grant_id,
         }
     }
@@ -189,6 +192,7 @@ impl KeptCaller {
             run_id: self.run_id,
             credential_id: self.credential_id,
             for_run: self.for_run,
+            home_space: self.home_space,
         }))
     }
 }

@@ -1805,6 +1805,11 @@ pub struct RunNow {
     #[serde(default)]
     #[schemars(with = "Option<String>")]
     pub work_item_id: Option<Uuid>,
+    /// The caller's request id: a retry with it finds the run the first
+    /// call queued instead of firing the rule again.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub request_key: Option<String>,
 }
 
 /// Fires a rule now, for trying it out. It still acts as its maker, with
@@ -1815,7 +1820,7 @@ pub(crate) async fn run_now(
     project_id: Uuid,
     rule_id: Uuid,
     request: RunNow,
-) -> Result<RunView, AppError> {
+) -> Result<(RunView, bool), AppError> {
     let (can_edit, _) = reader_access(&state.pool, caller, project_id).await?;
     let rule = fetch(&state.pool, project_id, rule_id).await?;
     if !can_edit || rule.owner_actor_id != caller.actor_id {
@@ -1841,11 +1846,26 @@ pub(crate) async fn run_now(
         ..Subject::default()
     };
     let person = caller.actor_kind == ActorKind::Human; // kind-check: mechanical (a person's app signs in as that person)
+    // A keyed try is queued once: the run and its queued firing commit
+    // together, and a retry finds that run (its job fires it if this call
+    // stops before it does).
+    let dedupe_key = match request.request_key.as_deref() {
+        // The task tried is part of it: the same key for another task is
+        // another try, not a replay of this one.
+        Some(key) => format!(
+            "manual:{}:{}:{key}",
+            caller.actor_id,
+            request
+                .work_item_id
+                .map_or_else(String::new, |id| id.simple().to_string())
+        ),
+        None => format!("manual:{}", Uuid::now_v7()),
+    };
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let run_id = queue_fire(
+    let queued = queue_fire(
         &mut transaction,
         &rule,
-        &format!("manual:{}", Uuid::now_v7()),
+        &dedupe_key,
         "Run by hand",
         &subject,
         // Through the maker's app or script (MCP or the public API set its
@@ -1858,11 +1878,24 @@ pub(crate) async fn run_now(
             )
             .is_some(),
     )
-    .await?
-    .ok_or(AppError::Internal("manual automation run collided"))?;
+    .await?;
+    let Some(run_id) = queued else {
+        if request.request_key.is_none() {
+            return Err(AppError::Internal("manual automation run collided"));
+        }
+        let earlier = sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM automation_runs WHERE rule_id = $1 AND dedupe_key = $2",
+        )
+        .bind(rule.id)
+        .bind(dedupe_key.chars().take(300).collect::<String>())
+        .fetch_one(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        return Ok((run_view(&state.pool, earlier).await?, true));
+    };
     transaction.commit().await?;
     fire(state, run_id).await?;
-    run_view(&state.pool, run_id).await
+    Ok((run_view(&state.pool, run_id).await?, false))
 }
 
 /// What trying a rule would do, worked out without doing any of it.

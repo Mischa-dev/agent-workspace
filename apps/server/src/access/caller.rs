@@ -35,6 +35,10 @@ pub struct Caller {
     /// run's space, and a worker membership there holds what a run
     /// delegates to its agent (`holding::RUN_DELEGATION`).
     pub for_run: bool,
+    /// The space the credential was made in (an agent's or app's home), to
+    /// prefer when a reference fits copies in several spaces. Never decides
+    /// access. `None` in the browser.
+    pub home_space: Option<Uuid>,
 }
 
 /// The credential a call came through, as far as a decision cares.
@@ -73,6 +77,7 @@ impl Caller {
             run_id: None,
             credential_id: None,
             for_run: false,
+            home_space: None,
         }
     }
 
@@ -98,6 +103,7 @@ impl Caller {
             run_id: None,
             credential_id: Some(principal.credential_id),
             for_run: principal.is_run_credential(),
+            home_space: Some(principal.project_id),
         }
     }
 

@@ -115,15 +115,32 @@ export function layoutFrom(preset: string, visible: Set<PartId>, words: Partial<
   }
 }
 
+/** A built module's layout part: `module.<name>`, its key without the `local.` every built key starts with. */
+export function modulePart(key: string): PartId {
+  return `module.${key.replace(/^[a-z]+\./, '')}` as PartId
+}
+
+/** The built modules' parts (`module.<key>`) a stored layout switches off. */
+export function hiddenModules(stored: Layout | null): Set<PartId> {
+  return new Set(
+    Object.entries(stored?.changes ?? {})
+      .filter(([part, shown]) => part.startsWith('module.') && shown === false)
+      .map(([part]) => part as PartId),
+  )
+}
+
 /**
  * `layout` with the built modules' switches (`module.<key>`) that `stored`
- * holds. The editor has no switch for them yet, so a save of anything else
- * keeps them rather than dropping them.
+ * holds, so a save of anything else keeps them rather than dropping them.
  */
 export function keepModuleChanges(layout: Layout, stored: Layout | null): Layout {
-  const kept = Object.entries(stored?.changes ?? {}).filter(([part]) => part.startsWith('module.'))
-  if (!kept.length) return layout
-  return { ...layout, changes: { ...Object.fromEntries(kept), ...layout.changes } }
+  return withModuleSwitches(layout, hiddenModules(stored))
+}
+
+/** `layout` with each of these built modules' parts switched off. */
+export function withModuleSwitches(layout: Layout, hidden: Set<PartId>): Layout {
+  if (!hidden.size) return layout
+  return { ...layout, changes: { ...layout.changes, ...Object.fromEntries([...hidden].map((part) => [part, false])) } }
 }
 
 /** A preset's name, for a reference that may be built in, saved or gone. */

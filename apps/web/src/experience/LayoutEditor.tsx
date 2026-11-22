@@ -6,7 +6,8 @@ import { ownerOf } from '../modules/ownership'
 import type { Word } from './layout'
 import type { NounId, PartId } from './parts'
 import { presetChoices, type PresetChoice } from './presetChoices'
-import { REGISTRY, everything, keepModuleChanges, layoutFrom, layoutShape, presetShape, shapeWord, type Layout, type SavedPreset, type Shape } from './registry'
+import type { ModulePart } from './builtParts'
+import { REGISTRY, everything, hiddenModules, layoutFrom, layoutShape, presetShape, shapeWord, withModuleSwitches, type Layout, type SavedPreset, type Shape } from './registry'
 import './layout.css'
 import '../styles/pages.css'
 
@@ -196,6 +197,7 @@ export function PartSwitches({
   disabled = false,
   lockedOff,
   moduleOn = () => true,
+  modules = [],
   onToggle,
   visible,
 }: {
@@ -204,6 +206,8 @@ export function PartSwitches({
   lockedOff?: { parts: Set<string>; why: string }
   /** Parts of a module that's off aren't offered: the module hides them anyway. */
   moduleOn?: (module: string) => boolean
+  /** Built modules' sidebar entries, one switch per module (`module.<key>`). */
+  modules?: ModulePart[]
   onToggle: (part: PartId, shown: boolean) => void
   visible: Set<PartId>
 }) {
@@ -234,6 +238,25 @@ export function PartSwitches({
             })}
         </fieldset>
       ))}
+      {modules.length ? (
+        <fieldset className="aw-partgroup">
+          <legend className="aw-partgroup__title">Built modules</legend>
+          <p className="aw-partgroup__desc">The sidebar entries of modules made in this workspace.</p>
+          {modules.map((part) => {
+            const locked = lockedOff?.parts.has(part.id) ?? false
+            return (
+              <Switch
+                checked={!locked && visible.has(part.id)}
+                description={locked ? `${part.description} ${lockedOff?.why}` : part.description}
+                disabled={disabled || locked}
+                key={part.id}
+                label={part.label}
+                onChange={(shown) => onToggle(part.id, shown)}
+              />
+            )
+          })}
+        </fieldset>
+      ) : null}
     </div>
   )
 }
@@ -298,10 +321,16 @@ function sameLayout(left: Layout | null, right: Layout | null) {
   return left.preset === right.preset && entries(left.changes) === entries(right.changes) && entries(left.words) === entries(right.words)
 }
 
-type Draft = { preset: string | null; visible: Set<PartId>; words: Partial<Record<NounId, Word>> }
+type Draft = {
+  preset: string | null
+  visible: Set<PartId>
+  words: Partial<Record<NounId, Word>>
+  /** Built modules' parts (`module.<key>`) switched off, offered here or not. */
+  hiddenModules: Set<PartId>
+}
 
-function draftFor(preset: string | null, shape: Shape): Draft {
-  return { preset, visible: new Set(shape.visible), words: { ...shape.words } }
+function draftFor(preset: string | null, shape: Shape, stored: Layout | null = null): Draft {
+  return { preset, visible: new Set(shape.visible), words: { ...shape.words }, hiddenModules: hiddenModules(stored) }
 }
 
 /**
@@ -315,6 +344,7 @@ export function LayoutEditor({
   cardsLabel,
   fallback,
   moduleOn,
+  modules = [],
   onSave,
   onSavePreset,
   previewName,
@@ -328,6 +358,8 @@ export function LayoutEditor({
   fallback: { name: string; description: string; layout: Layout | null }
   /** Which modules are on where this layout applies; parts of the others aren't offered. */
   moduleOn?: (module: string) => boolean
+  /** Built modules' parts offered here, beside the registry's. */
+  modules?: ModulePart[]
   onSave: (layout: Layout | null) => Promise<unknown>
   onSavePreset: (name: string, description: string, layout: Layout) => Promise<unknown>
   previewName: string
@@ -335,7 +367,7 @@ export function LayoutEditor({
   stored: Layout | null
 }) {
   const fallbackShape = useMemo(() => layoutShape(fallback.layout, saved), [fallback.layout, saved])
-  const initial = () => (stored ? draftFor(stored.preset, layoutShape(stored, saved)) : draftFor(null, fallbackShape))
+  const initial = () => (stored ? draftFor(stored.preset, layoutShape(stored, saved), stored) : draftFor(null, fallbackShape))
   const [draft, setDraft] = useState<Draft>(initial)
   const [saving, setSaving] = useState(false)
   const [naming, setNaming] = useState(false)
@@ -343,20 +375,25 @@ export function LayoutEditor({
   // Words and switches change from the preset picked, or from what applies without one.
   const base = draft.preset ? (presetShape(draft.preset, saved) ?? everything()) : fallbackShape
   const startFrom = draft.preset ?? fallback.layout?.preset ?? 'software_team'
-  const current = draft.preset === null ? null : keepModuleChanges(layoutFrom(draft.preset, draft.visible, draft.words, saved), stored)
+  const current = draft.preset === null ? null : withModuleSwitches(layoutFrom(draft.preset, draft.visible, draft.words, saved), draft.hiddenModules)
+  // The registry's parts as drafted, and each built module's unless switched off.
+  const switchedOn = new Set([...draft.visible, ...modules.map((part) => part.id).filter((part) => !draft.hiddenModules.has(part))])
   const dirty = !sameLayout(current, stored)
   const shape: Shape = { visible: draft.visible, words: { ...base.words, ...draft.words }, lead: base.lead }
 
   // Changing a part with no layout of its own starts one from what applies now.
   const toggle = (part: PartId, shown: boolean) =>
     setDraft((now) => {
-      const visible = new Set(now.visible)
-      if (shown) visible.add(part)
-      else visible.delete(part)
-      return { ...now, preset: now.preset ?? startFrom, visible }
+      const builtModule = part.startsWith('module.')
+      const changed = new Set(builtModule ? now.hiddenModules : now.visible)
+      if (shown === builtModule) changed.delete(part)
+      else changed.add(part)
+      return { ...now, preset: now.preset ?? startFrom, ...(builtModule ? { hiddenModules: changed } : { visible: changed }) }
     })
   const rename = (noun: NounId, word: Word) => setDraft((now) => ({ ...now, preset: now.preset ?? startFrom, words: { ...now.words, [noun]: word } }))
-  const pick = (id: string | null) => setDraft(id ? draftFor(id, presetShape(id, saved) ?? everything()) : draftFor(null, fallbackShape))
+  // A preset leaves the built modules' switches as they are.
+  const pick = (id: string | null) =>
+    setDraft((now) => ({ ...(id ? draftFor(id, presetShape(id, saved) ?? everything()) : draftFor(null, fallbackShape)), hiddenModules: now.hiddenModules }))
 
   const save = () => {
     setSaving(true)
@@ -388,7 +425,7 @@ export function LayoutEditor({
               <p className="aw-pagesection__desc">Turn single parts on or off. Anything already in a hidden part stays as it is.</p>
             </div>
           </div>
-          <PartSwitches disabled={!canEdit} moduleOn={moduleOn} onToggle={toggle} visible={draft.visible} />
+          <PartSwitches disabled={!canEdit} moduleOn={moduleOn} modules={modules} onToggle={toggle} visible={switchedOn} />
         </section>
         <section aria-labelledby="layout-words" className="aw-pagesection">
           <div className="aw-pagesection__head">
@@ -427,7 +464,9 @@ export function LayoutEditor({
         <SavePresetDialog
           onClose={() => setNaming(false)}
           onSave={(name, description) =>
-            onSavePreset(name, description, current ?? layoutFrom(startFrom, draft.visible, draft.words, saved)).then(() => setNaming(false))
+            onSavePreset(name, description, current ?? withModuleSwitches(layoutFrom(startFrom, draft.visible, draft.words, saved), draft.hiddenModules)).then(() =>
+              setNaming(false),
+            )
           }
         />
       ) : null}
