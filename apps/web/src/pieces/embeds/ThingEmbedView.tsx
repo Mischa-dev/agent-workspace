@@ -6,7 +6,8 @@ import type { Thing } from '../../modules/contract'
 import type { EmbedViewProps } from '../../modules/define'
 import { ListSkeleton } from '../../ui'
 import { PieceView } from '../Pieces'
-import { EmbedLink, EmbedProblem, declOf, embedPiece, filled, retryServerErrors } from './parts'
+import { EmbedLink, EmbedProblem } from './parts'
+import { declOf, embedPiece, filled, retryServerErrors } from './embedParts'
 
 /**
  * One thing in a page (W1.26): what a module registers for a task, a page, a

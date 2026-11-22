@@ -1560,8 +1560,8 @@ mod tests {
         expected_repository_mirror_path, inspect_prepared_repository, inspect_publishable_worktree,
         inspect_worktree, managed_worktree_path, prepare_repository, prepare_repository_with_token,
         remove_clean_worktree, remove_published_worktree, repair_and_prune_worktrees,
-        reserve_process_slot, unique_run_branch, validate_branch, validate_ref, without_user_info,
-        worktree_is_dirty,
+        reserve_process_slot, token_may_go_to, unique_run_branch, validate_branch, validate_ref,
+        without_user_info, worktree_is_dirty,
     };
     use std::{
         fs, os::unix::fs::PermissionsExt, path::Path, process::Command, sync::atomic::AtomicUsize,

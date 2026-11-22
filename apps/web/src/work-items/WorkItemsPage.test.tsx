@@ -25,7 +25,6 @@ import {
 import { useCreateLaunches, useLaunchPlan } from '../launch/hooks'
 import { WorkItemDetailPage } from './WorkItemDetailPage'
 import { EMPTY_PLANNING } from './testFixtures'
-import type { WorkItem } from './types'
 import { ApiError } from '../api/errors'
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'

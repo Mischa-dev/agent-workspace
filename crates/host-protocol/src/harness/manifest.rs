@@ -453,7 +453,7 @@ mod tests {
         );
         let read: OpenLocally =
             serde_json::from_value(serde_json::json!({"label": "L", "url": "x://{prompt}"}))
-                .unwrap();
+                .expect("an open-locally entry");
         assert_eq!(read.fill("", "é"), "x://%C3%A9");
     }
 
