@@ -230,11 +230,9 @@ fn candidate_query() -> String {
 /// candidate's worktree is where this host keeps it. The stored mirror path
 /// is the registering server's and isn't read.
 fn candidate_mirror(data_root: &Path, candidate: &WorktreeCandidate) -> Option<PathBuf> {
-    let mirror = crate::hosts::builtin::git::expected_repository_mirror_path(
-        data_root,
-        candidate.repository_id,
-    )
-    .ok()?;
+    let mirror =
+        crate::hosts::builtin::git::repository_mirror_path_here(data_root, candidate.repository_id)
+            .ok()?;
     let expected_worktree = crate::hosts::builtin::git::managed_worktree_path(
         data_root,
         candidate.repository_id,

@@ -88,6 +88,19 @@ pub fn expected_repository_mirror_path(
     Ok(repository_root.join("mirror.git"))
 }
 
+/// Where this host keeps a repository's mirror, without creating or
+/// changing anything: for looking at a mirror that may be missing or
+/// unreadable (recovery, cleanup), where a failure isn't the caller's.
+pub fn repository_mirror_path_here(
+    data_root: &Path,
+    repository_id: Uuid,
+) -> Result<PathBuf, RuntimeError> {
+    Ok(absolute_runtime_path(data_root)?
+        .join("repositories")
+        .join(repository_id.to_string())
+        .join("mirror.git"))
+}
+
 pub fn managed_worktree_path(
     data_root: &Path,
     repository_id: Uuid,

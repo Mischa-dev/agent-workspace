@@ -256,7 +256,25 @@ pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
         Duration::from_secs(20 * 60),
         |context| async move {
             let payload = context.job.payload_as::<PreparePayload>()?;
-            prepare(context.state, payload.project_id, payload.repository_id).await?;
+            let last_try = context.job.attempts >= context.job.max_attempts;
+            let state = context.state.clone();
+            if let Err(error) =
+                prepare(context.state, payload.project_id, payload.repository_id).await
+            {
+                // No more tries: say it failed rather than leave the
+                // repository waiting to be set up.
+                if last_try
+                    && let Err(marking) =
+                        give_up(&state, payload.project_id, payload.repository_id).await
+                {
+                    tracing::warn!(
+                        repository_id = %payload.repository_id,
+                        error_category = marking.log_category(),
+                        "couldn't mark the repository failed"
+                    );
+                }
+                return Err(error.into());
+            }
             Ok(())
         },
     );
@@ -304,6 +322,15 @@ async fn prepare(state: AppState, project_id: Uuid, repository_id: Uuid) -> Resu
     let workspace_id = host_repositories::workspace_of_space(&mut transaction, project_id).await?;
     transaction.commit().await?;
     run_preparation(&state, workspace_id, project_id, repository_id, row).await?;
+    Ok(())
+}
+
+/// Mark a repository whose preparation ran out of tries as failed.
+async fn give_up(state: &AppState, project_id: Uuid, repository_id: Uuid) -> Result<(), AppError> {
+    tracing::warn!(%project_id, %repository_id, "repository preparation ran out of tries");
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    apply_preparation_result(&mut transaction, project_id, repository_id, false).await?;
+    transaction.commit().await?;
     Ok(())
 }
 

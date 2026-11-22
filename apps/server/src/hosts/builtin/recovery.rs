@@ -174,7 +174,7 @@ impl RecoveryHost for Recovery<'_> {
         };
         // The mirror is wherever this host keeps it, not where the server
         // that registered the repository would.
-        let mirror = crate::hosts::builtin::git::expected_repository_mirror_path(
+        let mirror = crate::hosts::builtin::git::repository_mirror_path_here(
             &self.state.config.data_root,
             repository_id,
         )?;
