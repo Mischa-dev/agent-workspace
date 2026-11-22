@@ -238,6 +238,8 @@ export type UsageRow = UsageTotals & { key: string; label: string; runs: number 
 export type UsageReport = { groupBy: UsageGroup; since: string; rows: UsageRow[]; totals: UsageTotals; runs: number }
 
 export type RunListFilter = {
+  /** The workspace to list, when no project names one. */
+  workspaceId?: string
   projectId?: string
   status?: RunStatusFilter
   agentId?: string
@@ -266,7 +268,7 @@ export function listRuns(filter: RunListFilter, cursor?: string, signal?: AbortS
       cursor,
       limit: RUN_PAGE_SIZE,
     },
-    { signal },
+    { signal, workspaceId: filter.workspaceId },
   ).then((value) => value as unknown as RunList)
 }
 
