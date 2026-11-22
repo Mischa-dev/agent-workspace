@@ -257,6 +257,7 @@ impl Operation for PullRequestGet {
         else {
             return Ok(());
         };
+        // The space the call names first, then the credential's home.
         let preferred = input
             .get("projectId")
             .and_then(serde_json::Value::as_str)
@@ -270,7 +271,7 @@ impl Operation for PullRequestGet {
               AND pull_request_visible_to(pull.id, $2)
               AND ($4::uuid IS NULL OR project.organization_id = $4)
               AND ($5::uuid IS NULL OR pull.project_id = $5)
-            ORDER BY pull.project_id = $6 DESC, pull.project_id
+            ORDER BY pull.project_id = $6 DESC, pull.project_id = $7 DESC, pull.project_id
             LIMIT 1
             "#,
         )
@@ -280,6 +281,7 @@ impl Operation for PullRequestGet {
         .bind(workspace)
         .bind(caller.confined_space)
         .bind(preferred)
+        .bind(caller.home_space)
         .fetch_optional(crate::db::scoped(&state.pool))
         .await
         .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;

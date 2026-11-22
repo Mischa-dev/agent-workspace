@@ -85,6 +85,17 @@ function isCategory(value: string | null): value is InboxCategory {
   return CATEGORIES.some((category) => category.value === value)
 }
 
+/**
+ * A restore skips a notification whose group already has one in the inbox
+ * (a newer one about the same thing), so it stays archived: say so rather
+ * than nothing.
+ */
+function stayedArchived(skipped: number): string {
+  return skipped === 1
+    ? 'One stayed archived: a newer notification about the same thing is already in your inbox or snoozed.'
+    : `${countLabel(skipped, 'notification')} stayed archived: newer ones about the same things are already in your inbox or snoozed.`
+}
+
 function typingTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false
   return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
@@ -290,7 +301,11 @@ export function InboxPage() {
           { action: 'restore', ids },
           {
             success: (result) =>
-              result.updated.length ? { tone: 'success', title: 'Moved back to the inbox', onUndo: () => undo({ action: 'archive', ids: result.updated }) } : null,
+              result.updated.length
+                ? { tone: 'success', title: 'Moved back to the inbox', onUndo: () => undo({ action: 'archive', ids: result.updated }) }
+                : result.refused
+                  ? null
+                  : { tone: 'info', title: 'Stayed archived', description: 'A newer notification about the same thing is already in your inbox or snoozed.' },
             failed: 'It wasn’t moved back to the inbox',
           },
         )
@@ -330,16 +345,21 @@ export function InboxPage() {
       {
         // Undo changes back only what changed: never a notification another
         // workspace refused.
-        success: (result) =>
-          result.updated.length
-            ? {
-                tone: 'success',
-                title: restoring
-                  ? `Moved ${countLabel(result.updated.length, 'notification')} back to the inbox`
-                  : `Archived ${countLabel(result.updated.length, 'notification')}`,
-                onUndo: () => undo({ action: restoring ? 'archive' : 'restore', ids: result.updated }),
-              }
-            : null,
+        success: (result) => {
+          // Skipped without a refusal: a newer one in the group is open.
+          const skipped = restoring && !result.refused ? ids.length - result.updated.length : 0
+          if (!result.updated.length) {
+            return skipped ? { tone: 'info', title: 'Stayed archived', description: stayedArchived(skipped) } : null
+          }
+          return {
+            tone: 'success',
+            title: restoring
+              ? `Moved ${countLabel(result.updated.length, 'notification')} back to the inbox`
+              : `Archived ${countLabel(result.updated.length, 'notification')}`,
+            ...(skipped ? { description: stayedArchived(skipped) } : {}),
+            onUndo: () => undo({ action: restoring ? 'archive' : 'restore', ids: result.updated }),
+          }
+        },
         failed: restoring ? 'They weren’t moved back' : 'They weren’t archived',
       },
     )

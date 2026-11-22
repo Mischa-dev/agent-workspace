@@ -352,6 +352,64 @@ async fn every_edge_runs_the_same_operation() {
             .await
             .expect("automated row");
     assert_eq!(automated, 1, "{run}");
+    // A keyed try sent again finds the run it queued: the rule fires once.
+    for replay in [false, true] {
+        let (status, keyed) = super::support::app::send(
+            app,
+            setup.browser.request(
+                "POST",
+                "/api/v2/ops/automation_run_start",
+                Some("try-rule-once"),
+                json!({ "projectId": space, "ruleId": rule_id }),
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "{status}: {keyed}");
+        assert_eq!(keyed["replayed"], replay, "{keyed}");
+        assert_eq!(keyed["replaySafe"], true, "{keyed}");
+    }
+    let automated: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ops_kernel_echo WHERE text = 'rule Echo'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("automated rows");
+    assert_eq!(automated, 2, "a keyed retry fires nothing more");
+    // The same key for another rule is refused, not fired.
+    let (status, second) = setup
+        .browser
+        .op(
+            app,
+            "automation_create",
+            json!({
+                "projectId": space,
+                "name": "Echo again",
+                "trigger": {"kind": "task_created"},
+                "actions": [{
+                    "kind": "run_operation",
+                    "operation": "echo_create",
+                    "input": { "space": space, "text": "rule {{rule.name}}" }
+                }],
+            }),
+        )
+        .await;
+    assert!(status.is_success(), "{status}: {second}");
+    let (status, reused) = super::support::app::send(
+        app,
+        setup.browser.request(
+            "POST",
+            "/api/v2/ops/automation_run_start",
+            Some("try-rule-once"),
+            json!({ "projectId": space, "ruleId": second["id"] }),
+        ),
+    )
+    .await;
+    assert_eq!(status.as_u16(), 409, "{reused}");
+    let again: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ops_kernel_echo WHERE text LIKE 'rule Echo%'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("automated rows");
+    assert_eq!(again, 2, "a reused key fires no other rule");
     // An operation no rule may run is refused when the rule is saved.
     let (status, unknown) = setup
         .browser
@@ -390,6 +448,8 @@ async fn every_edge_runs_the_same_operation() {
             "mcp",
             "mcp",
             "mcp",
+            // The rule tried by hand, then the keyed try (its retry fires nothing).
+            "automation",
             "automation"
         ],
         "{rows:?}"

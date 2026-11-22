@@ -2153,14 +2153,43 @@ pub(crate) async fn people_search(
 // ---------------------------------------------------------------------------
 // Threads
 
+/// A keyed thread start's answer, kept for its retries.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KeptThread {
+    id: Uuid,
+    name: String,
+    status: String,
+    outcome: Option<String>,
+    parent_id: Uuid,
+    url: String,
+    created: bool,
+}
+
+/// Starts a thread. With `request_key`, a retry gets the thread the first
+/// call made (and its opening message, kept by its own key) and says it
+/// replayed.
 pub(crate) async fn thread_start(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ThreadStartArguments,
-) -> ToolResult<ThreadValue> {
+    request_key: Option<IdempotencyKey>,
+) -> (ToolResult<ThreadValue>, bool) {
     if !principal.can_write() {
-        return ToolResult::read_only();
+        return (ToolResult::read_only(), false);
     }
+    let mut replayed = false;
+    let answer = thread_start_once(state, principal, arguments, request_key, &mut replayed).await;
+    (answer, replayed)
+}
+
+async fn thread_start_once(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: ThreadStartArguments,
+    request_key: Option<IdempotencyKey>,
+    replayed: &mut bool,
+) -> ToolResult<ThreadValue> {
     let Some(parent_id) = parse_id(&arguments.conversation_id) else {
         return ToolResult::invalid("conversationId", "Pass the channel, DM, or group ID.");
     };
@@ -2195,6 +2224,54 @@ pub(crate) async fn thread_start(
     };
     let result = async {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        let reservation = match request_key.as_ref() {
+            None => None,
+            Some(key) => {
+                let scope = crate::idempotency::resource_bound_scope(
+                    "conversation",
+                    parent_id,
+                    "thread_start",
+                )?;
+                match crate::idempotency::reserve(
+                    &mut transaction,
+                    principal.actor_id,
+                    &scope,
+                    key,
+                    crate::idempotency::RequestHash::for_value(&arguments)?,
+                )
+                .await?
+                {
+                    crate::idempotency::IdempotencyOutcome::Replay(replay) => {
+                        let kept: KeptThread = replay.decode()?;
+                        transaction.commit().await?;
+                        *replayed = true;
+                        // The opening message replays by its own key; once
+                        // removed, its replay is refused and nothing is sent.
+                        let message = post_optional(
+                            state,
+                            principal,
+                            kept.id,
+                            arguments.text.as_deref(),
+                            request_key.as_ref(),
+                        )
+                        .await?;
+                        return Ok(ToolResult::ok(ThreadValue {
+                            id: kept.id.to_string(),
+                            name: kept.name,
+                            status: kept.status,
+                            outcome: kept.outcome,
+                            parent_id: kept.parent_id.to_string(),
+                            url: kept.url,
+                            created: Some(kept.created),
+                            message,
+                        }));
+                    }
+                    crate::idempotency::IdempotencyOutcome::Reserved(reservation) => {
+                        Some(reservation)
+                    }
+                }
+            }
+        };
         let created = match threads::create(
             &mut transaction,
             &ThreadCreator::mcp(principal),
@@ -2221,17 +2298,36 @@ pub(crate) async fn thread_start(
             }
             Err(error) => return Err(error),
         };
+        let url = link_url(state, None, &thread_target(&created.parent, created.id));
+        if let Some(reservation) = reservation.as_ref() {
+            let kept = KeptThread {
+                id: created.id,
+                name: created.name.clone(),
+                status: created.status.clone(),
+                outcome: created.outcome.clone(),
+                parent_id: created.parent.id,
+                url: url.clone(),
+                created: created.created,
+            };
+            crate::idempotency::complete(
+                &mut transaction,
+                reservation,
+                axum::http::StatusCode::OK,
+                &kept,
+            )
+            .await?;
+        }
         transaction.commit().await?;
         let message = post_optional(
             state,
             principal,
             created.id,
             arguments.text.as_deref(),
-            origin_id,
+            request_key.as_ref(),
         )
         .await?;
         Ok::<_, AppError>(ToolResult::ok(ThreadValue {
-            url: link_url(state, None, &thread_target(&created.parent, created.id)),
+            url,
             id: created.id.to_string(),
             name: created.name,
             status: created.status,
@@ -2250,18 +2346,38 @@ async fn post_optional(
     principal: &McpPrincipal,
     conversation_id: Uuid,
     text: Option<&str>,
-    origin_id: Option<Uuid>,
+    request_key: Option<&IdempotencyKey>,
 ) -> Result<Option<SentMessage>, AppError> {
     let Some(text) = text.map(str::trim).filter(|v| !v.is_empty()) else {
         return Ok(None);
     };
-    // A thread started from a message is found again on retry, so its opening
-    // message gets a key from that message and the text: retrying replays it
-    // instead of posting it twice.
-    let key = origin_id.map(|origin_id| {
-        let digest = <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes());
-        format!("thread-start.{origin_id}.{}", hex::encode(&digest[..16]))
-    });
+    // A retry finds the same thread (from the same message, or by the
+    // call's key), so the opening message gets a key from the thread:
+    // retrying replays it instead of posting it twice. A keyed call names
+    // its one text, so the thread and the call's key are the key, which
+    // survives the message's removal (its replay is then refused, so a
+    // retry can't post the removed text again), while another call that
+    // finds the same thread sends its own. Without a call key the same
+    // thread can be found again with other words, so the key holds the
+    // text's digest, renamed when the message is removed.
+    let key = match request_key {
+        Some(request_key) => {
+            let digest = <sha2::Sha256 as sha2::Digest>::digest(request_key.as_str().as_bytes());
+            format!(
+                "thread-open.{}.{}",
+                conversation_id.simple(),
+                hex::encode(&digest[..16])
+            )
+        }
+        None => {
+            let digest = <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes());
+            format!(
+                "thread-start.{conversation_id}.{}",
+                hex::encode(&digest[..16])
+            )
+        }
+    };
+    let key = Some(key);
     let content =
         content_from_text(state, principal.project_id, Some(conversation_id), text).await?;
     Ok(

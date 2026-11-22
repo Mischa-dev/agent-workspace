@@ -329,7 +329,9 @@ impl Operation for AutomationRunStart {
     const KIND: OpKind = OpKind::Create;
     const MODULE: &'static str = "automations";
     const PERMISSION: Option<Perm> = Some(Perm::TasksEdit);
-    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    // The run keeps the request id itself (its dedupe key), so the run and
+    // its queued firing commit together and a retry finds them.
+    const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const TITLE: &'static str = "Try automation";
     const DESCRIPTION: &'static str = "Fire an automation rule now, to try it, optionally on \
         one task. automation_history shows what it did.";
@@ -348,16 +350,32 @@ impl Operation for AutomationRunStart {
             None => None,
         };
         let (caller, space) = caller_and_space(call);
+        let request_key = match call.ctx.request_id.as_deref() {
+            Some(id) => Some(crate::idempotency::IdempotencyKey::parse(id).map_err(|_| {
+                OpError::Invalid {
+                    field: "clientRequestId".into(),
+                    message: "Use letters, numbers, dashes or dots, up to 128 characters.".into(),
+                }
+            })?),
+            None => None,
+        };
+        if request_key.is_some() {
+            call.key_honoured();
+        }
         // Boxed: a firing runs its actions, which can run operations.
-        let ran = Box::pin(super::run_now(
+        let (ran, replayed) = Box::pin(super::run_now(
             call.state,
             &caller,
             space,
             rule,
-            RunNow { work_item_id },
+            RunNow {
+                work_item_id,
+                request_key,
+            },
         ))
         .await
         .map_err(refused)?;
+        call.mark_replayed(replayed);
         to_value(ran)
     }
 }
@@ -394,9 +412,18 @@ impl Operation for AutomationPreview {
             None => None,
         };
         let (caller, space) = caller_and_space(call);
-        super::preview(call.state, &caller, space, rule, RunNow { work_item_id })
-            .await
-            .map_err(refused)
+        super::preview(
+            call.state,
+            &caller,
+            space,
+            rule,
+            RunNow {
+                work_item_id,
+                ..RunNow::default()
+            },
+        )
+        .await
+        .map_err(refused)
     }
 }
 

@@ -306,6 +306,64 @@ async fn channels_threads_pins_and_decisions_can_be_shaped() {
     )
     .await;
     let thread_id = thread["value"]["id"].as_str().expect("thread").to_owned();
+    // A named thread with its first message, sent twice with one key: the
+    // retry answers with the same thread and message, made once.
+    let keyed = json!({"conversationId": design_id, "name": "Tokens plan",
+                       "text": "Starting here.", "clientRequestId": "thread-once-1"});
+    let first = tool(app, &codex, &session, "thread_start", keyed.clone()).await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert_eq!(first["replayed"], false, "{first}");
+    assert_eq!(first["replaySafe"], true, "{first}");
+    let again = tool(app, &codex, &session, "thread_start", keyed.clone()).await;
+    assert_eq!(again["replayed"], true, "{again}");
+    assert_eq!(again["value"]["id"], first["value"]["id"], "{again}");
+    assert_eq!(
+        again["value"]["message"]["messageId"], first["value"]["message"]["messageId"],
+        "{again}"
+    );
+    // Once the opening message is removed, a retry finds the thread and
+    // never posts the removed text again.
+    let removed = tool(
+        app,
+        &codex,
+        &session,
+        "message_delete",
+        json!({"messageId": first["value"]["message"]["messageId"]}),
+    )
+    .await;
+    assert_eq!(removed["outcome"], "ok", "{removed}");
+    let after = tool(app, &codex, &session, "thread_start", keyed).await;
+    assert_eq!(after["replayed"], true, "{after}");
+    assert_eq!(after["value"]["id"], first["value"]["id"], "{after}");
+    assert!(after["value"]["message"].is_null(), "{after}");
+    let read = tool(
+        app,
+        &codex,
+        &session,
+        "conversation_read",
+        json!({"conversationId": first["value"]["id"]}),
+    )
+    .await;
+    assert_eq!(read["outcome"], "ok", "{read}");
+    assert!(!read.to_string().contains("Starting here."), "{read}");
+    // Two calls with their own keys that find the same thread each send
+    // their own opening message.
+    let mut opened = Vec::new();
+    for (key, text) in [("from-a", "First words."), ("from-b", "Second words.")] {
+        let call = tool(
+            app,
+            &codex,
+            &session,
+            "thread_start",
+            json!({"conversationId": design_id, "fromMessageId": message_id,
+                   "text": text, "clientRequestId": key}),
+        )
+        .await;
+        assert_eq!(call["value"]["id"], thread_id, "{call}");
+        assert!(call["value"]["message"]["messageId"].is_string(), "{call}");
+        opened.push(call["value"]["message"]["messageId"].clone());
+    }
+    assert_ne!(opened[0], opened[1]);
     let decided = tool(
         app,
         &codex,
@@ -900,6 +958,15 @@ async fn dependencies_refuse_cycles_and_milestones_track_progress() {
     .await;
     assert_eq!(trimmed["value"]["total"], 2, "{trimmed}");
     assert_eq!(trimmed["value"]["overdue"], false);
+    // A keyed change sent again replays instead of changing it twice.
+    let keyed = json!({"projectId": work, "milestoneId": milestone["value"]["id"],
+                       "description": "Keyed", "clientRequestId": "milestone-change-1"});
+    let first = call("milestone_update", keyed.clone()).await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert_eq!(first["replayed"], false, "{first}");
+    let again = call("milestone_update", keyed).await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    assert_eq!(again["replayed"], true, "{again}");
     let listed = call("milestone_list", json!({"projectId": "PLAN"})).await;
     assert_eq!(listed["value"]["milestones"][0]["name"], "v1", "{listed}");
 
