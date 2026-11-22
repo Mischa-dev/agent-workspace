@@ -1,7 +1,7 @@
 import { useContext, type CSSProperties, type ReactNode } from 'react'
 
 import { Icon, type IconName } from './icons'
-import { AvatarSources, initials, swatchFor, type ActorKind } from './identityModel'
+import { AvatarPresence, AvatarSources, initials, swatchFor, type ActorKind } from './identityModel'
 
 
 const TAGS: Record<ActorKind, string | null> = {
@@ -18,6 +18,7 @@ export function Avatar({
   name,
   presence,
   seed,
+  showPresence = false,
   size = 36,
   src,
   working = false,
@@ -30,11 +31,16 @@ export function Avatar({
   presence?: 'online' | 'away'
   /** Id used for the swatch, so renames keep the color. */
   seed?: string
+  /** Show whether the account (its `seed`) is online now. */
+  showPresence?: boolean
   size?: number
   src?: string | null
   working?: boolean
 }) {
   const sources = useContext(AvatarSources)
+  const useLivePresence = useContext(AvatarPresence)
+  const live = useLivePresence(showPresence ? seed : undefined)
+  const shown = presence ?? live
   const image = src || (seed ? sources(seed) : undefined)
   const square = kind !== 'person'
   const classes = [
@@ -45,7 +51,7 @@ export function Avatar({
     working ? 'is-working' : '',
     className ?? '',
   ].filter(Boolean).join(' ')
-  const described = [name, presence, working ? 'working' : ''].filter(Boolean).join(', ')
+  const described = [name, shown, working ? 'working' : ''].filter(Boolean).join(', ')
   return (
     <span
       aria-hidden={label ? undefined : true}
@@ -59,7 +65,7 @@ export function Avatar({
       } as CSSProperties}
     >
       {image ? <img alt="" src={image} /> : <span className="aw-avatar__initials">{initials(name)}</span>}
-      {presence && !square ? <span className={`aw-presence aw-presence--${presence}`} /> : null}
+      {shown && !square ? <span className={`aw-presence aw-presence--${shown}`} /> : null}
     </span>
   )
 }

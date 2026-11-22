@@ -240,7 +240,7 @@ export function MessagesPage() {
                     onMouseEnter={() => setActive(index)}
                     role="option"
                   >
-                    <Avatar kind={kind} name={person.displayName} seed={person.id} size={28} />
+                    <Avatar kind={kind} name={person.displayName} seed={person.id} showPresence size={28} />
                     <span className="aw-newchat__name">{person.displayName}</span>
                     <ActorTag kind={kind} />
                     <span className="aw-newchat__handle">@{person.handle}</span>

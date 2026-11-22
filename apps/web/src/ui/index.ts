@@ -1,6 +1,6 @@
 export { Icon, type IconGlyph, type IconName } from './icons'
 export { ActorTag, Avatar, AvatarStack, Badge, Dots, StatusChip, type ChipTone } from './identity'
-export { AvatarSources, SWATCHES, actorKind, initials, swatchFor, type ActorKind, type Swatch } from './identityModel'
+export { AvatarPresence, AvatarSources, SWATCHES, actorKind, initials, swatchFor, type ActorKind, type Swatch } from './identityModel'
 export { Dialog, Menu, Tooltip, type MenuEntry, type Placement } from './overlays'
 export { SidePanel } from './SidePanel'
 export { Sheet } from './Sheet'

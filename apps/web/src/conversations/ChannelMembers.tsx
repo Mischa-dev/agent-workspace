@@ -101,7 +101,7 @@ export function ChannelMembers({
           const you = member.id === viewerId
           return (
             <li className="aw-members__row" key={member.id}>
-              <Avatar kind={kind} name={member.displayName} seed={member.id} size={32} />
+              <Avatar kind={kind} name={member.displayName} seed={member.id} showPresence size={32} />
               <span className="aw-members__name">
                 {member.displayName}
                 {you ? <span className="aw-members__you"> (you)</span> : null}

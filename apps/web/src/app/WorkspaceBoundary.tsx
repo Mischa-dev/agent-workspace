@@ -3,10 +3,11 @@ import { Navigate, Outlet, useLocation, useParams } from 'react-router-dom'
 
 import { useAuthenticatedSession, type OrganizationSummary } from '../auth/session'
 import { AvatarSourcesProvider } from '../profiles/AvatarSourcesProvider'
+import { useOnlineMark } from '../realtime/realtimeContext'
 import { useProject, useProjects } from '../projects/hooks'
 import { CommandCenter } from '../shell/CommandCenter'
 import { useShellPage } from '../shell/shellStore'
-import { ButtonLink, EmptyState } from '../ui'
+import { AvatarPresence, ButtonLink, EmptyState } from '../ui'
 import { CURRENT_WORKSPACE, isWorkspacePath, setCurrentWorkspaceSlug, spaceIdOf, withinWorkspace, workspaceHref, workspaceSlugOf } from './href'
 import { rememberWorkspace, resolveWorkspace, useWorkspace, WorkspaceContext } from './workspace'
 
@@ -50,12 +51,14 @@ export function WorkspaceProvider() {
   return (
     <WorkspaceContext.Provider value={workspace}>
       <AvatarSourcesProvider workspaceId={workspace?.id}>
-        <Outlet />
-        {/* Shortcuts and the palette follow the workspace in the address, so they live inside it. */}
-        <CommandCenter />
-        <Suspense fallback={null}>
-          <OfflineReading actorId={session.user.actorId} workspaceId={workspace?.id} workspaces={session.organizations} />
-        </Suspense>
+        <AvatarPresence.Provider value={useOnlineMark}>
+          <Outlet />
+          {/* Shortcuts and the palette follow the workspace in the address, so they live inside it. */}
+          <CommandCenter />
+          <Suspense fallback={null}>
+            <OfflineReading actorId={session.user.actorId} workspaceId={workspace?.id} workspaces={session.organizations} />
+          </Suspense>
+        </AvatarPresence.Provider>
       </AvatarSourcesProvider>
     </WorkspaceContext.Provider>
   )

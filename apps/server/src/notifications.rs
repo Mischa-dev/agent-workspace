@@ -684,8 +684,9 @@ struct MentionRow {
 /// or admin of its project to notify everyone.
 const EVERYONE_OPEN_LIMIT: i64 = 50;
 
-/// The people a message mentions: everyone it names, and for `@everyone` or
-/// `@here`, every person who can see the conversation. Agents are only ever
+/// The people a message mentions: everyone it names, for `@everyone` every
+/// person who can see the conversation, and for `@here` those of them online
+/// and not away. Agents are only ever
 /// named; the reply rules decide whether a message wakes them.
 async fn message_mentions(
     transaction: &mut Transaction<'_, Postgres>,
@@ -713,11 +714,32 @@ async fn message_mentions(
             JOIN actors actor ON actor.id = membership.actor_id AND actor.kind = 'human' -- // kind-check: mechanical (people are notified; agents are asked to reply by the reply rules)
             -- Written in the text itself, so a person whose handle happens
             -- to be "everyone" is still only a mention of them.
-            WHERE EXISTS (
+            WHERE (EXISTS (
                     SELECT 1
                     FROM jsonb_array_elements(message.content -> 'nodes') node
                     WHERE node ->> 'type' = 'text' AND node ->> 'text' ~* $2
                   )
+                  -- C2.16: `@here` reaches only the people online now (a
+                  -- fresh connection on any instance) who aren't away.
+                  OR (EXISTS (
+                        SELECT 1
+                        FROM jsonb_array_elements(message.content -> 'nodes') node
+                        WHERE node ->> 'type' = 'text' AND node ->> 'text' ~* $4
+                      )
+                      AND EXISTS (
+                        SELECT 1 FROM realtime_connections live
+                        WHERE live.account_id = membership.actor_id
+                          AND live.seen_at > now() - make_interval(secs => $5)
+                      )
+                      AND NOT EXISTS (
+                        SELECT 1 FROM account_statuses status
+                        WHERE status.account_id = membership.actor_id
+                          AND (status.workspace_id IS NULL OR status.workspace_id = (
+                              SELECT space.organization_id FROM projects space
+                              WHERE space.id = message.project_id))
+                          AND status.away_until > now()
+                          AND (status.clear_at IS NULL OR status.clear_at > now())
+                      )))
               AND conversation_visible_to(message.conversation_id, membership.actor_id)
         ),
         -- C2.18: `@handle` of a group of this workspace, written as a word:
@@ -789,6 +811,8 @@ async fn message_mentions(
     .bind(message_id)
     .bind(crate::message_content::EVERYONE_MENTION_PATTERN)
     .bind(EVERYONE_OPEN_LIMIT)
+    .bind(crate::message_content::HERE_MENTION_PATTERN)
+    .bind(crate::realtime::presence::FRESH_SECONDS as f64)
     .fetch_all(&mut **transaction)
     .await?;
     Ok(rows

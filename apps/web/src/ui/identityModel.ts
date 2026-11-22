@@ -34,3 +34,10 @@ export function actorKind(kind: string): ActorKind {
  * its picture without each list carrying the address.
  */
 export const AvatarSources = createContext<(accountId: string) => string | undefined>(() => undefined)
+
+/**
+ * Whether an account is online now, as a hook (C2.16). The session provides
+ * it from the live connection's presence; an avatar asked to show presence
+ * calls it with its account id.
+ */
+export const AvatarPresence = createContext<(accountId: string | undefined) => 'online' | undefined>(() => undefined)
