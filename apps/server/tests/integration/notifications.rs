@@ -568,6 +568,16 @@ async fn people_read_archive_snooze_and_restore_their_own() {
     .await
     .expect("announcements");
     assert!(announced >= 3, "{announced}");
+    // A change Mara makes names her and the call's request.
+    let attributed = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM events WHERE legacy_type = 'notifications.updated' \
+         AND actor_account_id = $1 AND request_id IS NOT NULL",
+    )
+    .bind(mara)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("attribution");
+    assert!(attributed >= 1, "{attributed}");
 }
 
 #[tokio::test]
