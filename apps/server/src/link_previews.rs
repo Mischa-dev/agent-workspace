@@ -19,25 +19,17 @@ mod page;
 
 use std::{collections::BTreeMap, time::Duration};
 
-use axum::{
-    Router,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::Response,
-    routing::{delete, get},
-};
+use axum::{Router, extract::State, response::Response, routing::get};
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
-    conversations::MessageCommandActor,
+    auth::AuthenticatedActor,
     error::{ApiPath, AppError},
     files::{FileStore, image},
     jobs::{JobContext, JobError, JobRegistry, NewJob},
-    message_edits::{Change, lock_message_for_change},
     outbox::{MessageUpdatedPayload, OutboxEventPayload, enqueue_typed},
     settings::{self, SettingsContext},
 };
@@ -69,12 +61,7 @@ pub struct LinkPreviewView {
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/v1/link-previews/{id}/image", get(image_http))
-        .route(
-            "/api/v1/conversations/{id}/messages/{message_id}/link-previews/{preview_id}",
-            delete(hide_http),
-        )
+    Router::new().route("/api/v1/link-previews/{id}/image", get(image_http))
 }
 
 pub fn register_jobs(registry: &mut JobRegistry) {
@@ -550,46 +537,9 @@ async fn image_http(
     crate::files::http::serve(&state, &store_id, &key, &content_type, "preview", false).await
 }
 
-/// Hides one preview from a message: its author, or a moderator.
-async fn hide_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((conversation_id, message_id, preview_id)): ApiPath<(Uuid, Uuid, Uuid)>,
-) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let actor = MessageCommandActor {
-        actor_id: principal.actor_id,
-        actor_kind: principal.actor_kind.clone(),
-        mcp_credential: None,
-        via_grant_id: None,
-        run_id: None,
-    };
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let locked = lock_message_for_change(
-        &mut transaction,
-        &actor,
-        Some(conversation_id),
-        message_id,
-        Change::Remove,
-    )
-    .await?;
-    hide_in(
-        &mut transaction,
-        &locked,
-        principal.actor_id,
-        Hide::Preview(preview_id),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-/// Which of a message's link previews to hide.
+/// Which of a message's link previews to hide: the one for this link, or
+/// all of them.
 pub(crate) enum Hide<'a> {
-    /// One, by its ID (the web's remove button).
-    Preview(Uuid),
-    /// The one for this link, or all of them.
     Url(Option<&'a str>),
 }
 
@@ -605,34 +555,30 @@ pub(crate) async fn hide_in(
     if locked.removed {
         return Err(AppError::NotFound("link_preview"));
     }
-    let (preview_id, url, all) = match which {
-        Hide::Preview(id) => (Some(id), None, false),
+    let (url, all) = match which {
         // Stored links are normalized (a root slash added, no fragment):
         // match what someone typed the same way.
         Hide::Url(Some(url)) => (
-            None,
             Some(normalize(url.trim()).unwrap_or_else(|| url.trim().to_owned())),
             false,
         ),
-        Hide::Url(None) => (None, None, true),
+        Hide::Url(None) => (None, true),
     };
     let matching = r#"
         message.message_id = $1
-        AND ($2::uuid IS NULL OR message.link_preview_id = $2)
-        AND ($3::text IS NULL OR EXISTS (
+        AND ($2::text IS NULL OR EXISTS (
             SELECT 1 FROM link_previews preview
-            WHERE preview.id = message.link_preview_id AND preview.url = $3))
-        AND ($2::uuid IS NOT NULL OR $3::text IS NOT NULL OR $5)
+            WHERE preview.id = message.link_preview_id AND preview.url = $2))
+        AND ($2::text IS NOT NULL OR $4)
     "#;
     let hidden = sqlx::query(&format!(
         r#"
         UPDATE message_link_previews message
-        SET hidden_at = now(), hidden_by_actor_id = $4
+        SET hidden_at = now(), hidden_by_actor_id = $3
         WHERE {matching} AND message.hidden_at IS NULL
         "#
     ))
     .bind(locked.id)
-    .bind(preview_id)
     .bind(&url)
     .bind(actor_id)
     .bind(all)
@@ -641,10 +587,9 @@ pub(crate) async fn hide_in(
     .rows_affected();
     if hidden == 0 {
         let exists = sqlx::query_scalar::<_, bool>(&format!(
-            "SELECT EXISTS (SELECT 1 FROM message_link_previews message WHERE {matching} AND $4::uuid IS NOT NULL)"
+            "SELECT EXISTS (SELECT 1 FROM message_link_previews message WHERE {matching} AND $3::uuid IS NOT NULL)"
         ))
         .bind(locked.id)
-        .bind(preview_id)
         .bind(&url)
         .bind(actor_id)
         .bind(all)

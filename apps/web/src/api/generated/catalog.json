@@ -4455,6 +4455,22 @@
   },
   {
     "automation": true,
+    "destructive": false,
+    "emits": [
+      "reply.stopped"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "messages",
+    "name": "reply_stop_all",
+    "permission": "channels.post",
+    "preview": false,
+    "proposable": false,
+    "title": "Stop all agents"
+  },
+  {
+    "automation": true,
     "destructive": true,
     "emits": [
       "repository.archived"

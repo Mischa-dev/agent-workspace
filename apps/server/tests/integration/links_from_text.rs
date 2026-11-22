@@ -121,9 +121,9 @@ async fn text_links_count_by_the_registry_and_never_cross_workspaces() {
         &world.app,
         a.browser.request(
             "POST",
-            &format!("/api/v1/pages/{}/comments", a.page),
-            None,
-            serde_json::json!({"body": format!(
+            "/api/v2/ops/page_comment_create",
+            Some(&uuid::Uuid::now_v7().to_string()),
+            serde_json::json!({"pageId": a.page, "text": format!(
                 "See /projects/{}/collections/{}?record={}",
                 a.project, a.collection, a.record
             )}),

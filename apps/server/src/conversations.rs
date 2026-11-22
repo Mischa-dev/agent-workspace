@@ -80,17 +80,9 @@ pub fn router() -> Router<AppState> {
             "/api/v1/conversations/{id}/threads",
             get(list_threads).post(create_thread),
         )
-        .route("/api/v1/channels/{id}/archive", post(archive_channel))
-        .route("/api/v1/threads/{id}/archive", post(archive_thread))
-        .route("/api/v1/channels/{id}/restore", post(restore_channel))
-        .route("/api/v1/threads/{id}/restore", post(restore_thread))
         .route(
             "/api/v1/conversations/{id}/timeline",
             get(conversation_timeline),
-        )
-        .route(
-            "/api/v1/conversations/{id}/mark-seen",
-            post(mark_conversation_seen),
         )
         .layer(DefaultBodyLimit::max(MAX_HTTP_BODY_BYTES))
 }
@@ -324,19 +316,6 @@ struct SendMessageRequest {
     /// The message in this conversation it replies to, quoted above it (AWD-70).
     #[serde(default)]
     reply_to_message_id: Option<Uuid>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ArchiveConversationRequest {
-    expected_version: i64,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct MarkSeenRequest {
-    highest_seen_sequence: i64,
-    expected_version: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -936,26 +915,6 @@ struct ThreadAttention {
     label: &'static str,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ArchiveConversationResponse {
-    conversation: ConversationView,
-    fallback: ArchiveFallback,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RestoreConversationResponse {
-    conversation: ConversationView,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ArchiveFallback {
-    kind: &'static str,
-    conversation_id: Option<Uuid>,
-}
-
 async fn list_channels(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
@@ -1161,6 +1120,12 @@ pub(crate) async fn join_auto_channels(
           AND channel.visibility = 'project'
           AND channel.auto_join
           AND channel.archived_at IS NULL
+          -- A workspace guest is added to channels one by one (C2.37).
+          AND NOT EXISTS (
+              SELECT 1 FROM organization_memberships guest
+              WHERE guest.organization_id = channel.workspace_id
+                AND guest.actor_id = $2
+                AND role_is_guest(guest.role_id))
         ON CONFLICT DO NOTHING
         "#,
     )
@@ -1240,7 +1205,14 @@ pub(crate) async fn insert_channel(
             INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id)
             SELECT $1, $2, membership.actor_id, $3
             FROM project_memberships membership
+            JOIN projects space ON space.id = membership.project_id
             WHERE membership.project_id = $1 AND membership.enabled
+              -- A workspace guest is added to channels one by one (C2.37).
+              AND NOT EXISTS (
+                  SELECT 1 FROM organization_memberships guest
+                  WHERE guest.organization_id = space.organization_id
+                    AND guest.actor_id = membership.actor_id
+                    AND role_is_guest(guest.role_id))
             ON CONFLICT DO NOTHING
             "#,
         )
@@ -2996,82 +2968,6 @@ async fn conversation_timeline(
     }))
 }
 
-async fn mark_conversation_seen(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(conversation_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<MarkSeenRequest>,
-) -> Result<Json<ReadStateView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    if request.highest_seen_sequence < 0 {
-        return Err(AppError::Validation("highest seen sequence"));
-    }
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let conversation = lock_conversation_access(
-        &mut transaction,
-        &principal,
-        conversation_id,
-        Action::ReadStateUpdate,
-        true,
-    )
-    .await?;
-    if request.highest_seen_sequence >= conversation.next_entry_sequence {
-        return Err(AppError::Validation("highest seen sequence"));
-    }
-    let current = sqlx::query_as::<_, ReadStateRow>(
-        r#"
-        SELECT highest_seen_sequence, version
-        FROM conversation_read_states
-        WHERE project_id IS NOT DISTINCT FROM $1 AND conversation_id = $2 AND actor_id = $3
-        FOR UPDATE
-        "#,
-    )
-    .bind(conversation.project_id)
-    .bind(conversation.id)
-    .bind(principal.actor_id)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    if let Some(expected_version) = request.expected_version {
-        let current_version = current.as_ref().map_or(0, |row| row.version);
-        if expected_version != current_version
-            && request.highest_seen_sequence
-                > current.as_ref().map_or(0, |row| row.highest_seen_sequence)
-        {
-            return Err(AppError::VersionConflict {
-                resource: "conversation_read_state",
-                current_version,
-            });
-        }
-    }
-    if current
-        .as_ref()
-        .is_some_and(|row| request.highest_seen_sequence <= row.highest_seen_sequence)
-    {
-        let row = current.ok_or(AppError::Internal("read-state branch"))?;
-        transaction.commit().await?;
-        return Ok(Json(ReadStateView {
-            highest_seen_sequence: row.highest_seen_sequence,
-            version: row.version,
-        }));
-    }
-
-    let row = crate::read_state::mark_seen(
-        &mut transaction,
-        conversation.place(),
-        conversation.id,
-        principal.actor_id,
-        request.highest_seen_sequence,
-    )
-    .await?
-    .ok_or(AppError::Internal("read state moved under its lock"))?;
-    transaction.commit().await?;
-    Ok(Json(ReadStateView {
-        highest_seen_sequence: row.highest_seen_sequence,
-        version: row.version,
-    }))
-}
-
 /// Where `mark_unread_from` makes a conversation unread from.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum UnreadFrom {
@@ -3197,171 +3093,6 @@ pub(crate) async fn mark_unread_from(
     Ok(ReadMarkChange {
         highest_seen_sequence: row.highest_seen_sequence,
     })
-}
-
-async fn archive_channel(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(conversation_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<ArchiveConversationRequest>,
-) -> Result<Json<ArchiveConversationResponse>, AppError> {
-    archive_conversation(
-        &state,
-        &headers,
-        &principal,
-        conversation_id,
-        "channel",
-        request,
-    )
-    .await
-}
-
-async fn archive_thread(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(conversation_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<ArchiveConversationRequest>,
-) -> Result<Json<ArchiveConversationResponse>, AppError> {
-    archive_conversation(
-        &state,
-        &headers,
-        &principal,
-        conversation_id,
-        "thread",
-        request,
-    )
-    .await
-}
-
-async fn archive_conversation(
-    state: &AppState,
-    headers: &HeaderMap,
-    principal: &AuthenticatedActor,
-    conversation_id: Uuid,
-    expected_kind: &'static str,
-    request: ArchiveConversationRequest,
-) -> Result<Json<ArchiveConversationResponse>, AppError> {
-    require_authenticated_write(state, headers, principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (conversation, archived) = set_conversation_archived(
-        &mut transaction,
-        principal.actor_id,
-        conversation_id,
-        &[expected_kind],
-        true,
-        Some(request.expected_version),
-    )
-    .await?;
-    // The browser archives only what it can see as active.
-    let archived = archived.ok_or(AppError::NotFound("conversation"))?;
-    insert_audit_event(
-        &mut transaction,
-        headers,
-        principal,
-        conversation.place(),
-        "conversation.archived",
-        conversation.id,
-        serde_json::json!({"previous_version": conversation.version}),
-    )
-    .await?;
-    transaction.commit().await?;
-    let fallback = if conversation.kind == "thread" {
-        ArchiveFallback {
-            kind: "channel",
-            conversation_id: conversation.parent_channel_id,
-        }
-    } else {
-        ArchiveFallback {
-            kind: "project_overview",
-            conversation_id: None,
-        }
-    };
-    Ok(Json(ArchiveConversationResponse {
-        conversation: ConversationView::from(&archived),
-        fallback,
-    }))
-}
-
-async fn restore_channel(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(conversation_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<ArchiveConversationRequest>,
-) -> Result<Json<RestoreConversationResponse>, AppError> {
-    restore_conversation(
-        &state,
-        &headers,
-        &principal,
-        conversation_id,
-        "channel",
-        request,
-    )
-    .await
-}
-
-async fn restore_thread(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(conversation_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<ArchiveConversationRequest>,
-) -> Result<Json<RestoreConversationResponse>, AppError> {
-    restore_conversation(
-        &state,
-        &headers,
-        &principal,
-        conversation_id,
-        "thread",
-        request,
-    )
-    .await
-}
-
-/// Undo for archive: brings a channel or thread back. The expected version is
-/// the one the archive returned, so a restore never undoes a later change.
-async fn restore_conversation(
-    state: &AppState,
-    headers: &HeaderMap,
-    principal: &AuthenticatedActor,
-    conversation_id: Uuid,
-    expected_kind: &'static str,
-    request: ArchiveConversationRequest,
-) -> Result<Json<RestoreConversationResponse>, AppError> {
-    require_authenticated_write(state, headers, principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (conversation, restored) = set_conversation_archived(
-        &mut transaction,
-        principal.actor_id,
-        conversation_id,
-        &[expected_kind],
-        false,
-        Some(request.expected_version),
-    )
-    .await?;
-    let Some(restored) = restored else {
-        // Already active: nothing to undo.
-        transaction.commit().await?;
-        return Ok(Json(RestoreConversationResponse {
-            conversation: ConversationView::from(&conversation),
-        }));
-    };
-    insert_audit_event(
-        &mut transaction,
-        headers,
-        principal,
-        conversation.place(),
-        "conversation.restored",
-        conversation.id,
-        serde_json::json!({"previous_version": conversation.version}),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(RestoreConversationResponse {
-        conversation: ConversationView::from(&restored),
-    }))
 }
 
 /// Archive or restore a channel or thread. Shared by the browser API and MCP.

@@ -51,6 +51,10 @@ pub struct ReactionSummary {
     /// Who reacted, earliest first: "Name (@handle)", with ", agent" for
     /// agents. At most 10.
     pub people: Vec<String>,
+    /// A workspace's own emoji: its id, which message_react also takes, to
+    /// tell apart two that share a name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_emoji_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -90,6 +94,7 @@ pub(super) fn reaction_summaries(reactions: Vec<ReactionView>) -> Vec<ReactionSu
                     )
                 })
                 .collect(),
+            custom_emoji_id: reaction.custom_emoji_id.map(|id| id.to_string()),
         })
         .collect()
 }

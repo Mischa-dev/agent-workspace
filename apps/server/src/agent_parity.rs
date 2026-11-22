@@ -374,31 +374,6 @@ mod tests {
         (Post, "/api/v1/channels/{id}/threads", Tool("thread_start")),
         (
             Post,
-            "/api/v1/channels/{id}/archive",
-            Tool("conversation_update"),
-        ),
-        (
-            Post,
-            "/api/v1/threads/{id}/archive",
-            Tool("conversation_update"),
-        ),
-        (
-            Post,
-            "/api/v1/channels/{id}/restore",
-            Tool("conversation_update"),
-        ),
-        (
-            Post,
-            "/api/v1/threads/{id}/restore",
-            Tool("conversation_update"),
-        ),
-        (
-            Post,
-            "/api/v1/conversations/{id}/mark-seen",
-            Tool("conversation_mark_read"),
-        ),
-        (
-            Post,
             "/api/v1/conversations/{id}/messages",
             Tool("message_send"),
         ),
@@ -407,13 +382,11 @@ mod tests {
             "/api/v1/conversations/{id}/threads",
             Tool("thread_start"),
         ),
-        (Post, "/api/v1/projects/{id}/pages", Tool("page_create")),
         (
             Post,
             "/api/v1/projects/{id}/pages/import",
             Person("a file from the person's own computer; agents write the page with page_create"),
         ),
-        (Patch, "/api/v1/pages/{id}", Tool("page_update")),
         (
             Post,
             "/api/v1/pages/{id}/document/sync",
@@ -423,26 +396,6 @@ mod tests {
             Post,
             "/api/v1/pages/{id}/document/updates",
             Tool("page_update_blocks"),
-        ),
-        (
-            Post,
-            "/api/v1/pages/{id}/comments",
-            Tool("page_comment_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/pages/{id}/comments/{comment_id}",
-            Tool("page_comment_update"),
-        ),
-        (
-            Delete,
-            "/api/v1/pages/{id}/comments/{comment_id}",
-            Tool("page_comment_update"),
-        ),
-        (
-            Post,
-            "/api/v1/pages/{id}/suggestions/{suggestion_id}/decision",
-            Tool("page_suggestion_decide"),
         ),
         (
             Delete,
@@ -468,17 +421,6 @@ mod tests {
             Post,
             "/api/v1/whiteboards/{id}/files",
             Tool("whiteboard_update_elements"),
-        ),
-        (
-            Post,
-            "/api/v1/whiteboards/{id}/revisions/{revision}/restore",
-            Tool("whiteboard_update"),
-        ),
-        (Post, "/api/v1/conversations/{id}/pins", Tool("pin_set")),
-        (
-            Delete,
-            "/api/v1/conversations/{id}/pins/{kind}/{target_id}",
-            Tool("pin_set"),
         ),
         (
             Patch,
@@ -526,21 +468,6 @@ mod tests {
             Post,
             "/api/v1/things/{kind}/{id}/files",
             Tool("file_upload"),
-        ),
-        (
-            Delete,
-            "/api/v1/conversations/{id}/messages/{message_id}/link-previews/{preview_id}",
-            Tool("message_preview_hide"),
-        ),
-        (
-            Put,
-            "/api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
-            Tool("message_react"),
-        ),
-        (
-            Delete,
-            "/api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
-            Tool("message_react"),
         ),
         (
             Put,
@@ -1020,7 +947,7 @@ mod tests {
     /// Hand-written web writes whose tool is already an operation: each is a
     /// second edge for something the generated route does (K2.22). The
     /// number only goes down; when you delete one, lower it.
-    const HAND_WRITTEN_OPERATION_ROUTES: usize = 53;
+    const HAND_WRITTEN_OPERATION_ROUTES: usize = 36;
 
     #[test]
     fn hand_written_routes_for_operations_only_go_down() {

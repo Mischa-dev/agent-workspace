@@ -645,12 +645,16 @@ async fn document_rooms(name: &str, target: Target) {
         api,
         &owner,
         "POST",
-        &format!("/api/v1/projects/{project}/pages"),
-        None,
-        json!({"title": "Plan", "body": "Hello"}),
+        "/api/v2/ops/page_create",
+        Some("plan-page"),
+        json!({"projectId": project, "title": "Plan", "body": "Hello"}),
     )
     .await;
-    let page: Uuid = page["id"].as_str().expect("page").parse().expect("id");
+    let page: Uuid = page["value"]["id"]
+        .as_str()
+        .expect("page")
+        .parse()
+        .expect("id");
     let document = DocumentRef {
         kind: DocumentKind::Page,
         id: page,

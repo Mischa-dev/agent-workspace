@@ -1,4 +1,5 @@
 import { requestJson } from '../../api/client'
+import { callOp, newRequestId } from '../../api/ops'
 import { memoryKeys } from '../api'
 
 // A page's comment threads and suggested edits (AWD-53).
@@ -81,21 +82,27 @@ export function getDiscussion(pageId: string) {
   return requestJson<PageDiscussion>(`${page(pageId)}/discussion`)
 }
 
-export function addComment(pageId: string, input: { body: string; blockId?: string; quote?: string; replyTo?: string }) {
-  return requestJson<{ id: string; threadId: string }>(`${page(pageId)}/comments`, { method: 'POST', json: input })
+export async function addComment(pageId: string, input: { body: string; blockId?: string; quote?: string; replyTo?: string }) {
+  const made = await callOp(
+    'page_comment_create',
+    { pageId, text: input.body, blockId: input.blockId, quote: input.quote, replyTo: input.replyTo },
+    { requestId: newRequestId() },
+  )
+  return { id: made.commentId, threadId: made.threadId }
 }
 
-export function changeComment(pageId: string, commentId: string, input: { body: string } | { resolved: boolean }) {
-  return requestJson<{ threadId: string }>(`${page(pageId)}/comments/${encodeURIComponent(commentId)}`, { method: 'PATCH', json: input })
+export async function changeComment(pageId: string, commentId: string, input: { body: string } | { resolved: boolean }) {
+  const change = 'body' in input ? { text: input.body } : { resolved: input.resolved }
+  const changed = await callOp('page_comment_update', { pageId, commentId, ...change }, { requestId: newRequestId() })
+  return { threadId: changed.threadId }
 }
 
-export function deleteComment(pageId: string, commentId: string) {
-  return requestJson<{ threadId: string }>(`${page(pageId)}/comments/${encodeURIComponent(commentId)}`, { method: 'DELETE' })
+export async function deleteComment(pageId: string, commentId: string) {
+  const deleted = await callOp('page_comment_update', { pageId, commentId, delete: true }, { requestId: newRequestId() })
+  return { threadId: deleted.threadId }
 }
 
-export function decideSuggestion(pageId: string, suggestionId: string, decision: 'accept' | 'reject') {
-  return requestJson<{ status: string; version: number }>(`${page(pageId)}/suggestions/${encodeURIComponent(suggestionId)}/decision`, {
-    method: 'POST',
-    json: { decision },
-  })
+export async function decideSuggestion(pageId: string, suggestionId: string, decision: 'accept' | 'reject') {
+  const decided = await callOp('page_suggestion_decide', { pageId, suggestionId, decision }, { requestId: newRequestId() })
+  return { status: decided.status, version: decided.version }
 }

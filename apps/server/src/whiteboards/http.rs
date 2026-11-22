@@ -53,10 +53,6 @@ pub fn router() -> Router<AppState> {
             get(get_file_http),
         )
         .route("/api/v1/whiteboards/{id}/preview.svg", get(preview_http))
-        .route(
-            "/api/v1/whiteboards/{id}/revisions/{revision}/restore",
-            post(restore_http),
-        )
         .route("/api/v1/whiteboard-links", get(linked_http))
 }
 
@@ -506,37 +502,6 @@ async fn preview_http(
         ),
     );
     Ok(response)
-}
-
-async fn restore_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((id, revision)): ApiPath<(Uuid, i32)>,
-) -> Result<Json<store::WriteOutcome>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let board = access(&mut transaction, &caller, id, true).await?;
-    let outcome = store::restore_revision(
-        &crate::files::FileStore::from_config(&state.config),
-        &mut transaction,
-        &caller,
-        id,
-        revision,
-    )
-    .await?;
-    super::audit(
-        &mut transaction,
-        &caller,
-        board.organization_id,
-        board.project_id,
-        "whiteboard.revision_restored",
-        id,
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(outcome))
 }
 
 #[derive(Debug, Deserialize)]

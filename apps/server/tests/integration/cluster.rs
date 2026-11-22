@@ -1816,14 +1816,14 @@ async fn document_update_reaches_watchers_only() {
             .instance(0)
             .send(owner.request(
                 "POST",
-                &format!("/api/v1/projects/{space}/pages"),
-                None,
-                json!({"title": title, "body": ""}),
+                "/api/v2/ops/page_create",
+                Some(&Uuid::now_v7().to_string()),
+                json!({"projectId": space, "title": title, "body": ""}),
             ))
             .await;
         assert!(status.is_success(), "{page}");
         pages.push(
-            page["id"]
+            page["value"]["id"]
                 .as_str()
                 .expect("page")
                 .parse::<Uuid>()

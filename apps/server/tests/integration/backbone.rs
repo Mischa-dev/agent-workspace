@@ -1803,7 +1803,11 @@ async fn a_preparation_out_of_tries_fails_a_pending_repository_only() {
         .fetch_one(&setup.pool)
         .await
         .expect("state");
-        let expected = if before == "pending" { "failed" } else { "ready" };
+        let expected = if before == "pending" {
+            "failed"
+        } else {
+            "ready"
+        };
         assert_eq!(after, expected, "a {before} repository");
     }
 }

@@ -1732,3 +1732,19 @@ a.aw-forward__meta:hover .aw-forward__author {
     transition: none;
   }
 }
+
+/* C2.35: more than one agent at work, with Stop all */
+.aw-agents-at-work {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  padding: var(--space-1) var(--space-4);
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-agents-at-work__error {
+  flex-basis: 100%;
+  color: var(--danger);
+}

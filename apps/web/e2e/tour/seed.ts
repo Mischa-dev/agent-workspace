@@ -358,10 +358,10 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   ]
   for (const [index, name, who] of reactions) {
     for (const person of who) {
-      await team[person].write('PUT', `/api/v1/conversations/${releases}/messages/${releaseIds[index]}/reactions/${name}`)
+      await team[person].op('message_react', { messageId: releaseIds[index], emoji: name, reacted: true })
     }
   }
-  await me.write('PUT', `/api/v1/conversations/${releases}/messages/${releaseIds[2]}/reactions/tada`)
+  await me.op('message_react', { messageId: releaseIds[2], emoji: 'tada', reacted: true })
 
   // A thread off the exports timeout message.
   const rootAuthor = author(releasesChannel[releasesThread.root][0]) as Session

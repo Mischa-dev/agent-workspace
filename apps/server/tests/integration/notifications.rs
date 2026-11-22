@@ -804,12 +804,26 @@ async fn everyone_reaches_the_people_who_can_see_the_conversation() {
     .execute(&setup.pool)
     .await
     .expect("away");
-    say(&setup, &ben_browser, &standup, "e1h", text("@here quick one")).await;
+    say(
+        &setup,
+        &ben_browser,
+        &standup,
+        "e1h",
+        text("@here quick one"),
+    )
+    .await;
     drain(&setup).await;
     assert_eq!(items(&inbox(&setup, &setup.browser, "").await).len(), 2);
     assert_eq!(items(&inbox(&setup, &sam_browser, "").await).len(), 1);
-    assert_eq!(items(&inbox(&setup, &mara_browser, "").await).len(), 1, "away");
-    assert!(items(&inbox(&setup, &lee_browser, "").await).is_empty(), "offline");
+    assert_eq!(
+        items(&inbox(&setup, &mara_browser, "").await).len(),
+        1,
+        "away"
+    );
+    assert!(
+        items(&inbox(&setup, &lee_browser, "").await).is_empty(),
+        "offline"
+    );
 
     // In a group, only the people inside it, even though others share the
     // Messages space; naming someone as well notifies them once.
@@ -938,14 +952,17 @@ async fn page_comment_notifications_never_hold_the_words() {
         &setup.app,
         bea.request(
             "POST",
-            &format!("/api/v1/pages/{page}/comments"),
-            None,
-            json!({"body": "the budget is 40k"}),
+            "/api/v2/ops/page_comment_create",
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"pageId": page, "text": "the budget is 40k"}),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{comment}");
-    let comment_id = comment["id"].as_str().expect("comment id").to_owned();
+    let comment_id = comment["value"]["commentId"]
+        .as_str()
+        .expect("comment id")
+        .to_owned();
     drain(&setup).await;
 
     let owner = owner_id(&setup.pool).await;
@@ -973,10 +990,10 @@ async fn page_comment_notifications_never_hold_the_words() {
     let (status, removed) = send(
         &setup.app,
         bea.request(
-            "DELETE",
-            &format!("/api/v1/pages/{page}/comments/{comment_id}"),
-            None,
-            Value::Null,
+            "POST",
+            "/api/v2/ops/page_comment_update",
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"pageId": page, "commentId": comment_id, "delete": true}),
         ),
     )
     .await;

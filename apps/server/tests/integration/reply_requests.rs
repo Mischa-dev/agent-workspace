@@ -1171,6 +1171,117 @@ async fn stop_cancels_the_claim_and_refuses_the_next_call() {
         .expect("drop schema");
 }
 
+/// C2.35: Stop all cancels every agent's waiting and working request in a
+/// conversation, pressed by a person or by an agent holding replies.steer.
+#[tokio::test]
+async fn stop_all_stops_every_agent_in_the_conversation() {
+    let Some(Fixture {
+        admin,
+        schema,
+        pool,
+        app,
+        owner,
+        space,
+    }) = fixture("reply_stop_all").await
+    else {
+        return;
+    };
+    let mara = owner.add_agent(&app, &space, "Mara", "mara").await;
+    let rook = owner.add_agent(&app, &space, "Rook", "rook").await;
+    let mara_mcp = mara.connect(&app).await;
+    let rook_mcp = rook.connect(&app).await;
+    let (_, group) = owner
+        .call(
+            &app,
+            "POST",
+            "/api/v1/direct/groups",
+            Some("stop-all-group"),
+            json!({ "memberIds": [mara.actor_id, rook.actor_id] }),
+        )
+        .await;
+    let group_id = group["conversation"]["id"]
+        .as_str()
+        .expect("group")
+        .to_owned();
+    let ask_both = |key: &'static str| {
+        let owner = &owner;
+        let app = &app;
+        let group_id = group_id.clone();
+        async move {
+            owner
+                .say(app, &group_id, key, "@mara and @rook, both of you please.")
+                .await;
+        }
+    };
+    ask_both("stop-all-1").await;
+    let mara_request = only_request(&mara_mcp, &app).await["requestId"]
+        .as_str()
+        .expect("mara's")
+        .to_owned();
+    let rook_request = only_request(&rook_mcp, &app).await["requestId"]
+        .as_str()
+        .expect("rook's")
+        .to_owned();
+    // One is working on it, one is still waiting: both stop.
+    let claimed = mara_mcp
+        .tool(&app, "reply_claim", json!({ "requestId": mara_request }))
+        .await;
+    assert_eq!(claimed["outcome"], "ok", "{claimed}");
+    let (status, stopped) = owner
+        .call(
+            &app,
+            "POST",
+            "/api/v2/ops/reply_stop_all",
+            Some(&Uuid::now_v7().to_string()),
+            json!({"conversationId": group_id}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{stopped}");
+    assert_eq!(
+        stopped["value"]["stoppedRequestIds"]
+            .as_array()
+            .map(Vec::len),
+        Some(2),
+        "{stopped}"
+    );
+    assert_eq!(
+        statuses(&pool, &[&mara_request, &rook_request]).await,
+        ["cancelled", "cancelled"]
+    );
+    // Nothing left: pressing it again stops nothing and isn't an error.
+    let (status, again) = owner
+        .call(
+            &app,
+            "POST",
+            "/api/v2/ops/reply_stop_all",
+            Some(&Uuid::now_v7().to_string()),
+            json!({"conversationId": group_id}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["value"]["stoppedRequestIds"], json!([]), "{again}");
+
+    // An agent holding replies.steer stops the others the same way.
+    ask_both("stop-all-2").await;
+    let rook_again = only_request(&rook_mcp, &app).await["requestId"]
+        .as_str()
+        .expect("rook's")
+        .to_owned();
+    let by_agent = mara_mcp
+        .tool(
+            &app,
+            "reply_stop_all",
+            json!({ "conversationId": group_id }),
+        )
+        .await;
+    assert_eq!(by_agent["outcome"], "ok", "{by_agent}");
+    assert_eq!(statuses(&pool, &[&rook_again]).await, ["cancelled"]);
+
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
+        .await
+        .expect("drop schema");
+}
+
 /// A2.8: anyone's mention asks, and loops end by how deep the chain of asks
 /// is and by the conversation's turns, never by who wrote the message.
 #[tokio::test]

@@ -909,9 +909,9 @@ async fn removed_message_text_vanishes_everywhere() {
         app,
         setup.browser.request(
             "POST",
-            &format!("/api/v1/conversations/{general}/pins"),
-            None,
-            json!({"kind": "message", "targetId": message}),
+            "/api/v2/ops/pin_set",
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"conversationId": general, "messageId": message, "pinned": true}),
         ),
     )
     .await;

@@ -101,7 +101,7 @@ async fn two_actors_converge_privately_across_http_outbox_realtime_and_revocatio
         2,
     )
     .await;
-    assert_eq!(actor_a_seen["highestSeenSequence"], 2);
+    assert_eq!(actor_a_seen["lastReadSequence"], 2);
     let actor_a_event = receive_event(&mut actor_a_socket).await;
     assert_read_state_event(
         &actor_a_event,
@@ -128,8 +128,8 @@ async fn two_actors_converge_privately_across_http_outbox_realtime_and_revocatio
             1,
         )
     );
-    assert_eq!(actor_b_seen_first["highestSeenSequence"], 1);
-    assert_eq!(actor_b_seen_second["highestSeenSequence"], 1);
+    assert_eq!(actor_b_seen_first["lastReadSequence"], 1);
+    assert_eq!(actor_b_seen_second["lastReadSequence"], 1);
     let actor_b_event = receive_event(&mut actor_b_socket).await;
     assert_read_state_event(
         &actor_b_event,
@@ -288,9 +288,9 @@ async fn two_actors_converge_privately_across_http_outbox_realtime_and_revocatio
             2,
         )
     );
-    assert_eq!(actor_a_high["highestSeenSequence"], 3);
+    assert_eq!(actor_a_high["lastReadSequence"], 3);
     assert!(
-        actor_a_stale["highestSeenSequence"] == 2 || actor_a_stale["highestSeenSequence"] == 3,
+        actor_a_stale["lastReadSequence"] == 2 || actor_a_stale["lastReadSequence"] == 3,
         "the stale concurrent response may linearize before or after the advancing write"
     );
     let actor_a_high_event = receive_event(&mut reconnected_actor_a).await;
@@ -506,16 +506,17 @@ async fn mark_seen(
     highest_seen_sequence: i64,
 ) -> Value {
     let response = client
-        .post(format!(
-            "{base_url}/api/v1/conversations/{conversation_id}/mark-seen"
-        ))
+        .post(format!("{base_url}/api/v2/ops/conversation_mark_read"))
         .header(ORIGIN, ALLOWED_ORIGIN)
         .header(COOKIE, actor.cookie_header())
         .header("x-csrf-token", &actor.csrf_token)
         .header("content-type", "application/json")
+        .header("idempotency-key", Uuid::now_v7().to_string())
         .body(
-            serde_json::to_vec(&json!({"highestSeenSequence": highest_seen_sequence}))
-                .expect("serialize mark-seen request"),
+            serde_json::to_vec(
+                &json!({"conversationId": conversation_id, "upToSequence": highest_seen_sequence}),
+            )
+            .expect("serialize mark-read request"),
         )
         .send()
         .await
@@ -528,8 +529,8 @@ async fn mark_seen(
             .expect("read mark-seen response body"),
     )
     .expect("mark-seen JSON response");
-    assert_eq!(status, StatusCode::OK, "mark-seen response: {body}");
-    body
+    assert_eq!(status, StatusCode::OK, "mark-read response: {body}");
+    body["value"].clone()
 }
 
 async fn timeline(

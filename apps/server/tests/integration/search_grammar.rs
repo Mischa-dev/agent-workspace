@@ -134,30 +134,23 @@ async fn each_filter_narrows_and_none_widens() {
     let hidden = say(app, lena, &secret, &format!("{word} the hidden plan")).await;
 
     // Lena reacts to Mara's, pins her own and saves Mara's.
-    let (status, body) = send(
-        app,
-        lena.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/conversations/{design}/messages/{reviewed}/reactions/{}",
-                encoded("👍")
-            ),
-            None,
-            Value::Null,
-        ),
-    )
-    .await;
+    let (status, body) = lena
+        .browser
+        .op(
+            app,
+            "message_react",
+            json!({"messageId": reviewed, "emoji": "👍"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "react: {body}");
-    let (status, body) = send(
-        app,
-        lena.browser.request(
-            "POST",
-            &format!("/api/v1/conversations/{design}/pins"),
-            Some("grammar-pin"),
-            json!({"kind": "message", "targetId": planned}),
-        ),
-    )
-    .await;
+    let (status, body) = lena
+        .browser
+        .op(
+            app,
+            "pin_set",
+            json!({"conversationId": design, "messageId": planned, "pinned": true}),
+        )
+        .await;
     assert!(status.is_success(), "pin: {body}");
     let (status, body) = lena
         .browser

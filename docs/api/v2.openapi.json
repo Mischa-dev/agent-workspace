@@ -11059,6 +11059,13 @@
             "format": "int64",
             "type": "integer"
           },
+          "customEmojiId": {
+            "description": "A workspace's own emoji: its id, which message_react also takes, to\ntell apart two that share a name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "emoji": {
             "description": "The emoji, such as ✅.",
             "type": "string"
@@ -135393,6 +135400,354 @@
           }
         },
         "summary": "Stop reply request",
+        "tags": [
+          "messages"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/reply_stop_all": {
+      "post": {
+        "description": "Stop every agent's waiting or working reply request in a conversation and its threads, like Stop all on its status row. Needs \"Post messages\" where it acts.",
+        "operationId": "reply_stop_all",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "conversationId": {
+                    "description": "The conversation or thread whose agents to stop.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "conversationId"
+                ],
+                "title": "ReplyStopAllInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "stoppedRequestIds": {
+                              "description": "Every reply request stopped; empty when no agent was working there.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "stoppedRequestIds"
+                          ],
+                          "title": "ReplyStopAllOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "stoppedRequestIds": {
+                              "description": "Every reply request stopped; empty when no agent was working there.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "stoppedRequestIds"
+                          ],
+                          "title": "ReplyStopAllOutput",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Stop all agents",
         "tags": [
           "messages"
         ],

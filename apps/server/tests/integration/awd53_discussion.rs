@@ -154,14 +154,14 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
         app,
         setup.browser.request(
             "POST",
-            &format!("/api/v1/pages/{page}/suggestions/{first}/decision"),
-            None,
-            json!({"decision": "accept"}),
+            "/api/v2/ops/page_suggestion_decide",
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"pageId": page, "suggestionId": first, "decision": "accept"}),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{accepted}");
-    assert_eq!(accepted["status"], "accepted");
+    assert_eq!(accepted["value"]["status"], "accepted");
     let (body, version) = page_body().await;
     assert_eq!(version, 2);
     assert!(body.contains("- slow CI (fixed)"), "{body}");
@@ -207,9 +207,9 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
         app,
         setup.browser.request(
             "POST",
-            &format!("/api/v1/pages/{page}/suggestions/{second}/decision"),
-            None,
-            json!({"decision": "accept"}),
+            "/api/v2/ops/page_suggestion_decide",
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"pageId": page, "suggestionId": second, "decision": "accept"}),
         ),
     )
     .await;
@@ -337,9 +337,9 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
         app,
         setup.browser.request(
             "POST",
-            &format!("/api/v1/pages/{page}/comments"),
-            None,
-            json!({"body": "On the whiteboard", "replyTo": thread}),
+            "/api/v2/ops/page_comment_create",
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"pageId": page, "text": "On the whiteboard", "replyTo": thread}),
         ),
     )
     .await;
@@ -347,10 +347,10 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
     let (status, resolved) = send(
         app,
         setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/pages/{page}/comments/{thread}"),
-            None,
-            json!({"resolved": true}),
+            "POST",
+            "/api/v2/ops/page_comment_update",
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"pageId": page, "commentId": thread, "resolved": true}),
         ),
     )
     .await;
@@ -358,10 +358,10 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
     let (status, refused) = send(
         app,
         setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/pages/{page}/comments/{thread}"),
-            None,
-            json!({"body": "Rewritten by someone else"}),
+            "POST",
+            "/api/v2/ops/page_comment_update",
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"pageId": page, "commentId": thread, "text": "Rewritten by someone else"}),
         ),
     )
     .await;
@@ -439,13 +439,10 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
     let (status, resolved) = send(
         app,
         setup.browser.request(
-            "PATCH",
-            &format!(
-                "/api/v1/pages/{page}/comments/{}",
-                first_comment.as_str().expect("id")
-            ),
-            None,
-            json!({"resolved": true}),
+            "POST",
+            "/api/v2/ops/page_comment_update",
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"pageId": page, "commentId": first_comment.as_str().expect("id"), "resolved": true}),
         ),
     )
     .await;
@@ -476,9 +473,9 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
         app,
         stranger.request(
             "POST",
-            &format!("/api/v1/pages/{page}/comments"),
-            None,
-            json!({"body": "Hi"}),
+            "/api/v2/ops/page_comment_create",
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"pageId": page, "text": "Hi"}),
         ),
     )
     .await;
@@ -519,9 +516,9 @@ async fn a_change_a_comment_asked_for_shows_in_its_thread_with_undo() {
             app,
             browser.request(
                 "POST",
-                &format!("/api/v1/pages/{page}/comments"),
-                None,
-                json!({"body": "Can someone make the risks clearer?"}),
+                "/api/v2/ops/page_comment_create",
+                Some(&uuid::Uuid::now_v7().to_string()),
+                json!({"pageId": page, "text": "Can someone make the risks clearer?"}),
             ),
         )
         .await;

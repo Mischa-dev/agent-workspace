@@ -774,8 +774,44 @@ pub(crate) async fn page_write(
                     creator == Some(principal.actor_id),
                 )
                 .await?;
+                if mode == Some(access::WriteMode::Propose) {
+                    // The web's editor sends every field: only one that
+                    // changes needs edit access.
+                    let (title, is_guide, skill, archived, is_template, parent) =
+                        sqlx::query_as::<_, (String, bool, Option<String>, bool, bool, Option<Uuid>)>(
+                            "SELECT title, is_guide, skill_description, archived_at IS NOT NULL, \
+                                    is_template, parent_page_id \
+                             FROM project_pages WHERE id = $1",
+                        )
+                        .bind(page_id)
+                        .fetch_one(&mut *transaction)
+                        .await?;
+                    if input.title.as_deref().is_some_and(|value| value.trim() == title) {
+                        input.title = None;
+                    }
+                    if input.is_guide == Some(is_guide) {
+                        input.is_guide = None;
+                    }
+                    if input.is_template == Some(is_template) {
+                        input.is_template = None;
+                    }
+                    if input.archived == Some(archived) {
+                        input.archived = None;
+                    }
+                    if input
+                        .skill_description
+                        .as_deref()
+                        .is_some_and(|value| value.trim() == skill.as_deref().unwrap_or(""))
+                    {
+                        input.skill_description = None;
+                    }
+                    if input.parent_page_id == Some(parent) {
+                        input.parent_page_id = None;
+                    }
+                }
                 let changes_text = input.body.is_some() || input.restore_version.is_some();
                 let changes_more = input.title.is_some()
+                    || input.is_template.is_some()
                     || input.is_guide.is_some()
                     || input.skill_description.is_some()
                     || input.archived.is_some()

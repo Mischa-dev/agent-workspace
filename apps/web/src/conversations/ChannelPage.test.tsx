@@ -241,8 +241,8 @@ describe('M2 Channel workspace', () => {
             },
           })
         }
-        if (path.endsWith(`/conversations/${channelId}/mark-seen`)) {
-          return response({ highestSeenSequence: 4, version: 1 })
+        if (path.endsWith('/ops/conversation_mark_read')) {
+          return response({ outcome: 'ok', value: { conversationId: channelId, lastReadSequence: 4, unreadCount: 0 } })
         }
         if (path.includes(`/channels/${channelId}/messages`)) {
           sentKeys.push(new Headers(init?.headers).get('idempotency-key') ?? '')
@@ -320,7 +320,7 @@ describe('M2 Channel workspace', () => {
     await waitFor(() =>
       expect(
         fetchMock.mock.calls.some(([path, init]) =>
-          String(path).endsWith(`/conversations/${channelId}/mark-seen`) &&
+          String(path).endsWith('/ops/conversation_mark_read') &&
           init?.method === 'POST',
         ),
       ).toBe(true),

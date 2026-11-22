@@ -100,7 +100,6 @@ export type Pin = {
   id: string
   title: string
   text: string
-  pinnedAt: string
 }
 
 const project = (projectId: string) => `/api/v1/projects/${encodeURIComponent(projectId)}`
@@ -117,8 +116,10 @@ export function listPages(projectId: string) {
   return requestJson<{ pages: PageSummary[]; canEdit: boolean; canSuggest?: boolean }>(`${project(projectId)}/pages`)
 }
 
-export function createPage(projectId: string, input: PageInput) {
-  return requestJson<Page>(`${project(projectId)}/pages`, { method: 'POST', json: input })
+/** Makes a page (`page_create`) and reads it back. */
+export async function createPage(projectId: string, input: PageInput, requestId: string = newRequestId()) {
+  const created = await callOp('page_create', { projectId, ...input }, { requestId })
+  return getPage(created.id)
 }
 
 /** A page made from a file: what the file held that a page can't, left out. */
@@ -154,8 +155,11 @@ export function getPageVersion(pageId: string, version: number) {
 /** A save as it landed; `suggestionId` when your role only suggests, so the text waits for someone who edits. */
 export type SavedPage = Page & { suggestionId?: string }
 
-export function updatePage(pageId: string, input: PageInput) {
-  return requestJson<SavedPage>(`/api/v1/pages/${encodeURIComponent(pageId)}`, { method: 'PATCH', json: input })
+/** Saves a change (`page_update`) and reads the page back. */
+export async function updatePage(pageId: string, input: PageInput): Promise<SavedPage> {
+  const saved = await callOp('page_update', { pageId, ...input }, { requestId: newRequestId() })
+  const page = await getPage(pageId)
+  return saved.suggestion ? { ...page, suggestionId: saved.suggestion.suggestionId } : page
 }
 
 export function listDecisions(projectId: string, includeSuperseded = false) {
@@ -176,16 +180,17 @@ export function listPins(conversationId: string) {
   return requestJson<{ pins: Pin[] }>(`/api/v1/conversations/${encodeURIComponent(conversationId)}/pins`)
 }
 
+/** Pin or unpin a message, page or decision in a conversation (`pin_set`). */
+export async function setPinned(conversationId: string, kind: Pin['kind'], targetId: string, pinned: boolean) {
+  const target = kind === 'message' ? { messageId: targetId } : kind === 'page' ? { pageId: targetId } : { decisionId: targetId }
+  const answer = await callOp('pin_set', { conversationId, ...target, pinned }, { requestId: newRequestId() })
+  return { pins: answer.pins as Pin[] }
+}
+
 export function pin(conversationId: string, kind: Pin['kind'], targetId: string) {
-  return requestJson<{ pins: Pin[] }>(`/api/v1/conversations/${encodeURIComponent(conversationId)}/pins`, {
-    method: 'POST',
-    json: { kind, targetId },
-  })
+  return setPinned(conversationId, kind, targetId, true)
 }
 
 export function unpin(conversationId: string, kind: Pin['kind'], targetId: string) {
-  return requestJson<{ pins: Pin[] }>(
-    `/api/v1/conversations/${encodeURIComponent(conversationId)}/pins/${kind}/${encodeURIComponent(targetId)}`,
-    { method: 'DELETE' },
-  )
+  return setPinned(conversationId, kind, targetId, false)
 }

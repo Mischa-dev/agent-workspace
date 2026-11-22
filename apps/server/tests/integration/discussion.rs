@@ -609,14 +609,17 @@ async fn comments_that_mention_agents_tell_them() {
         app,
         lena.browser.request(
             "POST",
-            &format!("/api/v1/pages/{page_id}/comments"),
+            "/api/v2/ops/page_comment_create",
             Some(&Uuid::now_v7().to_string()),
-            json!({"body": "@Rook and @kite, thoughts?"}),
+            json!({"pageId": page_id, "text": "@Rook and @kite, thoughts?"}),
         ),
     )
     .await;
     assert!(status.is_success(), "{created}");
-    let page_comment = created["id"].as_str().expect("comment").to_owned();
+    let page_comment = created["value"]["commentId"]
+        .as_str()
+        .expect("comment")
+        .to_owned();
     let events = mentioned_events(app, pool, rook).await;
     assert_eq!(events.len(), 2, "{events:?}");
     assert_eq!(events[1].0, "page");

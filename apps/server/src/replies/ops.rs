@@ -21,7 +21,7 @@ use crate::{
     },
     ops::{
         Idempotency, OpCall, OpError, OpKind, Operation, Perm, Registry, Target, Targeted,
-        refs::parse_id,
+        refs::{IdRef, parse_id},
     },
 };
 
@@ -33,6 +33,7 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<ReplyPass>()
         .add::<ReplyRelease>()
         .add::<ReplyStop>()
+        .add::<ReplyStopAll>()
         .add::<ReplyRetry>();
 }
 
@@ -169,6 +170,62 @@ reply_op!(ReplyStop {
     output: StopProjection,
     run: replies::reply_stop
 });
+
+/// C2.35: Stop all in a conversation.
+pub(crate) struct ReplyStopAll;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ReplyStopAllInput {
+    /// The conversation or thread whose agents to stop.
+    pub conversation_id: IdRef,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReplyStopAllOutput {
+    /// Every reply request stopped; empty when no agent was working there.
+    pub stopped_request_ids: Vec<String>,
+}
+
+impl Targeted for ReplyStopAllInput {
+    fn target(&self) -> Target {
+        Target::thing("conversation", self.conversation_id.id())
+    }
+}
+
+impl Operation for ReplyStopAll {
+    const NAME: &'static str = "reply_stop_all";
+    const KIND: OpKind = OpKind::Change;
+    const MODULE: &'static str = "messages";
+    const PERMISSION: Option<Perm> = Some(Perm::ChannelsPost);
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const TITLE: &'static str = "Stop all agents";
+    const DESCRIPTION: &'static str = "Stop every agent's waiting or working reply request in \
+        a conversation and its threads, like Stop all on its status row.";
+    const EMITS: &'static [&'static str] = &["reply.stopped"];
+
+    type Input = ReplyStopAllInput;
+    type Output = ReplyStopAllOutput;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ReplyStopAllInput,
+    ) -> Result<ReplyStopAllOutput, OpError> {
+        let conversation_id = input.conversation_id.id();
+        let actor_id = call.account_id();
+        let stopped =
+            crate::replies::stop_all_in(call.tx().await?, actor_id, conversation_id).await?;
+        call.audit_target(
+            "conversation",
+            conversation_id,
+            serde_json::json!({ "stopped": stopped.len() }),
+        );
+        Ok(ReplyStopAllOutput {
+            stopped_request_ids: stopped.iter().map(Uuid::to_string).collect(),
+        })
+    }
+}
 
 reply_op!(ReplyRetry {
     name: "reply_retry",

@@ -542,7 +542,7 @@ export type QueryEntry = { answer?: AnswerEntry | null; canRun: boolean; connect
 
 export type RaisedRequestOutput = { activityId: string; clientRequestId?: string | null; requestId: string }
 
-export type ReactionSummary = { byYou: boolean; count: number; emoji: string; name: string; people: string[] }
+export type ReactionSummary = { byYou: boolean; count: number; customEmojiId?: string | null; emoji: string; name: string; people: string[] }
 
 export type RecipeView = { id: string; title: string }
 
@@ -2020,6 +2020,10 @@ export type ReplyStopInput = { requestId: string }
 
 export type ReplyStopOutput = { requestId: string; status: string; stoppedRequestIds: string[] }
 
+export type ReplyStopAllInput = { conversationId: string }
+
+export type ReplyStopAllOutput = { stoppedRequestIds: string[] }
+
 export type RepositoryArchiveInput = { expectedVersion?: number | null; projectId: string; repository: string }
 
 export type RepositoryArchiveOutput = { done: string; repository: Record<string, unknown> }
@@ -2951,6 +2955,7 @@ export type Operations = {
   reply_retry: { input: ReplyRetryInput; output: ReplyRetryOutput }
   reply_send: { input: ReplySendInput; output: ReplySendOutput }
   reply_stop: { input: ReplyStopInput; output: ReplyStopOutput }
+  reply_stop_all: { input: ReplyStopAllInput; output: ReplyStopAllOutput }
   repository_archive: { input: RepositoryArchiveInput; output: RepositoryArchiveOutput }
   repository_create: { input: RepositoryCreateInput; output: RepositoryCreateOutput }
   repository_get: { input: RepositoryGetInput; output: RepositoryGetOutput }

@@ -901,6 +901,12 @@
   },
   {
     "kind": "change",
+    "module": "messages",
+    "name": "reply_stop_all",
+    "title": "Stop all agents"
+  },
+  {
+    "kind": "change",
     "module": "code",
     "name": "repository_archive",
     "title": "Archive repository"
