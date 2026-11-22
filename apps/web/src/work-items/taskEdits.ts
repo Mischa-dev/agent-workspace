@@ -119,12 +119,7 @@ export function useApplyPick() {
             }
           : null
       if (targets.length === 1 || result.field === 'type') {
-        // One task's change can be undone from the moment it's made: its undo
-        // waits for this save (in order, per task), and a failed save forgets
-        // it. Several are kept once all their saves are queued and done.
-        const early = targets.length === 1
-        if (undo && early) remember(undo)
-        try {
+        const saves = (async () => {
           for (const target of targets) {
             await inOrder(`task:${target.id}`, () =>
               updateWorkItem({
@@ -135,11 +130,29 @@ export function useApplyPick() {
               }),
             )
           }
+        })()
+        // Undo can take it back from the moment it's made: it waits for the
+        // save itself and does nothing if the save failed (another editor's
+        // value that happens to match is never undone), and a failed save
+        // forgets it.
+        const afterSave: Undoable | null = undo && {
+          label: undo.label,
+          undo: async (client) => {
+            try {
+              await saves
+            } catch {
+              throw new Error('That change didn’t save, so there was nothing to undo.')
+            }
+            await undo.undo(client)
+          },
+        }
+        if (afterSave) remember(afterSave)
+        try {
+          await saves
         } catch (error) {
-          if (undo && early) forget(undo)
+          if (afterSave) forget(afterSave)
           throw error
         }
-        if (undo && !early) remember(undo)
         return
       }
       const changes = pickToBulk(result)
