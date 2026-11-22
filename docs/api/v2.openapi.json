@@ -6544,6 +6544,13 @@
           "name": {
             "type": "string"
           },
+          "newerVersion": {
+            "description": "A newer version the workspace's directory offers, for an installed\npackage (package_upgrade_preview and package_upgrade, with this\ninstall's id, move it there).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "objects": {
             "description": "How many objects it made or reused.",
             "format": "int64",
@@ -108150,7 +108157,7 @@
     },
     "/api/v2/w/{workspace}/ops/package_list": {
       "post": {
-        "description": "List the packages installed in the workspace (or one space), newest first: each install's package id, version, name, space, state, what it did in plain words and how many objects it made or reused. package_remove takes the install's id.",
+        "description": "List the packages installed in the workspace (or one space), newest first: each install's package id, version, name, space, state, what it did in plain words, how many objects it made or reused, and newerVersion when the directory offers one. package_remove takes the install's id.",
         "operationId": "package_list",
         "parameters": [
           {
@@ -109037,6 +109044,13 @@
                             "name": {
                               "type": "string"
                             },
+                            "newerVersion": {
+                              "description": "A newer version the workspace's directory offers, for an installed\npackage (package_upgrade_preview and package_upgrade, with this\ninstall's id, move it there).",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
                             "objects": {
                               "description": "How many objects it made or reused.",
                               "format": "int64",
@@ -109220,6 +109234,13 @@
                             },
                             "name": {
                               "type": "string"
+                            },
+                            "newerVersion": {
+                              "description": "A newer version the workspace's directory offers, for an installed\npackage (package_upgrade_preview and package_upgrade, with this\ninstall's id, move it there).",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
                             },
                             "objects": {
                               "description": "How many objects it made or reused.",

@@ -364,6 +364,23 @@ async fn channels_threads_pins_and_decisions_can_be_shaped() {
         opened.push(call["value"]["message"]["messageId"].clone());
     }
     assert_ne!(opened[0], opened[1]);
+    // Each retried with its own key gets its own message back.
+    for ((key, text), sent) in [("from-a", "First words."), ("from-b", "Second words.")]
+        .into_iter()
+        .zip(&opened)
+    {
+        let retried = tool(
+            app,
+            &codex,
+            &session,
+            "thread_start",
+            json!({"conversationId": design_id, "fromMessageId": message_id,
+                   "text": text, "clientRequestId": key}),
+        )
+        .await;
+        assert_eq!(retried["replayed"], true, "{retried}");
+        assert_eq!(&retried["value"]["message"]["messageId"], sent, "{retried}");
+    }
     let decided = tool(
         app,
         &codex,

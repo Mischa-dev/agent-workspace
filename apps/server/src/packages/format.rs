@@ -211,6 +211,16 @@ fn is_key(text: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
+/// A version's three numbers, for ordering (None for one that isn't a
+/// semantic version).
+pub fn version_order(text: &str) -> Option<(u32, u32, u32)> {
+    if !is_version(text) {
+        return None;
+    }
+    let mut parts = text.split('.').map(|part| part.parse::<u32>().ok());
+    Some((parts.next()??, parts.next()??, parts.next()??))
+}
+
 fn is_version(text: &str) -> bool {
     let parts = text.split('.').collect::<Vec<_>>();
     parts.len() == 3
@@ -609,6 +619,14 @@ pub fn schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn versions_order_by_their_numbers() {
+        assert!(version_order("1.10.0") > version_order("1.9.3"));
+        assert!(version_order("2.0.0") > version_order("1.99.99"));
+        assert_eq!(version_order("1.0"), None);
+        assert_eq!(version_order("01.0.0"), None);
+    }
 
     #[test]
     fn the_built_in_templates_are_packages_that_validate() {

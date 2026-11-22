@@ -777,7 +777,9 @@ async fn pipeline<O: Operation>(
     // the answer is kept in another after it. Holding the reservation open
     // would leave the command waiting on a second connection (a pool of
     // one stalls), on rows the reservation references, and across any
-    // network call the command makes.
+    // network call the command makes. A call that stops between the
+    // command's commit and its answer leaves the id unanswered: retries wait,
+    // then are refused, and never run the command a second time.
     let apart = O::OWN_TRANSACTION && !request.preview;
     // The reviewer's hold a command apart used, to give back if it fails.
     let mut used_hold = None;
@@ -785,7 +787,7 @@ async fn pipeline<O: Operation>(
         let (key, hash) = (*key, *hash);
         if apart {
             let mut tx = begin(state, &ctx).await?;
-            match idempotency::reserve_briefly(&mut tx, ctx.caller.account_id, scope, key, hash)
+            match idempotency::reserve_apart(&mut tx, ctx.caller.account_id, scope, key, hash)
                 .await?
             {
                 IdempotencyOutcome::Reserved(reserved) => reservation = Some(reserved),

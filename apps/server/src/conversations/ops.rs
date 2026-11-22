@@ -650,6 +650,9 @@ impl Operation for ScheduledMessageUpdate {
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "messages";
     const PERMISSION: Option<Perm> = Some(Perm::ChannelsPost);
+    // Not replayed by the dispatcher: a stored answer would skip the
+    // command's check that the author still reaches the conversation, and
+    // a send-now refusal can follow a saved edit. replaySafe stays false.
     const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const TITLE: &'static str = "Change scheduled message";
     const DESCRIPTION: &'static str = "Change a message you scheduled: its text or time \
@@ -665,8 +668,6 @@ impl Operation for ScheduledMessageUpdate {
         input: ScheduledMessageUpdateInput,
     ) -> Result<ScheduledUpdateValue, OpError> {
         let id = input.id.id();
-        // The scheduled-message command keeps no request ids, so a retry
-        // after a later edit would write again: replaySafe stays false.
         let updated = messaging::scheduled_update(
             call.state,
             call.ctx,

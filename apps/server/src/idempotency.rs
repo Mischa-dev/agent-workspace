@@ -116,7 +116,14 @@ struct IdempotencyRow {
     request_hash: Vec<u8>,
     response_status: Option<i32>,
     response_body: Option<serde_json::Value>,
+    /// Reserved long enough ago that its command can't still be running.
+    stalled: bool,
 }
+
+/// How long a reserved call may take before a retry stops waiting for it:
+/// past this, its command stopped midway (a reservation kept apart from its
+/// write is the only kind others can see unanswered).
+const STALLED_AFTER: &str = "30 minutes";
 
 pub fn resource_bound_scope(
     namespace: &str,
@@ -152,7 +159,8 @@ pub async fn reserve(
 
     let existing = sqlx::query_as::<_, IdempotencyRow>(
         r#"
-        SELECT request_hash, response_status, response_body
+        SELECT request_hash, response_status, response_body,
+               created_at < now() - $4::interval AS stalled
         FROM idempotency_keys
         WHERE actor_id = $1 AND scope = $2 AND key = $3
           AND expires_at > now()
@@ -162,6 +170,7 @@ pub async fn reserve(
     .bind(actor_id)
     .bind(scope)
     .bind(key.as_str())
+    .bind(STALLED_AFTER)
     .fetch_optional(&mut **transaction)
     .await?;
 
@@ -169,14 +178,22 @@ pub async fn reserve(
         if existing.request_hash.as_slice() != request_hash.as_bytes() {
             return Err(AppError::Conflict("idempotency_key", "payload mismatch"));
         }
-        let status = existing
-            .response_status
-            .and_then(|value| u16::try_from(value).ok())
-            .and_then(|value| StatusCode::from_u16(value).ok())
-            .ok_or(AppError::Conflict("idempotency_key", "command in progress"))?;
-        let response_body = existing
-            .response_body
-            .ok_or(AppError::Conflict("idempotency_key", "command in progress"))?;
+        // Unanswered: still running, or (after a while) stopped midway with
+        // its write made or not; a retry never runs it a second time.
+        let unanswered = if existing.stalled {
+            AppError::Conflict("idempotency_key", "outcome unknown")
+        } else {
+            AppError::Conflict("idempotency_key", "command in progress")
+        };
+        let (Some(status), Some(response_body)) = (
+            existing
+                .response_status
+                .and_then(|value| u16::try_from(value).ok())
+                .and_then(|value| StatusCode::from_u16(value).ok()),
+            existing.response_body,
+        ) else {
+            return Err(unanswered);
+        };
         return Ok(IdempotencyOutcome::Replay(IdempotencyReplay {
             status,
             response_body,
@@ -211,31 +228,20 @@ pub async fn reserve(
 /// (nothing is held after it returns). For a check that has to run before
 /// the call's own transaction opens; [`reserve`] still settles a race.
 /// As `reserve`, for a command that runs outside the reserving transaction
-/// (it commits before the command starts): the reservation lapses after a
-/// few minutes unless `complete` keeps the answer, so a call that died
-/// midway doesn't refuse its retries for a day.
-pub async fn reserve_briefly(
+/// (it commits before the command starts, and `complete` keeps the answer
+/// in another after it). The reservation lasts as long as any: a call that
+/// stopped between its command's commit and its answer may have made its
+/// write, so its retries are refused (`outcome unknown`, once it has had
+/// time to finish) rather than run again; a refused or failed command gives
+/// its reservation back with `release`.
+pub async fn reserve_apart(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
     scope: &str,
     key: &IdempotencyKey,
     request_hash: RequestHash,
 ) -> Result<IdempotencyOutcome, AppError> {
-    let outcome = reserve(transaction, actor_id, scope, key, request_hash).await?;
-    if let IdempotencyOutcome::Reserved(reservation) = &outcome {
-        sqlx::query(
-            r#"
-            UPDATE idempotency_keys SET expires_at = now() + interval '10 minutes'
-            WHERE actor_id = $1 AND scope = $2 AND key = $3 AND response_status IS NULL
-            "#,
-        )
-        .bind(reservation.actor_id)
-        .bind(&reservation.scope)
-        .bind(reservation.key.as_str())
-        .execute(&mut **transaction)
-        .await?;
-    }
-    Ok(outcome)
+    reserve(transaction, actor_id, scope, key, request_hash).await
 }
 
 /// Gives up a reservation whose command made nothing, so a retry runs.
@@ -269,7 +275,8 @@ pub async fn finished(
     validate_scope(scope)?;
     let existing = sqlx::query_as::<_, IdempotencyRow>(
         r#"
-        SELECT request_hash, response_status, response_body
+        SELECT request_hash, response_status, response_body,
+               created_at < now() - $4::interval AS stalled
         FROM idempotency_keys
         WHERE actor_id = $1 AND scope = $2 AND key = $3
           AND expires_at > now()
@@ -278,6 +285,7 @@ pub async fn finished(
     .bind(actor_id)
     .bind(scope)
     .bind(key.as_str())
+    .bind(STALLED_AFTER)
     .fetch_optional(&mut *connection)
     .await?;
     let Some(existing) = existing else {

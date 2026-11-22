@@ -262,9 +262,9 @@ impl Operation for PullRequestGet {
             .get("projectId")
             .and_then(serde_json::Value::as_str)
             .and_then(parse_id);
-        let found = sqlx::query_scalar::<_, Uuid>(
+        let candidates = sqlx::query_as::<_, (Uuid, Uuid)>(
             r#"
-            SELECT pull.id FROM github_pull_requests pull
+            SELECT pull.id, pull.project_id FROM github_pull_requests pull
             JOIN projects project ON project.id = pull.project_id
             WHERE pull.html_url = $1
               AND actor_can_access_project($2, $3, pull.project_id)
@@ -272,7 +272,7 @@ impl Operation for PullRequestGet {
               AND ($4::uuid IS NULL OR project.organization_id = $4)
               AND ($5::uuid IS NULL OR pull.project_id = $5)
             ORDER BY pull.project_id = $6 DESC, pull.project_id = $7 DESC, pull.project_id
-            LIMIT 1
+            LIMIT 20
             "#,
         )
         .bind(&link)
@@ -282,9 +282,34 @@ impl Operation for PullRequestGet {
         .bind(caller.confined_space)
         .bind(preferred)
         .bind(caller.home_space)
-        .fetch_optional(crate::db::scoped(&state.pool))
+        .fetch_all(crate::db::scoped(&state.pool))
         .await
         .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
+        // The first copy the caller may read where it is (the space's code
+        // module on and its role letting them view code), so a preferred
+        // space that refuses doesn't hide a readable copy (with none, the
+        // first, which admission then refuses).
+        let mut found = candidates.first().map(|(id, _)| *id);
+        if candidates.len() > 1 {
+            let need = crate::access::Need::maybe(Self::PERMISSION).in_module(Self::MODULE);
+            found = crate::db::scoped_one(&state.pool, async |connection| {
+                for (id, space) in &candidates {
+                    let checked = crate::access::check(
+                        connection,
+                        caller,
+                        need,
+                        crate::access::Target::Space(*space),
+                    )
+                    .await?;
+                    if checked.is_ok() {
+                        return Ok::<_, crate::error::AppError>(Some(*id));
+                    }
+                }
+                Ok(found)
+            })
+            .await
+            .map_err(|error| OpError::logged(Self::NAME, &error))?;
+        }
         if let Some(id) = found {
             input["identifier"] = serde_json::Value::String(id.to_string());
         }

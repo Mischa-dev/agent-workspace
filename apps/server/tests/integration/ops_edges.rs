@@ -829,3 +829,57 @@ async fn a_retired_name_says_what_to_use_instead() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_eq!(spaces().await, before, "no personal space was made");
 }
+
+/// A command that keeps its own transactions reserves its request id apart
+/// from its write. A retry while the first call is still unanswered waits
+/// (503); once that call has had time to finish, the id is refused (409)
+/// rather than run again, since its write may have been made.
+#[tokio::test]
+async fn an_unanswered_call_is_never_run_again() {
+    let Some(setup) = setup("k2_ops_unanswered").await else {
+        return;
+    };
+    let app = &setup.app;
+    let space = create_project(&setup, "UNA", "Unanswered").await;
+    let create = || {
+        setup.browser.request(
+            "POST",
+            "/api/v2/ops/page_create",
+            Some("page-once"),
+            json!({ "projectId": space, "title": "Once", "body": "Made once." }),
+        )
+    };
+    let pages = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM project_pages WHERE title = 'Once'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("pages")
+    };
+    let (status, first) = super::support::app::send(app, create()).await;
+    assert!(status.is_success(), "{status}: {first}");
+    assert_eq!(pages().await, 1);
+
+    // As if the call stopped after the page was made, before its answer
+    // was kept.
+    let pool = setup.pool.clone();
+    let unanswer = |age: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "UPDATE idempotency_keys SET response_status = NULL, response_body = NULL, \
+                 created_at = now() - $1::interval WHERE key = 'page-once'",
+            )
+            .bind(age)
+            .execute(&pool)
+            .await
+            .expect("unanswered");
+        }
+    };
+    unanswer("1 minute").await;
+    let (status, waiting) = super::support::app::send(app, create()).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{waiting}");
+    unanswer("1 hour").await;
+    let (status, refused) = super::support::app::send(app, create()).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(pages().await, 1, "a retry never makes it again");
+}

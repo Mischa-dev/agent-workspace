@@ -1194,4 +1194,14 @@ async fn an_agents_task_comment_mentions_people_and_references_tasks() {
     .await
     .expect("mentions");
     assert_eq!(mentioned, [owner]);
+    // A keyed edit sent twice is made once: the retry replays its answer.
+    let keyed = json!({"taskId": tasks[0], "commentId": comment_id,
+                       "text": "@owner over to you, again", "clientRequestId": "edit-once"});
+    let first = call("task_comment_update", keyed.clone()).await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert_eq!(first["replaySafe"], true, "{first}");
+    assert_eq!(first["replayed"], false, "{first}");
+    let again = call("task_comment_update", keyed).await;
+    assert_eq!(again["replayed"], true, "{again}");
+    assert_eq!(again["value"], first["value"], "{again}");
 }
