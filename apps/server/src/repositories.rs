@@ -325,12 +325,26 @@ async fn prepare(state: AppState, project_id: Uuid, repository_id: Uuid) -> Resu
     Ok(())
 }
 
-/// Mark a repository whose preparation ran out of tries as failed.
+/// Mark a repository still waiting for its first preparation as failed once
+/// the job runs out of tries. A ready repository whose refresh never reached
+/// its mirror keeps working from the mirror it has.
 async fn give_up(state: &AppState, project_id: Uuid, repository_id: Uuid) -> Result<(), AppError> {
     tracing::warn!(%project_id, %repository_id, "repository preparation ran out of tries");
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    apply_preparation_result(&mut transaction, project_id, repository_id, false).await?;
-    transaction.commit().await?;
+    sqlx::query(
+        r#"
+        UPDATE repositories
+        SET preparation_state = 'failed',
+            preparation_failure_category = 'git_prepare_failed',
+            version = version + 1,
+            updated_at = now()
+        WHERE id = $1 AND project_id = $2 AND archived_at IS NULL
+          AND preparation_state = 'pending'
+        "#,
+    )
+    .bind(repository_id)
+    .bind(project_id)
+    .execute(crate::db::scoped(&state.pool))
+    .await?;
     Ok(())
 }
 
