@@ -1,4 +1,4 @@
-import { opAnswers, type Handler } from './touches'
+import { opAnswers, opAnswersIn, payloadId, type Handler, type Touch } from './touches'
 
 // Built and connected modules (M1.6, M1.13). A built module made, changed,
 // switched or archived elsewhere: the sidebar's module entries and Settings ›
@@ -6,9 +6,19 @@ import { opAnswers, type Handler } from './touches'
 // installed, re-read, approved or revoked: its list too, and the built list,
 // whose nav entries can point through it.
 
-const builtChanged: Handler = () => [opAnswers('module_list'), opAnswers('module_open')]
+// Only the workspace the module is in reads again; an event that doesn't
+// name one refreshes every workspace's answers.
+const answers = (op: string, workspaceId: string | null): Touch => (workspaceId ? opAnswersIn(op, workspaceId) : opAnswers(op))
 
-const connectedChanged: Handler = () => [opAnswers('module_list'), opAnswers('connected_module_list')]
+const builtChanged: Handler = (event) => {
+  const workspaceId = payloadId(event, 'workspaceId', 'workspace_id')
+  return [answers('module_list', workspaceId), answers('module_open', workspaceId)]
+}
+
+const connectedChanged: Handler = (event) => {
+  const workspaceId = payloadId(event, 'workspaceId', 'workspace_id')
+  return [answers('module_list', workspaceId), answers('connected_module_list', workspaceId)]
+}
 
 export const moduleHandlers: Record<string, Handler> = {
   'module.created': builtChanged,

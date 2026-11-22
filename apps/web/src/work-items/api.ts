@@ -677,12 +677,22 @@ export async function queueWorkItemUpdate(input: {
  * Changes a task through `task_update`. A blocker change goes on its own
  * after the rest, against the version the rest left.
  */
-export async function updateWorkItem(input: {
+type WorkItemUpdate = {
   projectId: string
   workItemId: string
   patch: WorkItemPatch
   idempotencyKey: string
-}) {
+}
+
+/** Saves a change and returns the task as it now stands. */
+export async function updateWorkItem(input: WorkItemUpdate) {
+  await writeWorkItem(input)
+  return getWorkItem(input.projectId, input.workItemId)
+}
+
+/** Saves a change without reading the task back: it resolves once the write
+ * has landed, so a caller can tell a refused write from a failed read. */
+export async function writeWorkItem(input: WorkItemUpdate): Promise<void> {
   const { blockedReason, ...rest } = input.patch
   const refuse = (expectedVersion: number) => (error: unknown) => refuseAsMovedOn(error, { ...input, expectedVersion })
   let version = rest.expectedVersion
@@ -704,7 +714,6 @@ export async function updateWorkItem(input: {
       blockedReason === null ? 'Unblocking it' : 'Marking it blocked',
     )
   }
-  return getWorkItem(input.projectId, input.workItemId)
 }
 
 // W1.9a: these writes go through the op client; its answers are short, so

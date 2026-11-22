@@ -2587,6 +2587,13 @@ pub async fn update(
         "#
     );
     let mut transaction = crate::db::scoped_tx(pool).await?;
+    // The recipient acts on their own inbox; the call's request id and
+    // credential come from the edge.
+    crate::events::set_context(
+        &mut transaction,
+        &crate::events::EventContext::actor(viewer, None),
+    )
+    .await?;
     let changed = sqlx::query_as::<_, (Uuid, Uuid)>(&sql)
         .bind(viewer)
         .bind(ids)

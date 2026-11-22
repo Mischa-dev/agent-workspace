@@ -2,7 +2,7 @@ import { useMutation } from '@tanstack/react-query'
 
 import { isApiError } from '../api/errors'
 import { describeError } from '../ui'
-import { normalizeWorkItem, updateWorkItem } from './api'
+import { normalizeWorkItem, writeWorkItem } from './api'
 import type { PickResult } from './FieldPicker'
 import { bulkUpdateWorkItems } from './planningApi'
 import { useInvalidateWorkItems } from './planningHooks'
@@ -122,7 +122,7 @@ export function useApplyPick() {
         const saves = (async () => {
           for (const target of targets) {
             await inOrder(`task:${target.id}`, () =>
-              updateWorkItem({
+              writeWorkItem({
                 projectId: target.projectId,
                 workItemId: target.id,
                 idempotencyKey: crypto.randomUUID(),
