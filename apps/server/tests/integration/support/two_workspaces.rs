@@ -754,7 +754,7 @@ async fn build_workspace(
         json!({"workItemId": "WORK-1", "update": format!("Launch comment{m}"), "clientRequestId": "comment-1"}),
     )
     .await;
-    let comment = Uuid::parse_str(&string_at(&comment, "/activityId")).expect("comment id");
+    let comment = Uuid::parse_str(&string_at(&comment, "/value/activityId")).expect("comment id");
     // An edit, so the comment has versions to read.
     call(
         "task_comment_update",

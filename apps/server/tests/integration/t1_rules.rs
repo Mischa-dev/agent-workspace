@@ -34,8 +34,14 @@ async fn field_rules_hold_on_every_way_in() {
         codex.call(app, Call::Tool { name, arguments }).await.1
     };
     let write = |records: Value| {
+        // Records that name one change it; the others are new.
+        let name = if records[0].get("record").is_some() {
+            "record_update_many"
+        } else {
+            "record_create_many"
+        };
         call(
-            "record_create_many",
+            name,
             json!({"projectId": "WORK", "collection": "Parts", "records": records}),
         )
     };

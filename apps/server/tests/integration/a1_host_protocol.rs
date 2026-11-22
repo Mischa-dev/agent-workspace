@@ -767,7 +767,7 @@ async fn secrets_typed_into_runs_requests_and_hosts_are_never_kept() {
     for table in [
         "runs",
         "run_activities",
-        "run_usage_list",
+        "run_usage",
         "usage_reports",
         "requests",
         "hosts",

@@ -651,7 +651,7 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
     )
     .await;
     assert_eq!(
-        commented["outcome"], "applied",
+        commented["outcome"], "ok",
         "keys work in task_comment: {commented}"
     );
     let started = tool(

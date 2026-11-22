@@ -131,7 +131,7 @@ async fn a_key_two_workspaces_share_is_refused_rather_than_guessed() {
         json!({"taskId": "WORK-1", "text": "Which one?", "clientRequestId": "sweep-ambiguous"}),
     )
     .await;
-    assert_ne!(commented["outcome"], "applied", "{commented}");
+    assert_ne!(commented["outcome"], "ok", "{commented}");
     let comments = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM messages message JOIN conversations place ON place.id = message.conversation_id WHERE place.kind = 'comments'",
     )
@@ -236,7 +236,7 @@ async fn historical_aliases_cannot_hide_a_conflicting_task_key() {
         json!({"taskId": "WORK-1", "text": "Wrong task?", "clientRequestId": "alias-ambiguity"}),
     )
     .await;
-    assert_ne!(commented["outcome"], "applied", "{commented}");
+    assert_ne!(commented["outcome"], "ok", "{commented}");
     let count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM messages message JOIN conversations place ON place.id = message.conversation_id WHERE place.kind = 'comments'",
     )

@@ -1983,9 +1983,9 @@ async fn an_app_moderates_only_within_its_agent_limit() {
         json!({"taskId": task, "text": "The owner's note", "clientRequestId": "owner-note"}),
     )
     .await;
-    assert_eq!(commented["outcome"], "applied", "{commented}");
+    assert_eq!(commented["outcome"], "ok", "{commented}");
     // The comment's ID is the write's activityId; resultId is its audit record.
-    let comment = commented["activityId"]
+    let comment = commented["value"]["activityId"]
         .as_str()
         .unwrap_or_else(|| panic!("comment id: {commented}"))
         .parse::<Uuid>()
@@ -3069,7 +3069,7 @@ async fn a_write_token_follows_any_write_permission() {
         json!({"taskId": task, "title": "Renamed by the token", "expectedVersion": 1}),
     )
     .await;
-    assert_ne!(refused["outcome"], "applied", "{refused}");
+    assert_ne!(refused["outcome"], "ok", "{refused}");
     let renamed = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM task_rows WHERE title = 'Renamed by the token'",
     )
@@ -5413,6 +5413,7 @@ async fn link_changes_name_the_task_only_where_tasks_are_seen() {
 
     // As a plain Member, Bea sees the task.
     for (name, arguments) in calls.clone() {
+        let depends = arguments.get("blockedBy").is_some();
         let seen = tool(app, &bea_app, &session, name, arguments).await;
         assert_eq!(seen["outcome"], "ok", "{name}: {seen}");
         let changed = &seen["value"]["task"];
@@ -5420,7 +5421,8 @@ async fn link_changes_name_the_task_only_where_tasks_are_seen() {
         assert!(changed["status"].is_string(), "{name}: {seen}");
         assert!(changed["statusGroup"].is_string(), "{name}: {seen}");
         assert_eq!(changed["finished"], false, "{name}: {seen}");
-        if name == "task_link" {
+        // A dependency change answers whether the task is ready now.
+        if depends {
             assert!(seen["value"]["ready"].is_boolean(), "{name}: {seen}");
         }
         assert!(
@@ -6400,8 +6402,8 @@ async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
         json!({"taskId": task, "text": "On it", "clientRequestId": "k116-mara"}),
     )
     .await;
-    assert_eq!(commented["outcome"], "applied", "{commented}");
-    let mara_comment = commented["activityId"]
+    assert_eq!(commented["outcome"], "ok", "{commented}");
+    let mara_comment = commented["value"]["activityId"]
         .as_str()
         .expect("comment id")
         .to_owned();

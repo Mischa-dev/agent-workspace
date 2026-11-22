@@ -282,7 +282,7 @@ async fn task_list_filters_count_and_stay_inside_reachable_projects() {
         json!({"taskId": "ALPHA-2", "expectedVersion": 1, "blockedReason": "Waiting on design", "clientRequestId": "block-2"}),
     )
     .await;
-    assert_eq!(blocked["outcome"], "applied", "{blocked}");
+    assert_eq!(blocked["outcome"], "ok", "{blocked}");
     let claimed = as_mara("task_claim", json!({"taskId": "ALPHA-4"})).await;
     assert_eq!(claimed["outcome"], "ok", "{claimed}");
     let (status, archived) = crate::support::tasks::send(

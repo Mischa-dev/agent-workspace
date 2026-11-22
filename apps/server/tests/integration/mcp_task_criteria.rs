@@ -627,7 +627,7 @@ async fn history_shows_who_did_what_and_hides_private_threads() {
         json!({"taskId": "WORK-1", "text": "Repro attached", "clientRequestId": "history-comment"}),
     )
     .await;
-    assert_eq!(commented["outcome"], "applied", "{commented}");
+    assert_eq!(commented["outcome"], "ok", "{commented}");
     // A criterion added in a call can't be named in that call (its ID isn't
     // known yet), so checking it takes a second call.
     let added = call(
@@ -744,7 +744,7 @@ async fn history_shows_who_did_what_and_hides_private_threads() {
         json!({"taskId": second["value"]["workItemId"], "text": "Noted", "clientRequestId": "history-other"}),
     )
     .await;
-    assert_eq!(commented["outcome"], "applied", "{commented}");
+    assert_eq!(commented["outcome"], "ok", "{commented}");
     let other_page = call(
         "task_get",
         json!({"taskId": "WORK-2", "include": ["history"], "historyLimit": 1}),

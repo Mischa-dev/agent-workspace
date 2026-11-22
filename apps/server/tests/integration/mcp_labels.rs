@@ -629,7 +629,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
     let unknown = label_problem(&setup, project, &["bugz"]).await;
     assert_eq!(
         unknown,
-        "No label called \"bugz\" in WORK. Its labels: Bug, Mobile. Create one with label_write first."
+        "No label called \"bugz\" in WORK. Its labels: Bug, Mobile. Create one with label_create first."
     );
 
     // Archiving hides a label from every task without changing them, and
@@ -692,11 +692,9 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
     assert_eq!(names(&all["value"]["labels"]), ["Bug", "Mobile"]);
     assert_eq!(all["value"]["labels"][1]["archived"], true);
     assert_eq!(all["value"]["labels"][1]["taskCount"], 1);
-    assert!(
-        label_problem(&setup, project, &["mobile"]).await.contains(
-            "\"Mobile\" is archived in WORK. Restore it with label_write (archived: false)"
-        )
-    );
+    assert!(label_problem(&setup, project, &["mobile"]).await.contains(
+        "\"Mobile\" is archived in WORK. Restore it with label_update (archived: false)"
+    ));
     let reused = tool(
         app,
         &codex,
@@ -707,7 +705,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
     .await;
     assert_eq!(reused["outcome"], "conflict", "{reused}");
     assert!(
-        message(&reused).contains("Restore it with label_write"),
+        message(&reused).contains("Restore it with label_update"),
         "{reused}"
     );
     // Nothing puts an archived label on a task, whatever the code path.

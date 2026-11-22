@@ -152,6 +152,11 @@ async fn a_record_becoming_high_makes_one_task_and_a_maker_without_edit_rights_s
     };
     let write = |fields: Value, version: Option<i64>, record: Option<String>, key: &'static str| {
         let mut entry = json!({"fields": fields});
+        let name = if record.is_some() {
+            "record_update_many"
+        } else {
+            "record_create_many"
+        };
         match record {
             Some(id) => {
                 entry["record"] = json!(id);
@@ -160,7 +165,7 @@ async fn a_record_becoming_high_makes_one_task_and_a_maker_without_edit_rights_s
             None => entry["title"] = json!("Boss fight"),
         }
         tool(
-            "record_create_many",
+            name,
             json!({"projectId": "WORK", "collection": "Playtest", "records": [entry],
                    "clientRequestId": key}),
         )

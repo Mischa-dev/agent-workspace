@@ -779,7 +779,7 @@ async fn a_comment_naming_a_task_that_stays_moves_with_its_task() {
         json!({"taskId": "SRC-1", "text": "Waits on SRC-3", "clientRequestId": "move-ref"}),
     )
     .await;
-    assert_eq!(commented["outcome"], "applied", "{commented}");
+    assert_eq!(commented["outcome"], "ok", "{commented}");
     let stays = task_id(&setup, &w.src, 3).await;
     let moved = tool(
         app,

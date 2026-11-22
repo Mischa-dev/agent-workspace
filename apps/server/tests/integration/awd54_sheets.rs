@@ -110,7 +110,7 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
         }),
     )
     .await;
-    assert_eq!(replay["value"]["idempotentReplay"], true, "{replay}");
+    assert_eq!(replay["replayed"], true, "{replay}");
     let read = call("sheet_get", json!({"projectId": "WORK", "sheet": "budget"})).await;
     assert_eq!(read["outcome"], "ok", "{read}");
     assert_eq!(read["value"]["tab"], "Costs");

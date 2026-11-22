@@ -135,7 +135,7 @@ async fn a_thousand_records_page_filter_sort_and_group_on_the_server() {
         }),
     )
     .await;
-    assert_eq!(replay["value"]["idempotentReplay"], true, "{replay}");
+    assert_eq!(replay["replayed"], true, "{replay}");
 
     // The High ones, highest score first, 150 a page: every one once, in
     // order, and never more than a page at a time.

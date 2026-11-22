@@ -151,7 +151,7 @@ async fn refused_status_changes_explain_the_way_and_writes_name_the_task() {
     assert_eq!(stale["retryCategory"], "reread");
     assert_eq!(
         stale["message"],
-        "Someone changed WORK-1 first (now version 2). Open it again with task_open, then retry with expectedVersion 2."
+        "Someone changed WORK-1 first (now version 2). Open it again with task_get, then retry with expectedVersion 2."
     );
 
     let unknown = tool(
@@ -204,9 +204,9 @@ async fn refused_status_changes_explain_the_way_and_writes_name_the_task() {
         json!({"taskId": "WORK-1", "text": "Picked this up.", "clientRequestId": "ground-comment"}),
     )
     .await;
-    assert_eq!(comment["outcome"], "applied", "{comment}");
-    assert_eq!(comment["key"], "WORK-1");
-    assert_eq!(comment["url"], created["value"]["url"]);
+    assert_eq!(comment["outcome"], "ok", "{comment}");
+    assert_eq!(comment["value"]["key"], "WORK-1");
+    assert_eq!(comment["value"]["url"], created["value"]["url"]);
 }
 
 #[tokio::test]

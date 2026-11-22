@@ -599,7 +599,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         }),
     )
     .await;
-    assert_eq!(blocked.pointer("/version"), Some(&json!(3)));
+    assert_eq!(blocked.pointer("/value/version"), Some(&json!(3)));
 
     let posted = call_tool(
         &application,
@@ -614,7 +614,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         }),
     )
     .await;
-    assert_eq!(posted.pointer("/version"), Some(&json!(3)));
+    assert_eq!(posted.pointer("/value/version"), Some(&json!(3)));
 
     let subtask = call_tool(
         &application,
@@ -673,7 +673,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
             "clientRequestId":"m6-review-1", "readyForReview": true }),
     )
     .await;
-    assert_eq!(review.pointer("/version"), Some(&json!(6)));
+    assert_eq!(review.pointer("/value/version"), Some(&json!(6)));
 
     let missing_pr = call_tool(
         &application,
@@ -1379,7 +1379,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         }),
     )
     .await;
-    assert_eq!(oauth_update["outcome"], "applied");
+    assert_eq!(oauth_update["outcome"], "ok");
     let oauth_audit = sqlx::query_as::<_, (String, String, Option<Uuid>, Option<Uuid>)>(
         "SELECT authentication_class, channel, mcp_credential_id, mcp_oauth_grant_id FROM audit_events WHERE request_id = 'm6-oauth-post-1'",
     )

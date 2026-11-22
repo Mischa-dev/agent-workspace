@@ -588,7 +588,7 @@ async fn comments_that_mention_agents_tell_them() {
         json!({"taskId": task_id, "text": "@rook and @kite on it", "clientRequestId": "rook-1"}),
     )
     .await;
-    assert_eq!(own["outcome"], "applied", "{own}");
+    assert_eq!(own["outcome"], "ok", "{own}");
     assert_eq!(mentioned_events(app, pool, rook).await.len(), 1);
     assert!(mentioned_events(app, pool, kite).await.is_empty());
 
@@ -1136,7 +1136,7 @@ async fn task_discussions_keep_the_task_limit() {
                "attachmentIds": [file]}),
     )
     .await;
-    assert_eq!(commented["outcome"], "applied", "{commented}");
+    assert_eq!(commented["outcome"], "ok", "{commented}");
     let listed = call(
         "comment_list",
         json!({"thing": {"kind": "task", "id": task}}),

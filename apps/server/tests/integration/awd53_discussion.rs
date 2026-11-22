@@ -137,7 +137,7 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
             .iter()
             .all(|proposal| proposal["thingKind"] == "page"
                 && proposal["thingId"] == page.as_str()
-                && proposal["operation"] == "page_update_blocks"
+                && proposal["operation"] == "page_edit"
                 && proposal["status"] == "pending"),
         "{mine}"
     );

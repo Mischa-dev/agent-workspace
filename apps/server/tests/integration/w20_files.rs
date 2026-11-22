@@ -555,7 +555,7 @@ async fn files_open_only_where_their_message_or_task_does() {
         }),
     )
     .await;
-    assert_eq!(commented["outcome"], "applied", "{commented}");
+    assert_eq!(commented["outcome"], "ok", "{commented}");
     assert_eq!(
         read(&setup, owner, &for_comment)
             .await

@@ -758,7 +758,10 @@ tool_op!(MilestoneCreate {
             call.key_honoured();
         }
         call.audited_by_command();
-        tool!(call, None, planning::milestone_write, input)
+        let mut value = tool!(call, None, planning::milestone_write, input)?;
+        // A retry the command answered from its own key is a replay.
+        call.mark_replayed(std::mem::take(&mut value.idempotent_replay));
+        Ok(value)
     }
 });
 
@@ -781,7 +784,10 @@ tool_op!(MilestoneUpdate {
             call.key_honoured();
         }
         call.audited_by_command();
-        tool!(call, None, planning::milestone_write, input)
+        let mut value = tool!(call, None, planning::milestone_write, input)?;
+        // A retry the command answered from its own key is a replay.
+        call.mark_replayed(std::mem::take(&mut value.idempotent_replay));
+        Ok(value)
     }
 });
 

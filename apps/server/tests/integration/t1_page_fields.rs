@@ -86,7 +86,7 @@ async fn pages_have_fields_that_their_list_filters_and_sorts_by() {
         .call(
             app,
             tool(
-                "record_create_many",
+                "record_update_many",
                 json!({"projectId": "WORK", "collection": "Pages", "records": records,
                        "clientRequestId": "review-dates"}),
             ),

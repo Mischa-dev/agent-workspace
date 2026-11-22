@@ -177,10 +177,10 @@ async fn replies_quote_a_comment_on_the_same_task_and_tell_its_author() {
         json!({"taskId": task_b, "text": "Agreed", "clientRequestId": "c2", "replyToCommentId": elsewhere}),
     )
     .await;
-    assert_eq!(replied["outcome"], "applied", "{replied}");
+    assert_eq!(replied["outcome"], "ok", "{replied}");
     let stored: Option<uuid::Uuid> =
         sqlx::query_scalar("SELECT reply_to_message_id FROM messages WHERE id = $1::uuid")
-            .bind(replied["activityId"].as_str().expect("comment id"))
+            .bind(replied["value"]["activityId"].as_str().expect("comment id"))
             .fetch_one(&setup.pool)
             .await
             .expect("reply stored");

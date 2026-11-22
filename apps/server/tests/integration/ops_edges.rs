@@ -663,7 +663,7 @@ async fn a_retired_name_says_what_to_use_instead() {
     let token = connect_app(app, &setup.browser, "Old client", "full").await;
     let session = initialize(app, &token).await.expect("MCP session");
     let pages = || async {
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM pages WHERE title = 'Kept'")
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM project_pages WHERE title = 'Kept'")
             .fetch_one(&setup.pool)
             .await
             .expect("pages")
@@ -677,7 +677,7 @@ async fn a_retired_name_says_what_to_use_instead() {
         json!({
             "jsonrpc": "2.0", "id": 9, "method": "tools/call",
             "params": {
-                "name": "page_create",
+                "name": "page_write",
                 "arguments": { "projectId": space, "title": "Kept", "body": "Old" }
             }
         }),
