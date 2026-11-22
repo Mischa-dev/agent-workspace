@@ -567,14 +567,13 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
     assert_eq!(status, StatusCode::OK, "{limit}");
 
     // In the web app, Bea creates tasks as before.
-    let (status, made) = send(
+    let (status, made) = crate::support::tasks::send(
         app,
-        bea_browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("bea-web-task"),
-            json!({"title": "Made in the browser"}),
-        ),
+        &bea_browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("bea-web-task"),
+        json!({"title": "Made in the browser"}),
     )
     .await;
     assert!(status.is_success(), "{status}: {made}");
@@ -1093,14 +1092,13 @@ async fn task_files_follow_who_can_see_tasks() {
     let work = create_project(&setup, "WORK", "Work").await;
     let work_id = work.parse::<Uuid>().expect("project");
     let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
-    let (status, made) = send(
+    let (status, made) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("files-task"),
-            json!({"title": "With a file"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("files-task"),
+        json!({"title": "With a file"}),
     )
     .await;
     assert!(status.is_success(), "{status}: {made}");
@@ -1331,14 +1329,13 @@ async fn file_search_leaves_out_task_files_where_tasks_are_hidden() {
     let app = &setup.app;
     let work = create_project(&setup, "WORK", "Work").await;
     let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
-    let (status, made) = send(
+    let (status, made) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("file-search-task"),
-            json!({"title": "Quarterly plan"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("file-search-task"),
+        json!({"title": "Quarterly plan"}),
     )
     .await;
     assert!(status.is_success(), "{status}: {made}");
@@ -1635,7 +1632,7 @@ async fn agent_connection(setup: &Setup, agent: Uuid) -> (Uuid, i64, String) {
 
 /// A task made by the owner in `project`, by its title; returns its ID.
 async fn owner_task(setup: &Setup, project: &str, title: &str) -> Uuid {
-    let (status, made) = send(
+    let (status, made) = crate::support::tasks::send_built(
         &setup.app,
         setup.browser.request(
             "POST",
@@ -3130,7 +3127,7 @@ async fn archiving_without_see_tasks_reveals_no_task() {
         )
     };
 
-    let (status, archived) = send(
+    let (status, archived) = crate::support::tasks::send_built(
         app,
         act(
             &bea_browser,
@@ -3146,13 +3143,15 @@ async fn archiving_without_see_tasks_reveals_no_task() {
         "{archived}"
     );
     let stale = task_version(&setup, project, task).await - 1;
-    let (status, conflict) = send(app, act(&bea_browser, "restore", "bea-stale", stale)).await;
+    let (status, conflict) =
+        crate::support::tasks::send_built(app, act(&bea_browser, "restore", "bea-stale", stale))
+            .await;
     assert!(!status.is_success(), "{status}: {conflict}");
     assert!(
         !conflict.to_string().contains("Secret archive plan"),
         "{conflict}"
     );
-    let (status, restored) = send(
+    let (status, restored) = crate::support::tasks::send_built(
         app,
         act(
             &bea_browser,
@@ -3167,7 +3166,7 @@ async fn archiving_without_see_tasks_reveals_no_task() {
         !restored.to_string().contains("Secret archive plan"),
         "{restored}"
     );
-    let (status, unchanged) = send(
+    let (status, unchanged) = crate::support::tasks::send_built(
         app,
         act(
             &bea_browser,
@@ -3184,7 +3183,7 @@ async fn archiving_without_see_tasks_reveals_no_task() {
     );
 
     // The owner sees tasks: the whole task comes back.
-    let (status, archived) = send(
+    let (status, archived) = crate::support::tasks::send_built(
         app,
         act(
             &setup.browser,
@@ -4432,10 +4431,10 @@ async fn ai_suggestions_need_see_tasks() {
     );
 }
 
-/// A bulk change returns its cards the way a single task's change does:
-/// someone who may archive tasks but not see them gets each card's id,
-/// key, version, type and status, not its title, assignee or other
-/// contents; with "see tasks" the whole card comes back.
+/// A bulk change only reaches tasks the caller sees: someone who may
+/// archive tasks but not see them is told the task wasn't found, with
+/// nothing of it in the answer; with "see tasks" the change goes through
+/// and answers with each task's id, key and version.
 #[tokio::test]
 async fn bulk_changes_without_see_tasks_reveal_no_task() {
     let Some(setup) = setup("awd74_bulk_cards").await else {
@@ -4471,26 +4470,12 @@ async fn bulk_changes_without_see_tasks_reveal_no_task() {
     assert_eq!(status, StatusCode::OK, "{changed}");
     let bulk = format!("/api/v1/projects/{work}/work-items/bulk");
 
-    // Restoring a task that's already active changes nothing and returns
-    // its card: without "see tasks", only what identifies it.
+    // Without "see tasks", the task isn't there for them.
     let version = task_version(&setup, project, task).await;
-    let (status, restored) = send(
-        app,
-        bea_browser.request(
-            "POST",
-            &bulk,
-            Some("bea-bulk-blind"),
-            json!({"items": [{"id": task, "expectedVersion": version}], "changes": {"archived": false}}),
-        ),
-    )
+    let (status, restored) = crate::support::tasks::send(app, &bea_browser, "POST", &bulk, Some("bea-bulk-blind"), json!({"items": [{"id": task, "expectedVersion": version}], "changes": {"archived": false}}))
     .await;
-    assert_eq!(status, StatusCode::OK, "{restored}");
-    let card = &restored["items"][0];
-    assert_eq!(card["id"], task.to_string(), "{restored}");
-    assert!(card["key"].is_string(), "{restored}");
-    assert!(card["status"]["id"].is_string(), "{restored}");
-    assert_eq!(card["title"], "", "{restored}");
-    assert!(card["assignee"].is_null(), "{restored}");
+    assert_eq!(status, StatusCode::CONFLICT, "{restored}");
+    assert_eq!(restored["code"], "rejected", "{restored}");
     assert!(
         !restored.to_string().contains("Secret bulk plan"),
         "{restored}"
@@ -4514,22 +4499,11 @@ async fn bulk_changes_without_see_tasks_reveal_no_task() {
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     let version = task_version(&setup, project, task).await;
-    let (status, restored) = send(
-        app,
-        bea_browser.request(
-            "POST",
-            &bulk,
-            Some("bea-bulk-seeing"),
-            json!({"items": [{"id": task, "expectedVersion": version}], "changes": {"archived": false}}),
-        ),
-    )
+    let (status, restored) = crate::support::tasks::send(app, &bea_browser, "POST", &bulk, Some("bea-bulk-seeing"), json!({"items": [{"id": task, "expectedVersion": version}], "changes": {"archived": false}}))
     .await;
     assert_eq!(status, StatusCode::OK, "{restored}");
-    assert_eq!(
-        restored["items"][0]["title"], "Secret bulk plan",
-        "{restored}"
-    );
-    assert!(restored["items"][0]["assignee"].is_object(), "{restored}");
+    assert_eq!(restored["tasks"][0]["id"], task.to_string(), "{restored}");
+    assert!(restored["tasks"][0]["key"].is_string(), "{restored}");
 }
 
 /// Moving a task again returns where it went, under its current title
@@ -5338,6 +5312,51 @@ async fn moving_a_task_needs_its_contents_and_code_to_be_seen() {
         in_target("move-repo").await > 0,
         "the owner's note names it"
     );
+
+    // Through the web, archiving and seeing tasks here and creating them
+    // there is enough: no "edit tasks" in either project.
+    set_work_role(
+        "Web movers",
+        json!(["tasks.view", "tasks.delete"]),
+        Value::Null,
+        "bea-web-movers",
+    )
+    .await;
+    let (status, creators) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Creators", "baseRole": "member", "permissions": ["tasks.view", "tasks.create"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{creators}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &dest,
+        bea,
+        "bea-dest-creators",
+        json!({"roleId": creators["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let web = linked_task("Moved through the web").await;
+    let (status, done) = crate::support::tasks::send(
+        app,
+        &bea_browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items/{web}/project-move"),
+        None,
+        json!({"targetProjectId": dest}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let arrived = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM task_rows WHERE project_id = $1 AND title = 'Moved through the web'",
+    )
+    .bind(target)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("moved");
+    assert_eq!(arrived, 1, "{done}");
 }
 
 /// Changing a task's links (task_relate, task_depend) answers with the task
@@ -5940,14 +5959,13 @@ async fn every_membership_names_a_role_row_and_starting_roles_are_data() {
         "{refused}"
     );
     // A task Lena may archive, before the edit.
-    let (status, made) = send(
+    let (status, made) = crate::support::tasks::send(
         &world.app,
-        world.owner.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("k110-task"),
-            json!({"title": "Kept"}),
-        ),
+        &world.owner.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("k110-task"),
+        json!({"title": "Kept"}),
     )
     .await;
     assert!(status.is_success(), "{status}: {made}");
@@ -6015,14 +6033,13 @@ async fn every_membership_names_a_role_row_and_starting_roles_are_data() {
         1,
         "only herself without the directory"
     );
-    let (status, archived) = send(
+    let (status, archived) = crate::support::tasks::send(
         &world.app,
-        lena.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items/{task}/archive"),
-            Some("k110-archive"),
-            json!({"expectedVersion": 1}),
-        ),
+        &lena.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items/{task}/archive"),
+        Some("k110-archive"),
+        json!({"expectedVersion": 1}),
     )
     .await;
     assert!(
@@ -6030,14 +6047,13 @@ async fn every_membership_names_a_role_row_and_starting_roles_are_data() {
         "{status}: {archived}"
     );
     // The owner, holding everything, still archives it.
-    let (status, archived) = send(
+    let (status, archived) = crate::support::tasks::send(
         &world.app,
-        world.owner.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items/{task}/archive"),
-            Some("k110-owner-archive"),
-            json!({"expectedVersion": 1}),
-        ),
+        &world.owner.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items/{task}/archive"),
+        Some("k110-owner-archive"),
+        json!({"expectedVersion": 1}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{archived}");
@@ -6311,14 +6327,13 @@ async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{said}");
-    let (status, refused) = send(
+    let (status, refused) = crate::support::tasks::send(
         app,
-        alex_browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/work-items/{task}"),
-            Some("k116-alex-edit"),
-            json!({"title": "Renamed", "expectedVersion": 1}),
-        ),
+        &alex_browser,
+        "PATCH",
+        &format!("/api/v1/projects/{work}/work-items/{task}"),
+        Some("k116-alex-edit"),
+        json!({"title": "Renamed", "expectedVersion": 1}),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");

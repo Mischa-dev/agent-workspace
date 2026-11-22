@@ -296,14 +296,13 @@ async fn a_comment_mention_reaches_the_person_and_the_attention_count() {
     let base = format!("/api/v1/projects/{project}/work-items");
 
     // Assigned on creation.
-    let (status, created) = send(
+    let (status, created) = crate::support::tasks::send(
         &setup.app,
-        setup.browser.request(
-            "POST",
-            &base,
-            Some("task-one"),
-            json!({"title": "Pick theme colours", "assigneeActorId": ben}),
-        ),
+        &setup.browser,
+        "POST",
+        &base,
+        Some("task-one"),
+        json!({"title": "Pick theme colours", "assigneeActorId": ben}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{created}");
@@ -353,14 +352,13 @@ async fn a_comment_mention_reaches_the_person_and_the_attention_count() {
     // Ben watches the task he was assigned; Cara is in the project but
     // doesn't watch it. A rename reaches Ben only.
     let (_cara, cara_browser) = add_person(&setup, &[&project], "cara").await;
-    let (status, updated) = send(
+    let (status, updated) = crate::support::tasks::send(
         &setup.app,
-        setup.browser.request(
-            "PATCH",
-            &format!("{base}/{task}"),
-            Some("rename-one"),
-            json!({"expectedVersion": created["version"], "title": "Pick the theme colours"}),
-        ),
+        &setup.browser,
+        "PATCH",
+        &format!("{base}/{task}"),
+        Some("rename-one"),
+        json!({"expectedVersion": created["version"], "title": "Pick the theme colours"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{updated}");

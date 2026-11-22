@@ -79,14 +79,13 @@ async fn a_task_made_any_way_is_one_task_created_by_its_maker() {
     let helper = &world.apps["helper"];
 
     // The web.
-    let (status, made) = send(
+    let (status, made) = crate::support::tasks::send(
         &world.app,
-        lena.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{project}/work-items"),
-            Some("k3-7-web-task"),
-            json!({"title": "From the web"}),
-        ),
+        &lena.browser,
+        "POST",
+        &format!("/api/v1/projects/{project}/work-items"),
+        Some("k3-7-web-task"),
+        json!({"title": "From the web"}),
     )
     .await;
     assert!(status.is_success(), "{status}: {made}");

@@ -76,9 +76,9 @@ test('the task grid works from the keyboard alone', async ({ page, context }) =>
   await page.goto(`/projects/${project}/work-items`)
   const { request, headers } = await writer(context, page)
   for (const title of ['Grid keys first', 'Grid keys second']) {
-    const created = await request.post(`/api/v1/projects/${project}/work-items`, {
+    const created = await request.post('/api/v2/ops/task_create', {
       headers: headers(`grid-${title.replace(/\W+/g, '-')}-${Date.now()}`),
-      data: { title },
+      data: { projectId: project, title },
     })
     expect(created.ok(), await created.text()).toBe(true)
   }

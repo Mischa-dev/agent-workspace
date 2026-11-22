@@ -338,14 +338,13 @@ async fn archiving_releases_claims_and_moved_originals_stay_archived() {
 
     // Archiving in the web app lets go of the claim.
     let base = format!("/api/v1/projects/{old}/work-items/{task}");
-    let (status, archived) = send(
+    let (status, archived) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("{base}/archive"),
-            Some("ground-archive"),
-            json!({"expectedVersion": 1}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("{base}/archive"),
+        Some("ground-archive"),
+        json!({"expectedVersion": 1}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{archived}");
@@ -355,26 +354,24 @@ async fn archiving_releases_claims_and_moved_originals_stay_archived() {
         .await
         .expect("claims");
     assert_eq!(claims, 0);
-    let (status, again) = send(
+    let (status, again) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("{base}/archive"),
-            Some("ground-archive-again"),
-            json!({"expectedVersion": 1}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("{base}/archive"),
+        Some("ground-archive-again"),
+        json!({"expectedVersion": 1}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "already archived: {again}");
     assert_eq!(again["version"], 2);
-    let (status, restored) = send(
+    let (status, restored) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("{base}/restore"),
-            Some("ground-restore"),
-            json!({"expectedVersion": 2}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("{base}/restore"),
+        Some("ground-restore"),
+        json!({"expectedVersion": 2}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{restored}");
@@ -402,18 +399,17 @@ async fn archiving_releases_claims_and_moved_originals_stay_archived() {
             .fetch_one(&setup.pool)
             .await
             .expect("original version");
-    let (status, refused) = send(
+    let (status, refused) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("{base}/restore"),
-            Some("ground-restore-moved"),
-            json!({"expectedVersion": original_version}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("{base}/restore"),
+        Some("ground-restore-moved"),
+        json!({"expectedVersion": original_version}),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
-    assert_eq!(refused["error"]["code"], "conflict", "{refused}");
+    assert_eq!(refused["outcome"], "conflict", "{refused}");
     let still_archived = sqlx::query_scalar::<_, bool>(
         "SELECT archived_at IS NOT NULL FROM task_rows WHERE id = $1",
     )

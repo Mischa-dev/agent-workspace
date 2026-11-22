@@ -216,8 +216,8 @@ async function seed(password: string, databaseUrl: string) {
     )
     // So the list and board screenshots show a card, whichever spec runs first.
     await write(
-      `/api/v1/projects/${project.id}/work-items`,
-      { title: 'Seeded work item', description: '', priority: 'medium' },
+      '/api/v2/ops/task_create',
+      { projectId: project.id, title: 'Seeded work item', priority: 'medium' },
       'create a work item',
     )
     // The UI tour (playwright.tour.config.ts) adds a busy workspace on top.

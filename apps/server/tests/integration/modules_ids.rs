@@ -1,7 +1,7 @@
 //! AWD-75: tools that resolve their own targets (scheduled messages, saved items, usage batches) check the module there.
 
 use super::{
-    agent_interface::{connect_app, initialize, send, tool},
+    agent_interface::{connect_app, initialize, tool},
     mcp_admin::{Setup, create_project, setup},
     message_edits::{add_person, create_channel, text},
     modules::{narrow_in_project, switch},
@@ -63,14 +63,13 @@ async fn later_items_and_scheduled_messages_follow_their_own_project() {
     let work = create_project(&setup, "WORK", "Work").await;
     let other = create_project(&setup, "OTHER", "Other").await;
     let (bea, bea_browser) = add_person(&setup, &[&work, &other], "bea").await;
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{other}/work-items"),
-            Some("awd75-ids-task"),
-            json!({"title": "Harbour ledger"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{other}/work-items"),
+        Some("awd75-ids-task"),
+        json!({"title": "Harbour ledger"}),
     )
     .await;
     assert!(status.is_success(), "{status}: {task}");
@@ -222,14 +221,13 @@ async fn usage_tools_follow_runs_in_each_project_the_account_serves() {
     .execute(&setup.pool)
     .await
     .expect("repository");
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{alpha}/work-items"),
-            Some("awd75-usage-task"),
-            json!({"title": "Alpha outage"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{alpha}/work-items"),
+        Some("awd75-usage-task"),
+        json!({"title": "Alpha outage"}),
     )
     .await;
     assert!(status.is_success(), "{status}: {task}");

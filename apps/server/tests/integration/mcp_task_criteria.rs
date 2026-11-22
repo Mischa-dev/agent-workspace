@@ -540,14 +540,13 @@ async fn criteria_follow_roles_tasks_and_archives() {
     assert_eq!(completer, Some(kai));
 
     // An archived task refuses changes, whatever version is named.
-    let (status, archived) = send(
+    let (status, archived) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items/{task}/archive"),
-            Some("criteria-archive"),
-            json!({"expectedVersion": 2}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items/{task}/archive"),
+        Some("criteria-archive"),
+        json!({"expectedVersion": 2}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{archived}");
@@ -599,29 +598,27 @@ async fn history_shows_who_did_what_and_hides_private_threads() {
     )
     .await;
     assert_eq!(ready["value"]["version"], 2, "{ready}");
-    let (status, described) = send(
+    let (status, described) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/work-items/{task}"),
-            Some("history-describe"),
-            json!({"expectedVersion": 2, "description": "Works with no network"}),
-        ),
+        &setup.browser,
+        "PATCH",
+        &format!("/api/v1/projects/{work}/work-items/{task}"),
+        Some("history-describe"),
+        json!({"expectedVersion": 2, "description": "Works with no network"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{described}");
-    let (status, moved) = send(
+    let (status, moved) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items/{task}/move"),
-            Some("history-move"),
-            json!({
-                "expectedVersion": 3,
-                "targetStatusId": status_id(&setup, &work, "In Progress").await,
-                "targetPosition": 1
-            }),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items/{task}/move"),
+        Some("history-move"),
+        json!({
+            "expectedVersion": 3,
+            "targetStatusId": status_id(&setup, &work, "In Progress").await,
+            "targetPosition": 1
+        }),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{moved}");

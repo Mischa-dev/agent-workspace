@@ -197,19 +197,10 @@ const WRITE_ROUTES: &[&str] = &[
     "DELETE /api/v1/projects/{project_id}/secrets/{name}",
     "PUT /api/v1/projects/{project_id}/secrets/{name}",
     "POST /api/v1/projects/{project_id}/task-templates/{template_id}/apply",
-    "POST /api/v1/projects/{project_id}/work-items",
-    "POST /api/v1/projects/{project_id}/work-items/bulk",
-    "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/ai/criteria",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/ai/summary",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/ai/triage",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/archive",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/files",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/move",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/work-with-worker",
     "POST /api/v1/push/subscriptions",
     "DELETE /api/v1/push/subscriptions/{id}",
@@ -2912,7 +2903,11 @@ async fn ok_op(app: &axum::Router, browser: &Browser, path: &str, input: Value) 
 /// Sends a setup request as `browser` and returns the body; it must work.
 async fn ok(app: &axum::Router, browser: &Browser, method: &str, uri: &str, body: Value) -> Value {
     let key = format!("net-setup-{}", Uuid::now_v7().simple());
-    let (status, value) = send(app, browser.request(method, uri, Some(&key), body)).await;
+    let (status, value) = if crate::support::tasks::op_for(method, uri, &body).is_some() {
+        crate::support::tasks::send(app, browser, method, uri, Some(&key), body).await
+    } else {
+        send(app, browser.request(method, uri, Some(&key), body)).await
+    };
     assert!(
         status.is_success(),
         "setup {method} {uri}: {status} {value}"
@@ -4820,81 +4815,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         // The workflow
         // Tasks
         path_case(
-            "POST /api/v1/projects/{project_id}/work-items",
-            &[project()],
-            json_body(json!({"title": "Net task"})),
-        )
-        .rejecting(vec![
-            json!({"title": "Net task", "typeId": bx.task_type}),
-            json!({"title": "Net task", "statusId": bx.status}),
-            json!({"title": "Net task", "assigneeActorId": b.rook}),
-            json!({"title": "Net task", "parentWorkItemId": b.task}),
-            json!({"title": "Net task", "milestoneId": bx.milestone}),
-            json!({"title": "Net task", "labelIds": [bx.label]}),
-            json!({"title": "Net task", "sourceMessageId": b.message}),
-        ]),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/bulk",
-            &[project()],
-            |values| {
-                let task = if is_a(values, &a.project) { a.subtask } else { b.subtask };
-                Payload::Json(json!({
-                    "items": [{"id": task, "expectedVersion": version("work_items", task)}],
-                    "changes": {"priority": "high"},
-                }))
-            },
-        )
-        .rejecting(vec![
-            json!({
-                "items": [{"id": b.task, "expectedVersion": version("work_items", b.task)}],
-                "changes": {"priority": "high"},
-            }),
-            json!({
-                "items": [{"id": a.subtask, "expectedVersion": version("work_items", a.subtask)}],
-                "changes": {"statusId": bx.status},
-            }),
-            json!({
-                "items": [{"id": a.subtask, "expectedVersion": version("work_items", a.subtask)}],
-                "changes": {"assigneeActorId": b.rook},
-            }),
-            json!({
-                "items": [{"id": a.subtask, "expectedVersion": version("work_items", a.subtask)}],
-                "changes": {"milestoneId": bx.milestone},
-            }),
-            json!({
-                "items": [{"id": a.subtask, "expectedVersion": version("work_items", a.subtask)}],
-                "changes": {"addLabelIds": [bx.label]},
-            }),
-            json!({
-                "items": [{"id": a.subtask, "expectedVersion": version("work_items", a.subtask)}],
-                "changes": {"fieldValues": keyed(bx.field, json!("Net"))},
-            }),
-            json!({
-                "items": [{"id": a.subtask, "expectedVersion": version("work_items", a.subtask)}],
-                "changes": {"fieldValues": keyed(ax.person_field, json!(b.rook))},
-            }),
-        ]),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}",
-            &[project(), task()],
-            versioned("work_items", 1, json!({"title": "Launch plan"})),
-        )
-        .rejecting(
-            [
-                json!({"typeId": bx.task_type}),
-                json!({"statusId": bx.status}),
-                json!({"assigneeActorId": b.rook}),
-                json!({"parentWorkItemId": b.task}),
-                json!({"milestoneId": bx.milestone}),
-                json!({"addLabelIds": [bx.label]}),
-                json!({"fieldValues": keyed(bx.field, json!("Net"))}),
-                json!({"fieldValues": keyed(ax.person_field, json!(b.rook))}),
-            ]
-            .into_iter()
-            .map(|change| with(&change, "expectedVersion", version("work_items", a.task)))
-            .collect(),
-        ),
-        path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/ai/criteria",
             &[project(), task()],
             empty(),
@@ -4910,67 +4830,15 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         ),
         path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/archive",
-            &[project(), id(sp.task, b.task)],
-            versioned("work_items", 1, json!({})),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
-            &[project(), id(sp.task, b.task)],
-            versioned("work_items", 1, json!({})),
-        ),
-        path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/files",
             &[project(), task()],
             |_| Payload::Bytes("image/png", tiny_png()),
         )
         .query("?name=net.png"),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/move",
-            &[project(), task()],
-            |values| {
-                Payload::Json(json!({
-                    "expectedVersion": version("work_items", &values[1]),
-                    "targetStatusId": if is_a(values, &a.project) { ax.status } else { bx.status },
-                    "targetPosition": 1,
-                }))
-            },
-        )
-        .rejecting(vec![json!({
-            "expectedVersion": version("work_items", a.task),
-            "targetStatusId": bx.status,
-            "targetPosition": 1,
-        })]),
         // AWD-102: moving to another project. A's own request names a spare
         // project of A's with a made-up preview snapshot, so it passes every
         // access check and stops at the snapshot (a real move is in
         // awd102_task_move); B's task, project or target is refused first.
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
-            &[project(), task()],
-            |values| {
-                Payload::Json(json!({
-                    "targetProjectId": if is_a(values, &a.project) { sp.projects[0].clone() } else { a.project.clone() },
-                    "snapshot": "0".repeat(64),
-                }))
-            },
-        )
-        .rejecting(vec![json!({"targetProjectId": b.project, "snapshot": "0".repeat(64)})])
-        .own_reaches(
-            "conflict",
-            "a move needs its own fresh preview; a made-up snapshot stops there, past every access check",
-        )
-        .last(),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-            &[project(), task(), id(a.repository, b.repository)],
-            versioned("work_items", 1, json!({"role": "related"})),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
-            &[project(), task(), id(&a.thread, &b.thread)],
-            empty(),
-        ),
         path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/work-with-worker",
             &[project(), task()],
@@ -6258,6 +6126,9 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 ("status", json!(bx.status)),
                 ("type", json!(bx.task_type)),
                 ("beforeTaskId", json!(bx.backlog_task)),
+                ("labels", json!([bx.label])),
+                ("fromMessageId", json!(b.message)),
+                ("fields", keyed(bx.field, json!("Net"))),
             ]
             .into_iter()
             .enumerate()
@@ -6286,6 +6157,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 ("beforeTaskId", json!(b.subtask)),
                 ("fields", keyed(bx.field, json!("Net"))),
                 ("fields", keyed(ax.person_field, json!(b.rook))),
+                ("addLabels", json!([bx.label])),
             ]
             .into_iter()
             .map(|(key, value)| {
@@ -6333,6 +6205,8 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "taskIds": [a.subtask], "assignee": b.rook, "clientRequestId": "net-update-many-m3"}),
             json!({"projectId": a.project, "taskIds": [a.subtask], "fields": keyed(bx.field, json!("Net")), "clientRequestId": "net-update-many-m4"}),
             json!({"projectId": a.project, "taskIds": [a.subtask], "fields": keyed(ax.person_field, json!(b.rook)), "clientRequestId": "net-update-many-m5"}),
+            json!({"projectId": a.project, "taskIds": [a.subtask], "status": bx.status, "clientRequestId": "net-update-many-m6"}),
+            json!({"projectId": a.project, "taskIds": [a.subtask], "addLabels": [bx.label], "clientRequestId": "net-update-many-m7"}),
         ]),
         mcp_case(
             "task_criteria_update",

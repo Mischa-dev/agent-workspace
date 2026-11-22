@@ -137,6 +137,22 @@ impl Client {
     }
 
     async fn send(&self, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+        // The task writes moved to operations (K2.22).
+        if let Some(body) = body
+            .as_ref()
+            .filter(|body| crate::support::tasks::op_for(method, uri, body).is_some())
+        {
+            let browser = crate::support::tasks::browser(&self.cookie, &self.csrf);
+            return crate::support::tasks::send(
+                &self.application,
+                &browser,
+                method,
+                uri,
+                None,
+                body.clone(),
+            )
+            .await;
+        }
         let mut request = Request::builder()
             .method(method)
             .uri(uri)
@@ -375,7 +391,7 @@ async fn planning_fields_dependencies_and_history_work_over_http() {
             json!({ "expectedVersion": design["version"], "startDate": "2026-11-05" }),
         )
         .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 
     // Build waits on design; the reverse link would close a cycle.
     let build_id = build["id"].as_str().expect("test value");
@@ -430,20 +446,34 @@ async fn planning_fields_dependencies_and_history_work_over_http() {
     assert_eq!(blocked["total"], 1);
     assert_eq!(blocked["items"][0]["openBlockerCount"], 1);
 
-    // A field change is recorded before and after, with names.
+    // A field change is recorded before and after, with names; a blocker
+    // is its own change.
     let (status, changed) = owner
         .patch(
             &format!("{base}/work-items/{design_id}"),
             json!({
                 "expectedVersion": design_now["version"],
                 "priority": "urgent",
-                "dueDate": null,
-                "blockedReason": "Waiting on a decision"
+                "dueDate": null
             }),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
-    assert_eq!(changed["blocked"]["reason"], "Waiting on a decision");
+    let (status, changed) = owner
+        .patch(
+            &format!("{base}/work-items/{design_id}"),
+            json!({
+                "expectedVersion": changed["version"],
+                "blockedReason": "Waiting on a decision\nFollow up Friday"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    // A note may span lines.
+    assert_eq!(
+        changed["blocked"]["reason"],
+        "Waiting on a decision\nFollow up Friday"
+    );
     assert_eq!(changed["dueDate"], Value::Null);
     let (_, timeline) = owner
         .get(&format!("{base}/work-items/{design_id}/timeline"))
@@ -452,8 +482,9 @@ async fn planning_fields_dependencies_and_history_work_over_http() {
         .as_array()
         .expect("test value")
         .iter()
-        .find_map(|entry| entry["activity"]["payload"].get("changes"))
-        .expect("an entry with field changes")
+        .filter_map(|entry| entry["activity"]["payload"].get("changes"))
+        .find(|changes| changes.get("priority").is_some())
+        .expect("an entry with the priority change")
         .clone();
     assert_eq!(changes["priority"]["from"], "no_priority");
     assert_eq!(changes["priority"]["to"], "urgent");
@@ -719,10 +750,10 @@ async fn bulk_changes_are_all_or_nothing() {
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
-    assert_eq!(refused["error"]["code"], "bulk_rejected");
+    assert_eq!(refused["code"], "rejected", "{refused}");
     assert_eq!(
-        refused["error"]["details"]["problems"][0]["id"],
-        second["id"]
+        refused["details"]["current"]["problems"][0]["index"], 1,
+        "{refused}"
     );
     let (_, unchanged) = owner
         .get(&format!(
@@ -745,14 +776,17 @@ async fn bulk_changes_are_all_or_nothing() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{applied}");
-    assert_eq!(applied["items"][0]["id"], first["id"]);
-    assert!(
-        applied["items"]
-            .as_array()
-            .expect("test value")
-            .iter()
-            .all(|item| item["priority"] == "high" && item["dueDate"] == "2026-11-01")
-    );
+    assert_eq!(applied["tasks"][0]["id"], first["id"]);
+    for task in [&first, &second] {
+        let (_, item) = owner
+            .get(&format!(
+                "{base}/work-items/{}",
+                task["id"].as_str().expect("test value")
+            ))
+            .await;
+        assert_eq!(item["priority"], "high", "{item}");
+        assert_eq!(item["dueDate"], "2026-11-01", "{item}");
+    }
 
     // A viewer-level change can't be smuggled through bulk.
     let (status, _) = fixture
@@ -765,7 +799,7 @@ async fn bulk_changes_are_all_or_nothing() {
             }),
         )
         .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]
@@ -1317,7 +1351,7 @@ async fn lists_page_every_sort_and_grouping_quickly_at_ten_thousand_tasks() {
 #[tokio::test]
 async fn every_status_change_says_what_changed() {
     use super::{
-        agent_interface::{connect_app, initialize, send, tool},
+        agent_interface::{connect_app, initialize, tool},
         mcp_admin::{create_project, setup},
     };
     let Some(setup) = setup("p12_changes").await else {
@@ -1411,18 +1445,17 @@ async fn every_status_change_says_what_changed() {
     };
 
     // The board drag.
-    let (status, moved) = send(
+    let (status, moved) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items/{}/move", tasks[0]),
-            Some("p12-drag"),
-            json!({
-                "expectedVersion": version(tasks[0]).await,
-                "targetStatusId": review,
-                "targetPosition": 1,
-            }),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items/{}/move", tasks[0]),
+        Some("p12-drag"),
+        json!({
+            "expectedVersion": version(tasks[0]).await,
+            "targetStatusId": review,
+            "targetPosition": 1,
+        }),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{moved}");

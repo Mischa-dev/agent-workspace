@@ -7,7 +7,6 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::support::{
-    app::send,
     callers::{Call, Caller},
     world::WorldBuilder,
 };
@@ -117,26 +116,24 @@ async fn people_and_agents_hold_either_role_and_launches_hand_tasks_over() {
     )
     .await;
     assert_ne!(refused["outcome"], "ok", "{refused}");
-    let (status, body) = send(
+    let (status, body) = crate::support::tasks::send(
         app,
-        world.owner.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/work-items/{task}"),
-            Some(&Uuid::now_v7().to_string()),
-            json!({"expectedVersion": current, "delegateActorId": outsider}),
-        ),
+        &world.owner.browser,
+        "PATCH",
+        &format!("/api/v1/projects/{work}/work-items/{task}"),
+        Some(&Uuid::now_v7().to_string()),
+        json!({"expectedVersion": current, "delegateActorId": outsider}),
     )
     .await;
     assert!(!status.is_success(), "{status} {body}");
     // The web takes it back.
-    let (status, body) = send(
+    let (status, body) = crate::support::tasks::send(
         app,
-        world.owner.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/work-items/{task}"),
-            Some(&Uuid::now_v7().to_string()),
-            json!({"expectedVersion": current, "delegateActorId": null}),
-        ),
+        &world.owner.browser,
+        "PATCH",
+        &format!("/api/v1/projects/{work}/work-items/{task}"),
+        Some(&Uuid::now_v7().to_string()),
+        json!({"expectedVersion": current, "delegateActorId": null}),
     )
     .await;
     assert!(status.is_success(), "{status} {body}");

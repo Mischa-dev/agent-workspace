@@ -482,9 +482,9 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         actor_id.to_string()
     );
 
-    let browser_created = application
-        .clone()
-        .oneshot(write_request_with_idempotency(
+    let (browser_created_status, browser_created) = crate::support::tasks::send_built(
+        &application,
+        write_request_with_idempotency(
             "POST",
             &format!("/api/v1/projects/{}/work-items", seed.project_id),
             &cookie,
@@ -498,19 +498,18 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
                 "priority":"medium",
                 "assigneeActorId":actor_id
             }),
-        ))
-        .await
-        .expect("browser Work Item create response");
-    assert_eq!(browser_created.status(), StatusCode::CREATED);
-    let browser_created = response_json(browser_created).await;
+        ),
+    )
+    .await;
+    assert_eq!(browser_created_status, StatusCode::CREATED);
     let browser_work_item_id = browser_created["id"]
         .as_str()
         .expect("browser Work Item id")
         .parse::<Uuid>()
         .expect("browser Work Item UUID");
-    let browser_updated = application
-        .clone()
-        .oneshot(write_request_with_idempotency(
+    let (browser_updated, _) = crate::support::tasks::send_built(
+        &application,
+        write_request_with_idempotency(
             "PATCH",
             &format!(
                 "/api/v1/projects/{}/work-items/{browser_work_item_id}",
@@ -520,10 +519,10 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
             &csrf,
             "m9-browser-work-item-update",
             json!({"expectedVersion":1,"priority":"high"}),
-        ))
-        .await
-        .expect("browser Work Item update response");
-    assert_eq!(browser_updated.status(), StatusCode::OK);
+        ),
+    )
+    .await;
+    assert_eq!(browser_updated, StatusCode::OK);
     let browser_comment = application
         .clone()
         .oneshot(write_request_with_idempotency(

@@ -1,6 +1,7 @@
 import { requestJson } from '../api/client'
-import { callOp } from '../api/ops'
-import { getWorkItem, getWorkItemWorkflow, normalizeCard } from './api'
+import { callOp, ranOrThrow } from '../api/ops'
+import { getWorkItem, getWorkItemWorkflow } from './api'
+import type { TaskUpdateManyInput } from '../api/generated/operations'
 import type { BulkChanges, Milestone, ProjectLabel, TaskRelationKind, WorkflowUpdate } from './types'
 import { boolean, list, milestone, projectLabel, record } from './wire'
 
@@ -8,20 +9,33 @@ function projectPath(projectId: string, path: string) {
   return `/api/v1/projects/${encodeURIComponent(projectId)}/${path}`
 }
 
+/** One change to many tasks in one project, all or nothing, through `task_update_many`. */
 export async function bulkUpdateWorkItems(input: {
   projectId: string
   items: Array<{ id: string; expectedVersion: number }>
   changes: BulkChanges
   idempotencyKey: string
 }) {
-  const payload = record(
-    await requestJson<unknown>(projectPath(input.projectId, 'work-items/bulk'), {
-      method: 'POST',
-      idempotencyKey: input.idempotencyKey,
-      json: { items: input.items, changes: input.changes },
-    }),
-  )
-  return { items: list(payload.items).map(normalizeCard) }
+  const { changes } = input
+  const operation: TaskUpdateManyInput = {
+    projectId: input.projectId,
+    taskIds: input.items.map((item) => item.id),
+    expectedVersions: Object.fromEntries(input.items.map((item) => [item.id, item.expectedVersion])),
+  }
+  if (changes.statusId !== undefined) operation.status = changes.statusId
+  if (changes.priority !== undefined) operation.priority = changes.priority
+  if (changes.assigneeActorId === null) operation.clearAssignee = true
+  else if (changes.assigneeActorId !== undefined) operation.assignee = changes.assigneeActorId
+  if (changes.milestoneId !== undefined) operation.milestone = changes.milestoneId ?? 'none'
+  if (changes.dueDate !== undefined) operation.dueDate = changes.dueDate ?? ''
+  if (changes.addLabelIds?.length) operation.addLabels = changes.addLabelIds
+  if (changes.removeLabelIds?.length) operation.removeLabels = changes.removeLabelIds
+  if (changes.archived !== undefined) operation.archived = changes.archived
+  // Fields go by ID or name; null clears one.
+  if (changes.fieldValues !== undefined) operation.fields = changes.fieldValues
+  const { tasks } = ranOrThrow(await callOp('task_update_many', operation, { requestId: input.idempotencyKey }), 'This change')
+  // Each task as it is now: its id, key and version, for an undo.
+  return { items: tasks }
 }
 
 export async function listLabels(projectId: string, includeArchived = false): Promise<ProjectLabel[]> {

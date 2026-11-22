@@ -245,17 +245,16 @@ async fn workspace_pages_are_found_linked_and_referenced() {
     // A task in a project links to it; someone in that project finds the
     // page by search, opens the link, and sees the task under Referenced in.
     let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("awd96-task"),
-            json!({
-                "title": "Read the handbook",
-                "description": format!("See https://example.test/projects/{space}/pages/{page}"),
-            }),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("awd96-task"),
+        json!({
+            "title": "Read the handbook",
+            "description": format!("See https://example.test/projects/{space}/pages/{page}"),
+        }),
     )
     .await;
     assert!(status.is_success(), "{task}");

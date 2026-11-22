@@ -705,31 +705,28 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     .fetch_one(&pool)
     .await
     .expect("count effects before M10 create parity");
-    let browser_create_response = application
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/api/v1/projects/{}/work-items", seed.project_id))
-                .header(header::COOKIE, &parity_cookie)
-                .header(header::ORIGIN, "http://127.0.0.1:3100")
-                .header("x-csrf-token", &parity_csrf)
-                .header("idempotency-key", "m10-browser-create-parity")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    serde_json::to_vec(&json!({
-                        "title":"M10 parity item",
-                        "description":"Shared command state",
-                        "priority":"low"
-                    }))
-                    .expect("browser parity create JSON"),
-                ))
-                .expect("browser parity create request"),
-        )
-        .await
-        .expect("browser parity create response");
-    assert_eq!(browser_create_response.status(), StatusCode::CREATED);
-    let browser_created = json_response(browser_create_response).await;
+    let (browser_create_status, browser_created) = crate::support::tasks::send_built(
+        &application,
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/projects/{}/work-items", seed.project_id))
+            .header(header::COOKIE, &parity_cookie)
+            .header(header::ORIGIN, "http://127.0.0.1:3100")
+            .header("x-csrf-token", &parity_csrf)
+            .header("idempotency-key", "m10-browser-create-parity")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({
+                    "title":"M10 parity item",
+                    "description":"Shared command state",
+                    "priority":"low"
+                }))
+                .expect("browser parity create JSON"),
+            ))
+            .expect("browser parity create request"),
+    )
+    .await;
+    assert_eq!(browser_create_status, StatusCode::CREATED);
     let browser_work_item_id = Uuid::parse_str(
         browser_created["id"]
             .as_str()
@@ -808,38 +805,33 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     .expect("MCP parity row");
     assert_eq!(browser_state, mcp_state);
 
-    let browser_update_response = application
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("PATCH")
-                .uri(format!(
-                    "/api/v1/projects/{}/work-items/{browser_work_item_id}",
-                    seed.project_id
-                ))
-                .header(header::COOKIE, &parity_cookie)
-                .header(header::ORIGIN, "http://127.0.0.1:3100")
-                .header("x-csrf-token", &parity_csrf)
-                .header("idempotency-key", "m10-browser-update-parity")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    serde_json::to_vec(&json!({
-                        "expectedVersion":1,
-                        "title":"M10 parity updated",
-                        "description":"Shared update state",
-                        "priority":"urgent"
-                    }))
-                    .expect("browser parity update JSON"),
-                ))
-                .expect("browser parity update request"),
-        )
-        .await
-        .expect("browser parity update response");
-    assert_eq!(browser_update_response.status(), StatusCode::OK);
-    assert_eq!(
-        json_response(browser_update_response).await["version"],
-        json!(2)
-    );
+    let (browser_update_status, browser_updated) = crate::support::tasks::send_built(
+        &application,
+        Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/api/v1/projects/{}/work-items/{browser_work_item_id}",
+                seed.project_id
+            ))
+            .header(header::COOKIE, &parity_cookie)
+            .header(header::ORIGIN, "http://127.0.0.1:3100")
+            .header("x-csrf-token", &parity_csrf)
+            .header("idempotency-key", "m10-browser-update-parity")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({
+                    "expectedVersion":1,
+                    "title":"M10 parity updated",
+                    "description":"Shared update state",
+                    "priority":"urgent"
+                }))
+                .expect("browser parity update JSON"),
+            ))
+            .expect("browser parity update request"),
+    )
+    .await;
+    assert_eq!(browser_update_status, StatusCode::OK);
+    assert_eq!(browser_updated["version"], json!(2));
     let after_browser_update = sqlx::query_as::<_, (i64, i64, i64)>(
         &format!(
 "SELECT (SELECT count(*) FROM work_item_activity), (SELECT count(*) FROM audit_events), (SELECT count(*) FROM {n} outbox)",

@@ -327,6 +327,10 @@ pub struct TaskUpdateInput {
     /// true clears its blocker and moves it to review. Pass it on its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready_for_review: Option<bool>,
+    /// true clears its blocker and leaves it in its status. Pass it on its
+    /// own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unblock: Option<bool>,
     /// When your role only suggests on tasks and the change becomes a
     /// proposal: why, for whoever decides it (up to 500 characters).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -343,6 +347,7 @@ impl TaskUpdateInput {
                 "expectedVersion",
                 "blockedReason",
                 "readyForReview",
+                "unblock",
                 "note",
             ] {
                 object.remove(own);
@@ -374,8 +379,8 @@ impl Operation for TaskUpdate {
         (who it is handed to), type, status (by name), its place in its column (position, beforeTaskId, afterTaskId), \
         its parent (parentId, or clearParent for top-level), labels (addLabels, removeLabels), \
         or archive it (archived: true; false restores; pass it on its own). Mark it blocked \
-        with blockedReason, or clear the blocker and move it to review with readyForReview: \
-        true (each on its own). Pass the version you last read as expectedVersion; on a \
+        with blockedReason, clear the blocker with unblock: true, or clear it and move it to \
+        review with readyForReview: true (each on its own). Pass the version you last read as expectedVersion; on a \
         conflict, open it again and retry. If your role only suggests on tasks, a change to \
         its own fields becomes a proposal (proposalId) that someone who edits the task accepts \
         or rejects, from its request card or with proposal_decide; it is then written as yours.";
@@ -387,15 +392,19 @@ impl Operation for TaskUpdate {
 
     async fn run(call: &mut OpCall<'_>, input: TaskUpdateInput) -> Result<TaskWritten, OpError> {
         let task_id = input.task_id.id();
-        let blocker = input.blocked_reason.is_some() || input.ready_for_review.is_some();
-        if blocker
-            && (input.changes_fields()
-                || input.blocked_reason.is_some() == input.ready_for_review.is_some())
-        {
+        let blockers = [
+            input.blocked_reason.is_some(),
+            input.ready_for_review.is_some(),
+            input.unblock.is_some(),
+        ]
+        .into_iter()
+        .filter(|set| *set)
+        .count();
+        if blockers > 1 || (blockers == 1 && input.changes_fields()) {
             return Err(OpError::invalid(
                 "blockedReason",
-                "Pass blockedReason or readyForReview on its own, then make other changes with \
-                 the new version.",
+                "Pass blockedReason, readyForReview or unblock on its own, then make other \
+                 changes with the new version.",
             ));
         }
         if let Some(written) = propose_instead(call, &input).await? {
@@ -407,6 +416,16 @@ impl Operation for TaskUpdate {
             return Ok(written);
         }
         let written = match (input.blocked_reason.clone(), input.ready_for_review) {
+            (None, None) if input.unblock == Some(true) => {
+                task_commands::clear_blocker(call.state, call.ctx, task_id, input.expected_version)
+                    .await?
+            }
+            (None, None) if input.unblock == Some(false) => {
+                return Err(OpError::invalid(
+                    "unblock",
+                    "unblock takes true; to block it, pass blockedReason.",
+                ));
+            }
             (Some(reason), _) => {
                 task_commands::mark_blocked(
                     call.state,
@@ -499,7 +518,8 @@ async fn propose_instead(
         || input.cycle.is_some()
         || input.delegate.is_some()
         || input.blocked_reason.is_some()
-        || input.ready_for_review.is_some();
+        || input.ready_for_review.is_some()
+        || input.unblock.is_some();
     if edit_only {
         return Err(denied(task_proposals::EDIT_ONLY.to_owned()));
     }

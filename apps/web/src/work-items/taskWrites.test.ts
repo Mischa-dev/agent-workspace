@@ -6,7 +6,7 @@ import { callOp } from '../api/ops'
 import { updateAcceptanceCriterion, updateWorkItem } from './api'
 import { conflictCurrent } from './taskEdits'
 
-vi.mock('../api/ops', () => ({ callOp: vi.fn() }))
+vi.mock('../api/ops', async (importOriginal) => ({ ...(await importOriginal<typeof import('../api/ops')>()), callOp: vi.fn() }))
 vi.mock('../api/client', () => ({ requestJson: vi.fn() }))
 
 const TASK = { id: 'task-1', projectId: 'space-1', key: 'AW-1', title: 'Parse the flags', version: 5 }

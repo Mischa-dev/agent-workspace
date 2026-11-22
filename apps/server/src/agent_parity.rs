@@ -826,31 +826,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/work-items",
-            Tool("task_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}",
-            Tool("task_update"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/archive",
-            Tool("task_update"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/move",
-            Tool("task_update"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
-            Tool("task_move"),
-        ),
-        (
-            Post,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/work-with-worker",
             Tool("task_launch"),
         ),
@@ -858,26 +833,6 @@ mod tests {
             Post,
             "/api/v1/projects/{project_id}/launches",
             Tool("task_launch"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
-            Tool("task_restore"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
-            Tool("task_link"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-            Tool("task_link"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/bulk",
-            Tool("task_update_many"),
         ),
         (
             Post,
@@ -1066,7 +1021,7 @@ mod tests {
     /// Hand-written web writes whose tool is already an operation: each is a
     /// second edge for something the generated route does (K2.22). The
     /// number only goes down; when you delete one, lower it.
-    const HAND_WRITTEN_OPERATION_ROUTES: usize = 63;
+    const HAND_WRITTEN_OPERATION_ROUTES: usize = 54;
 
     #[test]
     fn hand_written_routes_for_operations_only_go_down() {

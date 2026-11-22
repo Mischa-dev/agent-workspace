@@ -302,6 +302,10 @@ impl From<AppError> for OpError {
                     .into(),
                 current: None,
             },
+            // The same request id is still running (a command that keeps
+            // its own transactions commits its reservation first): a retry
+            // shortly gets its answer.
+            AppError::Conflict("idempotency_key", "command in progress") => Self::Unavailable,
             AppError::Conflict(code, message) => Self::Conflict {
                 reason: ConflictReason::State { code },
                 message: Cow::Borrowed(message),

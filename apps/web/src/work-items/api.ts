@@ -2,7 +2,7 @@ import { isSpaceAddress } from '../app/href'
 import { workItemHref } from './links'
 import { requestJson } from '../api/client'
 import { ApiError, isApiError } from '../api/errors'
-import { callOp, type OpInput } from '../api/ops'
+import { callOp, ranOrThrow, type OpInput } from '../api/ops'
 import { queueOp } from '../data/outbound'
 import type { CriterionOperationArgument, TaskUpdateInput } from '../api/generated/operations'
 import type { ConversationWorkItemReference } from '../conversations/types'
@@ -278,8 +278,11 @@ async function linkOnTask(
   input: { projectId: string; workItemId: string; idempotencyKey: string; expectedVersion?: number },
   link: Omit<OpInput<'task_link'>, 'taskId' | 'expectedVersion'>,
 ) {
-  await callOp('task_link', { taskId: input.workItemId, ...link }, { requestId: input.idempotencyKey, expectedVersion: input.expectedVersion }).catch(
-    (error: unknown) => refuseAsMovedOn(error, input),
+  ranOrThrow(
+    await callOp('task_link', { taskId: input.workItemId, ...link }, { requestId: input.idempotencyKey, expectedVersion: input.expectedVersion }).catch(
+      (error: unknown) => refuseAsMovedOn(error, input),
+    ),
+    'Linking it',
   )
   return getWorkItem(input.projectId, input.workItemId)
 }
@@ -482,16 +485,21 @@ export async function moveWorkItem(input: {
   workItemId: string
   expectedVersion: number
   targetStatusId: string
+  /** 1 is the top of the column. */
   targetPosition?: number
   beforeId?: string
   afterId?: string
   idempotencyKey: string
 }) {
-  const { projectId, workItemId, idempotencyKey, ...json } = input
-  return normalizeWorkItem(await requestJson<unknown>(
-    `/api/v1/projects/${encodeURIComponent(projectId)}/work-items/${encodeURIComponent(workItemId)}/move`,
-    { method: 'POST', idempotencyKey, json },
-  ))
+  const operation: TaskUpdateInput = { taskId: input.workItemId, expectedVersion: input.expectedVersion, status: input.targetStatusId }
+  if (input.beforeId) operation.beforeTaskId = input.beforeId
+  else if (input.afterId) operation.afterTaskId = input.afterId
+  else if (input.targetPosition !== undefined) operation.position = String(input.targetPosition)
+  ranOrThrow(
+    await callOp('task_update', operation, { requestId: input.idempotencyKey }).catch((error: unknown) => refuseAsMovedOn(error, input)),
+    'Moving it',
+  )
+  return getWorkItem(input.projectId, input.workItemId)
 }
 
 export async function getWorkItem(projectId: string, workItemId: string) {
@@ -573,10 +581,8 @@ export async function createWorkItem(input: {
   saySo?: boolean
   idempotencyKey: string
 }) {
-  const { projectId, idempotencyKey, ...json } = input
-  // W1.9a: through `task_create`, except custom field values, which it takes by name only.
-  if (!input.fieldValues || !Object.keys(input.fieldValues).length) {
-    const created = await callOp(
+  const { projectId, idempotencyKey } = input
+  const created = await callOp(
       'task_create',
       {
         projectId,
@@ -595,28 +601,22 @@ export async function createWorkItem(input: {
         acceptanceCriteria: input.acceptanceCriteria?.length ? input.acceptanceCriteria : undefined,
         fromMessageId: input.sourceMessageId,
         saySo: input.saySo,
+        // Fields go by ID or name.
+        fields: input.fieldValues && Object.keys(input.fieldValues).length ? input.fieldValues : undefined,
       },
       { requestId: idempotencyKey },
     )
-    return getWorkItem(projectId, created.workItemId)
-  }
-  return normalizeWorkItem(
-    await requestJson<unknown>(
-      `/api/v1/projects/${encodeURIComponent(projectId)}/work-items`,
-      { method: 'POST', idempotencyKey, json },
-    ),
-  )
+  ranOrThrow(created, 'Creating it')
+  return getWorkItem(projectId, created.workItemId)
 }
 
 /**
- * The patch as `task_update` takes it, or null where it can't yet: custom
- * field values go by name there and by id here, a status change there also
- * moves the task to the bottom of its column, and a blocked reason isn't
- * cleared the same way. Those stay on the old route until K2's task
- * operations carry them (W1.9a).
+ * The patch as `task_update` takes it, or null for a blocker change, which
+ * the operation takes on its own (see `blockerInput`). A status change
+ * there also moves the task to the bottom of its new column.
  */
 export function taskUpdateInput(workItemId: string, patch: WorkItemPatch): TaskUpdateInput | null {
-  if (patch.fieldValues !== undefined || patch.statusId !== undefined || patch.blockedReason !== undefined) return null
+  if (patch.blockedReason !== undefined) return null
   const input: TaskUpdateInput = { taskId: workItemId, expectedVersion: patch.expectedVersion }
   if (patch.title !== undefined) input.title = patch.title
   if (patch.description !== undefined) input.description = patch.description
@@ -640,13 +640,21 @@ export function taskUpdateInput(workItemId: string, patch: WorkItemPatch): TaskU
   }
   if (patch.addLabelIds?.length) input.addLabels = patch.addLabelIds
   if (patch.removeLabelIds?.length) input.removeLabels = patch.removeLabelIds
+  if (patch.statusId !== undefined) input.status = patch.statusId
+  // Fields go by ID or name; null clears one.
+  if (patch.fieldValues !== undefined) input.fields = patch.fieldValues
   return input
+}
+
+/** Blocks a task with a reason, or (null) clears its blocker where it stands. */
+function blockerInput(workItemId: string, expectedVersion: number, reason: string | null): TaskUpdateInput {
+  return reason === null ? { taskId: workItemId, expectedVersion, unblock: true } : { taskId: workItemId, expectedVersion, blockedReason: reason }
 }
 
 /**
  * A task edit that may wait for the connection (W1.30): offline, it's kept on
  * this device and sent when the connection is back, and this returns null.
- * Edits the operation can't carry yet go the old way, and never wait.
+ * A blocker change goes straight away, and never waits.
  */
 export async function queueWorkItemUpdate(input: {
   projectId: string
@@ -665,25 +673,38 @@ export async function queueWorkItemUpdate(input: {
   return sent === null ? null : getWorkItem(input.projectId, input.workItemId)
 }
 
+/**
+ * Changes a task through `task_update`. A blocker change goes on its own
+ * after the rest, against the version the rest left.
+ */
 export async function updateWorkItem(input: {
   projectId: string
   workItemId: string
   patch: WorkItemPatch
   idempotencyKey: string
 }) {
-  const operation = taskUpdateInput(input.workItemId, input.patch)
-  if (operation) {
-    await callOp('task_update', operation, { requestId: input.idempotencyKey }).catch((error: unknown) =>
-      refuseAsMovedOn(error, { ...input, expectedVersion: input.patch.expectedVersion }),
+  const { blockedReason, ...rest } = input.patch
+  const refuse = (expectedVersion: number) => (error: unknown) => refuseAsMovedOn(error, { ...input, expectedVersion })
+  let version = rest.expectedVersion
+  const changesMore = Object.keys(rest).some((key) => key !== 'expectedVersion')
+  if (changesMore || blockedReason === undefined) {
+    const written = ranOrThrow(
+      await callOp('task_update', taskUpdateInput(input.workItemId, rest) as TaskUpdateInput, { requestId: input.idempotencyKey }).catch(
+        refuse(version),
+      ),
+      'Saving it',
     )
-    return getWorkItem(input.projectId, input.workItemId)
+    version = written.version
   }
-  return normalizeWorkItem(
-    await requestJson<unknown>(
-      `/api/v1/projects/${encodeURIComponent(input.projectId)}/work-items/${encodeURIComponent(input.workItemId)}`,
-      { method: 'PATCH', idempotencyKey: input.idempotencyKey, json: input.patch },
-    ),
-  )
+  if (blockedReason !== undefined) {
+    // Request ids take letters, digits, dashes, underscores and dots.
+    const requestId = changesMore ? `${input.idempotencyKey}-blocker` : input.idempotencyKey
+    ranOrThrow(
+      await callOp('task_update', blockerInput(input.workItemId, version, blockedReason), { requestId }).catch(refuse(version)),
+      blockedReason === null ? 'Unblocking it' : 'Marking it blocked',
+    )
+  }
+  return getWorkItem(input.projectId, input.workItemId)
 }
 
 // W1.9a: these writes go through the op client; its answers are short, so
@@ -697,8 +718,11 @@ export async function setWorkItemArchived(input: {
   idempotencyKey: string
 }) {
   const task = { taskId: input.workItemId, expectedVersion: input.expectedVersion }
-  await callOp(input.archived ? 'task_archive' : 'task_restore', task, { requestId: input.idempotencyKey }).catch((error: unknown) =>
-    refuseAsMovedOn(error, input),
+  ranOrThrow(
+    await callOp(input.archived ? 'task_archive' : 'task_restore', task, { requestId: input.idempotencyKey }).catch((error: unknown) =>
+      refuseAsMovedOn(error, input),
+    ),
+    input.archived ? 'Archiving it' : 'Restoring it',
   )
   return getWorkItem(input.projectId, input.workItemId)
 }

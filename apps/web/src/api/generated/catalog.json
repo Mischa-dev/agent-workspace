@@ -5911,7 +5911,7 @@
     "long": false,
     "module": "tasks",
     "name": "task_move",
-    "permission": "tasks.edit",
+    "permission": "tasks.delete",
     "preview": true,
     "proposable": false,
     "title": "Move task"
