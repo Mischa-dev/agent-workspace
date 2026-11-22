@@ -6545,7 +6545,7 @@
             "type": "string"
           },
           "newerVersion": {
-            "description": "A newer version the workspace's directory offers, for an installed\npackage (package_preview and package_install upgrade to it).",
+            "description": "A newer version the workspace's directory offers, for an installed\npackage (package_upgrade_preview and package_upgrade, with this\ninstall's id, move it there).",
             "type": [
               "string",
               "null"
@@ -109045,7 +109045,7 @@
                               "type": "string"
                             },
                             "newerVersion": {
-                              "description": "A newer version the workspace's directory offers, for an installed\npackage (package_preview and package_install upgrade to it).",
+                              "description": "A newer version the workspace's directory offers, for an installed\npackage (package_upgrade_preview and package_upgrade, with this\ninstall's id, move it there).",
                               "type": [
                                 "string",
                                 "null"
@@ -109236,7 +109236,7 @@
                               "type": "string"
                             },
                             "newerVersion": {
-                              "description": "A newer version the workspace's directory offers, for an installed\npackage (package_preview and package_install upgrade to it).",
+                              "description": "A newer version the workspace's directory offers, for an installed\npackage (package_upgrade_preview and package_upgrade, with this\ninstall's id, move it there).",
                               "type": [
                                 "string",
                                 "null"

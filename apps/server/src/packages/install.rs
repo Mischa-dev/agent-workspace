@@ -636,7 +636,8 @@ pub struct InstallView {
     #[schemars(with = "String")]
     pub installed_at: chrono::DateTime<chrono::Utc>,
     /// A newer version the workspace's directory offers, for an installed
-    /// package (package_preview and package_install upgrade to it).
+    /// package (package_upgrade_preview and package_upgrade, with this
+    /// install's id, move it there).
     #[serde(skip_serializing_if = "Option::is_none")]
     #[sqlx(skip)]
     pub newer_version: Option<String>,

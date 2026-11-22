@@ -285,17 +285,23 @@ impl Operation for PullRequestGet {
         .fetch_all(crate::db::scoped(&state.pool))
         .await
         .map_err(|error| OpError::logged(Self::NAME, &error.into()))?;
-        // The first copy in a space whose code module is on for the caller,
-        // so a preferred space with it off doesn't hide a readable copy
-        // (with none on, the first, which admission then refuses).
+        // The first copy the caller may read where it is (the space's code
+        // module on and its role letting them view code), so a preferred
+        // space that refuses doesn't hide a readable copy (with none, the
+        // first, which admission then refuses).
         let mut found = candidates.first().map(|(id, _)| *id);
         if candidates.len() > 1 {
-            let account = caller.account_id;
+            let need = crate::access::Need::maybe(Self::PERMISSION).in_module(Self::MODULE);
             found = crate::db::scoped_one(&state.pool, async |connection| {
                 for (id, space) in &candidates {
-                    let modules =
-                        crate::modules::state::for_project(connection, *space, account).await?;
-                    if modules.is_some_and(|modules| modules.contains(Self::MODULE)) {
+                    let checked = crate::access::check(
+                        connection,
+                        caller,
+                        need,
+                        crate::access::Target::Space(*space),
+                    )
+                    .await?;
+                    if checked.is_ok() {
                         return Ok::<_, crate::error::AppError>(Some(*id));
                     }
                 }

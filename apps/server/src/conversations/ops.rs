@@ -650,10 +650,10 @@ impl Operation for ScheduledMessageUpdate {
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "messages";
     const PERMISSION: Option<Perm> = Some(Perm::ChannelsPost);
-    // The change commits in its own transaction: the dispatcher keeps the
-    // request id apart from it, so a retry replays the first answer.
-    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
-    const OWN_TRANSACTION: bool = true;
+    // Not replayed by the dispatcher: a stored answer would skip the
+    // command's check that the author still reaches the conversation, and
+    // a send-now refusal can follow a saved edit. replaySafe stays false.
+    const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const TITLE: &'static str = "Change scheduled message";
     const DESCRIPTION: &'static str = "Change a message you scheduled: its text or time \
         (sendAt), send it now (sendNow: true), or cancel it (cancel: true). A failed one is \
