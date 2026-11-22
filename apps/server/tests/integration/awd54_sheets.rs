@@ -1017,7 +1017,7 @@ async fn a_strict_rule_refuses_what_breaks_it_and_names_the_rule() {
     // Rules set in the same write as an insert name the cells as they are
     // after it: they don't move with it.
     let both = call(
-        "sheet_write",
+        "sheet_update",
         json!({"projectId": "VAL", "sheet": sheet,
                "tabs": [{"tab": "Work", "insertRowsAt": 1, "count": 1}],
                "validations": [{"tab": "Work", "rules": [{"range": "A2:A10", "allow": "number"}]}],
@@ -1273,7 +1273,7 @@ async fn an_added_row_reports_its_own_row_not_a_formula_below_it() {
         app,
         &codex,
         &session,
-        "sheet_write",
+        "sheet_create",
         json!({
             "projectId": "ROW",
             "name": "Log",

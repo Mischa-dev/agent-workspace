@@ -1247,7 +1247,14 @@ async fn moves_at_once_never_loop_pages() {
     let (wren, token) = create_agent(&setup.app, &setup.browser, &space, "Wren", "wren").await;
     add_member(&setup, &work, wren, "member").await;
     let session = initialize(&setup.app, &token).await.expect("MCP session");
-    let write = |arguments: Value| tool(&setup.app, &token, &session, "page_write", arguments);
+    let write = |arguments: Value| {
+        let name = if arguments.get("pageId").is_some() {
+            "page_update"
+        } else {
+            "page_create"
+        };
+        tool(&setup.app, &token, &session, name, arguments)
+    };
     let id_of = |value: &Value| value["value"]["id"].as_str().expect("page id").to_owned();
     let mut ids = Vec::new();
     for (title, parent) in [("A", None), ("B", Some(0)), ("C", None), ("D", Some(2))] {
@@ -1270,7 +1277,7 @@ async fn moves_at_once_never_loop_pages() {
                 &setup.app,
                 &token,
                 &other,
-                "page_write",
+                "page_update",
                 json!({"pageId": c, "parentPageId": b})
             ),
         );

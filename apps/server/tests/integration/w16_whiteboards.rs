@@ -1651,7 +1651,7 @@ async fn board_changes_are_listed_and_undone() {
     // An edit that wins a tie at the same version on its nonce is a change
     // since, so undo leaves it alone.
     let edited = call(
-        "whiteboard_edit",
+        "whiteboard_update_elements",
         json!({"whiteboardId": board, "operations": [{"op": "update", "id": "plan", "x": 555}]}),
     )
     .await;
