@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::time::Duration;
 
 use axum::{Json, Router, extract::State, routing::get};
 use serde::{Deserialize, Serialize};
@@ -37,7 +37,6 @@ struct RepositoryRow {
     name: String,
     clone_url: String,
     default_branch: String,
-    mirror_path: String,
     legacy_mirror_path: Option<String>,
     enabled: bool,
     trusted: bool,
@@ -209,19 +208,21 @@ pub(crate) async fn register_picked_repository(
 
 async fn run_preparation(
     state: &AppState,
+    workspace_id: Uuid,
     project_id: Uuid,
     repository_id: Uuid,
     row: RepositoryRow,
 ) -> Result<RepositoryRow, AppError> {
-    // The mirror is the built-in host's: it clones or refreshes it.
+    // The mirror is the built-in host's: it clones or refreshes it, on its
+    // own disk.
     let prepared = host_repositories::prepare(
         state,
+        workspace_id,
         project_id,
         Mirror {
             repository_id,
             clone_url: row.clone_url,
             default_branch: row.default_branch,
-            mirror_path: PathBuf::from(row.mirror_path),
             imported: row.legacy_mirror_path.is_some(),
         },
     )
@@ -236,9 +237,9 @@ async fn run_preparation(
     Ok(row)
 }
 
-/// The host-scoped job that clones or refreshes a repository on this
-/// machine's disk (K5.3): only the built-in host's holder runs it, and a
-/// crash leaves it queued rather than the repository pending for ever.
+/// The job that has the built-in host clone or refresh a repository on its
+/// disk: any instance asks the host, and a crash leaves it queued rather
+/// than the repository pending for ever.
 pub const PREPARE_KIND: &str = "repositories.prepare";
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -249,11 +250,16 @@ struct PreparePayload {
 }
 
 pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
-    registry.register_host(PREPARE_KIND, |context| async move {
-        let payload = context.job.payload_as::<PreparePayload>()?;
-        prepare(context.state, payload.project_id, payload.repository_id).await?;
-        Ok(())
-    });
+    // The host may take a while to clone; the ask waits for it.
+    registry.register_with_timeout(
+        PREPARE_KIND,
+        Duration::from_secs(20 * 60),
+        |context| async move {
+            let payload = context.job.payload_as::<PreparePayload>()?;
+            prepare(context.state, payload.project_id, payload.repository_id).await?;
+            Ok(())
+        },
+    );
 }
 
 /// Clone or refresh a repository without holding up the request that added
@@ -272,8 +278,7 @@ pub(crate) fn prepare_in_background(state: AppState, project_id: Uuid, repositor
     });
 }
 
-/// Queue the host job that prepares a repository on the built-in host's
-/// disk, and wake the host. Only the lease holder runs it.
+/// Queue the job that has the built-in host prepare a repository.
 async fn queue_prepare(
     state: &AppState,
     project_id: Uuid,
@@ -286,31 +291,19 @@ async fn queue_prepare(
         })
         .unique(format!("{PREPARE_KIND}:{repository_id}"));
     crate::jobs::enqueue(&state.pool, job).await?;
-    crate::db::scoped_one(&state.pool, async |connection| {
-        sqlx::query("SELECT pg_notify(realtime_channel('control'), 'host:kick')")
-            .execute(&mut *connection)
-            .await
-    })
-    .await?;
     Ok(())
 }
 
 async fn prepare(state: AppState, project_id: Uuid, repository_id: Uuid) -> Result<(), AppError> {
-    let admission_root = state.config.data_root.clone();
-    let admission_quota = state.config.data_quota_bytes;
-    let admission_free = state.config.minimum_free_bytes;
-    tokio::task::spawn_blocking(move || {
-        crate::storage_admission::require_growth(&admission_root, admission_quota, admission_free)
-    })
-    .await
-    .map_err(|_| AppError::Internal("join storage admission"))??;
+    // The host checks its own disk has room before it clones.
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let row = fetch_repository(&mut transaction, project_id, repository_id)
         .await?
         .filter(|row| row.archived_at.is_none() && row.enabled && row.trusted)
         .ok_or(AppError::NotFound("repository"))?;
+    let workspace_id = host_repositories::workspace_of_space(&mut transaction, project_id).await?;
     transaction.commit().await?;
-    run_preparation(&state, project_id, repository_id, row).await?;
+    run_preparation(&state, workspace_id, project_id, repository_id, row).await?;
     Ok(())
 }
 
@@ -376,12 +369,11 @@ pub(crate) async fn archive_in(
     Ok(())
 }
 
-/// Prepare (clone or refresh) an enabled repository of the project on this
-/// server, for someone the caller checked may manage repositories there.
-/// Prepare a repository where its mirror lives: on a server, the built-in
-/// host's holder does it as a host job (this instance may be a standby
-/// with another disk), and this returns once it is queued; a state without
-/// a server (a test's) prepares it here.
+/// Prepare (clone or refresh) an enabled repository of the project, for
+/// someone the caller checked may manage repositories there. The built-in
+/// host does it on its own disk: on a server it is a job (which asks the
+/// host), and this returns once it is queued; a state without a server (a
+/// test's) asks here.
 pub(crate) async fn prepare_in(
     state: &AppState,
     project_id: Uuid,
@@ -390,22 +382,7 @@ pub(crate) async fn prepare_in(
     if state.supervisors.cluster().is_some() {
         return queue_prepare(state, project_id, repository_id).await;
     }
-    let admission_root = state.config.data_root.clone();
-    let admission_quota = state.config.data_quota_bytes;
-    let admission_free = state.config.minimum_free_bytes;
-    tokio::task::spawn_blocking(move || {
-        crate::storage_admission::require_growth(&admission_root, admission_quota, admission_free)
-    })
-    .await
-    .map_err(|_| AppError::Internal("join storage admission"))??;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let row = fetch_repository(&mut transaction, project_id, repository_id)
-        .await?
-        .filter(|row| row.archived_at.is_none() && row.enabled && row.trusted)
-        .ok_or(AppError::NotFound("repository"))?;
-    transaction.commit().await?;
-    run_preparation(state, project_id, repository_id, row).await?;
-    Ok(())
+    prepare(state.clone(), project_id, repository_id).await
 }
 
 /// Whether this role may manage repositories (for a view's capabilities).

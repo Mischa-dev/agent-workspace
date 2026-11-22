@@ -58,6 +58,8 @@ impl commands::CommandHost for BuiltinCommands<'_> {
     async fn action(&self, command: &Command) -> Ack {
         if super::accounts::is_account_action(command) {
             super::accounts::answer(self.state, command).await
+        } else if super::repositories::is_repository_action(command) {
+            super::repositories::answer(self.state, command).await
         } else {
             commands::refused("unknown_action", "The built-in host has no such action.")
         }

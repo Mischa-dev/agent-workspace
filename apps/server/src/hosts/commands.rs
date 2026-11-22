@@ -557,6 +557,15 @@ pub async fn fetch(state: &AppState, host: &HostRow, command_id: Uuid) -> Result
             &mut command,
         )
         .await?;
+        // So is a git token for repository work.
+        crate::hosts::builtin::repositories::attach_secret(
+            state,
+            &mut transaction,
+            row.id,
+            &row.body,
+            &mut command,
+        )
+        .await?;
     }
     command.insert("issuedAt".into(), json!(timestamp(row.created_at)));
     command.insert("expiresAt".into(), json!(timestamp(row.expires_at)));

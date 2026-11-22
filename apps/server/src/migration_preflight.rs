@@ -73,7 +73,6 @@ async fn prepare_m3_repository_upgrade_here(
                 repository_id: repository.id,
                 clone_url: repository.clone_url,
                 default_branch: repository.default_branch,
-                mirror_path: canonical.clone(),
                 imported: true,
             },
             legacy.clone(),

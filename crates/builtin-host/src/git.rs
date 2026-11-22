@@ -393,6 +393,36 @@ pub fn inspect_worktree(
     })
 }
 
+/// Why inspection refuses to publish a worktree (all `git_worktree`
+/// conflicts). [`publication_refusal`] reads one back after it has crossed
+/// the wire as text.
+pub const REFUSED_DIRTY: &str =
+    "dirty worktree is retained; commit intended changes through the Thread before publishing";
+pub const REFUSED_BRANCH: &str = "worktree branch does not match its durable workspace";
+pub const REFUSED_HEAD: &str = "HEAD commit is invalid";
+pub const REFUSED_NOTHING_AHEAD: &str = "workspace has no commit ahead of its recorded base";
+pub const REFUSED_NOT_DESCENDED: &str = "workspace HEAD is not descended from its recorded base";
+pub const REFUSED_MOVED_ON: &str = "workspace HEAD changed after publication was queued";
+const PUBLICATION_REFUSALS: [&str; 6] = [
+    REFUSED_DIRTY,
+    REFUSED_BRANCH,
+    REFUSED_HEAD,
+    REFUSED_NOTHING_AHEAD,
+    REFUSED_NOT_DESCENDED,
+    REFUSED_MOVED_ON,
+];
+
+/// The refusal an inspection answered with, from its text: one of
+/// [`PUBLICATION_REFUSALS`] reads back as itself, anything else as a
+/// changed workspace.
+pub fn publication_refusal(why: &str) -> RuntimeError {
+    let why = PUBLICATION_REFUSALS
+        .into_iter()
+        .find(|known| *known == why)
+        .unwrap_or(REFUSED_MOVED_ON);
+    RuntimeError::Conflict("git_worktree", why)
+}
+
 pub fn inspect_publishable_worktree(
     mirror: &Path,
     worktree: &Path,
@@ -407,16 +437,10 @@ pub fn inspect_publishable_worktree(
     let _lock = repository_lock(repository_root)?;
     let inspection = inspect_worktree(mirror, worktree)?;
     if inspection.dirty {
-        return Err(RuntimeError::Conflict(
-            "git_worktree",
-            "dirty worktree is retained; commit intended changes through the Thread before publishing",
-        ));
+        return Err(RuntimeError::Conflict("git_worktree", REFUSED_DIRTY));
     }
     if inspection.branch != expected_branch {
-        return Err(RuntimeError::Conflict(
-            "git_worktree",
-            "worktree branch does not match its durable workspace",
-        ));
+        return Err(RuntimeError::Conflict("git_worktree", REFUSED_BRANCH));
     }
     let head = run_git([
         OsString::from("-C"),
@@ -426,14 +450,14 @@ pub fn inspect_publishable_worktree(
         OsString::from("HEAD^{commit}"),
     ])?;
     let head_commit = String::from_utf8(head.stdout)
-        .map_err(|_| RuntimeError::Conflict("git_worktree", "HEAD commit is invalid"))?
+        .map_err(|_| RuntimeError::Conflict("git_worktree", REFUSED_HEAD))?
         .trim()
         .to_owned();
     validate_commit(&head_commit)?;
     if head_commit == base_commit {
         return Err(RuntimeError::Conflict(
             "git_worktree",
-            "workspace has no commit ahead of its recorded base",
+            REFUSED_NOTHING_AHEAD,
         ));
     }
     run_git([
@@ -444,12 +468,7 @@ pub fn inspect_publishable_worktree(
         OsString::from(base_commit),
         OsString::from(&head_commit),
     ])
-    .map_err(|_| {
-        RuntimeError::Conflict(
-            "git_worktree",
-            "workspace HEAD is not descended from its recorded base",
-        )
-    })?;
+    .map_err(|_| RuntimeError::Conflict("git_worktree", REFUSED_NOT_DESCENDED))?;
     Ok(PublishInspection {
         branch: inspection.branch,
         head_commit,
@@ -464,10 +483,7 @@ pub fn push_publishable_commit(request: PublishPush<'_>) -> Result<(), RuntimeEr
         request.base_commit,
     )?;
     if inspection.head_commit != request.intended_commit {
-        return Err(RuntimeError::Conflict(
-            "git_worktree",
-            "workspace HEAD changed after publication was queued",
-        ));
+        return Err(RuntimeError::Conflict("git_worktree", REFUSED_MOVED_ON));
     }
     if !request.remote_is_safe {
         return Err(RuntimeError::Invalid("unsafe GitHub remote"));
@@ -614,10 +630,7 @@ pub fn remove_published_worktree(
         ));
     }
     if inspection.branch != expected_branch {
-        return Err(RuntimeError::Conflict(
-            "git_worktree",
-            "worktree branch does not match its durable workspace",
-        ));
+        return Err(RuntimeError::Conflict("git_worktree", REFUSED_BRANCH));
     }
     let head = run_git([
         OsString::from("-C"),
@@ -627,7 +640,7 @@ pub fn remove_published_worktree(
         OsString::from("HEAD^{commit}"),
     ])?;
     let head = String::from_utf8(head.stdout)
-        .map_err(|_| RuntimeError::Conflict("git_worktree", "HEAD commit is invalid"))?;
+        .map_err(|_| RuntimeError::Conflict("git_worktree", REFUSED_HEAD))?;
     if head.trim() != published_commit {
         return Err(RuntimeError::Conflict(
             "git_worktree",
@@ -790,7 +803,7 @@ pub fn apply_result_and_commit(
         OsString::from("HEAD^{commit}"),
     ])?;
     let head = String::from_utf8(head.stdout)
-        .map_err(|_| RuntimeError::Conflict("git_worktree", "HEAD commit is invalid"))?
+        .map_err(|_| RuntimeError::Conflict("git_worktree", REFUSED_HEAD))?
         .trim()
         .to_owned();
     validate_commit(&head)?;

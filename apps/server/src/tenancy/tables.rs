@@ -117,6 +117,7 @@ pub const TENANT_TABLES: &[(&str, &str)] = &[
     ("harness_catalog_refreshes", ORGANIZATION_ID),
     ("harness_models", ORGANIZATION_ID),
     ("host_a2a_tasks", WORKSPACE_ID),
+    ("host_command_secrets", WORKSPACE_ID),
     ("host_commands", WORKSPACE_ID),
     ("incoming_hook_deliveries", WORKSPACE_ID),
     ("incoming_hooks", WORKSPACE_ID),

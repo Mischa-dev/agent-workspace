@@ -512,6 +512,7 @@ mod client;
 pub mod git_ref;
 pub mod harness;
 mod model;
+pub mod repository;
 pub use client::{
     ClientError, HostClient, HttpRequest, HttpResponse, ReqwestTransport, RunReporter, Transport,
     TransportFuture,
