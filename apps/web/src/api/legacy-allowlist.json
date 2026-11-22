@@ -39,7 +39,6 @@
   "projects/homeApi.ts": 1,
   "projects/ProjectOverviewPage.tsx": 1,
   "repositories/api.ts": 1,
-  "runs/api.ts": 4,
   "settings/account/api.ts": 5,
   "settings/account/EmailSection.tsx": 4,
   "settings/account/ProfilePage.tsx": 3,

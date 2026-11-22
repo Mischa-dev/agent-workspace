@@ -248,7 +248,7 @@ export type RunListFilter = {
   mine?: boolean
 }
 
-export type UsageFilter = { projectId?: string; groupBy: UsageGroup; days?: number }
+export type UsageFilter = { workspaceId?: string; projectId?: string; groupBy: UsageGroup; days?: number }
 
 export const RUN_PAGE_SIZE = 50
 
@@ -300,7 +300,11 @@ export function getRunDiff(runId: string, signal?: AbortSignal) {
 }
 
 export function getUsage(filter: UsageFilter, signal?: AbortSignal) {
-  return callOp('run_usage_list', { projectId: filter.projectId, groupBy: filter.groupBy, days: filter.days }, { signal }).then(
+  return callOp(
+    'run_usage_list',
+    { projectId: filter.projectId, groupBy: filter.groupBy, days: filter.days },
+    { signal, workspaceId: filter.workspaceId },
+  ).then(
     (value) => value.usage as unknown as UsageReport,
   )
 }

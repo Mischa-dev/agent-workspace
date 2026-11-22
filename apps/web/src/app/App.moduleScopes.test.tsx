@@ -139,6 +139,18 @@ describe('entry points follow the modules where they lead', () => {
     expect(turnedOff('Runs')).toBeNull()
   })
 
+  it('a run whose space has Runs off, refused by the server, shows the turned-off page', async () => {
+    const refused = () =>
+      jsonResponse(
+        { outcome: 'permission_denied', code: 'module_off', message: 'Runs is off here.', details: { module: 'runs' } },
+        403,
+      )
+    withScopes({ home: [], extra: (path, init) => (asksFor(path, init, runId) ? refused() : undefined) })
+    window.history.replaceState({}, '', `/w/-/runs/${runId}`)
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: 'Runs is turned off' })).toBeVisible()
+  })
+
   it('a task key leaves the decision to the task’s project', async () => {
     const references = (path: string) =>
       path.includes(`/projects/${projectAId}/work-item-references`)

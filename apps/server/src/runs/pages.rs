@@ -212,6 +212,14 @@ pub struct RunListQuery {
     /// The `nextCursor` of the previous page.
     pub cursor: Option<String>,
     pub limit: Option<i64>,
+    /// Spaces left out: those where Runs is off for the viewer. Never read
+    /// from a request.
+    #[serde(skip)]
+    pub without_spaces: Vec<Uuid>,
+    /// The agent connection calling, whose own limits on the spaces it
+    /// reaches apply too. Never read from a request.
+    #[serde(skip)]
+    pub connection_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema)]
@@ -288,6 +296,9 @@ pub async fn list(
           AND ($8::text IS NULL OR detail.config->>'harness' = $8)
           AND (NOT $9 OR run.requested_by_account_id = $1)
           AND ($10::timestamptz IS NULL OR (run.created_at, run.id) < ($10, $11))
+          AND (run.space_id IS NULL OR NOT (run.space_id = ANY($13)))
+          AND (run.space_id IS NULL OR $14::uuid IS NULL
+               OR actor_can_access_project($1, $14, run.space_id))
         ORDER BY run.created_at DESC, run.id DESC
         LIMIT $12
         "#
@@ -304,6 +315,8 @@ pub async fn list(
     .bind(cursor.map(|(time, _)| time))
     .bind(cursor.map(|(_, id)| id))
     .bind(limit + 1)
+    .bind(&query.without_spaces)
+    .bind(query.connection_id)
     .fetch_all(&mut *transaction)
     .await?;
     let harnesses = Harnesses::visible_on(state, &mut transaction).await?;
@@ -826,6 +839,7 @@ impl Operation for RunLineList {
     const MODULE: &'static str = "runs";
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const HELD_SPACE_BY_DEFAULT: bool = true;
     const TITLE: &'static str = "List all runs";
     const DESCRIPTION: &'static str = "Every run you can see in this workspace, newest first, \
         whoever runs it (this server's host, a linked host, or an agent reporting its own): \
@@ -837,9 +851,16 @@ impl Operation for RunLineList {
     type Output = RunList;
 
     async fn run(call: &mut OpCall<'_>, input: RunLineListInput) -> Result<RunList, OpError> {
+        let viewer = call.account_id();
+        // Not spaces where Runs is off for the viewer (AWD-75), as
+        // run_usage_list leaves them out.
+        let without_spaces = crate::mcp::runs::projects_with_module_off(call.state, viewer, "runs")
+            .await
+            .map_err(OpError::from)?;
         let query = RunListQuery {
             organization_id: Some(call.ctx.workspace_id),
-            project_id: call.ctx.space_id.filter(|_| input.space_id.is_some()),
+            // The space named, or the one a space-held credential is held to.
+            project_id: call.ctx.space_id,
             status: input.status,
             agent_id: input.agent_id.map(|agent| agent.id()),
             host_id: input.host_id.map(|host| host.id()),
@@ -847,8 +868,10 @@ impl Operation for RunLineList {
             mine: input.mine,
             cursor: input.cursor,
             limit: input.limit.map(i64::from),
+            without_spaces,
+            connection_id: call.ctx.caller.connection_id,
         };
-        list(call.state, call.account_id(), &query)
+        list(call.state, viewer, &query)
             .await
             .map_err(OpError::from)
     }

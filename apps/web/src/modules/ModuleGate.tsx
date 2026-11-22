@@ -3,6 +3,7 @@ import { lazy, Suspense, type ReactNode } from 'react'
 import { useLocation, useParams } from 'react-router-dom'
 
 import { requestJson } from '../api/client'
+import { isApiError } from '../api/errors'
 import { callOp } from '../api/ops'
 import { useWorkspaceId } from '../app/workspace'
 import { useProjectExperience, useWorkspaceExperience } from '../experience/layout'
@@ -52,6 +53,15 @@ export function ModuleGate({ children, waiting }: { children: ReactNode; waiting
   const module = moduleOfPath(pathname)
   const experience = inProject ? project : workspace
   if (module && moduleSwitchable(module) && !taskKey) {
+    // The server refused the lookup because the module is off where the
+    // thing is: that is the answer.
+    if (id && !shown && refusedAsOff(target.error, module)) {
+      return (
+        <Suspense fallback={waiting}>
+          <TurnedOffPage module={module} />
+        </Suspense>
+      )
+    }
     if (id && !shown) return target.isError ? children : waiting
     if (experience.modules === 'loading') return waiting
     if (!experience.moduleOn(module)) {
@@ -63,4 +73,11 @@ export function ModuleGate({ children, waiting }: { children: ReactNode; waiting
     }
   }
   return children
+}
+
+/** Whether `error` is the server saying `module` is off where the thing is. */
+function refusedAsOff(error: unknown, module: string): boolean {
+  if (!isApiError(error) || !error.details || typeof error.details !== 'object') return false
+  const details = error.details as { reason?: unknown; module?: unknown }
+  return details.reason === 'module_off' && (details.module === undefined || details.module === module)
 }

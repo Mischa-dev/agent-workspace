@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 
+import { useWorkspaceId } from '../app/workspace'
 import { ErrorState, ListSkeleton, Section, SegmentedControl, formatShortDate } from '../ui'
 import { getUsage, runKeys, type UsageGroup, type UsageReport, type UsageRow } from './api'
 import { formatCost, formatTokens } from './runModel'
@@ -19,7 +20,9 @@ const DAYS = 30
 /** Tokens and cost of the runs you can see over the last month, totalled the way you pick. */
 export function RunUsage({ projectId }: { projectId?: string }) {
   const [groupBy, setGroupBy] = useState<UsageGroup>('day')
-  const filter = { projectId, groupBy, days: DAYS }
+  // The workspace the person is in, as the Runs list beside it, unless a project names its own.
+  const workspaceId = useWorkspaceId() ?? undefined
+  const filter = { workspaceId: projectId ? undefined : workspaceId, projectId, groupBy, days: DAYS }
   const usage = useQuery({ queryKey: runKeys.usage(filter), queryFn: () => getUsage(filter) })
 
   return (
