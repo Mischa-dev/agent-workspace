@@ -108,12 +108,30 @@
   inset: 0;
 }
 
-/* Excalidraw draws its own UI; keep it on the app's typeface and accent. */
-.aw-wb__canvas .excalidraw {
+/* Excalidraw draws its own UI; dress it in the app's kit (W1.41 round 2):
+   our typeface, accent, surfaces, corners and shadows, in either theme. */
+.aw-wb__canvas .excalidraw,
+.aw-wb__canvas .excalidraw.theme--dark {
   --color-primary: var(--accent);
   --color-primary-darker: var(--accent-hover);
   --color-primary-darkest: var(--accent-hover);
+  --color-primary-light: var(--accent-soft);
+  --color-surface-primary-container: var(--accent-soft);
   --ui-font: inherit;
+  --island-bg-color: var(--surface-raised);
+  --color-surface-low: var(--surface-raised);
+  --color-surface-mid: var(--content-hover);
+  --button-hover-bg: var(--content-hover);
+  --text-primary-color: var(--content-fg);
+  --shadow-island: var(--shadow-popover);
+  --modal-shadow: var(--shadow-dialog);
+  --border-radius-md: var(--radius-sm);
+  --border-radius-lg: var(--radius-md);
+}
+
+/* The library's hint under the toolbar, in the app's muted ink. */
+.aw-wb__canvas .excalidraw .HintViewer {
+  color: var(--content-fg-muted);
 }
 
 .aw-linked-boards__actions {
