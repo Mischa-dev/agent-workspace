@@ -495,3 +495,38 @@ async fn only_people_who_manage_the_workspace_use_or_save_templates() {
     .await;
     assert_eq!(gone["outcome"], "not_found", "{gone}");
 }
+
+/// A wrapped command keeps its own transaction: with a request id and a
+/// pool of one connection, using a template (which makes a space the
+/// caller joins) still finishes, and a retry with the same id replays it.
+#[tokio::test]
+async fn a_template_is_used_on_a_one_connection_pool() {
+    let Some(setup) = setup("awd76_one_connection").await else {
+        return;
+    };
+    let one = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(10))
+        .connect_with((*setup.pool.connect_options()).clone())
+        .await
+        .expect("a pool of one");
+    let app = super::support::app::test_app(one, "postgres://fixture/unused");
+    let key = Uuid::now_v7().to_string();
+    let path = format!(
+        "/api/v2/w/{}/ops/workspace_template_apply",
+        setup.organization_id
+    );
+    let input = json!({"projectId": "workspace", "template": "software_team"});
+    for attempt in ["first", "retry"] {
+        let request = setup
+            .browser
+            .request("POST", &path, Some(&key), input.clone());
+        let (status, body) =
+            tokio::time::timeout(std::time::Duration::from_secs(60), send(&app, request))
+                .await
+                .unwrap_or_else(|_| panic!("the {attempt} call waited on itself"));
+        assert_eq!(status, StatusCode::OK, "{attempt}: {body}");
+        assert_eq!(body["outcome"], "ok", "{attempt}: {body}");
+        assert_eq!(body["replayed"], attempt == "retry", "{attempt}: {body}");
+    }
+}

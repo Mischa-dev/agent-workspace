@@ -176,6 +176,10 @@ pub trait Operation: Send + Sync + 'static {
     /// transaction's scope is every workspace the caller belongs to, not
     /// only the one it is called in.
     const ACROSS_WORKSPACES: bool = false;
+    /// Its `run` keeps its own transactions (a wrapped tool command): the
+    /// dispatcher reserves its request id, and keeps the answer, in short
+    /// transactions of their own around it rather than one held across it.
+    const OWN_TRANSACTION: bool = false;
     /// The kind of thing the workspace's guards see it change, when its
     /// target is wider than what it writes (a bulk record write aimed at
     /// its space is still a change to records).

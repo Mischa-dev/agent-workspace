@@ -1263,24 +1263,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/projects/{project_id}/task-templates/{template_id}/apply",
         WorkItemCreate
     ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/imports",
-        WorkItemCreate
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/projects/{project_id}/imports/{import_id}",
-        WorkItemCreate
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/imports/{import_id}/commit",
-        WorkItemCreate
-    ),
 ];
 
 #[cfg(test)]

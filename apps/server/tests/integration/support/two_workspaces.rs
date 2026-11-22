@@ -1150,13 +1150,15 @@ async fn build_workspace(
         project_template["outcome"], "ok",
         "{label} project template: {project_template}"
     );
-    let import = post(
-        format!("/api/v1/projects/{project}/imports"),
-        "import-1",
-        json!({"source": "markdown", "text": format!("# Launch{m}\n- [ ] Launch import{m}\n"), "fileName": format!("launch{tag}.md")}),
-    )
-    .await;
-    let import = string_at(&import, "/id");
+    let (status, import) = browser
+        .op(
+            app,
+            "task_import",
+            json!({"projectId": project, "source": "markdown", "text": format!("# Launch{m}\n- [ ] Launch import{m}\n"), "fileName": format!("launch{tag}.md")}),
+        )
+        .await;
+    assert!(status.is_success(), "{label} import: {status} {import}");
+    let import = string_at(&import, "/import/id");
 
     // Code: the same repository name in both, and a pull request on it.
     let repository = insert_repository(&setup, &project, "acme/widgets", true, true, None).await;

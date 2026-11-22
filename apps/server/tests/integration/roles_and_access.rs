@@ -4868,27 +4868,21 @@ async fn github_imports_follow_see_code() {
     assert!(!one.to_string().contains("import-repo"), "{one}");
     assert!(!one.to_string().contains("Secret issue seven"), "{one}");
     let version = one["version"].clone();
-    let (status, changed) = send(
-        app,
-        bea_browser.request(
-            "PATCH",
-            &path,
-            Some("bea-import-cancel"),
-            json!({"expectedVersion": version, "cancel": true}),
-        ),
-    )
-    .await;
+    let (status, changed) = bea_browser
+        .op(
+            app,
+            "task_import",
+            json!({"projectId": work, "importId": import_id, "expectedVersion": version, "cancel": true}),
+        )
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{changed}");
-    let (status, committed) = send(
-        app,
-        bea_browser.request(
-            "POST",
-            &format!("{path}/commit"),
-            Some("bea-import-commit"),
-            json!({"expectedVersion": version}),
-        ),
-    )
-    .await;
+    let (status, committed) = bea_browser
+        .op(
+            app,
+            "task_import",
+            json!({"projectId": work, "importId": import_id, "expectedVersion": version, "commit": true}),
+        )
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{committed}");
     let state: String = sqlx::query_scalar("SELECT status FROM task_imports WHERE id = $1")
         .bind(import_id)
@@ -4899,18 +4893,15 @@ async fn github_imports_follow_see_code() {
 
     // Markdown and CSV need no code, and keep no repository they're passed,
     // nor show one an older import stored.
-    let (status, markdown) = send(
-        app,
-        bea_browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/imports"),
-            Some("bea-markdown-import"),
-            json!({"source": "markdown", "text": "- Plain task", "repositoryId": repository}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{markdown}");
-    let markdown_id = markdown["id"]
+    let (status, markdown) = bea_browser
+        .op(
+            app,
+            "task_import",
+            json!({"projectId": work, "source": "markdown", "text": "- Plain task", "repositoryId": repository}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{markdown}");
+    let markdown_id = markdown["import"]["id"]
         .as_str()
         .expect("markdown import")
         .parse::<Uuid>()

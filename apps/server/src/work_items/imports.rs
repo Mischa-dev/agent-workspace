@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashMap};
 use axum::{
     Json,
     extract::State,
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderValue, header},
     response::{IntoResponse, Response},
 };
 use chrono::{DateTime, NaiveDate, Utc};
@@ -32,15 +32,14 @@ use super::{
         FIELDS, ImportRow, MAX_ROWS, auto_mapping, csv_rows, date_of, github_rows, markdown_rows,
         parse_csv, priority_of,
     },
-    planning::{Started, begin, invalid, refusal, start_write},
+    planning::invalid,
     project_membership,
 };
 use crate::{
     AppState,
     auth::AuthenticatedActor,
-    error::{ApiJson, ApiPath, ApiQuery, AppError},
+    error::{ApiPath, ApiQuery, AppError},
     fields::{self, FieldDefinition, FieldType, FieldView},
-    idempotency::resource_bound_scope,
     jobs::{JobContext, JobError, JobRegistry, NewJob, enqueue},
     policy::{
         Action, ActorKind, AgentLimits, Decision, DenyReason, MembershipScope, Permission,
@@ -1132,105 +1131,57 @@ pub(crate) async fn import_by_id(
     }
 }
 
-pub(super) async fn create_import(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<CreateImportRequest>,
-) -> Result<Response, AppError> {
-    let prepared = match prepare(&request) {
-        Ok(prepared) => prepared,
-        Err((field, message)) => return Ok(invalid(field, message)),
-    };
-    let mut write = begin!(
-        start_write(
-            &state,
-            &headers,
-            &principal,
-            project_id,
-            Action::WorkItemCreate,
-            None,
-            resource_bound_scope("projects", project_id, "task_import_create")?,
-            &request,
-        )
-        .await
-    );
-    let actor = write.actor.clone();
-    let id = match insert_import(&mut write.transaction, &actor, &request, prepared).await? {
-        Ok(id) => id,
-        Err((field, message)) => return Ok(invalid(field, message)),
-    };
-    let view = import_by_id(&mut write.transaction, project_id, id, true, actor.actor_id)
-        .await?
-        .ok_or(AppError::Internal("import vanished"))?;
-    write.finish(StatusCode::CREATED, &view).await
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct UpdateImportRequest {
-    expected_version: i64,
-    #[serde(default)]
-    mapping: Option<BTreeMap<String, String>>,
-    #[serde(default)]
-    options: Option<ImportOptions>,
+/// A change to an import that hasn't finished: a draft's column mapping
+/// or options, or stopping it.
+pub(crate) struct ImportChange {
+    pub expected_version: Option<i64>,
+    pub mapping: Option<BTreeMap<String, String>>,
+    pub options: Option<ImportOptions>,
     /// Stops the import: a draft is dropped, a queued or running one stops
     /// after the chunk it's on. Tasks already made stay.
-    #[serde(default)]
-    cancel: bool,
+    pub cancel: bool,
 }
 
-fn version_conflict(current: i64) -> Response {
-    refusal(
-        StatusCode::CONFLICT,
-        "version_conflict",
-        "This import changed since you loaded it.".to_owned(),
-        json!({ "currentVersion": current }),
-    )
+/// Why an import can't change.
+pub(crate) enum ChangeRefusal {
+    NotFound,
+    VersionConflict(i64),
+    /// Stopping one that already finished (its status).
+    Finished(String),
+    /// Changing one that has started (its status).
+    NotDraft(String),
+    Invalid(Refusal),
 }
 
-pub(super) async fn update_import(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, import_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<UpdateImportRequest>,
-) -> Result<Response, AppError> {
-    let mut write = begin!(
-        start_write(
-            &state,
-            &headers,
-            &principal,
-            project_id,
-            Action::WorkItemCreate,
-            None,
-            resource_bound_scope("task_imports", import_id, "update")?,
-            &request,
-        )
-        .await
-    );
-    let record = import_row(&mut write.transaction, project_id, import_id, true)
-        .await?
-        .ok_or(AppError::NotFound("import"))?;
-    let code = sees_code(&mut write.transaction, write.actor.actor_id, project_id).await?;
+/// Changes an import in `project_id`. The caller has checked the reader
+/// may create tasks there; a repository's import is only theirs to change
+/// while they see its code.
+pub(crate) async fn change_import(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    import_id: Uuid,
+    viewer: Uuid,
+    change: ImportChange,
+) -> Result<Result<(), ChangeRefusal>, AppError> {
+    let Some(record) = import_row(transaction, project_id, import_id, true).await? else {
+        return Ok(Err(ChangeRefusal::NotFound));
+    };
+    let code = sees_code(transaction, viewer, project_id).await?;
     if record.source == "github" && !code {
-        return Err(AppError::NotFound("import"));
+        return Ok(Err(ChangeRefusal::NotFound));
     }
-    if record.version != request.expected_version {
-        return Ok(version_conflict(record.version));
+    if change
+        .expected_version
+        .is_some_and(|expected| expected != record.version)
+    {
+        return Ok(Err(ChangeRefusal::VersionConflict(record.version)));
     }
-    if request.cancel {
+    if change.cancel {
         if !matches!(
             record.status.as_str(),
             "fetching" | "draft" | "queued" | "running"
         ) {
-            return Ok(refusal(
-                StatusCode::CONFLICT,
-                "import_finished",
-                "This import already finished.".to_owned(),
-                json!({ "status": record.status }),
-            ));
+            return Ok(Err(ChangeRefusal::Finished(record.status)));
         }
         sqlx::query(
             r#"
@@ -1241,74 +1192,70 @@ pub(super) async fn update_import(
             "#,
         )
         .bind(import_id)
-        .execute(&mut *write.transaction)
+        .execute(&mut **transaction)
         .await?;
-    } else {
-        if record.status != "draft" {
-            return Ok(refusal(
-                StatusCode::CONFLICT,
-                "import_not_draft",
-                "Only an import that hasn't started can change.".to_owned(),
-                json!({ "status": record.status }),
-            ));
-        }
-        let options = request.options.clone().unwrap_or_else(|| record.options());
-        if let Err((field, message)) = check_options(&options) {
-            return Ok(invalid(field, message));
-        }
-        let reread = record.source != "github"
-            && (request.mapping.is_some()
-                || options.headings_as_milestones != record.options().headings_as_milestones);
-        let (rows, mapping) = if reread {
-            let text = sqlx::query_scalar::<_, Option<String>>(
-                "SELECT raw_text FROM task_imports WHERE id = $1",
-            )
-            .bind(import_id)
-            .fetch_one(&mut *write.transaction)
-            .await?
-            .unwrap_or_default();
-            match read_text(
-                &record.source,
-                &text,
-                request
-                    .mapping
-                    .clone()
-                    .or_else(|| (record.source == "csv").then(|| record.mapping())),
-                &options,
-            ) {
-                Ok(read) => read,
-                Err((field, message)) => return Ok(invalid(field, message)),
-            }
-        } else {
-            (record.rows(), record.mapping())
-        };
-        sqlx::query(
-            r#"
-            UPDATE task_imports
-            SET mapping = $2, options = $3, rows = $4, row_count = $5,
-                version = version + 1, updated_at = now()
-            WHERE id = $1
-            "#,
+        return Ok(Ok(()));
+    }
+    if record.status != "draft" {
+        return Ok(Err(ChangeRefusal::NotDraft(record.status)));
+    }
+    let options = change.options.clone().unwrap_or_else(|| record.options());
+    if let Err(refusal) = check_options(&options) {
+        return Ok(Err(ChangeRefusal::Invalid(refusal)));
+    }
+    let reread = record.source != "github"
+        && (change.mapping.is_some()
+            || options.headings_as_milestones != record.options().headings_as_milestones);
+    let (rows, mapping) = if reread {
+        let text = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT raw_text FROM task_imports WHERE id = $1",
         )
         .bind(import_id)
-        .bind(json!(mapping))
-        .bind(json!(options))
-        .bind(json!(rows))
-        .bind(rows.len() as i32)
-        .execute(&mut *write.transaction)
-        .await?;
-    }
-    let record = import_row(&mut write.transaction, project_id, import_id, false)
+        .fetch_one(&mut **transaction)
         .await?
-        .ok_or(AppError::Internal("import vanished"))?;
-    let view = import_view(&mut write.transaction, record, true, code).await?;
-    write.finish(StatusCode::OK, &view).await
+        .unwrap_or_default();
+        match read_text(
+            &record.source,
+            &text,
+            change
+                .mapping
+                .clone()
+                .or_else(|| (record.source == "csv").then(|| record.mapping())),
+            &options,
+        ) {
+            Ok(read) => read,
+            Err(refusal) => return Ok(Err(ChangeRefusal::Invalid(refusal))),
+        }
+    } else {
+        (record.rows(), record.mapping())
+    };
+    sqlx::query(
+        r#"
+        UPDATE task_imports
+        SET mapping = $2, options = $3, rows = $4, row_count = $5,
+            version = version + 1, updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(import_id)
+    .bind(json!(mapping))
+    .bind(json!(options))
+    .bind(json!(rows))
+    .bind(rows.len() as i32)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(Ok(()))
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct CommitImportRequest {
-    expected_version: i64,
+/// The options an import keeps, for a change that names only some.
+pub(crate) async fn options_of(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    import_id: Uuid,
+) -> Result<Option<ImportOptions>, AppError> {
+    Ok(import_row(connection, project_id, import_id, false)
+        .await?
+        .map(|record| record.options()))
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1384,60 +1331,6 @@ pub(crate) async fn queue_commit(
     )
     .await?;
     Ok(Ok(()))
-}
-
-pub(super) async fn commit_import(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, import_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<CommitImportRequest>,
-) -> Result<Response, AppError> {
-    let mut write = begin!(
-        start_write(
-            &state,
-            &headers,
-            &principal,
-            project_id,
-            Action::WorkItemCreate,
-            None,
-            resource_bound_scope("task_imports", import_id, "commit")?,
-            &request,
-        )
-        .await
-    );
-    let actor = write.actor.clone();
-    match queue_commit(
-        &mut write.transaction,
-        &actor,
-        import_id,
-        Some(request.expected_version),
-    )
-    .await?
-    {
-        Ok(()) => {}
-        Err(CommitRefusal::NotFound) => return Err(AppError::NotFound("import")),
-        Err(CommitRefusal::VersionConflict(current)) => return Ok(version_conflict(current)),
-        Err(CommitRefusal::NotDraft(status)) => {
-            return Ok(refusal(
-                StatusCode::CONFLICT,
-                "import_not_draft",
-                "This import has already started.".to_owned(),
-                json!({ "status": status }),
-            ));
-        }
-        Err(CommitRefusal::Empty) => return Ok(invalid("rows", "There's nothing to import.")),
-    }
-    let view = import_by_id(
-        &mut write.transaction,
-        project_id,
-        import_id,
-        false,
-        actor.actor_id,
-    )
-    .await?
-    .ok_or(AppError::Internal("import vanished"))?;
-    write.finish(StatusCode::OK, &view).await
 }
 
 // ---------------------------------------------------------------------------

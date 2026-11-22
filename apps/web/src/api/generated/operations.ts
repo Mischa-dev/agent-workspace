@@ -2376,7 +2376,7 @@ export type TaskGetInput = { historyBefore?: string | null; historyLimit?: numbe
 
 export type TaskGetOutput = { blockedBy?: TaskRef[]; blockedReason?: string | null; blocks?: TaskRef[]; claimedBy?: ClaimValue | null; collection?: string | null; comments?: CommentItem[]; conversations?: LinkedItem[]; dueDate?: string | null; estimate?: number | null; estimateUnit?: string; fields?: TaskFieldValue[]; files?: FileSummary[]; guidePageId?: string | null; handoffs?: HandoffNote[]; history?: TaskHistory | null; links?: LinkedItem[]; milestone?: MilestoneRef | null; overdue?: boolean; parent?: TaskRef | null; ready?: boolean; relations?: RelationRef[]; startDate?: string | null; subtasks?: TaskSummary[]; task: WorkItemProjection; watchers?: WatcherRef[] }
 
-export type TaskImportInput = { commit?: boolean | null; githubState?: string | null; headingsAsMilestones?: boolean | null; importId?: string | null; mapping?: Record<string, string> | null; projectId: string; repositoryId?: string | null; source?: string | null; text?: string | null }
+export type TaskImportInput = { cancel?: boolean | null; commit?: boolean | null; createLabels?: boolean | null; createMilestones?: boolean | null; excludedRows?: number[] | null; expectedVersion?: number | null; fileName?: string | null; githubState?: string | null; headingsAsMilestones?: boolean | null; importId?: string | null; mapping?: Record<string, string> | null; projectId: string; repositoryId?: string | null; source?: string | null; text?: string | null }
 
 export type TaskImportOutput = { import: unknown; nextStep: string }
 

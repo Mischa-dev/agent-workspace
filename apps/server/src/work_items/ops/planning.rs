@@ -68,6 +68,7 @@ macro_rules! tool_op {
             $(destructive: $destructive:literal,)?
             $(long: |$long_input:ident| $long_body:expr,)?
             $(shown_once: [$($shown:literal),*],)?
+            $(max_body_bytes: $max_body:expr,)?
             title: $title:literal,
             description: $description:expr,
             emits: [$($emit:literal),*],
@@ -84,6 +85,7 @@ macro_rules! tool_op {
             const MODULE: &'static str = "tasks";
             const PERMISSION: Option<Perm> = $perm;
             const IDEMPOTENCY: Idempotency = Idempotency::$idem;
+            const OWN_TRANSACTION: bool = true;
             $(const PREVIEW: bool = $preview;)?
             $(const DESTRUCTIVE: bool = $destructive;)?
             $(
@@ -93,6 +95,7 @@ macro_rules! tool_op {
                 }
             )?
             $(const SHOWN_ONCE: &'static [&'static str] = &[$($shown),*];)?
+            $(const MAX_BODY_BYTES: usize = $max_body;)?
             const TITLE: &'static str = $title;
             const DESCRIPTION: &'static str = $description;
             const EMITS: &'static [&'static str] = &[$($emit),*];
@@ -881,11 +884,13 @@ tool_op!(TaskImport {
     kind: Create,
     permission: Some(Perm::TasksCreate),
     idempotency: Dispatcher,
+    max_body_bytes: crate::work_items::imports::MAX_IMPORT_BODY_BYTES,
     title: "Import tasks",
     description: "Import tasks from Markdown, CSV (Linear and Jira exports work as they are) or a \
         connected repository's issues. It previews first: each row's status, labels, assignee \
-        and milestone, and anything that doesn't match. Call again with the importId and commit: \
-        true to create them. Rows imported before from the same source are skipped.",
+        and milestone, and anything that doesn't match. Call again with the importId to map its \
+        columns again, change its options or cancel it, and with commit: true to create them. \
+        Rows imported before from the same source are skipped.",
     emits: ["task.created"],
     input: views_data::TaskImportArguments,
     output: views_data::TaskImportValue,

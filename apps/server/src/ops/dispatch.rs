@@ -769,29 +769,85 @@ async fn pipeline<O: Operation>(
     }
 
     let mut reservation = None;
+    // An operation whose command keeps its own transactions (a wrapped
+    // tool) holds none of the call's across it: its request id is reserved,
+    // and a reviewer's hold used, in a short transaction of their own, and
+    // the answer is kept in another after it. Holding the reservation open
+    // would leave the command waiting on a second connection (a pool of
+    // one stalls), on rows the reservation references, and across any
+    // network call the command makes.
+    let apart = O::OWN_TRANSACTION && !request.preview;
     if let Some((key, scope, hash)) = keyed.as_ref() {
         let (key, hash) = (*key, *hash);
-        let tx = call.tx().await?;
-        match idempotency::reserve(tx, ctx.caller.account_id, scope, key, hash).await? {
-            IdempotencyOutcome::Reserved(reserved) => reservation = Some(reserved),
-            IdempotencyOutcome::Replay(replayed) => {
-                if let Some(tx) = call.tx.take() {
+        if apart {
+            let mut tx = begin(state, &ctx).await?;
+            match idempotency::reserve_briefly(&mut tx, ctx.caller.account_id, scope, key, hash)
+                .await?
+            {
+                IdempotencyOutcome::Reserved(reserved) => reservation = Some(reserved),
+                IdempotencyOutcome::Replay(replayed) => {
                     tx.commit()
                         .await
                         .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
+                    return Ok(replay(replayed));
                 }
-                return Ok(replay(replayed));
+            }
+            if let Some(hold) = guard_hold.take() {
+                crate::guards::use_hold(&mut tx, hold, ctx.request_id.as_deref()).await?;
+            }
+            tx.commit()
+                .await
+                .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
+        } else {
+            let tx = call.tx().await?;
+            match idempotency::reserve(tx, ctx.caller.account_id, scope, key, hash).await? {
+                IdempotencyOutcome::Reserved(reserved) => reservation = Some(reserved),
+                IdempotencyOutcome::Replay(replayed) => {
+                    if let Some(tx) = call.tx.take() {
+                        tx.commit()
+                            .await
+                            .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
+                    }
+                    return Ok(replay(replayed));
+                }
             }
         }
     }
 
     if let Some(hold) = guard_hold {
-        let tx = call.tx().await?;
-        crate::guards::use_hold(tx, hold, ctx.request_id.as_deref()).await?;
+        if apart {
+            let mut tx = begin(state, &ctx).await?;
+            crate::guards::use_hold(&mut tx, hold, ctx.request_id.as_deref()).await?;
+            tx.commit()
+                .await
+                .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
+        } else {
+            let tx = call.tx().await?;
+            crate::guards::use_hold(tx, hold, ctx.request_id.as_deref()).await?;
+        }
     }
-    let output =
-        crate::policy::within_agent_limits(ctx.caller.limits.clone(), O::run(&mut call, decoded))
-            .await?;
+    let output = match crate::policy::within_agent_limits(
+        ctx.caller.limits.clone(),
+        O::run(&mut call, decoded),
+    )
+    .await
+    {
+        Ok(output) => output,
+        Err(error) => {
+            // A refused or failed command made nothing: its reservation goes,
+            // so a retry runs (as the rolled-back one does when it is held
+            // in the call's transaction).
+            if apart && let Some(reservation) = reservation.as_ref() {
+                drop(call.tx.take());
+                let mut tx = begin(state, &ctx).await?;
+                idempotency::release(&mut tx, reservation).await?;
+                tx.commit()
+                    .await
+                    .map_err(|released| OpError::logged(O::NAME, &released.into()))?;
+            }
+            return Err(error);
+        }
+    };
 
     let envelope = Envelope::Ok {
         value: output,

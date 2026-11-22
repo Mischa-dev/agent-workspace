@@ -177,19 +177,11 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/projects/{project_id}/imports",
-            get(imports::list_imports)
-                .post(imports::create_import)
-                .layer(axum::extract::DefaultBodyLimit::max(
-                    imports::MAX_IMPORT_BODY_BYTES,
-                )),
+            get(imports::list_imports),
         )
         .route(
             "/api/v1/projects/{project_id}/imports/{import_id}",
-            get(imports::get_import).patch(imports::update_import),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/imports/{import_id}/commit",
-            axum::routing::post(imports::commit_import),
+            get(imports::get_import),
         )
         .route(
             "/api/v1/projects/{project_id}/export",
