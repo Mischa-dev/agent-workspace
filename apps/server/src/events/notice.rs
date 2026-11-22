@@ -322,6 +322,25 @@ pub async fn stage(
             None,
             None,
         ),
+        P::ModuleChanged(p) => (
+            match p.change {
+                crate::outbox::ModuleChange::Created => &catalog::MODULE_CREATED,
+                crate::outbox::ModuleChange::Updated => &catalog::MODULE_UPDATED,
+                crate::outbox::ModuleChange::Switched => &catalog::MODULE_SWITCHED,
+                crate::outbox::ModuleChange::Removed => &catalog::MODULE_REMOVED,
+                crate::outbox::ModuleChange::Connected => &catalog::MODULE_CONNECTED,
+            },
+            "module",
+            p.module_id,
+            None,
+            if p.whole_workspace {
+                Audience::Workspace
+            } else {
+                Audience::Space
+            },
+            None,
+            None,
+        ),
         P::GuardsChanged(p) => (
             &catalog::GUARDS_CHANGED,
             "workspace",

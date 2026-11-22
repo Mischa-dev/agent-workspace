@@ -7,7 +7,7 @@ import type { PickResult } from './FieldPicker'
 import { bulkUpdateWorkItems } from './planningApi'
 import { useInvalidateWorkItems } from './planningHooks'
 import type { BulkChanges, BulkProblem, WorkItem, WorkItemCard, WorkItemPatch } from './types'
-import { inOrder, remember, type Undoable } from '../views/saveQueue'
+import { forget, inOrder, remember, type Undoable } from '../views/saveQueue'
 import { undoableTaskChange } from './taskUndo'
 
 /** The PATCH fields for a picker result. */
@@ -119,17 +119,27 @@ export function useApplyPick() {
             }
           : null
       if (targets.length === 1 || result.field === 'type') {
-        for (const target of targets) {
-          await inOrder(`task:${target.id}`, () =>
-            updateWorkItem({
-              projectId: target.projectId,
-              workItemId: target.id,
-              idempotencyKey: crypto.randomUUID(),
-              patch: { expectedVersion: target.version, ...patch },
-            }),
-          )
+        // One task's change can be undone from the moment it's made: its undo
+        // waits for this save (in order, per task), and a failed save forgets
+        // it. Several are kept once all their saves are queued and done.
+        const early = targets.length === 1
+        if (undo && early) remember(undo)
+        try {
+          for (const target of targets) {
+            await inOrder(`task:${target.id}`, () =>
+              updateWorkItem({
+                projectId: target.projectId,
+                workItemId: target.id,
+                idempotencyKey: crypto.randomUUID(),
+                patch: { expectedVersion: target.version, ...patch },
+              }),
+            )
+          }
+        } catch (error) {
+          if (undo && early) forget(undo)
+          throw error
         }
-        if (undo) remember(undo)
+        if (undo && !early) remember(undo)
         return
       }
       const changes = pickToBulk(result)

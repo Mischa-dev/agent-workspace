@@ -1779,12 +1779,17 @@ fn final_parents(
             None => unnamed.push(id),
         }
     }
+    // Whether `start` is on a loop: its ancestors come back to it. One that
+    // only runs into a loop further up (a descendant of a task on it) isn't.
     let loops = |tree: &HashMap<Uuid, Option<Uuid>>, start: Uuid| {
         let mut at = tree.get(&start).copied().flatten();
         let mut steps = 0;
         while let Some(node) = at {
-            if node == start || steps > tree.len() {
+            if node == start {
                 return true;
+            }
+            if steps > tree.len() {
+                return false;
             }
             at = tree.get(&node).copied().flatten();
             steps += 1;
@@ -1984,6 +1989,16 @@ mod tests {
         // A's parent B is obsolete and is cleared first.
         let current = HashMap::from([(a, Some(b)), (b, None)]);
         let (moves, stuck) = final_parents(&current, [(a, None), (b, Some(Some(a)))].into_iter());
+        assert_eq!(stuck, None);
+        assert_eq!(moves, vec![(a, None), (b, Some(a))]);
+
+        // B > A > C today; the draft lists C and A without parents, then B
+        // under A. Only A, which is on the loop, leaves B; C stays under A.
+        let current = HashMap::from([(b, None), (a, Some(b)), (c, Some(a))]);
+        let (moves, stuck) = final_parents(
+            &current,
+            [(c, None), (a, None), (b, Some(Some(a)))].into_iter(),
+        );
         assert_eq!(stuck, None);
         assert_eq!(moves, vec![(a, None), (b, Some(a))]);
 
