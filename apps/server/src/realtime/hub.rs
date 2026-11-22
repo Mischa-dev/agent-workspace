@@ -384,6 +384,11 @@ pub(super) fn checked_delivery(
                 | "notification_keywords.changed"
                 | "theme.changed"
                 | "workspace_themes.changed"
+                | "module.created"
+                | "module.updated"
+                | "module.switched"
+                | "module.removed"
+                | "module.connected"
                 | "sidebar.changed"
                 | "saved_searches.changed"
                 | "follows.changed"
@@ -413,6 +418,11 @@ pub(super) fn checked_delivery(
                 | "notification_keywords.changed"
                 | "theme.changed"
                 | "workspace_themes.changed"
+                | "module.created"
+                | "module.updated"
+                | "module.switched"
+                | "module.removed"
+                | "module.connected"
                 | "sidebar.changed"
                 | "saved_searches.changed"
                 | "follows.changed"
@@ -516,9 +526,17 @@ pub async fn websocket(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    let protocol = wire_query.protocol();
     if !origin_is_allowed(&state.config, &headers) {
         return StatusCode::FORBIDDEN.into_response();
+    }
+    // Protocol 2 only (K5.15): a client that doesn't ask for it is told to
+    // upgrade before anything is opened.
+    if !wire_query.is_current() {
+        return (
+            StatusCode::UPGRADE_REQUIRED,
+            "realtime protocol 2 (?v=2) is required",
+        )
+            .into_response();
     }
     let principal = match load_authenticated_actor(&state, &headers).await {
         Ok(Some(principal)) => principal,
@@ -536,14 +554,16 @@ pub async fn websocket(
         .max_frame_size(MAX_REALTIME_CLIENT_FRAME_BYTES)
         .max_message_size(MAX_REALTIME_CLIENT_FRAME_BYTES)
         .on_upgrade(move |socket| {
-            serve_socket(
-                socket,
-                state,
-                headers,
-                principal,
-                receiver,
-                session_revocations,
-                protocol,
+            crate::tenancy::system(
+                "realtime.connections",
+                serve_socket(
+                    socket,
+                    state,
+                    headers,
+                    principal,
+                    receiver,
+                    session_revocations,
+                ),
             )
         })
         .into_response()
@@ -556,7 +576,6 @@ async fn serve_socket(
     original_principal: AuthenticatedActor,
     mut receiver: broadcast::Receiver<RealtimeDelivery>,
     mut session_revocations: broadcast::Receiver<Uuid>,
-    protocol: u8,
 ) {
     let mut revalidation = interval(SESSION_REVALIDATION_INTERVAL);
     revalidation.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -579,11 +598,11 @@ async fn serve_socket(
     let mut backstop = interval(SUBSCRIPTION_BACKSTOP_INTERVAL);
     backstop.set_missed_tick_behavior(MissedTickBehavior::Delay);
     backstop.tick().await;
-    // Protocol 2: what it missed since `hello`'s position, then `ready`.
-    // Live events were already arriving in `receiver`; those the replay
-    // covered are dropped by position (catch up, then live).
-    let mut last_position = 0_i64;
-    if protocol == 2 {
+    // What it missed since `hello`'s position, then `ready`. Live events
+    // were already arriving in `receiver`; those the replay covered are
+    // dropped by position (catch up, then live).
+    let mut last_position;
+    {
         let resume_from = wait_for_hello(&mut socket).await;
         let mut sent = 0_usize;
         let mut position = resume_from.unwrap_or(0);
@@ -654,7 +673,7 @@ async fn serve_socket(
                             break;
                         }
                     }
-                    Some(Ok(Message::Text(text))) if protocol == 2 => {
+                    Some(Ok(Message::Text(text))) => {
                         if let Some(frame) = wire::ClientFrame::parse(&text)
                             && let Err(error) = client_frame(
                                 &state,
@@ -682,44 +701,37 @@ async fn serve_socket(
                             skipped_events = skipped,
                             "realtime client lagged; forcing durable-state resynchronization"
                         );
-                        if protocol == 2 {
-                            let frame = wire::resync("too_far_behind", last_position);
-                            let _ = socket.send(Message::Text(frame.into())).await;
-                        }
+                        let frame = wire::resync("too_far_behind", last_position);
+                        let _ = socket.send(Message::Text(frame.into())).await;
                         close_socket_to_restart(&mut socket, REALTIME_RESYNC_CLOSE_REASON).await;
                         break;
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 };
                 if let RealtimeDelivery::Restart(reason) = event {
-                    if protocol == 2 {
-                        let frame = if reason == SERVER_DRAINING_CLOSE_REASON {
-                            wire::reconnect(RECONNECT_AFTER_MS, reason)
-                        } else {
-                            wire::resync("too_far_behind", last_position)
-                        };
-                        let _ = socket.send(Message::Text(frame.into())).await;
-                    }
+                    let frame = if reason == SERVER_DRAINING_CLOSE_REASON {
+                        wire::reconnect(RECONNECT_AFTER_MS, reason)
+                    } else {
+                        wire::resync("too_far_behind", last_position)
+                    };
+                    let _ = socket.send(Message::Text(frame.into())).await;
                     close_socket_to_restart(&mut socket, reason).await;
                     break;
                 }
                 if let RealtimeDelivery::Live(frame) = &event {
-                    if protocol == 2 {
-                        let mut closed = false;
-                        for text in live_frames(frame, &subscription, &live, connection_id, account) {
-                            if socket.send(Message::Text(text.into())).await.is_err() {
-                                closed = true;
-                                break;
-                            }
-                        }
-                        if closed {
+                    let mut closed = false;
+                    for text in live_frames(frame, &subscription, &live, connection_id, account) {
+                        if socket.send(Message::Text(text.into())).await.is_err() {
+                            closed = true;
                             break;
                         }
+                    }
+                    if closed {
+                        break;
                     }
                     continue;
                 }
                 if let RealtimeDelivery::Durable { envelope, .. } = &event
-                    && protocol == 2
                     && envelope.event_cursor <= last_position
                 {
                     // The replay sent it already.
@@ -727,7 +739,7 @@ async fn serve_socket(
                 }
                 let access_may_change = refreshes(&subscription, &event);
                 match refresh_if_changed(&state, &original_principal, &mut subscription, &event).await {
-                    Ok(Some(access)) if protocol == 2 => {
+                    Ok(Some(access)) => {
                         if socket.send(Message::Text(access.into())).await.is_err() {
                             break;
                         }
@@ -767,7 +779,7 @@ async fn serve_socket(
                 if !heard {
                     continue;
                 }
-                let json = match frame(&event, protocol) {
+                let json = match frame(&event) {
                     Ok(json) => json,
                     Err(error) => {
                         tracing::error!(
@@ -814,7 +826,7 @@ async fn serve_socket(
                     Ok(fresh) => {
                         let access = wire::access(&subscription, &fresh);
                         subscription = fresh;
-                        if let (2, Some(access)) = (protocol, access)
+                        if let Some(access) = access
                             && socket.send(Message::Text(access.into())).await.is_err()
                         {
                             break;
@@ -1113,15 +1125,13 @@ pub(super) fn access_changed(event: &crate::events::LoggedEvent) -> Option<Uuid>
 /// The frame a contract connection gets for a durable delivery: protocol
 /// 2's `event`.
 pub(super) fn contract_frame(event: &RealtimeDelivery) -> Result<String, RealtimePublishError> {
-    frame(event, 2)
+    frame(event)
 }
 
-/// The frame a delivery is sent as in the connection's protocol.
-fn frame(event: &RealtimeDelivery, protocol: u8) -> Result<String, RealtimePublishError> {
+/// The frame a delivery is sent as: protocol 2's `event` around the
+/// envelope, or a stream delta.
+fn frame(event: &RealtimeDelivery) -> Result<String, RealtimePublishError> {
     let json = event.to_wire_json()?;
-    if protocol != 2 {
-        return Ok(json);
-    }
     Ok(match event {
         RealtimeDelivery::Durable { envelope, .. } => wire::event(envelope.event_cursor, &json),
         RealtimeDelivery::Ephemeral(delta) => {
@@ -1225,7 +1235,7 @@ pub(super) async fn replay(
             frames.push(access);
         }
         if hears(state, principal, subscription, &delivery).await?
-            && let Ok(frame) = frame(&delivery, 2)
+            && let Ok(frame) = frame(&delivery)
         {
             frames.push(frame);
             events += 1;
@@ -1497,6 +1507,75 @@ mod tests {
         assert_eq!(wire["conversationId"], conversation_id.to_string());
         assert_eq!(wire["type"], "conversation.message.created");
         assert!(wire.get("kind").is_none());
+    }
+
+    /// A module change as the tail reads it from the log, for its space or
+    /// (workspace-wide) the workspace's own space: each reaches a socket.
+    #[tokio::test]
+    async fn module_changes_reach_live_sockets() {
+        use crate::outbox::{ModuleChange, ModuleChangedPayload};
+        let hub = RealtimeHub::new(16);
+        let mut receiver = hub.subscribe();
+        let (workspace, space, module) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+        for (position, change) in [
+            ModuleChange::Created,
+            ModuleChange::Updated,
+            ModuleChange::Switched,
+            ModuleChange::Removed,
+            ModuleChange::Connected,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let whole_workspace = change == ModuleChange::Connected;
+            let payload = serde_json::to_value(ModuleChangedPayload {
+                workspace_id: workspace,
+                project_id: space,
+                module_id: module,
+                change,
+                whole_workspace,
+            })
+            .expect("payload JSON");
+            let event = crate::events::LoggedEvent {
+                position: 100 + i64::try_from(position).expect("position"),
+                id: Uuid::now_v7(),
+                workspace_id: workspace,
+                space_id: Some(space),
+                thing_id: Some(module),
+                thing_kind: Some("module".to_owned()),
+                access_thing_id: None,
+                thing_version: None,
+                event_type: change.event_type().to_owned(),
+                class: "fact".to_owned(),
+                changes: Vec::new(),
+                audience: if whole_workspace {
+                    "workspace"
+                } else {
+                    "space"
+                }
+                .to_owned(),
+                conversation_id: None,
+                conversation_restricted: None,
+                audience_account_id: None,
+                actor_account_id: None,
+                via_credential_id: None,
+                requested_by_account_id: None,
+                run_id: None,
+                request_id: None,
+                legacy_type: Some(change.event_type().to_owned()),
+                payload,
+                created_at: chrono::Utc::now(),
+            };
+            hub.deliver_logged(&event);
+            let delivery = receiver
+                .try_recv()
+                .expect("a live frame for the module change");
+            let wire: serde_json::Value =
+                serde_json::from_str(&delivery.to_wire_json().expect("wire JSON")).expect("decode");
+            assert_eq!(wire["type"], change.event_type());
+            assert_eq!(wire["payload"]["moduleId"], module.to_string());
+            assert_eq!(wire["payload"]["workspaceId"], workspace.to_string());
+        }
     }
 
     #[test]

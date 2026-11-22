@@ -5,6 +5,7 @@ import { PanelsTopLeft } from 'lucide-react'
 import { queryKeys } from '../../api/queryKeys'
 import { toastError } from '../../app/mutations'
 import { createPreset, layoutKeys, refreshLayouts, saveProjectLayout, saveProjectRules, useProjectLayout, type LayoutRule, type ProjectLayoutView, type RuleRole } from '../../experience/api'
+import { useModuleParts } from '../../experience/builtParts'
 import { LayoutEditor, VisualOnlyNote } from '../../experience/LayoutEditor'
 import { useProjectExperience } from '../../experience/layout'
 import { MyViewSection, OwnRuleNote, YourLayout } from '../../experience/LayoutSections'
@@ -24,6 +25,11 @@ function ProjectLayout({ project }: { project: Project }) {
   const experience = useProjectExperience(project.id)
   const queryClient = useQueryClient()
   const layout = useProjectLayout(project.id)
+  // The editor offers this space's built modules; your view is workspace-wide,
+  // with this space's own modules (which the workspace-wide list leaves out) too.
+  const spaceModules = useModuleParts(project.organizationId, project.id)
+  const workspaceModules = useModuleParts(project.organizationId)
+  const yourModules = [...workspaceModules, ...spaceModules.filter((part) => !workspaceModules.some((other) => other.id === part.id))]
   const save = useMutation({
     mutationFn: ({ next, version }: { next: Layout | null; version: number }) => saveProjectLayout(project.id, next, version),
     onSuccess: (response) => {
@@ -80,6 +86,7 @@ function ProjectLayout({ project }: { project: Project }) {
             }}
             key={view.version}
             moduleOn={experience.moduleOn}
+            modules={spaceModules}
             onSave={(next) => save.mutateAsync({ next, version: view.version })}
             onSavePreset={savePreset}
             previewName={project.name}
@@ -91,7 +98,7 @@ function ProjectLayout({ project }: { project: Project }) {
       ) : (
         <YourLayout effective={view.effective} previewName={project.name} />
       )}
-      <MyViewSection key={`${view.myView.hidden.join()}:${view.myView.showHidden}`} layoutHidden={view.effective.layoutHidden} myView={view.myView} organizationId={view.organizationId} />
+      <MyViewSection key={`${view.myView.hidden.join()}:${view.myView.showHidden}`} layoutHidden={view.effective.layoutHidden} modules={yourModules} myView={view.myView} organizationId={view.organizationId} />
     </>
   )
 }

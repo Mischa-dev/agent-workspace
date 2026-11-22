@@ -14,14 +14,13 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
-    conversations::{RunCapabilities, RunRow, RunView},
     domain::{RunState, allocate_conversation_sequence},
     error::{ApiJson, ApiPath, AppError},
+    harness::run_config::RunConfig,
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     message_content::MessageContent,
     outbox,
     policy::{Action, ActorKind, RoleGrant},
-    provider::run_config::RunConfig,
 };
 
 #[derive(Debug, FromRow)]
@@ -485,7 +484,7 @@ pub(crate) async fn retry_run_in(
         Some(predecessor_worker_id),
     )
     .await?;
-    let config = crate::provider::resolve_stored_run_config(
+    let config = crate::model_catalog::resolve_stored_run_config(
         state,
         setup.organization_id,
         &setup.adapter_kind,
@@ -538,137 +537,6 @@ pub(crate) async fn retry_run_in(
     transaction.commit().await?;
     crate::scheduler::kick(state.clone());
     Ok((StatusCode::ACCEPTED, response))
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct FailureAcknowledgementRequest {
-    event_id: Uuid,
-}
-
-pub(crate) async fn acknowledge_run_failure(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(run_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<FailureAcknowledgementRequest>,
-) -> Result<Json<EmptyCommand>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let conversation_id =
-        sqlx::query_scalar::<_, Uuid>("SELECT conversation_id FROM agent_runs WHERE id = $1")
-            .bind(run_id)
-            .fetch_optional(crate::db::scoped(&state.pool))
-            .await?
-            .ok_or(AppError::NotFound("agent_run"))?;
-    let conversation =
-        authorized_conversation(&state, &principal, conversation_id, Action::ReadStateUpdate)
-            .await?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let scope = idempotency::resource_bound_scope("agent_run", run_id, "acknowledge_failure")?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    guard_conversation_mutation(
-        &mut transaction,
-        &principal,
-        conversation_id,
-        conversation.project_id,
-        Action::ReadStateUpdate,
-    )
-    .await?;
-    let reservation = match idempotency::reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let _: EmptyCommand = replay.decode()?;
-            transaction.commit().await?;
-            return Ok(Json(EmptyCommand {}));
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let valid_failure = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1
-              FROM agent_runs run
-              JOIN run_activities event ON event.run_id = run.id
-              JOIN conversation_entries entry
-                ON entry.run_activity_id = event.id
-               AND entry.conversation_id = run.conversation_id
-             WHERE run.id = $1
-               AND run.project_id = $2
-               AND run.state = 'failed'
-               AND event.id = $3
-               AND event.payload->>'step' = 'run_failed'
-        )
-        "#,
-    )
-    .bind(run_id)
-    .bind(conversation.project_id)
-    .bind(request.event_id)
-    .fetch_one(&mut *transaction)
-    .await?;
-    if !valid_failure {
-        return Err(AppError::Conflict(
-            "agent_run",
-            "failure event is not acknowledgeable",
-        ));
-    }
-    let inserted = sqlx::query(
-        r#"
-        INSERT INTO agent_run_acknowledgements (
-            id, project_id, agent_run_id, actor_id, acknowledged_event_id
-        )
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (agent_run_id, actor_id) DO NOTHING
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(conversation.project_id)
-    .bind(run_id)
-    .bind(principal.actor_id)
-    .bind(request.event_id)
-    .execute(&mut *transaction)
-    .await?;
-    let created_acknowledgement = inserted.rows_affected() == 1;
-    if !created_acknowledgement {
-        let acknowledged_event_id = sqlx::query_scalar::<_, Uuid>(
-            "SELECT acknowledged_event_id FROM agent_run_acknowledgements WHERE agent_run_id = $1 AND actor_id = $2",
-        )
-        .bind(run_id)
-        .bind(principal.actor_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if acknowledged_event_id != request.event_id {
-            return Err(AppError::Conflict(
-                "agent_run_acknowledgement",
-                "a different failure event is already acknowledged",
-            ));
-        }
-    }
-    if created_acknowledgement {
-        outbox::enqueue_agent_run_updated(
-            &mut transaction,
-            conversation.project_id,
-            conversation_id,
-            run_id,
-        )
-        .await?;
-    }
-    idempotency::complete(
-        &mut transaction,
-        &reservation,
-        StatusCode::OK,
-        &EmptyCommand {},
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(EmptyCommand {}))
 }
 
 pub(crate) async fn select_run_setup(
@@ -732,7 +600,7 @@ pub(crate) async fn select_run_setup_for(
     .fetch_all(&mut **transaction)
     .await?;
     let linked_work_item_count = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_item_conversation_links WHERE project_id = $1 AND conversation_id = $2",
+        "SELECT count(*) FROM task_threads WHERE project_id = $1 AND conversation_id = $2",
     )
     .bind(project_id)
     .bind(conversation_id)
@@ -742,7 +610,7 @@ pub(crate) async fn select_run_setup_for(
         sqlx::query_scalar::<_, Uuid>(
             r#"
             SELECT repository.id
-            FROM work_item_conversation_links conversation_link
+            FROM task_threads conversation_link
             JOIN work_item_repository_links repository_link
               ON repository_link.project_id = conversation_link.project_id
              AND repository_link.work_item_id = conversation_link.work_item_id
@@ -855,25 +723,6 @@ struct CommandReference {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EmptyCommand {}
-
-pub(crate) async fn interrupt_agent_run(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(run_id): ApiPath<Uuid>,
-) -> Result<Json<RunView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let project_id = interrupt_run_in(
-        &state,
-        &principal,
-        run_id,
-        IdempotencyKey::from_headers(&headers),
-    )
-    .await?;
-    fetch_run(&state, run_id, project_id, principal.actor_id)
-        .await
-        .map(Json)
-}
 
 /// Stop a run that hasn't finished, as `principal`: the browser's Stop and
 /// MCP's run_stop. Returns the run's project. Stopping one already stopped
@@ -1019,9 +868,10 @@ pub(crate) async fn interrupt_run_in(
     )
     .await?;
     transaction.commit().await?;
-    if started {
-        // The built-in host hears the cancel now, not at its next tick.
-        // Otherwise its next tick does.
+    if started && state.config.builtin_host && state.config.builtin_host_remote.is_none() {
+        // The built-in host hears the cancel now, not at its next tick,
+        // when it runs in this process. Otherwise (its own program, or
+        // another instance) its next look does.
         if let Err(error) = crate::hosts::builtin::driver::hear_now(
             state,
             run_id,
@@ -1113,93 +963,6 @@ pub(crate) async fn retain_run_workspace(
     .execute(&mut **transaction)
     .await?;
     Ok(())
-}
-
-async fn fetch_run(
-    state: &AppState,
-    run_id: Uuid,
-    project_id: Uuid,
-    viewer: Uuid,
-) -> Result<RunView, AppError> {
-    let mut run = sqlx::query_as::<_, RunRow>(
-        r#"
-        SELECT
-            ar.id,
-            ar.state,
-            ar.repository_id,
-            ar.repository_workspace_id,
-            ar.provider_session_id,
-            ar.provider_turn_id,
-            workspace.branch_name AS branch,
-            ar.config,
-            workspace.base_commit,
-            workspace.published_commit,
-            workspace.published_at::text AS published_at,
-            workspace.publish_failure_category,
-            pull_request_request.state AS pull_request_request_state,
-            pull_request_request.failure_category AS pull_request_failure_category,
-            pull_request.pull_request_number,
-            pull_request.id AS pull_request_id,
-            pull_request.html_url AS pull_request_url,
-            pull_request.title AS pull_request_title,
-            pull_request.state AS pull_request_state,
-            pull_request.draft AS pull_request_draft,
-            pull_request.checks_state AS pull_request_checks_state,
-            pull_request.review_state AS pull_request_review_state,
-            pull_request.mergeability_state AS pull_request_mergeability_state,
-            pull_request.sync_state AS pull_request_sync_state,
-            pull_request.sync_failure_category AS pull_request_sync_failure_category,
-            pull_request.automation_state AS pull_request_automation_state,
-            pull_request.automation_reason AS pull_request_automation_reason,
-            CASE WHEN ar.state = 'queued' THEN (
-                SELECT count(*) FROM agent_runs queued
-                WHERE queued.state = 'queued'
-                  AND (queued.created_at, queued.id) <= (ar.created_at, ar.id)
-            ) END AS queue_position,
-            ar.failure_reason,
-            ar.created_at::text AS created_at,
-            ar.updated_at::text AS updated_at
-        FROM agent_runs ar
-        JOIN conversations c
-          ON c.id = ar.conversation_id
-         AND c.project_id = $2
-        LEFT JOIN repository_workspaces workspace
-          ON workspace.id = ar.repository_workspace_id
-        LEFT JOIN github_pull_request_requests pull_request_request
-          ON pull_request_request.agent_run_id = ar.id
-        LEFT JOIN github_pull_requests pull_request
-          ON pull_request.id = pull_request_request.github_pull_request_id
-        WHERE ar.id = $1
-        "#,
-    )
-    .bind(run_id)
-    .bind(project_id)
-    .fetch_optional(crate::db::scoped(&state.pool))
-    .await?
-    .ok_or(AppError::NotFound("agent_run"))?;
-    // The linked pull request only for someone who sees code here.
-    if crate::search::projects_allowing(
-        &state.pool,
-        viewer,
-        &[project_id],
-        crate::policy::Permission::CodeView,
-    )
-    .await?
-    .is_empty()
-    {
-        crate::conversations::hide_pull_request(&mut run);
-    }
-    Ok(RunView {
-        run,
-        failure_acknowledged: false,
-        capabilities: RunCapabilities {
-            interrupt: false,
-            retry: false,
-            publish: false,
-            create_pull_request: false,
-            refresh_pull_request: false,
-        },
-    })
 }
 
 async fn guard_conversation_mutation(

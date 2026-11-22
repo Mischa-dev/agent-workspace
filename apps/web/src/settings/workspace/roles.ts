@@ -1,88 +1,11 @@
-import { requestJson } from '../../api/client'
+import { PERMISSION_KEYS } from '../../api/generated/permissions'
+import { callOp } from '../../api/ops'
 
 /**
- * Every permission a role can hold (AWD-74). The server's catalogue
- * (`policy::PERMISSIONS`) is the source of truth and comes with the roles;
- * this list types it. A new permission adds its key here too.
+ * Every permission a role can hold (AWD-74), generated from the server's
+ * catalogue and the modules that own each one (M1.3o).
  */
-export const PERMISSION_KEYS = [
-  'projects.view',
-  'projects.create',
-  'projects.manage',
-  'tasks.view',
-  'tasks.create',
-  'tasks.edit',
-  'tasks.delete',
-  'tasks.workflow',
-  'channels.post',
-  'channels.create',
-  'channels.moderate',
-  'pages.edit',
-  'whiteboards.edit',
-  'collections.edit',
-  'collections.build',
-  'sheets.edit',
-  'runs.launch',
-  'runs.approve',
-  'runs.interrupt',
-  'runs.accounts',
-  'runs.report',
-  'requests.raise',
-  'requests.answer',
-  'code.view',
-  'code.publish',
-  'code.manage',
-  'agents.manage',
-  'agents.manage_any',
-  'hosts.manage',
-  'members.view',
-  'directory.view',
-  'members.invite',
-  'members.manage',
-  'roles.manage',
-  'settings.manage',
-  // K1.9: levels and capabilities of the catalogue's new shape.
-  'spaces.browse',
-  'tasks.comment',
-  'tasks.suggest',
-  'tasks.edit_own',
-  'views.share',
-  'dashboards.view',
-  'dashboards.edit',
-  'conversations.see',
-  'conversations.members',
-  'direct.start',
-  'replies.steer',
-  'pages.see',
-  'pages.comment',
-  'pages.suggest',
-  'pages.edit_own',
-  'whiteboards.comment',
-  'whiteboards.suggest',
-  'whiteboards.edit_own',
-  'collections.comment',
-  'collections.suggest',
-  'data.connect',
-  'data.share',
-  'sheets.comment',
-  'sheets.suggest',
-  'sheets.edit_own',
-  'runs.environments',
-  'requests.answer_sensitive',
-  'agents.create',
-  'webhooks.manage',
-  'automations.manage',
-  'modules.build',
-  'modules.manage',
-  'workspace.delete',
-  'settings.audit',
-  // K1.27: groups, and chat's keys.
-  'members.groups',
-  'channels.browse',
-  'channels.create_private',
-  'channels.mention_everyone',
-  'workspace.export',
-] as const
+export { PERMISSION_KEYS }
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number]
 export type BaseRole = 'owner' | 'admin' | 'member' | 'viewer'
@@ -179,31 +102,48 @@ export type PermissionsView = {
   personalAgentLimit: PermissionKey[] | null
 }
 
-const base = (organizationId: string) => `/api/v1/organizations/${encodeURIComponent(organizationId)}`
-
 export const roleKeys = {
   roles: (organizationId: string) => ['organization', organizationId, 'roles'] as const,
   permissions: (organizationId: string, actorId: string | null) =>
     ['organization', organizationId, 'permissions', actorId ?? 'me'] as const,
 }
 
-export const listRoles = (organizationId: string) => requestJson<RolesResponse>(`${base(organizationId)}/roles`)
+// The operations (K2.17) answer with these shapes; the generated types say
+// `string` where these name the keys.
+const inWorkspace = (organizationId: string) => ({ workspaceId: organizationId })
 
-export const createRole = (organizationId: string, input: RoleInput) =>
-  requestJson<WorkspaceRoleView>(`${base(organizationId)}/roles`, { method: 'POST', json: input })
+export const listRoles = async (organizationId: string) =>
+  (await callOp('role_list', {}, inWorkspace(organizationId))) as unknown as RolesResponse
 
-export const changeRole = (
+export const createRole = async (organizationId: string, input: RoleInput) =>
+  (await callOp(
+    'role_create',
+    { ...input, agentLimit: input.agentLimit ?? undefined },
+    inWorkspace(organizationId),
+  )) as unknown as WorkspaceRoleView
+
+export const changeRole = async (
   organizationId: string,
   role: WorkspaceRoleView,
   change: Partial<Omit<RoleInput, 'baseRole'>>,
-) =>
-  requestJson<WorkspaceRoleView>(`${base(organizationId)}/roles/${encodeURIComponent(role.id)}`, {
-    method: 'PATCH',
-    json: { expectedVersion: role.version, ...change },
-  })
+) => {
+  const { agentLimit, ...rest } = change
+  return (await callOp(
+    'role_update',
+    {
+      ...rest,
+      role: role.id,
+      expectedVersion: role.version,
+      // null takes the limit away; left out, it stays.
+      ...(agentLimit === null ? { clearAgentLimit: true } : agentLimit ? { agentLimit } : {}),
+    },
+    inWorkspace(organizationId),
+  )) as unknown as WorkspaceRoleView
+}
 
-export const removeRole = (organizationId: string, role: WorkspaceRoleView) =>
-  requestJson<void>(`${base(organizationId)}/roles/${encodeURIComponent(role.id)}`, { method: 'DELETE' })
+export const removeRole = async (organizationId: string, role: WorkspaceRoleView) => {
+  await callOp('role_delete', { role: role.id }, inWorkspace(organizationId))
+}
 
 export type Assignment = {
   actorId: string
@@ -216,29 +156,32 @@ export type Assignment = {
   skippedProjects: { projectId: string; reason: string }[]
 }
 
-export const assignRole = (
+export const assignRole = async (
   organizationId: string,
   actorId: string,
   input: { roleId: string; applyToProjects: boolean; expectedVersion: number },
 ) =>
-  requestJson<Assignment>(`${base(organizationId)}/members/${encodeURIComponent(actorId)}/role`, {
-    method: 'PUT',
-    json: input,
-  })
+  (await callOp(
+    'role_assign',
+    { account: actorId, role: input.roleId, applyToProjects: input.applyToProjects, expectedVersion: input.expectedVersion },
+    inWorkspace(organizationId),
+  )) as unknown as Assignment
 
-export const setAgentLimit = (organizationId: string, actorId: string, permissions: PermissionKey[] | null) =>
-  requestJson<{ permissions: PermissionKey[] | null }>(
-    `${base(organizationId)}/members/${encodeURIComponent(actorId)}/agent-limit`,
-    { method: 'PUT', json: { permissions } },
+export const setAgentLimit = async (organizationId: string, actorId: string, permissions: PermissionKey[] | null) => {
+  const set = await callOp(
+    'app_limit_set',
+    permissions === null ? { account: actorId, lift: true } : { account: actorId, permissions },
+    inWorkspace(organizationId),
   )
-
-export function getPermissions(organizationId: string, options: { actorId?: string; projectId?: string } = {}) {
-  const query = new URLSearchParams()
-  if (options.actorId) query.set('actorId', options.actorId)
-  if (options.projectId) query.set('projectId', options.projectId)
-  const suffix = query.toString() ? `?${query.toString()}` : ''
-  return requestJson<PermissionsView>(`${base(organizationId)}/permissions${suffix}`)
+  return { permissions: (set.permissions ?? null) as PermissionKey[] | null }
 }
+
+export const getPermissions = async (organizationId: string, options: { actorId?: string; projectId?: string } = {}) =>
+  (await callOp(
+    'permissions_get',
+    { account: options.actorId, spaceId: options.projectId },
+    inWorkspace(organizationId),
+  )) as unknown as PermissionsView
 
 /** The roles someone can be given in the workspace: no owner (that's Transfer ownership) and no plain viewer. */
 export function workspaceAssignable(roles: WorkspaceRoleView[]) {

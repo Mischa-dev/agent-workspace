@@ -38,13 +38,14 @@ async fn second_workspace(setup: &Setup, key: &str) -> (Uuid, String) {
         &setup.app,
         setup.browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", elsewhere),
             Some(&format!("create-elsewhere-{key}")),
-            json!({"organizationId": elsewhere, "key": key, "name": "Theirs"}),
+            json!({"key": key, "name": "Theirs"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{project}");
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project = project["value"].clone();
     (
         elsewhere,
         project["id"].as_str().expect("project").to_owned(),
@@ -117,7 +118,7 @@ async fn a_key_two_workspaces_share_is_refused_rather_than_guessed() {
         app,
         &codex,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": "WORK-1"}),
     )
     .await;
@@ -126,11 +127,11 @@ async fn a_key_two_workspaces_share_is_refused_rather_than_guessed() {
         app,
         &codex,
         &session,
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": "WORK-1", "text": "Which one?", "clientRequestId": "sweep-ambiguous"}),
     )
     .await;
-    assert_ne!(commented["outcome"], "applied", "{commented}");
+    assert_ne!(commented["outcome"], "ok", "{commented}");
     let comments = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM messages message JOIN conversations place ON place.id = message.conversation_id WHERE place.kind = 'comments'",
     )
@@ -150,7 +151,7 @@ async fn a_key_two_workspaces_share_is_refused_rather_than_guessed() {
         app,
         &codex,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": task_id.to_string()}),
     )
     .await;
@@ -170,13 +171,14 @@ async fn historical_aliases_cannot_hide_a_conflicting_task_key() {
         &setup.app,
         setup.browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", elsewhere),
             Some("foreign-source"),
-            json!({"organizationId": elsewhere, "key": "FROMSRC", "name": "Foreign source"}),
+            json!({"key": "FROMSRC", "name": "Foreign source"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{foreign_source}");
+    assert_eq!(status, StatusCode::OK, "{foreign_source}");
+    let foreign_source = foreign_source["value"].clone();
     let foreign_source = foreign_source["id"].as_str().expect("source");
     let token = connect_app(&setup.app, &setup.browser, "Codex", "full").await;
     let session = initialize(&setup.app, &token).await.expect("MCP");
@@ -218,7 +220,7 @@ async fn historical_aliases_cannot_hide_a_conflicting_task_key() {
         &setup.app,
         &token,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": "WORK-1"}),
     )
     .await;
@@ -230,11 +232,11 @@ async fn historical_aliases_cannot_hide_a_conflicting_task_key() {
         &setup.app,
         &token,
         &session,
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": "WORK-1", "text": "Wrong task?", "clientRequestId": "alias-ambiguity"}),
     )
     .await;
-    assert_ne!(commented["outcome"], "applied", "{commented}");
+    assert_ne!(commented["outcome"], "ok", "{commented}");
     let count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM messages message JOIN conversations place ON place.id = message.conversation_id WHERE place.kind = 'comments'",
     )
@@ -268,7 +270,7 @@ async fn a_workspace_you_left_stops_listing_its_archived_projects() {
             app,
             &codex,
             &session,
-            "projects_list",
+            "project_list",
             json!({"includeArchived": true}),
         )
         .await;

@@ -30,7 +30,7 @@ async fn a_pages_history_names_the_agent_session_behind_each_version() {
         app,
         &mara_token,
         &session,
-        "page_write",
+        "page_create",
         json!({"projectId": "WORK", "title": "Mara's notes", "body": "One"}),
     )
     .await;
@@ -73,7 +73,7 @@ async fn a_pages_history_names_the_agent_session_behind_each_version() {
         app,
         &mara_token,
         &session,
-        "page_edit",
+        "page_update_blocks",
         json!({"pageId": page, "edits": [{"op": "append", "markdown": "Two"}]}),
     )
     .await;

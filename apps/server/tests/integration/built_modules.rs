@@ -124,7 +124,7 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     let written = tool(
         &world,
         "builder",
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Playtests",
                "records": [{"title": "Zeppelin level", "fields": {"Notes": "resets"}}],
                "clientRequestId": "zeppelin"}),
@@ -139,14 +139,17 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
         &world.app,
         world.owner.browser.request(
             "POST",
-            &format!("/api/v1/bug-report-links/{form_id}/replace"),
+            "/api/v2/ops/bug_report_link_update",
             Some("form-link"),
-            json!({}),
+            json!({"projectId": world.project("WORK"), "linkId": form_id, "replace": true}),
         ),
     )
     .await;
     assert!(status.is_success(), "{link}");
-    let form_url = link["formUrl"].as_str().expect("form url").to_owned();
+    let form_url = link["value"]["formUrl"]
+        .as_str()
+        .expect("form url")
+        .to_owned();
     let token = form_url.rsplit('/').next().expect("token").to_owned();
     let form = |token: String| {
         let world = &world;
@@ -169,7 +172,7 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     let page = tool(
         &world,
         "builder",
-        "page_write",
+        "page_create",
         json!({"projectId": "WORK", "title": "Playtest notes", "body": "Zeppelin tips."}),
     )
     .await;
@@ -197,12 +200,12 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     assert_eq!(off["outcome"], "ok", "{off}");
     assert_eq!(off["value"]["on"], false);
     let query = json!({"projectId": "WORK", "collection": "Playtests"});
-    let hidden = tool(&world, "builder", "record_query", query.clone()).await;
+    let hidden = tool(&world, "builder", "record_list", query.clone()).await;
     assert_ne!(hidden["outcome"], "ok", "{hidden}");
     let searched = tool(
         &world,
         "builder",
-        "search",
+        "workspace_search",
         json!({"query": "zeppelin", "kinds": ["records"]}),
     )
     .await;
@@ -227,7 +230,7 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     let found = tool(
         &world,
         "builder",
-        "search",
+        "workspace_search",
         json!({"query": "zeppelin tips", "kinds": ["pages"]}),
     )
     .await;
@@ -235,7 +238,7 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     let written = tool(
         &world,
         "builder",
-        "page_write",
+        "page_update",
         json!({"pageId": page_id, "body": "Changed while off."}),
     )
     .await;
@@ -268,7 +271,7 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     )
     .await;
     assert_eq!(on["outcome"], "ok", "{on}");
-    let back = tool(&world, "builder", "record_query", query.clone()).await;
+    let back = tool(&world, "builder", "record_list", query.clone()).await;
     assert_eq!(back["value"]["total"], 1, "{back}");
     assert_eq!(form(token).await.0, StatusCode::OK);
     let read = tool(&world, "builder", "page_get", json!({"pageId": page_id})).await;
@@ -319,7 +322,7 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     .await;
     assert_eq!(archived["outcome"], "ok", "{archived}");
     assert_eq!(archived["value"]["archived"], true);
-    let plain = tool(&world, "builder", "record_query", query).await;
+    let plain = tool(&world, "builder", "record_list", query).await;
     assert_eq!(plain["value"]["total"], 1, "{plain}");
     let owned = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM module_parts WHERE module_id = $1::uuid AND part_kind = 'collection'",
@@ -329,6 +332,28 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     .await
     .expect("parts");
     assert_eq!(owned, 0);
+
+    // Each change told the module's other readers (other tabs' sidebars and
+    // settings refetch `module_list`), in the write's own transaction, as a
+    // typed notice the live socket can carry (its legacy type set).
+    let told: Vec<String> = sqlx::query_scalar(
+        "SELECT type FROM (SELECT thing_id, type, legacy_type FROM event_staging \
+             UNION ALL SELECT thing_id, type, legacy_type FROM events) event \
+         WHERE event.thing_id = $1::text::uuid AND event.type LIKE 'module.%' \
+           AND event.legacy_type = event.type",
+    )
+    .bind(&module_id)
+    .fetch_all(&pool)
+    .await
+    .expect("module events");
+    for kind in [
+        "module.created",
+        "module.switched",
+        "module.updated",
+        "module.removed",
+    ] {
+        assert!(told.iter().any(|told| told == kind), "{kind} in {told:?}");
+    }
     world.finish().await;
 }
 
@@ -531,7 +556,13 @@ async fn a_part_from_another_workspace_never_joins() {
     );
     assert!(!opened.to_string().contains("Hidden"), "{opened}");
     assert_eq!(opened["value"]["nav"], json!([]), "{opened}");
-    let listed = tool(&world, "builder", "module_list", json!({})).await;
+    let listed = tool(
+        &world,
+        "builder",
+        "module_list",
+        json!({"workspace": world.organization}),
+    )
+    .await;
     let wide_listed = listed["value"]["built"]
         .as_array()
         .and_then(|built| built.iter().find(|row| row["id"] == wide["value"]["id"]))

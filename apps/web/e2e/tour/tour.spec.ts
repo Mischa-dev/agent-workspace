@@ -5,6 +5,7 @@ import { expect, test, type Page } from '@playwright/test'
 
 import { outputRoot, storageStatePath } from '../environment'
 import { tourStatePath, type TourState } from './state'
+import { at } from '../addresses'
 
 // The UI tour (AWD-84): the key screens of the app at 1440 px (the main
 // score) and 390 px, in light and dark, against the busy workspace that
@@ -164,7 +165,7 @@ for (const scheme of schemes) {
         test(`${screen.name} ${size}`, async ({ page }) => {
           const s = state()
           await page.setViewportSize({ width, height })
-          await page.goto(screen.path(s))
+          await page.goto(at(screen.path(s)))
           await screen.ready(page, s)
           await screen.then?.(page, s)
           // Let lazy images, avatars and fonts settle.

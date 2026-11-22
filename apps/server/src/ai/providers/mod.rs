@@ -16,7 +16,7 @@ pub use agent_workspace_host_protocol::{
     ModelMessage, ModelPart, ModelReply, ModelRole, ModelStop, ModelTool, ModelTurn,
 };
 
-use crate::{provider::manifest::ModelEntry, secrets::SecretValue};
+use crate::{harness::manifest::ModelEntry, secrets::SecretValue};
 
 mod anthropic;
 pub mod fake;
@@ -312,7 +312,7 @@ fn model(id: &str, name: &str, input: f64, output: f64, is_default: bool) -> Mod
     ModelEntry {
         id: id.to_owned(),
         display_name: name.to_owned(),
-        prices: Some(crate::provider::manifest::ModelPrices {
+        prices: Some(crate::harness::manifest::ModelPrices {
             currency: "USD".to_owned(),
             input_per_million: input,
             output_per_million: output,

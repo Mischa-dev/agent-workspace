@@ -96,21 +96,14 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/account/connected-apps/{id}/revoke",
     "PUT /api/v1/account/default-workspace",
     "POST /api/v1/account/sessions/{session_id}/revoke",
-    "POST /api/v1/agent-runs/{id}/acknowledge-failure",
-    "POST /api/v1/agent-runs/{id}/interrupt",
     "POST /api/v1/agent-runs/{id}/retry",
-    "DELETE /api/v1/bug-report-links/{link_id}",
-    "PATCH /api/v1/bug-report-links/{link_id}",
-    "POST /api/v1/bug-report-links/{link_id}/replace",
     "POST /api/v1/channels/{id}/archive",
     "POST /api/v1/channels/{id}/messages",
     "POST /api/v1/channels/{id}/restore",
     "POST /api/v1/channels/{id}/threads",
     "POST /api/v1/conversations/{id}/ai/summary",
-    "POST /api/v1/conversations/{id}/continue",
     "POST /api/v1/conversations/{id}/files",
     "POST /api/v1/conversations/{id}/mark-seen",
-    "POST /api/v1/conversations/{id}/mark-unread",
     "POST /api/v1/conversations/{id}/members",
     "POST /api/v1/conversations/{id}/members/{actor_id}/remove",
     "POST /api/v1/conversations/{id}/messages",
@@ -122,50 +115,24 @@ const WRITE_ROUTES: &[&str] = &[
     "PUT /api/v1/conversations/{id}/notification-level",
     "POST /api/v1/conversations/{id}/pins",
     "DELETE /api/v1/conversations/{id}/pins/{kind}/{target_id}",
-    "POST /api/v1/conversations/{id}/scheduled-messages",
     "POST /api/v1/conversations/{id}/threads",
     "POST /api/v1/direct/dms",
     "POST /api/v1/direct/groups",
-    "DELETE /api/v1/files/{id}",
-    "POST /api/v1/inbox/update",
-    "POST /api/v1/later",
-    "DELETE /api/v1/later/{id}",
-    "PATCH /api/v1/later/{id}",
-    "POST /api/v1/messages/{id}/forward",
     "PUT /api/v1/notification-settings/channels",
     "PUT /api/v1/notification-settings/mutes",
-    "PATCH /api/v1/organizations/{organization_id}",
     "POST /api/v1/organizations/{organization_id}/ai/test",
     "POST /api/v1/organizations/{organization_id}/harnesses",
     "DELETE /api/v1/organizations/{organization_id}/harnesses/{harness_id}",
     "PATCH /api/v1/organizations/{organization_id}/harnesses/{harness_id}",
-    "POST /api/v1/organizations/{organization_id}/invitations",
-    "PUT /api/v1/organizations/{organization_id}/layout",
     "PUT /api/v1/organizations/{organization_id}/layout/mine",
-    "PUT /api/v1/organizations/{organization_id}/modules",
-    "POST /api/v1/organizations/{organization_id}/workspace-templates",
-    "POST /api/v1/organizations/{organization_id}/workspace-templates/apply",
-    "DELETE /api/v1/organizations/{organization_id}/workspace-templates/{template_id}",
-    "POST /api/v1/organizations/{organization_id}/layout/presets",
-    "DELETE /api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-    "PATCH /api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
     "POST /api/v1/organizations/{organization_id}/leave",
     "DELETE /api/v1/organizations/{organization_id}/mail",
     "PUT /api/v1/organizations/{organization_id}/mail",
     "POST /api/v1/organizations/{organization_id}/mail/test",
     "PATCH /api/v1/organizations/{organization_id}/members/{actor_id}",
-    "PUT /api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
-    "PUT /api/v1/organizations/{organization_id}/members/{actor_id}/role",
-    "DELETE /api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-    "PUT /api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-    "POST /api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
     "PUT /api/v1/organizations/{organization_id}/onboarding",
     "DELETE /api/v1/organizations/{organization_id}/personal-secrets/{name}",
     "PUT /api/v1/organizations/{organization_id}/personal-secrets/{name}",
-    "PATCH /api/v1/organizations/{organization_id}/project-templates/{template_id}",
-    "POST /api/v1/organizations/{organization_id}/roles",
-    "DELETE /api/v1/organizations/{organization_id}/roles/{role_id}",
-    "PATCH /api/v1/organizations/{organization_id}/roles/{role_id}",
     "DELETE /api/v1/organizations/{organization_id}/secrets/{name}",
     "PUT /api/v1/organizations/{organization_id}/secrets/{name}",
     "POST /api/v1/organizations/{organization_id}/transfer-ownership",
@@ -176,28 +143,13 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/pages/{id}/document/sync",
     "POST /api/v1/pages/{id}/document/updates",
     "POST /api/v1/pages/{id}/suggestions/{suggestion_id}/decision",
-    "POST /api/v1/project-invitations/{invitation_id}/replace",
-    "POST /api/v1/project-invitations/{invitation_id}/revoke",
-    "POST /api/v1/projects",
     "PUT /api/v1/projects/rail-order",
-    "PATCH /api/v1/projects/{id}",
-    "POST /api/v1/projects/{id}/archive",
     "POST /api/v1/projects/{id}/channels",
-    "POST /api/v1/projects/{id}/decisions",
     "POST /api/v1/projects/{id}/execution-profiles",
-    "POST /api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
-    "DELETE /api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-    "PUT /api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
     "PUT /api/v1/projects/{id}/navigation",
     "POST /api/v1/projects/{id}/pages",
     "POST /api/v1/projects/{id}/pages/import",
-    "POST /api/v1/projects/{id}/restore",
     "POST /api/v1/projects/{id}/switch",
-    "POST /api/v1/projects/{project_id}/agent-profiles",
-    "DELETE /api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-    "PATCH /api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-    "POST /api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
-    "POST /api/v1/projects/{project_id}/agent-runs/{run_id}/pull-request",
     "POST /api/v1/projects/{project_id}/ai/analyze",
     "POST /api/v1/projects/{project_id}/ai/plans",
     "PUT /api/v1/projects/{project_id}/ai/plans/{import_id}",
@@ -205,16 +157,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/ai/suggestions/{suggestion_id}/accept",
     "POST /api/v1/projects/{project_id}/ai/suggestions/{suggestion_id}/dismiss",
     "POST /api/v1/projects/{project_id}/ai/test",
-    "POST /api/v1/projects/{project_id}/automations",
-    "DELETE /api/v1/projects/{project_id}/automations/{rule_id}",
-    "PATCH /api/v1/projects/{project_id}/automations/{rule_id}",
-    "POST /api/v1/projects/{project_id}/automations/{rule_id}/run",
-    "POST /api/v1/projects/{project_id}/bug-report-links",
-    "POST /api/v1/projects/{project_id}/environments",
-    "PUT /api/v1/projects/{project_id}/environments/{environment_id}",
-    "POST /api/v1/projects/{project_id}/environments/{environment_id}/archive",
-    "POST /api/v1/projects/{project_id}/environments/{environment_id}/check",
-    "POST /api/v1/projects/{project_id}/environments/{environment_id}/default",
     "POST /api/v1/projects/{project_id}/execution-profiles/{profile_id}/account/login/api-key",
     "POST /api/v1/projects/{project_id}/execution-profiles/{profile_id}/account/login/browser",
     "POST /api/v1/projects/{project_id}/execution-profiles/{profile_id}/account/login/cancel",
@@ -229,18 +171,8 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/external-agents/{connection_id}/webhook/test",
     "POST /api/v1/projects/{project_id}/external-agents/{connection_id}/workos",
     "DELETE /api/v1/projects/{project_id}/external-agents/{connection_id}/workos/{binding_id}",
-    "POST /api/v1/projects/{project_id}/imports",
-    "PATCH /api/v1/projects/{project_id}/imports/{import_id}",
-    "POST /api/v1/projects/{project_id}/imports/{import_id}/commit",
-    "PUT /api/v1/projects/{project_id}/integrations/github/automation",
     "POST /api/v1/projects/{project_id}/integrations/github/connect",
     "POST /api/v1/projects/{project_id}/integrations/github/repositories",
-    "POST /api/v1/projects/{project_id}/integrations/github/sync",
-    "POST /api/v1/projects/{project_id}/invitations",
-    "POST /api/v1/projects/{project_id}/labels",
-    "PATCH /api/v1/projects/{project_id}/labels/{label_id}",
-    "POST /api/v1/projects/{project_id}/fields",
-    "PATCH /api/v1/projects/{project_id}/fields/{field_id}",
     "POST /api/v1/projects/{project_id}/collections",
     "PATCH /api/v1/projects/{project_id}/collections/{collection_id}",
     "POST /api/v1/projects/{project_id}/collections/{collection_id}/fields",
@@ -252,13 +184,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/sheets/import",
     "POST /api/v1/projects/{project_id}/sheets/{sheet_id}/changes",
     "POST /api/v1/projects/{project_id}/launches",
-    "POST /api/v1/projects/{project_id}/launches/{launch_id}/cancel",
-    "PUT /api/v1/projects/{project_id}/layout",
-    "PUT /api/v1/projects/{project_id}/layout/rules",
-    "POST /api/v1/projects/{project_id}/members",
-    "PATCH /api/v1/projects/{project_id}/members/{actor_id}",
-    "POST /api/v1/projects/{project_id}/milestones",
-    "PATCH /api/v1/projects/{project_id}/milestones/{milestone_id}",
     "POST /api/v1/projects/{project_id}/provider-accounts",
     "DELETE /api/v1/projects/{project_id}/provider-accounts/{account_id}",
     "PATCH /api/v1/projects/{project_id}/provider-accounts/{account_id}",
@@ -268,62 +193,18 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/provider-accounts/{account_id}/login/device-code",
     "POST /api/v1/projects/{project_id}/provider-accounts/{account_id}/logout",
     "POST /api/v1/projects/{project_id}/provider-accounts/{account_id}/use",
-    "POST /api/v1/projects/{project_id}/pull-requests/{pull_request_id}/merge",
-    "POST /api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
-    "POST /api/v1/projects/{project_id}/recurring-tasks",
-    "DELETE /api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-    "PATCH /api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-    "POST /api/v1/projects/{project_id}/repositories",
-    "POST /api/v1/projects/{project_id}/repositories/{repository_id}/archive",
-    "POST /api/v1/projects/{project_id}/repositories/{repository_id}/prepare",
-    "POST /api/v1/projects/{project_id}/save-as-template",
     "DELETE /api/v1/projects/{project_id}/secrets/{name}",
     "PUT /api/v1/projects/{project_id}/secrets/{name}",
-    "POST /api/v1/projects/{project_id}/task-templates",
-    "PATCH /api/v1/projects/{project_id}/task-templates/{template_id}",
     "POST /api/v1/projects/{project_id}/task-templates/{template_id}/apply",
-    "PUT /api/v1/projects/{project_id}/work-item-workflow",
-    "POST /api/v1/projects/{project_id}/work-items",
-    "POST /api/v1/projects/{project_id}/work-items/bulk",
-    "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
-    "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
-    "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/ai/criteria",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/ai/summary",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/ai/triage",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/archive",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
-    "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
-    "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/files",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/move",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
-    "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/release-claim",
-    "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}/primary",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
-    "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
-    "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/watch",
     "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/work-with-worker",
     "POST /api/v1/push/subscriptions",
     "DELETE /api/v1/push/subscriptions/{id}",
     "POST /api/v1/push/subscriptions/{id}/test",
-    "POST /api/v1/reply-requests/{id}/retry",
-    "POST /api/v1/reply-requests/{id}/stop",
-    "DELETE /api/v1/scheduled-messages/{id}",
-    "PATCH /api/v1/scheduled-messages/{id}",
-    "POST /api/v1/scheduled-messages/{id}/send-now",
-    "PUT /api/v1/settings/values/{key}",
-    "POST /api/v1/settings/values/{key}/reset",
     "POST /api/v1/things/{kind}/{id}/files",
-    "PATCH /api/v1/threads/{id}",
     "POST /api/v1/threads/{id}/agent-runs",
     "POST /api/v1/threads/{id}/archive",
     "POST /api/v1/threads/{id}/messages",
@@ -335,17 +216,11 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/usage/accounts/{account_id}/schedules",
     "DELETE /api/v1/usage/accounts/{account_id}/schedules/{schedule_id}",
     "POST /api/v1/whiteboard-trash/empty",
-    "POST /api/v1/whiteboards",
     "DELETE /api/v1/whiteboards/{id}",
-    "PATCH /api/v1/whiteboards/{id}",
-    "POST /api/v1/whiteboards/{id}/duplicate",
     "POST /api/v1/whiteboards/{id}/files",
-    "POST /api/v1/whiteboards/{id}/links",
-    "DELETE /api/v1/whiteboards/{id}/links/{kind}/{target_id}",
     "POST /api/v1/whiteboards/{id}/operations",
     "POST /api/v1/whiteboards/{id}/revisions/{revision}/restore",
     "POST /api/v1/whiteboards/{id}/scene",
-    "POST /api/v1/workspace-invitations/{invitation_id}/revoke",
     "POST /connect/confirm",
     "POST /oauth/authorize",
 ];
@@ -412,6 +287,18 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
          (automation_write below; tests/integration/incoming_hooks.rs)",
     ),
     (
+        "POST /api/v1/host/builtin/enrol",
+        "the install's built-in host program exchanging the one-time code the server \
+         wrote for its token, once; no session, no workspace, and any other code is refused \
+         (tests/integration/a1_host_program.rs)",
+    ),
+    (
+        "PUT /api/v1/host/builtin/harnesses",
+        "the install's built-in host describing the harnesses it runs, for every workspace \
+         at once; only its own token or in-process call is taken, a person's or an agent's \
+         is refused (tests/integration/a1_harness_catalog.rs)",
+    ),
+    (
         "POST /api/v1/host/commands/{command_id}/ack",
         "a host answering one of its own commands with its own token; another host's \
          command is not found (tests/integration/a1_host_protocol.rs)",
@@ -426,6 +313,11 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
         "POST /api/v1/host/runs/{run_id}/model",
         "a run's own credential asking for its next model turn; any run but its own, and any \
          but the built-in assistant's, is refused (tests/integration/a1_host_protocol.rs)",
+    ),
+    (
+        "POST /api/v1/host/runs/{run_id}/stream",
+        "a run's own credential showing its reply live in its own conversation; any run but \
+         its own is refused, and nothing is stored (tests/integration/a1_host_protocol.rs)",
     ),
     (
         "POST /api/v1/host/describe",
@@ -510,6 +402,22 @@ const WRITE_EXCLUSIONS: &[(&str, &str)] = &[
     ("POST /api/v1/workspace-invitations/accept-new", CAPABILITY),
     ("POST /api/v1/workspace-invitations/resolve", CAPABILITY),
     (
+        "POST /api/v1/connected-modules/token",
+        "a connected app trades the one-time install code it was sent for its credentials; \
+         no session, and the code names its one install; covered in connected_modules",
+    ),
+    (
+        "POST /api/v1/modules/{module_id}/events",
+        "a connected app sends in an event signed with its install's inbound secret; no \
+         session, and the signature reaches only that install; covered in connected_modules",
+    ),
+    (
+        "POST /api/v1/modules/{module_id}/frames/redeem",
+        "a connected app redeems a framed panel's launch token, signed with its install's \
+         inbound secret; no session, and only that install's launches; covered in \
+         connected_modules",
+    ),
+    (
         "POST /oauth/register",
         "OAuth client registration: makes a public client that belongs to no workspace",
     ),
@@ -534,7 +442,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "agent_register_decide",
     "agent_pause",
     "agent_resume",
-    "agent_profile_write",
+    "agent_profile_set",
     "agent_ref_set",
     "agent_ref_decide",
     "agent_ref_remove",
@@ -587,6 +495,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "data_query_update",
     "decision_record",
     "page_make",
+    "page_file_upload",
+    "page_move",
     "environment_archive",
     "environment_check",
     "environment_create",
@@ -601,9 +511,12 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "host_agent_unbind",
     "host_enrolment_create",
     "host_unlink",
-    "invitation_write",
+    "invitation_create",
+    "invitation_update",
     "invite_link_create",
     "invite_link_revoke",
+    "layout_preset_create",
+    "layout_preset_update",
     "incoming_hook_create",
     "incoming_hook_delete",
     "thing_link",
@@ -613,7 +526,6 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "workspace_store_set",
     "workspace_store_revoke",
     "workspace_export_start",
-    "layout_preset_write",
     "label_create",
     "label_update",
     "field_create",
@@ -628,9 +540,11 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "recurring_update",
     "bug_report_link_create",
     "bug_report_link_update",
-    "collection_write",
+    "collection_create",
+    "collection_update",
     "proposal_decide",
-    "record_write",
+    "record_create_many",
+    "record_update_many",
     "record_create",
     "record_update",
     "form_create",
@@ -643,11 +557,13 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "recurring_record_delete",
     "conversation_tab_set",
     "button_press",
-    "sheet_write",
+    "sheet_create",
+    "sheet_update",
     "sheet_view_create",
     "sheet_view_update",
     "sheet_view_delete",
     "sheet_range_set",
+    "sheet_chart_set",
     "later_save",
     "later_update",
     "schedule_create",
@@ -681,29 +597,39 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "project_status_set",
     "project_update_create",
     "module_archive",
+    "connected_module_approve",
+    "connected_module_install",
+    "connected_module_refresh",
+    "connected_module_revoke",
+    "connected_module_run",
+    "connected_module_test",
+    "module_panel_press",
+    "module_frame_check",
     "module_create",
     "module_part_link",
     "module_part_unlink",
     "module_restore",
     "module_set",
     "module_update",
-    "model_catalog_write",
+    "model_catalog_set",
     "notification_keyword_set",
     "notification_update",
     "package_install",
+    "package_upgrade",
     "package_remove",
     "directory_source_create",
     "directory_source_remove",
     "workspace_shape_set",
-    "page_comment",
+    "page_comment_create",
     "page_comment_update",
-    "page_edit",
+    "page_create",
     "page_suggestion_decide",
-    "page_write",
+    "page_update",
+    "page_update_blocks",
     "person_create",
     "pin_set",
     "plan_import",
-    "project_layout_set",
+    "layout_update",
     "pull_request_create",
     "pull_request_merge",
     "pull_request_refresh",
@@ -718,10 +644,14 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "repository_create",
     "repository_prepare",
     "role_assign",
-    "role_write",
+    "role_create",
+    "role_update",
+    "role_delete",
+    "app_limit_set",
     "run_activity_report",
     "run_cancel",
-    "run_dismiss_failure",
+    "run_changes_report",
+    "run_failure_hide",
     "run_mark_not_started",
     "run_create",
     "run_publish",
@@ -734,7 +664,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "run_usage_report",
     "scheduled_message_update",
     "session_bind",
-    "settings_set",
+    "setting_update",
     "space_archive",
     "space_create",
     "space_join",
@@ -749,6 +679,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "thing_link_create",
     "thing_share_add",
     "thing_share_remove",
+    "thing_upsert",
     "sidebar_item_move",
     "sidebar_section_set",
     "saved_search_set",
@@ -789,6 +720,9 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "view_update",
     "whiteboard_create",
     "whiteboard_duplicate",
+    "whiteboard_to_tasks",
+    "whiteboard_ask",
+    "sheet_row_add",
     "whiteboard_update_elements",
     "whiteboard_propose",
     "whiteboard_link",
@@ -801,7 +735,8 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "initiative_create",
     "workspace_template_apply",
     "workspace_template_save",
-    "project_template_write",
+    "project_template_create",
+    "project_template_update",
     "workspace_update",
     "workspace_delete",
     "workspace_delete_cancel",
@@ -1497,10 +1432,8 @@ struct Targets {
     /// Threads with no repository or run yet, to start runs in: one over
     /// HTTP, one through MCP.
     run_threads: [Uuid; 2],
-    /// A run that failed, and the event that says so, to acknowledge and
-    /// retry.
+    /// A run that failed, to dismiss and retry.
     failed_run: Uuid,
-    failed_event: Uuid,
     /// A board in the trash. B's is one A's "Delete forever" and "Empty
     /// trash" must leave alone; A's goes when A empties its trash.
     trashed_whiteboard: Uuid,
@@ -1566,12 +1499,11 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     .await;
 
     // The fake model, so the AI routes and tools run.
-    ok(
+    ok_op(
         app,
         browser,
-        "PUT",
-        "/api/v1/settings/values/ai.provider",
-        json!({"scope": "workspace", "organizationId": organization, "value": "fake"}),
+        &format!("/api/v2/w/{organization}/ops/setting_update"),
+        json!({"key": "ai.provider", "scope": "workspace", "value": "fake"}),
     )
     .await;
     // So refusing to remove these proves something: each exists in both.
@@ -1594,20 +1526,6 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
             }),
         ),
         (
-            "PUT",
-            format!(
-                "/api/v1/organizations/{organization}/model-catalog/codex_app_server/models/net-model"
-            ),
-            json!({"displayName": format!("Model {tag}")}),
-        ),
-        (
-            "PUT",
-            format!(
-                "/api/v1/projects/{project}/harnesses/codex_app_server/models/net-project-model"
-            ),
-            json!({"displayName": format!("Project model {tag}")}),
-        ),
-        (
             "POST",
             format!(
                 "/api/v1/projects/{project}/work-items/{}/threads/{}",
@@ -1617,8 +1535,9 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         ),
         (
             "POST",
-            format!("/api/v1/organizations/{organization}/invitations"),
-            json!({"role": "member", "expiresInHours": 24}),
+            format!("/api/v2/w/{organization}/ops/invitation_create"),
+            json!({"projectId": "workspace", "wholeWorkspace": true, "role": "member",
+                "expiresInHours": 24}),
         ),
         (
             "POST",
@@ -1649,22 +1568,20 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         json!({"title": "Net backlog task"}),
     )
     .await;
-    let trashed = ok(
+    let trashed = ok_op(
         app,
         browser,
-        "POST",
-        "/api/v1/whiteboards",
-        json!({"title": format!("Net trashed {tag}"), "organizationId": organization}),
+        "/api/v2/ops/whiteboard_create",
+        json!({"title": format!("Net trashed {tag}"), "workspaceId": organization}),
     )
     .await;
     let trashed_whiteboard =
         Uuid::parse_str(&string_at(&trashed, "/whiteboard/id")).expect("trashed board");
-    ok(
+    ok_op(
         app,
         browser,
-        "PATCH",
-        &format!("/api/v1/whiteboards/{trashed_whiteboard}"),
-        json!({"deleted": true}),
+        "/api/v2/ops/whiteboard_update",
+        json!({"whiteboardId": trashed_whiteboard, "deleted": true}),
     )
     .await;
 
@@ -2025,8 +1942,8 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
             .await
             .expect("delivery connection");
         sqlx::query(
-            "UPDATE agent_connections SET webhook_url = 'https://hooks.example.test/net', \
-             webhook_format = 'standard' WHERE id = $1",
+            "UPDATE agent_connections SET webhook_url = 'https://hooks.example.test/net' \
+             WHERE id = $1",
         )
         .bind(made.id)
         .execute(&mut *database)
@@ -2256,7 +2173,6 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         stopped_reply,
         run_threads: [run_threads[0], run_threads[1]],
         failed_run,
-        failed_event,
         trashed_whiteboard,
         record_fields: [
             collection_field(pool, world.collection, "person").await,
@@ -2296,7 +2212,6 @@ struct Spares {
     projects: [String; 2],
     /// Deleted over HTTP and through MCP.
     messages: [String; 2],
-    file: Uuid,
     /// Unsent uploads A's own tool calls attach: in the channel and for a
     /// task comment, and the agent's, in the group its reply goes to.
     tool_upload: Uuid,
@@ -2304,15 +2219,14 @@ struct Spares {
     /// An unsent upload A's own file_delete removes.
     tool_delete_upload: Uuid,
     reply_upload: Uuid,
-    later: Uuid,
     /// Sent now over HTTP, and changed through MCP.
     scheduled: [Uuid; 2],
     harness: Uuid,
-    bug_link: Uuid,
     /// A rule A's own automation_delete removes.
     rule: Uuid,
     /// An environment A's own environment_archive archives.
     environment: Uuid,
+    /// A's own invitation_update revokes it.
     project_invitation: Uuid,
     /// An agent in the project to change, rotate and remove.
     agent_connection: Uuid,
@@ -2327,9 +2241,8 @@ struct Spares {
     /// A second connected app, revoked.
     grant: Uuid,
     oauth_client: String,
-    /// Reply requests: stopped over HTTP; claimed, then progress and a
-    /// reply; passed; released (held already); stopped through MCP.
-    reply_stop: Uuid,
+    /// Reply requests: claimed, then progress and a reply; passed;
+    /// released (held already); stopped through MCP. The first is unused.
     reply_claim: Uuid,
     reply_pass: Uuid,
     reply_release: Uuid,
@@ -2343,14 +2256,11 @@ struct Spares {
     session: Uuid,
     /// An agent in A's project that may ask a person to run Codex.
     requester_token: String,
-    /// A repository with no runs, archived.
-    repository: Uuid,
     /// The owner's comments on the task, deleted over HTTP and through MCP.
     comments: [Uuid; 2],
     /// A board in the trash, deleted for good.
     trashed_whiteboard: Uuid,
-    /// An agent and an account for runs, deleted.
-    agent_profile: Uuid,
+    /// An account for runs, deleted.
     provider_account: Uuid,
     /// A custom role nobody holds, removed.
     role: Uuid,
@@ -2430,8 +2340,8 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
             app,
             browser,
             "POST",
-            "/api/v1/projects",
-            json!({"organizationId": a.organization, "key": key, "name": format!("Net {key}")}),
+            &format!("/api/v2/w/{}/ops/space_create", a.organization),
+            json!({"key": key, "name": format!("Net {key}")}),
         )
         .await;
         projects.push(
@@ -2452,17 +2362,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         .await;
         messages.push(string_at(&sent, "/message/id"));
     }
-    let file = upload(
-        app,
-        browser,
-        &format!(
-            "/api/v1/conversations/{}/files?name=net-spare.txt",
-            a.channel
-        ),
-        "text/plain",
-        b"Net spare".to_vec(),
-    )
-    .await;
     let mut uploads = Vec::new();
     for uri in [
         format!(
@@ -2480,27 +2379,12 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     ] {
         uploads.push(upload(app, browser, &uri, "text/plain", b"Net unsent".to_vec()).await);
     }
-    ok(
-        app,
-        browser,
-        "POST",
-        "/api/v1/later",
-        json!({"note": "Net spare", "remindAt": soon, "organizationId": a.organization}),
-    )
-    .await;
-    let later = scalar(
-        pool,
-        "SELECT id FROM saved_items WHERE note = $1",
-        "Net spare",
-    )
-    .await;
     for text_value in ["Net spare one", "Net spare two"] {
-        ok(
+        ok_op(
             app,
             browser,
-            "POST",
-            &format!("/api/v1/conversations/{}/scheduled-messages", a.channel),
-            json!({"content": text(text_value), "sendAt": soon}),
+            "/api/v2/ops/message_schedule",
+            json!({"conversationId": a.channel, "content": text(text_value), "sendAt": soon}),
         )
         .await;
     }
@@ -2531,26 +2415,12 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         "Net spare runner",
     )
     .await;
-    ok(
+    let spare_rule = ok_op(
         app,
         browser,
-        "POST",
-        &format!("/api/v1/projects/{project}/bug-report-links"),
-        json!({"name": "Net spare"}),
-    )
-    .await;
-    let bug_link = scalar(
-        pool,
-        "SELECT id FROM bug_report_links WHERE name = $1",
-        "Net spare",
-    )
-    .await;
-    let spare_rule = ok(
-        app,
-        browser,
-        "POST",
-        &format!("/api/v1/projects/{project}/automations"),
+        "/api/v2/ops/automation_create",
         json!({
+            "projectId": project,
             "name": "Net spare rule",
             "trigger": {"kind": "task_created"},
             "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
@@ -2561,12 +2431,11 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         .as_str()
         .and_then(|id| id.parse().ok())
         .expect("spare rule");
-    ok(
+    ok_op(
         app,
         browser,
-        "POST",
-        &format!("/api/v1/projects/{project}/environments"),
-        json!({"name": "Net spare cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-spare"}),
+        "/api/v2/ops/environment_create",
+        json!({"projectId": project, "name": "Net spare cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-spare"}),
     )
     .await;
     let spare_environment = scalar(
@@ -2575,12 +2444,11 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         "Net spare cloud",
     )
     .await;
-    ok(
+    ok_op(
         app,
         browser,
-        "POST",
-        &format!("/api/v1/projects/{project}/invitations"),
-        json!({"role": "viewer", "expiresInHours": 24}),
+        "/api/v2/ops/invitation_create",
+        json!({"projectId": project, "role": "viewer", "expiresInHours": 24}),
     )
     .await;
     let project_invitation = scalar(
@@ -2621,64 +2489,33 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     .await;
     let requester_token = string_at(&requester, "/oneTimeCredential/token");
 
-    // A repository with no runs, to archive (one with a run that hasn't
-    // finished stays). It isn't prepared, so runs never pick it.
-    let repository = ok(
-        app,
-        browser,
-        "POST",
-        &format!("/api/v1/projects/{project}/repositories"),
-        json!({
-            "githubRepositoryId": 9002,
-            "owner": "acme",
-            "name": "net-spare",
-            "cloneUrl": "https://github.com/acme/net-spare.git",
-            "defaultBranch": "main",
-            "trustAcknowledged": true,
-        }),
-    )
-    .await;
-    let repository = Uuid::parse_str(&string_at(&repository, "/id")).expect("repository");
-
     let mut comments = Vec::new();
     for text_value in ["Net spare comment one", "Net spare comment two"] {
-        let created = ok(
+        let created = ok_op(
             app,
             browser,
-            "POST",
-            &format!("/api/v1/projects/{project}/work-items/{}/comments", a.task),
-            json!({"content": text(text_value)}),
+            "/api/v2/ops/task_comment_create",
+            json!({"taskId": a.task, "content": text(text_value)}),
         )
         .await;
-        comments.push(Uuid::parse_str(&string_at(&created, "/comment/id")).expect("comment"));
+        comments.push(Uuid::parse_str(&string_at(&created, "/resultId")).expect("comment"));
     }
-    let trashed = ok(
+    let trashed = ok_op(
         app,
         browser,
-        "POST",
-        "/api/v1/whiteboards",
-        json!({"title": "Net spare trashed", "organizationId": a.organization}),
+        "/api/v2/ops/whiteboard_create",
+        json!({"title": "Net spare trashed", "workspaceId": a.organization}),
     )
     .await;
     let trashed_whiteboard =
         Uuid::parse_str(&string_at(&trashed, "/whiteboard/id")).expect("trashed board");
-    ok(
+    ok_op(
         app,
         browser,
-        "PATCH",
-        &format!("/api/v1/whiteboards/{trashed_whiteboard}"),
-        json!({"deleted": true}),
+        "/api/v2/ops/whiteboard_update",
+        json!({"whiteboardId": trashed_whiteboard, "deleted": true}),
     )
     .await;
-    let profile = ok(
-        app,
-        browser,
-        "POST",
-        &format!("/api/v1/projects/{project}/agent-profiles"),
-        json!({"template": "reviewer", "name": "Net spare reviewer"}),
-    )
-    .await;
-    let agent_profile = Uuid::parse_str(&string_at(&profile, "/id")).expect("agent profile");
     let account = ok(
         app,
         browser,
@@ -3019,15 +2856,12 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         second_task,
         projects: [projects[0].clone(), projects[1].clone()],
         messages: [messages[0].clone(), messages[1].clone()],
-        file,
         tool_upload: uploads[0],
         tool_comment_upload: uploads[1],
         tool_delete_upload: uploads[2],
         reply_upload,
-        later,
         scheduled: [scheduled[0], scheduled[1]],
         harness,
-        bug_link,
         rule: spare_rule,
         environment: spare_environment,
         project_invitation,
@@ -3038,7 +2872,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         launch: queued_launch,
         grant,
         oauth_client,
-        reply_stop: replies[0],
         reply_claim: replies[1],
         reply_pass: replies[2],
         reply_release: replies[3],
@@ -3048,10 +2881,8 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         types,
         session,
         requester_token,
-        repository,
         comments: [comments[0], comments[1]],
         trashed_whiteboard,
-        agent_profile,
         provider_account,
         collection_view,
         dashboard,
@@ -3060,10 +2891,22 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     }
 }
 
+/// Runs a setup operation as `browser` at `path` (`/api/v2/ops/{name}` or
+/// `/api/v2/w/{workspace}/ops/{name}`) and returns its value; it must work.
+async fn ok_op(app: &axum::Router, browser: &Browser, path: &str, input: Value) -> Value {
+    let mut body = ok(app, browser, "POST", path, input).await;
+    assert_eq!(body["outcome"], "ok", "setup {path}: {body}");
+    body["value"].take()
+}
+
 /// Sends a setup request as `browser` and returns the body; it must work.
 async fn ok(app: &axum::Router, browser: &Browser, method: &str, uri: &str, body: Value) -> Value {
     let key = format!("net-setup-{}", Uuid::now_v7().simple());
-    let (status, value) = send(app, browser.request(method, uri, Some(&key), body)).await;
+    let (status, value) = if crate::support::tasks::op_for(method, uri, &body).is_some() {
+        crate::support::tasks::send(app, browser, method, uri, Some(&key), body).await
+    } else {
+        send(app, browser.request(method, uri, Some(&key), body)).await
+    };
     assert!(
         status.is_success(),
         "setup {method} {uri}: {status} {value}"
@@ -3987,7 +3830,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
     let organization = || id(a.organization, b.organization);
     let task = || id(a.task, b.task);
     let channel = || id(&a.channel, &b.channel);
-    let soon = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
     let far = (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339();
     // Which workspace a request's first path value belongs to.
     let is_a = |values: &[String], a_value: &str| values[0] == a_value;
@@ -4001,43 +3843,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         "p256dh": URL_SAFE_NO_PAD.encode(device_public.as_ref()),
         "auth": URL_SAFE_NO_PAD.encode([9_u8; 16]),
     });
-    let workflow = |statuses: &[Value], types: &[Value]| {
-        json!({
-            "statuses": statuses,
-            "types": types,
-            "transitions": "all",
-        })
-    };
-    // A's statuses and types, each with one more: new in A's own request,
-    // and B's in the others, which are then valid but for B's ID.
-    let added_status =
-        json!({"name": "Net added status", "semanticCategory": "review", "isDefault": false});
-    let added_type = json!({"name": "Net added type", "isDefault": false});
-    let plus = |entries: &[Value], entry: Value| {
-        let mut entries = entries.to_vec();
-        entries.push(entry);
-        entries
-    };
-    let a_workflow = workflow(
-        &plus(&sp.statuses, added_status.clone()),
-        &plus(&sp.types, added_type.clone()),
-    );
-    let b_status_workflow = workflow(
-        &plus(&sp.statuses, with(&added_status, "id", json!(bx.status))),
-        &plus(&sp.types, added_type.clone()),
-    );
-    let b_type_workflow = workflow(
-        &plus(&sp.statuses, added_status),
-        &plus(&sp.types, with(&added_type, "id", json!(bx.task_type))),
-    );
-    let workflow_version = |project: &str| {
-        current(
-            "project_task_settings",
-            "workflow_version",
-            &[("project_id", project.to_owned())],
-            1,
-        )
-    };
     let navigation_version = |project: &str| {
         current(
             "project_navigation_states",
@@ -4061,13 +3866,13 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         HttpCase {
             route: "POST /api/public/v1/{tool}",
             own: Own::Run(public(
-                "task_comment",
+                "task_comment_create",
                 json!({"taskId": a.task, "text": "Net public comment", "clientRequestId": "net-public-own"}),
             )),
             foreign: vec![
                 (
                     public(
-                        "task_comment",
+                        "task_comment_create",
                         json!({"taskId": b.task, "text": "Net public comment", "clientRequestId": "net-public-b"}),
                     ),
                     Expect::Refused,
@@ -4164,42 +3969,11 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         ),
         // Runs
         path_case(
-            "POST /api/v1/agent-runs/{id}/acknowledge-failure",
-            &[id(ax.failed_run, bx.failed_run)],
-            |values| {
-                Payload::Json(json!({
-                    "eventId": if is_a(values, &ax.failed_run.to_string()) { ax.failed_event } else { bx.failed_event }
-                }))
-            },
-        )
-        .rejecting(vec![json!({"eventId": bx.failed_event})]),
-        path_case(
-            "POST /api/v1/agent-runs/{id}/interrupt",
-            &[id(a.run, b.run)],
-            empty(),
-        )
-        .last(),
-        path_case(
             "POST /api/v1/agent-runs/{id}/retry",
             &[id(ax.failed_run, bx.failed_run)],
             empty(),
         ),
         // Bug report links
-        path_case(
-            "DELETE /api/v1/bug-report-links/{link_id}",
-            &[id(sp.bug_link, bx.bug_link)],
-            empty(),
-        ),
-        path_case(
-            "PATCH /api/v1/bug-report-links/{link_id}",
-            &[id(ax.bug_link, bx.bug_link)],
-            json_body(json!({"name": "Net game"})),
-        ),
-        path_case(
-            "POST /api/v1/bug-report-links/{link_id}/replace",
-            &[id(ax.bug_link, bx.bug_link)],
-            empty(),
-        ),
         // Channels and threads
         path_case(
             "POST /api/v1/channels/{id}/archive",
@@ -4225,11 +3999,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             json_body(json!({"name": "Net thread"})),
         )
         .rejecting(vec![json!({"name": "Net thread", "originMessageId": b.message})]),
-        path_case(
-            "PATCH /api/v1/threads/{id}",
-            &[id(&a.thread, &b.thread)],
-            json_body(json!({"name": "Launch thread"})),
-        ),
         path_case(
             "POST /api/v1/threads/{id}/archive",
             &[id(&sp.thread, &b.thread)],
@@ -4265,11 +4034,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         ),
         path_case(
-            "POST /api/v1/conversations/{id}/continue",
-            &[id(&a.group, &b.group)],
-            empty(),
-        ),
-        path_case(
             "POST /api/v1/conversations/{id}/files",
             &[channel()],
             |_| Payload::Bytes("text/plain", b"Net file".to_vec()),
@@ -4286,16 +4050,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[channel()],
             json_body(json!({"highestSeenSequence": 1})),
         ),
-        path_case(
-            "POST /api/v1/conversations/{id}/mark-unread",
-            &[channel()],
-            |values| {
-                Payload::Json(json!({
-                    "messageId": if is_a(values, &a.channel) { &a.message } else { &b.message }
-                }))
-            },
-        )
-        .rejecting(vec![json!({"messageId": b.message})]),
         path_case(
             "POST /api/v1/conversations/{id}/members",
             &[id(&a.group, &b.group)],
@@ -4392,22 +4146,11 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         ),
         path_case(
-            "POST /api/v1/conversations/{id}/scheduled-messages",
-            &[channel()],
-            json_body(json!({"content": text("Net later"), "sendAt": soon})),
-        ),
-        path_case(
             "POST /api/v1/conversations/{id}/threads",
             &[channel()],
             json_body(json!({"name": "Net thread two"})),
         )
         .rejecting(vec![json!({"name": "Net thread two", "originMessageId": b.message})]),
-        path_case(
-            "POST /api/v1/messages/{id}/forward",
-            &[id(&a.message, &b.message)],
-            json_body(json!({"conversationId": a.dm, "text": "Net forward"})),
-        )
-        .rejecting(vec![json!({"conversationId": b.channel}), json!({"conversationId": b.dm})]),
         // Direct messages and groups
         body_case(
             "POST /api/v1/direct/dms",
@@ -4424,70 +4167,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
                 json!({"name": "Net group", "memberIds": [a.rook, bx.wren]}),
             ],
         ),
-        // Files
-        path_case(
-            "DELETE /api/v1/files/{id}",
-            &[id(sp.file, bx.channel_upload)],
-            empty(),
-        )
-        // And a task's own file, which anyone who may edit the task removes.
-        // A message's files go with the message, for anyone.
-        .and(vec![(
-            Call::new(
-                "DELETE",
-                format!("/api/v1/files/{}", b.task_file),
-                Payload::Json(json!({})),
-            ),
-            Expect::Refused,
-        )]),
         // Inbox, later and scheduled messages
-        body_case(
-            "POST /api/v1/inbox/update",
-            &[],
-            json!({"action": "read", "ids": [ax.notification]}),
-            Vec::new(),
-        )
-        // Only ever the caller's own notifications: B's project and B's
-        // notification are filters that match none of them.
-        .no_effect(vec![
-            json!({"action": "read", "all": true, "projectId": b.project}),
-            json!({"action": "read", "ids": [bx.notification]}),
-        ]),
-        body_case(
-            "POST /api/v1/later",
-            &[],
-            json!({"messageId": a.dm_message, "note": "Net"}),
-            vec![
-                json!({"messageId": b.message}),
-                json!({"workItemId": b.task}),
-                json!({"note": "Net", "remindAt": soon, "organizationId": b.organization}),
-            ],
-        ),
-        path_case(
-            "PATCH /api/v1/later/{id}",
-            &[id(ax.later, bx.later)],
-            json_body(json!({"note": "Net note"})),
-        ),
-        path_case(
-            "DELETE /api/v1/later/{id}",
-            &[id(sp.later, bx.later)],
-            empty(),
-        ),
-        path_case(
-            "PATCH /api/v1/scheduled-messages/{id}",
-            &[id(ax.scheduled, bx.scheduled)],
-            json_body(json!({"content": text("Net later, edited")})),
-        ),
-        path_case(
-            "DELETE /api/v1/scheduled-messages/{id}",
-            &[id(ax.scheduled, bx.scheduled)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/scheduled-messages/{id}/send-now",
-            &[id(sp.scheduled[0], bx.scheduled)],
-            empty(),
-        ),
         // Notification settings
         body_case(
             "PUT /api/v1/notification-settings/channels",
@@ -4502,11 +4182,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             vec![json!({"projectId": b.project, "group": "runs", "muted": false})],
         ),
         // The workspace
-        path_case(
-            "PATCH /api/v1/organizations/{organization_id}",
-            &[organization()],
-            versioned("organizations", 0, json!({"name": "Acme net"})),
-        ),
         path_case(
             "POST /api/v1/organizations/{organization_id}/ai/test",
             &[organization()],
@@ -4547,26 +4222,8 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[organization(), id(sp.harness, bx.harness)],
             empty(),
         ),
-        path_case(
-            "POST /api/v1/organizations/{organization_id}/invitations",
-            &[organization()],
-            json_body(json!({"role": "member", "expiresInHours": 24})),
-        ),
         // Layouts: a saved preset is the workspace's own, so B's is refused
         // wherever A's would do.
-        path_case(
-            "PUT /api/v1/organizations/{organization_id}/layout",
-            &[organization()],
-            |values| {
-                let preset = if is_a(values, &a.organization.to_string()) {
-                    ax.layout_preset
-                } else {
-                    bx.layout_preset
-                };
-                Payload::Json(json!({"layout": {"preset": preset}}))
-            },
-        )
-        .rejecting(vec![json!({"layout": {"preset": bx.layout_preset}})]),
         path_case(
             "PUT /api/v1/organizations/{organization_id}/layout/mine",
             &[organization()],
@@ -4575,66 +4232,8 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         // Modules: switching one on that is on changes nothing in A, so the
         // rest of the run keeps every module. B's space can't be narrowed
         // from A (M1.2).
-        path_case(
-            "PUT /api/v1/organizations/{organization_id}/modules",
-            &[organization()],
-            json_body(json!({"switches": {"whiteboards": true}})),
-        )
-        .rejecting(vec![
-            json!({"switches": {"whiteboards": false}, "space": b.project}),
-        ]),
         // Workspace templates (AWD-76): Everything changes nothing in A, whose
         // modules are all on. B's saved template and project are refused.
-        path_case(
-            "POST /api/v1/organizations/{organization_id}/workspace-templates",
-            &[organization()],
-            |values| {
-                let project = if is_a(values, &a.organization.to_string()) {
-                    a.project.clone()
-                } else {
-                    b.project.clone()
-                };
-                Payload::Json(json!({"name": "Net saved", "projectId": project}))
-            },
-        )
-        .rejecting(vec![json!({"name": "Net saved b", "projectId": b.project})]),
-        path_case(
-            "POST /api/v1/organizations/{organization_id}/workspace-templates/apply",
-            &[organization()],
-            json_body(json!({"template": "everything"})),
-        )
-        .rejecting(vec![json!({"template": bx.workspace_template})]),
-        path_case(
-            "DELETE /api/v1/organizations/{organization_id}/workspace-templates/{template_id}",
-            &[organization(), id(ax.workspace_template, bx.workspace_template)],
-            empty(),
-        )
-        .last(),
-        path_case(
-            "POST /api/v1/organizations/{organization_id}/layout/presets",
-            &[organization()],
-            |values| {
-                let preset = if is_a(values, &a.organization.to_string()) {
-                    ax.layout_preset
-                } else {
-                    bx.layout_preset
-                };
-                Payload::Json(json!({"name": "Net preset", "layout": {"preset": preset}}))
-            },
-        )
-        .rejecting(vec![json!({"name": "Net preset b", "layout": {"preset": bx.layout_preset}})]),
-        path_case(
-            "PATCH /api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-            &[organization(), id(ax.layout_preset, bx.layout_preset)],
-            json_body(json!({"description": "Net preset"})),
-        )
-        .rejecting(vec![json!({"layout": {"preset": bx.layout_preset}})]),
-        path_case(
-            "DELETE /api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-            &[organization(), id(ax.layout_preset, bx.layout_preset)],
-            empty(),
-        )
-        .last(),
         path_case(
             "POST /api/v1/organizations/{organization_id}/leave",
             &[organization()],
@@ -4676,64 +4275,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             },
         ),
         path_case(
-            "PUT /api/v1/organizations/{organization_id}/members/{actor_id}/role",
-            &[organization(), id(a.rook, b.rook)],
-            |values| {
-                Payload::Json(json!({
-                    "roleId": ax.custom_role,
-                    "applyToProjects": false,
-                    "expectedVersion": current(
-                        "organization_memberships",
-                        "version",
-                        &[("organization_id", values[0].clone()), ("actor_id", values[1].clone())],
-                        1,
-                    ),
-                }))
-            },
-        )
-        .rejecting(vec![json!({"roleId": bx.custom_role, "applyToProjects": true, "expectedVersion": 1})]),
-        path_case(
-            "PUT /api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
-            &[organization(), id(a.rook, b.rook)],
-            json_body(json!({"permissions": null})),
-        ),
-        path_case(
-            "POST /api/v1/organizations/{organization_id}/roles",
-            &[organization()],
-            json_body(json!({"name": "Net made role", "baseRole": "member", "permissions": ["tasks.view"]})),
-        ),
-        path_case(
-            "PATCH /api/v1/organizations/{organization_id}/roles/{role_id}",
-            &[organization(), id(ax.custom_role, bx.custom_role)],
-            |values| {
-                Payload::Json(json!({
-                    "expectedVersion": current("workspace_roles", "version", &[("id", values[1].clone())], 1),
-                    "description": "Net changed",
-                }))
-            },
-        ),
-        path_case(
-            "DELETE /api/v1/organizations/{organization_id}/roles/{role_id}",
-            &[organization(), id(sp.role, bx.custom_role)],
-            empty(),
-        ),
-        path_case(
-            "PUT /api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-            &[organization(), same("codex_app_server"), same("net-model")],
-            json_body(json!({"displayName": "Net model"})),
-        ),
-        path_case(
-            "DELETE /api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-            &[organization(), same("codex_app_server"), same("net-model")],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
-            &[organization(), same("codex_app_server")],
-            empty(),
-        )
-        .own_reaches("execution_profile_required", NEEDS_ACCOUNT),
-        path_case(
             "PUT /api/v1/organizations/{organization_id}/onboarding",
             &[organization()],
             json_body(json!({"dismissed": false})),
@@ -4748,11 +4289,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             "DELETE /api/v1/organizations/{organization_id}/personal-secrets/{name}",
             &[organization(), secret()],
             empty(),
-        ),
-        path_case(
-            "PATCH /api/v1/organizations/{organization_id}/project-templates/{template_id}",
-            &[organization(), id(ax.project_template, bx.project_template)],
-            versioned("project_templates", 1, json!({"name": "Net setup"})),
         ),
         path_case(
             "PUT /api/v1/organizations/{organization_id}/secrets/{name}",
@@ -4775,11 +4311,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         )
         .rejecting(vec![json!({"actorId": b.rook})])
         .without_own("it would hand A to someone else; transfers are checked in the workspace tests"),
-        path_case(
-            "POST /api/v1/workspace-invitations/{invitation_id}/revoke",
-            &[id(ax.workspace_invitation, bx.workspace_invitation)],
-            versioned("workspace_invitations", 0, json!({})),
-        ),
         // Pages
         path_case(
             "PATCH /api/v1/pages/{id}",
@@ -4836,29 +4367,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             )
         },
         // Project invitations
-        path_case(
-            "POST /api/v1/project-invitations/{invitation_id}/replace",
-            &[id(ax.project_invitation, bx.project_invitation)],
-            versioned("project_invitations", 0, json!({"expiresInHours": 48})),
-        ),
-        path_case(
-            "POST /api/v1/project-invitations/{invitation_id}/revoke",
-            &[id(sp.project_invitation, bx.project_invitation)],
-            versioned("project_invitations", 0, json!({})),
-        ),
         // Projects
-        body_case(
-            "POST /api/v1/projects",
-            &[],
-            json!({"organizationId": a.organization, "key": "NET", "name": "Net"}),
-            vec![json!({"organizationId": b.organization, "key": "NETB", "name": "Net"})],
-        )
-        .rejecting(vec![json!({
-            "organizationId": a.organization,
-            "key": "NETC",
-            "name": "Net",
-            "templateId": bx.project_template,
-        })]),
         // The rail's order is the caller's own; projects they can't open in
         // it are skipped.
         body_case(
@@ -4871,61 +4380,18 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             json!({"projectIds": [b.project]}),
             json!({"projectIds": [b.project, a.project]}),
         ]),
-        path_case(
-            "PATCH /api/v1/projects/{id}",
-            &[project()],
-            versioned("projects", 0, json!({"name": "Work"})),
-        ),
-        path_case(
-            "POST /api/v1/projects/{id}/archive",
-            &[id(&sp.projects[0], &b.project)],
-            versioned("projects", 0, json!({})),
-        )
-        .last(),
         // After the archive above, which runs first.
-        path_case(
-            "POST /api/v1/projects/{id}/restore",
-            &[id(&sp.projects[0], &b.project)],
-            versioned("projects", 0, json!({})),
-        )
-        .last(),
         path_case(
             "POST /api/v1/projects/{id}/channels",
             &[project()],
             json_body(json!({"name": "net-channel"})),
         ),
         path_case(
-            "POST /api/v1/projects/{id}/decisions",
-            &[project()],
-            json_body(json!({"title": "Net decision"})),
-        )
-        .rejecting(vec![
-            json!({"title": "Net decision", "sourceMessageId": b.message}),
-            json!({"title": "Net decision", "sourceConversationId": b.channel}),
-            json!({"title": "Net decision", "supersedes": bx.decision}),
-        ]),
-        path_case(
             "POST /api/v1/projects/{id}/execution-profiles",
             &[project()],
             empty(),
         )
         .rejecting(vec![json!({"providerAccountId": b.provider_account})]),
-        path_case(
-            "POST /api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
-            &[project(), same("codex_app_server")],
-            empty(),
-        )
-        .own_reaches("execution_profile_required", NEEDS_ACCOUNT),
-        path_case(
-            "PUT /api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-            &[project(), same("codex_app_server"), same("net-project-model")],
-            json_body(json!({"displayName": "Net project model"})),
-        ),
-        path_case(
-            "DELETE /api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-            &[project(), same("codex_app_server"), same("net-project-model")],
-            empty(),
-        ),
         path_case("PUT /api/v1/projects/{id}/navigation", &[project()], |values| {
             Payload::Json(json!({
                 "location": {
@@ -4953,48 +4419,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         path_case("POST /api/v1/projects/{id}/switch", &[project()], |values| {
             Payload::Json(json!({"expectedVersion": navigation_version(&values[0])}))
         }),
-        // Agent profiles and runs
-        path_case(
-            "POST /api/v1/projects/{project_id}/agent-profiles",
-            &[project()],
-            json_body(json!({"template": "reviewer", "name": "Net reviewer"})),
-        )
-        .rejecting(vec![json!({
-            "template": "reviewer",
-            "name": "Net reviewer b",
-            "environmentId": bx.environment,
-        })]),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            &[project(), id(ax.agent_profile, bx.agent_profile)],
-            |values| {
-                Payload::Json(json!({
-                    "version": version("agent_profiles", &values[1]),
-                    "description": "Net reviews",
-                }))
-            },
-        )
-        .rejecting(vec![json!({
-            "version": version("agent_profiles", ax.agent_profile),
-            "environmentId": bx.environment,
-        })]),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            &[project(), id(sp.agent_profile, bx.agent_profile)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
-            &[project(), id(a.run, b.run)],
-            empty(),
-        )
-        .without_own("publishing pushes to GitHub, which tests can't reach"),
-        path_case(
-            "POST /api/v1/projects/{project_id}/agent-runs/{run_id}/pull-request",
-            &[project(), looked_up(a.run, b.run)],
-            json_body(json!({"title": "Net pull request", "body": "Net"})),
-        )
-        .without_own("opening a pull request asks GitHub, which tests can't reach"),
+        // Runs
         // AI
         path_case(
             "POST /api/v1/projects/{project_id}/ai/analyze",
@@ -5039,102 +4464,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         ),
         // Automations
-        path_case(
-            "POST /api/v1/projects/{project_id}/automations",
-            &[project()],
-            json_body(json!({
-                "name": "Net rule",
-                "trigger": {"kind": "task_created"},
-                "actions": [{"kind": "notify", "recipients": "owner", "message": "Net"}],
-            })),
-        )
-        .rejecting(vec![
-            json!({
-                "name": "Net rule b",
-                "trigger": {"kind": "task_created"},
-                "actions": [{"kind": "post_message", "conversationId": b.channel, "text": "Net"}],
-            }),
-            json!({
-                "name": "Net rule c",
-                "trigger": {"kind": "task_created"},
-                "actions": [{"kind": "launch", "environmentId": bx.environment}],
-            }),
-            json!({
-                "name": "Net rule d",
-                "trigger": {"kind": "task_created"},
-                "actions": [{"kind": "launch", "agentProfileId": bx.agent_profile}],
-            }),
-        ]),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/automations/{rule_id}",
-            &[project(), id(a.rule, b.rule)],
-            versioned("automation_rules", 1, json!({"name": "Rule"})),
-        )
-        .rejecting(vec![json!({
-            "expectedVersion": version("automation_rules", a.rule),
-            "actions": [{"kind": "post_message", "conversationId": b.channel, "text": "Net"}],
-        })]),
-        path_case(
-            "POST /api/v1/projects/{project_id}/automations/{rule_id}/run",
-            &[project(), id(a.rule, b.rule)],
-            empty(),
-        )
-        .rejecting(vec![json!({"workItemId": b.task})]),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/automations/{rule_id}",
-            &[project(), id(a.rule, b.rule)],
-            empty(),
-        )
-        .last(),
-        path_case(
-            "POST /api/v1/projects/{project_id}/bug-report-links",
-            &[project()],
-            json_body(json!({"name": "Net game"})),
-        ),
-        // Environments
-        path_case(
-            "POST /api/v1/projects/{project_id}/environments",
-            &[project()],
-            json_body(json!({"name": "Net cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-net"})),
-        )
-        .rejecting(vec![json!({
-            "name": "Net cloud b",
-            "harness": "codex_cloud",
-            "providerEnvironmentId": "env-net-b",
-            "repositoryId": b.repository,
-        })]),
-        path_case(
-            "PUT /api/v1/projects/{project_id}/environments/{environment_id}",
-            &[project(), id(ax.environment, bx.environment)],
-            versioned(
-                "project_environments",
-                1,
-                json!({"name": "Cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-launch"}),
-            ),
-        )
-        .rejecting(vec![json!({
-            "name": "Cloud",
-            "harness": "codex_cloud",
-            "providerEnvironmentId": "env-launch",
-            "repositoryId": b.repository,
-            "expectedVersion": version("project_environments", ax.environment),
-        })]),
-        path_case(
-            "POST /api/v1/projects/{project_id}/environments/{environment_id}/default",
-            &[project(), id(ax.environment, bx.environment)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/environments/{environment_id}/check",
-            &[project(), id(ax.environment, bx.environment)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/environments/{environment_id}/archive",
-            &[project(), id(ax.environment, bx.environment)],
-            empty(),
-        )
-        .last(),
         // Personal provider sign-in
         path_case(
             "POST /api/v1/projects/{project_id}/execution-profiles/{profile_id}/account/login/api-key",
@@ -5246,39 +4575,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             versioned("external_agent_connections", 1, json!({})),
         ),
         // Imports
-        path_case(
-            "POST /api/v1/projects/{project_id}/imports",
-            &[project()],
-            json_body(json!({"source": "markdown", "text": "# Net\n- [ ] Net import\n", "fileName": "net.md"})),
-        )
-        .rejecting(vec![json!({"source": "github", "repositoryId": b.repository})]),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/imports/{import_id}",
-            &[project(), id(&a.import, &b.import)],
-            versioned("task_imports", 1, json!({})),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/imports/{import_id}/commit",
-            &[project(), id(&a.import, &b.import)],
-            versioned("task_imports", 1, json!({})),
-        ),
         // GitHub
-        path_case(
-            "PUT /api/v1/projects/{project_id}/integrations/github/automation",
-            &[project()],
-            |values| {
-                Payload::Json(json!({
-                    "expectedVersion": current(
-                        "project_github_automation_settings",
-                        "version",
-                        &[("project_id", values[0].clone())],
-                        0,
-                    ),
-                    "pullRequestOpenEnabled": true,
-                    "pullRequestMergeEnabled": true,
-                }))
-            },
-        ),
         path_case(
             "POST /api/v1/projects/{project_id}/integrations/github/connect",
             &[project()],
@@ -5290,44 +4587,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             json_body(json!({"installationId": 1, "githubRepositoryId": 1})),
         )
         .without_own(NEEDS_GITHUB),
-        path_case(
-            "POST /api/v1/projects/{project_id}/integrations/github/sync",
-            &[project()],
-            |values| {
-                Payload::Json(json!({
-                    "installationId": 1,
-                    "repositoryIds": [if is_a(values, &a.project) { a.repository } else { b.repository }],
-                }))
-            },
-        )
-        .rejecting(vec![json!({"installationId": 1, "repositoryIds": [b.repository]})])
-        .without_own(NEEDS_GITHUB),
         // Invitations, labels, launches, members, milestones
-        path_case(
-            "POST /api/v1/projects/{project_id}/invitations",
-            &[project()],
-            json_body(json!({"role": "viewer", "expiresInHours": 24})),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/labels",
-            &[project()],
-            json_body(json!({"name": "Net label"})),
-        ),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/labels/{label_id}",
-            &[project(), id(ax.label, bx.label)],
-            versioned("project_labels", 1, json!({"description": "Net"})),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/fields",
-            &[project()],
-            json_body(json!({"name": "Net field", "type": "text"})),
-        ),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/fields/{field_id}",
-            &[project(), id(ax.field, bx.field)],
-            versioned("field_definitions", 1, json!({"description": "Net"})),
-        ),
         // Collections (AWD-90). A view or a record may only name A's fields,
         // people, tasks and pages.
         path_case(
@@ -5465,81 +4725,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             json!({"workItemIds": [a.subtask], "startWhen": "at", "startAt": far, "providerAccountId": b.provider_account}),
             json!({"workItemIds": [a.subtask], "startWhen": "at", "startAt": far, "agentProfileId": bx.agent_profile}),
         ]),
-        path_case(
-            "POST /api/v1/projects/{project_id}/launches/{launch_id}/cancel",
-            &[project(), id(ax.launch, bx.launch)],
-            empty(),
-        ),
         // Layouts
-        path_case(
-            "PUT /api/v1/projects/{project_id}/layout",
-            &[project()],
-            |values| {
-                let preset = if is_a(values, &a.project) {
-                    ax.layout_preset
-                } else {
-                    bx.layout_preset
-                };
-                Payload::Json(json!({"layout": {"preset": preset}}))
-            },
-        )
-        .rejecting(vec![json!({"layout": {"preset": bx.layout_preset}})]),
-        path_case(
-            "PUT /api/v1/projects/{project_id}/layout/rules",
-            &[project()],
-            |values| {
-                let (preset, person) = if is_a(values, &a.project) {
-                    (ax.layout_preset, a.rook)
-                } else {
-                    (bx.layout_preset, b.rook)
-                };
-                Payload::Json(json!({"rules": [
-                    {"role": "viewer", "preset": preset},
-                    {"actorId": person, "preset": "bug_reporting"},
-                ]}))
-            },
-        )
-        .rejecting(vec![
-            json!({"rules": [
-                {"role": "viewer", "preset": bx.layout_preset},
-                {"actorId": a.rook, "preset": "bug_reporting"},
-            ]}),
-            json!({"rules": [
-                {"role": "viewer", "preset": ax.layout_preset},
-                {"actorId": b.rook, "preset": "bug_reporting"},
-            ]}),
-        ]),
-        path_case(
-            "POST /api/v1/projects/{project_id}/members",
-            &[project()],
-            json_body(json!({"actorId": ax.wren, "role": "member"})),
-        )
-        .rejecting(vec![json!({"actorId": bx.wren, "role": "member"})]),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/members/{actor_id}",
-            &[project(), id(a.rook, b.rook)],
-            |values| {
-                Payload::Json(json!({
-                    "expectedVersion": current(
-                        "project_memberships",
-                        "version",
-                        &[("project_id", values[0].clone()), ("actor_id", values[1].clone())],
-                        1,
-                    ),
-                    "enabled": true,
-                }))
-            },
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/milestones",
-            &[project()],
-            json_body(json!({"name": "Net milestone"})),
-        ),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/milestones/{milestone_id}",
-            &[project(), id(ax.milestone, bx.milestone)],
-            versioned("project_milestones", 1, json!({"description": "Net"})),
-        ),
         // Provider accounts
         path_case(
             "POST /api/v1/projects/{project_id}/provider-accounts",
@@ -5591,59 +4777,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         )
         .without_own(NEEDS_CLI),
-        path_case(
-            "POST /api/v1/projects/{project_id}/pull-requests/{pull_request_id}/merge",
-            &[project(), id(a.pull_request, b.pull_request)],
-            |_| Payload::Json(json!({})),
-        )
-        .without_own(NEEDS_GITHUB),
-        path_case(
-            "POST /api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
-            &[project(), id(a.pull_request, b.pull_request)],
-            empty(),
-        )
-        .without_own(NEEDS_GITHUB),
         // Recurring tasks and templates
-        path_case(
-            "POST /api/v1/projects/{project_id}/recurring-tasks",
-            &[project()],
-            |values| {
-                Payload::Json(json!({
-                    "templateId": if is_a(values, &a.project) { ax.task_template } else { bx.task_template },
-                    "frequency": "weekly",
-                    "weekdays": [2],
-                }))
-            },
-        )
-        .rejecting(vec![
-            json!({"templateId": bx.task_template, "frequency": "weekly", "weekdays": [2]}),
-            json!({"templateId": ax.task_template, "frequency": "weekly", "weekdays": [3], "assigneeActorId": b.rook}),
-        ]),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-            &[project(), id(ax.recurring, bx.recurring)],
-            versioned("recurring_tasks", 1, json!({"enabled": true})),
-        )
-        .rejecting(vec![json!({
-            "expectedVersion": version("recurring_tasks", ax.recurring),
-            "assigneeActorId": b.rook,
-        })]),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-            &[project(), id(ax.recurring, bx.recurring)],
-            empty(),
-        )
-        .last(),
-        path_case(
-            "POST /api/v1/projects/{project_id}/task-templates",
-            &[project()],
-            json_body(json!({"name": "Net template", "title": "Net review"})),
-        ),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/task-templates/{template_id}",
-            &[project(), id(ax.task_template, bx.task_template)],
-            versioned("task_templates", 1, json!({"archived": false})),
-        ),
         path_case(
             "POST /api/v1/projects/{project_id}/task-templates/{template_id}/apply",
             &[project(), looked_up(ax.task_template, bx.task_template)],
@@ -5653,36 +4787,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             json!({"title": "Net applied", "assigneeActorId": b.rook}),
             json!({"title": "Net applied", "milestoneId": bx.milestone}),
         ]),
-        path_case(
-            "POST /api/v1/projects/{project_id}/save-as-template",
-            &[project()],
-            json_body(json!({"name": "Net setup two", "description": "Net"})),
-        ),
         // Repositories
-        path_case(
-            "POST /api/v1/projects/{project_id}/repositories",
-            &[project()],
-            json_body(json!({
-                "githubRepositoryId": 9001,
-                "owner": "acme",
-                "name": "net",
-                "cloneUrl": "https://github.com/acme/net.git",
-                "defaultBranch": "main",
-                "trustAcknowledged": true,
-            })),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/repositories/{repository_id}/prepare",
-            &[project(), id(a.repository, b.repository)],
-            empty(),
-        )
-        .without_own("preparing clones the repository from GitHub"),
-        path_case(
-            "POST /api/v1/projects/{project_id}/repositories/{repository_id}/archive",
-            &[project(), id(sp.repository, b.repository)],
-            versioned("repositories", 1, json!({})),
-        )
-        .last(),
         // Project secrets
         path_case(
             "PUT /api/v1/projects/{project_id}/secrets/{name}",
@@ -5695,117 +4800,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         ),
         // The workflow
-        path_case(
-            "PUT /api/v1/projects/{project_id}/work-item-workflow",
-            &[project()],
-            |values| {
-                Payload::Json(with(&a_workflow, "expectedVersion", workflow_version(&values[0])))
-            },
-        )
-        .rejecting(vec![
-            with(
-                &b_status_workflow,
-                "expectedVersion",
-                workflow_version(&a.project),
-            ),
-            with(
-                &b_type_workflow,
-                "expectedVersion",
-                workflow_version(&a.project),
-            ),
-        ]),
         // Tasks
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items",
-            &[project()],
-            json_body(json!({"title": "Net task"})),
-        )
-        .rejecting(vec![
-            json!({"title": "Net task", "typeId": bx.task_type}),
-            json!({"title": "Net task", "statusId": bx.status}),
-            json!({"title": "Net task", "assigneeActorId": b.rook}),
-            json!({"title": "Net task", "parentWorkItemId": b.task}),
-            json!({"title": "Net task", "milestoneId": bx.milestone}),
-            json!({"title": "Net task", "labelIds": [bx.label]}),
-            json!({"title": "Net task", "sourceMessageId": b.message}),
-        ]),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/bulk",
-            &[project()],
-            |values| {
-                let task = if is_a(values, &a.project) { a.subtask } else { b.subtask };
-                Payload::Json(json!({
-                    "items": [{"id": task, "expectedVersion": version("work_items", task)}],
-                    "changes": {"priority": "high"},
-                }))
-            },
-        )
-        .rejecting(vec![
-            json!({
-                "items": [{"id": b.task, "expectedVersion": version("work_items", b.task)}],
-                "changes": {"priority": "high"},
-            }),
-            json!({
-                "items": [{"id": a.subtask, "expectedVersion": version("work_items", a.subtask)}],
-                "changes": {"statusId": bx.status},
-            }),
-            json!({
-                "items": [{"id": a.subtask, "expectedVersion": version("work_items", a.subtask)}],
-                "changes": {"assigneeActorId": b.rook},
-            }),
-            json!({
-                "items": [{"id": a.subtask, "expectedVersion": version("work_items", a.subtask)}],
-                "changes": {"milestoneId": bx.milestone},
-            }),
-            json!({
-                "items": [{"id": a.subtask, "expectedVersion": version("work_items", a.subtask)}],
-                "changes": {"addLabelIds": [bx.label]},
-            }),
-            json!({
-                "items": [{"id": a.subtask, "expectedVersion": version("work_items", a.subtask)}],
-                "changes": {"fieldValues": keyed(bx.field, json!("Net"))},
-            }),
-            json!({
-                "items": [{"id": a.subtask, "expectedVersion": version("work_items", a.subtask)}],
-                "changes": {"fieldValues": keyed(ax.person_field, json!(b.rook))},
-            }),
-        ]),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}",
-            &[project(), task()],
-            versioned("work_items", 1, json!({"title": "Launch plan"})),
-        )
-        .rejecting(
-            [
-                json!({"typeId": bx.task_type}),
-                json!({"statusId": bx.status}),
-                json!({"assigneeActorId": b.rook}),
-                json!({"parentWorkItemId": b.task}),
-                json!({"milestoneId": bx.milestone}),
-                json!({"addLabelIds": [bx.label]}),
-                json!({"fieldValues": keyed(bx.field, json!("Net"))}),
-                json!({"fieldValues": keyed(ax.person_field, json!(b.rook))}),
-            ]
-            .into_iter()
-            .map(|change| with(&change, "expectedVersion", version("work_items", a.task)))
-            .collect(),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
-            &[project(), task()],
-            versioned("work_items", 1, json!({"text": "Net criterion"})),
-        ),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
-            &[project(), task(), id(ax.criterion, bx.criterion)],
-            versioned("work_items", 1, json!({"completed": true})),
-        ),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
-            &[project(), task(), id(ax.criterion, bx.criterion)],
-            versioned("work_items", 1, json!({})),
-        )
-        .last(),
         path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/ai/criteria",
             &[project(), task()],
@@ -5822,150 +4817,15 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         ),
         path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/archive",
-            &[project(), id(sp.task, b.task)],
-            versioned("work_items", 1, json!({})),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
-            &[project(), id(sp.task, b.task)],
-            versioned("work_items", 1, json!({})),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
-            &[project(), task()],
-            json_body(json!({"content": text("Net comment"), "attachments": [ax.comment_upload]})),
-        )
-        .rejecting(vec![
-            json!({"content": text("Net comment"), "attachments": [bx.comment_upload]}),
-        ]),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
-            &[project(), task(), id(a.comment, b.comment)],
-            json_body(json!({"content": text("Launch comment, edited over HTTP")})),
-        ),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
-            &[project(), task(), id(sp.comments[0], b.comment)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
-            &[project(), task()],
-            |values| {
-                Payload::Json(json!({
-                    "expectedVersion": version("work_items", &values[1]),
-                    "blockedBy": [if is_a(values, &a.project) { sp.task } else { b.subtask }.to_string()],
-                }))
-            },
-        )
-        .rejecting(vec![
-            json!({"expectedVersion": version("work_items", a.task), "blockedBy": [b.task.to_string()]}),
-            json!({"expectedVersion": version("work_items", a.task), "blocks": [b.task.to_string()]}),
-        ]),
-        path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/files",
             &[project(), task()],
             |_| Payload::Bytes("image/png", tiny_png()),
         )
         .query("?name=net.png"),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/move",
-            &[project(), task()],
-            |values| {
-                Payload::Json(json!({
-                    "expectedVersion": version("work_items", &values[1]),
-                    "targetStatusId": if is_a(values, &a.project) { ax.status } else { bx.status },
-                    "targetPosition": 1,
-                }))
-            },
-        )
-        .rejecting(vec![json!({
-            "expectedVersion": version("work_items", a.task),
-            "targetStatusId": bx.status,
-            "targetPosition": 1,
-        })]),
         // AWD-102: moving to another project. A's own request names a spare
         // project of A's with a made-up preview snapshot, so it passes every
         // access check and stops at the snapshot (a real move is in
         // awd102_task_move); B's task, project or target is refused first.
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
-            &[project(), task()],
-            |values| {
-                Payload::Json(json!({
-                    "targetProjectId": if is_a(values, &a.project) { sp.projects[0].clone() } else { a.project.clone() },
-                    "snapshot": "0".repeat(64),
-                }))
-            },
-        )
-        .rejecting(vec![json!({"targetProjectId": b.project, "snapshot": "0".repeat(64)})])
-        .own_reaches(
-            "conflict",
-            "a move needs its own fresh preview; a made-up snapshot stops there, past every access check",
-        )
-        .last(),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
-            &[project(), task(), id(a.pull_request, b.pull_request)],
-            versioned("work_items", 1, json!({})),
-        ),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
-            &[project(), task(), id(a.pull_request, b.pull_request)],
-            versioned("work_items", 1, json!({})),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
-            &[project(), task()],
-            |values| {
-                Payload::Json(json!({
-                    "expectedVersion": version("work_items", &values[1]),
-                    "kind": "relates_to",
-                    "target": if is_a(values, &a.project) { sp.task } else { b.subtask }.to_string(),
-                }))
-            },
-        )
-        .rejecting(vec![json!({
-            "expectedVersion": version("work_items", a.task),
-            "kind": "relates_to",
-            "target": b.task.to_string(),
-        })]),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/release-claim",
-            &[project(), task()],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-            &[project(), task(), id(a.repository, b.repository)],
-            versioned("work_items", 1, json!({"role": "related"})),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}/primary",
-            &[project(), task(), id(a.repository, b.repository)],
-            versioned("work_items", 1, json!({})),
-        ),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-            &[project(), task(), id(a.repository, b.repository)],
-            versioned("work_items", 1, json!({})),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
-            &[project(), task(), id(&a.thread, &b.thread)],
-            empty(),
-        ),
-        path_case(
-            "DELETE /api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
-            &[project(), task(), id(&a.thread, &b.thread)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/watch",
-            &[project(), task()],
-            json_body(json!({"watching": true})),
-        ),
         path_case(
             "POST /api/v1/projects/{project_id}/work-items/{work_item_id}/work-with-worker",
             &[project(), task()],
@@ -6016,35 +4876,7 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         )
         .last(),
         // Reply requests
-        path_case(
-            "POST /api/v1/reply-requests/{id}/stop",
-            &[id(sp.reply_stop, bx.reply)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/reply-requests/{id}/retry",
-            &[id(ax.stopped_reply, bx.stopped_reply)],
-            empty(),
-        ),
         // Settings
-        body_case(
-            "PUT /api/v1/settings/values/{key}",
-            &["run.model"],
-            json!({"scope": "workspace", "organizationId": a.organization, "value": "net-model"}),
-            vec![
-                json!({"scope": "workspace", "organizationId": b.organization, "value": "net-model"}),
-                json!({"scope": "project", "projectId": b.project, "value": "net-model"}),
-            ],
-        ),
-        body_case(
-            "POST /api/v1/settings/values/{key}/reset",
-            &["run.model"],
-            json!({"scope": "project", "projectId": a.project}),
-            vec![
-                json!({"scope": "project", "projectId": b.project}),
-                json!({"scope": "workspace", "organizationId": b.organization}),
-            ],
-        ),
         // Usage
         path_case(
             "POST /api/v1/usage/accounts/{account_id}/batch",
@@ -6098,58 +4930,10 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         )
         .last(),
         // Whiteboards
-        body_case(
-            "POST /api/v1/whiteboards",
-            &[],
-            json!({"title": "Net sketch", "organizationId": a.organization}),
-            vec![
-                json!({"title": "Net sketch", "organizationId": b.organization}),
-                json!({"title": "Net sketch", "projectId": b.project}),
-            ],
-        )
-        .rejecting(vec![json!({
-            "title": "Net sketch",
-            "projectId": a.project,
-            "link": {"targetKind": "task", "targetId": b.task},
-        })]),
-        path_case(
-            "PATCH /api/v1/whiteboards/{id}",
-            &[id(a.project_whiteboard, b.project_whiteboard)],
-            versioned("whiteboards", 0, json!({"title": "Plan"})),
-        )
-        .rejecting(vec![json!({
-            "projectId": b.project,
-            "expectedVersion": version("whiteboards", a.project_whiteboard),
-        })]),
-        path_case(
-            "POST /api/v1/whiteboards/{id}/duplicate",
-            &[id(a.whiteboard, b.whiteboard)],
-            json_body(json!({"title": "Net copy"})),
-        ),
         path_case(
             "POST /api/v1/whiteboards/{id}/files",
             &[id(a.whiteboard, b.whiteboard)],
             json_body(json!({"id": "netphoto", "mimeType": "image/png", "dataURL": TINY_PNG})),
-        ),
-        path_case(
-            "POST /api/v1/whiteboards/{id}/links",
-            &[id(a.project_whiteboard, b.project_whiteboard)],
-            |values| {
-                Payload::Json(json!({
-                    "targetKind": "task",
-                    "targetId": if values[0] == a.project_whiteboard.to_string() { a.subtask } else { b.subtask },
-                }))
-            },
-        )
-        .rejecting(vec![
-            json!({"targetKind": "task", "targetId": b.task}),
-            json!({"targetKind": "page", "targetId": b.page}),
-            json!({"targetKind": "project", "targetId": b.project}),
-        ]),
-        path_case(
-            "DELETE /api/v1/whiteboards/{id}/links/{kind}/{target_id}",
-            &[id(a.whiteboard, b.whiteboard), same("project"), project()],
-            empty(),
         ),
         path_case(
             "POST /api/v1/whiteboards/{id}/operations",
@@ -6405,7 +5189,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .rejecting(vec![json!({"accountId": a.provider_account, "taskIds": [b.task], "clientRequestId": "net-batch-mixed"})]),
         mcp_case(
-            "project_layout_set",
+            "layout_update",
             json!({"projectId": a.project, "preset": "Software team"}),
             vec![json!({"projectId": b.project, "preset": "Software team"})],
         )
@@ -6413,17 +5197,23 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "preset": bx.layout_preset}),
             json!({"projectId": a.project, "rules": [{"role": "member", "preset": bx.layout_preset}]}),
             json!({"projectId": a.project, "rules": [{"person": bx.wren, "preset": "Minimal"}]}),
-            json!({"projectId": a.project, "workspace": true, "preset": bx.layout_preset}),
+            json!({"projectId": a.project, "wholeWorkspace": true, "preset": bx.layout_preset}),
         ]),
         mcp_case(
-            "layout_preset_write",
+            "layout_preset_create",
             json!({"projectId": a.project, "name": "Net own", "base": "Software team"}),
             vec![json!({"projectId": b.project, "name": "Net b", "base": "Software team"})],
         )
+        .rejecting(vec![json!({"projectId": a.project, "name": "Net based", "base": bx.layout_preset})]),
+        mcp_case(
+            "layout_preset_update",
+            json!({}),
+            vec![json!({"projectId": b.project, "preset": bx.layout_preset, "name": "Mine now"})],
+        )
+        .without_own("layouts.rs changes and removes a workspace's own preset")
         .rejecting(vec![
             json!({"projectId": a.project, "preset": bx.layout_preset, "name": "Mine now"}),
             json!({"projectId": a.project, "preset": bx.layout_preset, "remove": true}),
-            json!({"projectId": a.project, "name": "Net based", "base": bx.layout_preset}),
         ]),
         mcp_case("space_join", json!({}), vec![json!({"spaceId": b.project})])
             .without_own("joining needs an open space A's app isn't in; space_ops.rs covers it"),
@@ -6840,7 +5630,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .without_own("A isn't being deleted; workspace_lifecycle.rs covers keeping it"),
         mcp_case(
-            "agent_profile_write",
+            "agent_profile_set",
             json!({"projectId": a.project, "template": "reviewer", "name": "Net mcp reviewer"}),
             vec![json!({"projectId": b.project, "template": "reviewer", "name": "Net mcp reviewer"})],
         )
@@ -6879,7 +5669,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .rejecting(vec![json!({"projectId": a.project, "environment": bx.environment})]),
         mcp_case(
-            "model_catalog_write",
+            "model_catalog_set",
             json!({"projectId": a.project, "harness": "codex_cloud", "model": "net-model", "overrides": {"displayName": "Net"}}),
             vec![
                 json!({"projectId": b.project, "harness": "codex_cloud", "model": "net-model", "overrides": {"displayName": "Net"}}),
@@ -6895,31 +5685,52 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             ],
         ),
         mcp_case(
-            "settings_set",
-            json!({"projectId": a.project, "key": "run.model", "value": "net-model"}),
+            "setting_update",
+            json!({"spaceId": a.project, "key": "run.model", "value": "net-model"}),
             vec![
-                json!({"projectId": b.project, "key": "run.model", "value": "net-model"}),
-                json!({"projectId": b.project, "key": "run.model", "scope": "workspace", "value": "net-model"}),
+                json!({"spaceId": b.project, "key": "run.model", "value": "net-model"}),
+                json!({"workspace": b.organization, "key": "run.model", "scope": "workspace", "value": "net-model"}),
+                // A reset reaches as far as a set: never another workspace's value.
+                json!({"spaceId": b.project, "key": "run.model", "scope": "project", "reset": true}),
+                json!({"workspace": b.organization, "key": "run.model", "scope": "workspace", "reset": true}),
             ],
         ),
         mcp_case(
-            "invitation_write",
+            "invitation_create",
             json!({"projectId": a.project, "role": "viewer", "expiresInHours": 24}),
             vec![json!({"projectId": b.project, "role": "viewer"})],
         )
         .rejecting(vec![
-            json!({"projectId": a.project, "invitation": bx.project_invitation, "revoke": true}),
-            json!({"projectId": a.project, "invitation": bx.project_invitation, "replace": true}),
             json!({"projectId": a.project, "role": bx.custom_role}),
-            json!({"projectId": a.project, "workspace": true, "invitation": bx.workspace_invitation, "revoke": true}),
-            json!({"projectId": a.project, "workspace": true, "role": bx.custom_role}),
+            json!({"projectId": a.project, "wholeWorkspace": true, "role": bx.custom_role}),
         ]),
         mcp_case(
-            "role_write",
-            json!({"projectId": a.project, "name": "Net tool role", "baseRole": "viewer", "permissions": ["tasks.view"]}),
-            vec![json!({"projectId": b.project, "name": "Net tool role b", "baseRole": "viewer", "permissions": ["tasks.view"]})],
+            "invitation_update",
+            json!({"projectId": a.project, "invitation": sp.project_invitation, "revoke": true}),
+            vec![json!({"projectId": b.project, "invitation": bx.project_invitation, "revoke": true})],
         )
-        .rejecting(vec![json!({"projectId": a.project, "role": bx.custom_role, "description": "Net"})]),
+        .rejecting(vec![
+            json!({"projectId": a.project, "invitation": bx.project_invitation, "revoke": true}),
+            json!({"projectId": a.project, "invitation": bx.project_invitation, "replace": true}),
+            json!({"projectId": a.project, "wholeWorkspace": true, "invitation": bx.workspace_invitation, "revoke": true}),
+        ]),
+        mcp_case(
+            "role_create",
+            json!({"name": "Net tool role", "baseRole": "viewer", "permissions": ["tasks.view"], "clientRequestId": "net-role"}),
+            vec![json!({"workspace": b.organization, "name": "Net tool role b", "baseRole": "viewer", "permissions": ["tasks.view"], "clientRequestId": "net-role-b"})],
+        ),
+        mcp_case(
+            "role_update",
+            json!({"role": ax.custom_role, "expectedVersion": version("workspace_roles", ax.custom_role), "description": "Net"}),
+            vec![json!({"workspace": b.organization, "role": bx.custom_role, "expectedVersion": version("workspace_roles", bx.custom_role), "description": "Net"})],
+        )
+        .rejecting(vec![json!({"role": bx.custom_role, "expectedVersion": version("workspace_roles", bx.custom_role), "description": "Net"})]),
+        mcp_case(
+            "role_delete",
+            json!({"role": sp.role}),
+            vec![json!({"workspace": b.organization, "role": bx.custom_role})],
+        )
+        .rejecting(vec![json!({"role": bx.custom_role})]),
         mcp_case(
             "workspace_template_apply",
             json!({"projectId": a.project, "template": "everything"}),
@@ -6933,26 +5744,34 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .rejecting(vec![json!({"projectId": a.project, "remove": bx.workspace_template})]),
         mcp_case(
-            "project_template_write",
+            "project_template_create",
             json!({"projectId": a.project, "name": "Net mcp setup"}),
             vec![json!({"projectId": b.project, "name": "Net mcp setup b"})],
+        ),
+        mcp_case(
+            "project_template_update",
+            json!({}),
+            vec![json!({"projectId": b.project, "template": bx.project_template, "name": "Net"})],
         )
+        .without_own("awd91_agent_parity.rs renames and archives a template")
         .rejecting(vec![
             json!({"projectId": a.project, "template": bx.project_template, "name": "Net"}),
         ]),
         mcp_case(
             "role_assign",
-            json!({"projectId": a.project, "person": "@wren", "role": ax.custom_role}),
-            vec![
-                json!({"projectId": b.project, "person": "@wren", "role": "member"}),
-                json!({"projectId": b.project, "person": "@wren", "agentLimit": ["tasks.view"]}),
-            ],
+            json!({"account": "@wren", "role": ax.custom_role}),
+            vec![json!({"workspace": b.organization, "account": "@wren", "role": "member"})],
         )
         .rejecting(vec![
-            json!({"projectId": a.project, "person": bx.wren, "role": "member"}),
-            json!({"projectId": a.project, "person": bx.wren, "agentLimit": null}),
-            json!({"projectId": a.project, "person": "@wren", "role": bx.custom_role}),
+            json!({"account": bx.wren, "role": "member"}),
+            json!({"account": "@wren", "role": bx.custom_role}),
         ]),
+        mcp_case(
+            "app_limit_set",
+            json!({"account": "@wren", "permissions": ["tasks.view"]}),
+            vec![json!({"workspace": b.organization, "account": "@wren", "permissions": ["tasks.view"]})],
+        )
+        .rejecting(vec![json!({"account": bx.wren, "lift": true})]),
         // K4.7: spaces. B's spaces, B's workspace and B's project
         // templates aren't A's.
         mcp_case(
@@ -7114,6 +5933,13 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"id": ax.later, "text": "Net"}),
             vec![json!({"id": bx.later, "text": "Net"})],
         ),
+        // Wren joins A's project here: the requests below ask Wren.
+        mcp_case(
+            "space_member_add",
+            json!({"spaceId": a.project, "account": "@wren", "role": "member"}),
+            vec![json!({"spaceId": b.project, "account": "@wren", "role": "member"})],
+        )
+        .rejecting(vec![json!({"spaceId": a.project, "account": bx.wren, "role": "member"})]),
         mcp_case(
             "request_create",
             json!({"spaceId": a.project, "title": "Net?", "audience": {"accounts": ["@wren"]},
@@ -7287,6 +6113,9 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 ("status", json!(bx.status)),
                 ("type", json!(bx.task_type)),
                 ("beforeTaskId", json!(bx.backlog_task)),
+                ("labels", json!([bx.label])),
+                ("fromMessageId", json!(b.message)),
+                ("fields", keyed(bx.field, json!("Net"))),
             ]
             .into_iter()
             .enumerate()
@@ -7315,6 +6144,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 ("beforeTaskId", json!(b.subtask)),
                 ("fields", keyed(bx.field, json!("Net"))),
                 ("fields", keyed(ax.person_field, json!(b.rook))),
+                ("addLabels", json!([bx.label])),
             ]
             .into_iter()
             .map(|(key, value)| {
@@ -7362,6 +6192,8 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"projectId": a.project, "taskIds": [a.subtask], "assignee": b.rook, "clientRequestId": "net-update-many-m3"}),
             json!({"projectId": a.project, "taskIds": [a.subtask], "fields": keyed(bx.field, json!("Net")), "clientRequestId": "net-update-many-m4"}),
             json!({"projectId": a.project, "taskIds": [a.subtask], "fields": keyed(ax.person_field, json!(b.rook)), "clientRequestId": "net-update-many-m5"}),
+            json!({"projectId": a.project, "taskIds": [a.subtask], "status": bx.status, "clientRequestId": "net-update-many-m6"}),
+            json!({"projectId": a.project, "taskIds": [a.subtask], "addLabels": [bx.label], "clientRequestId": "net-update-many-m7"}),
         ]),
         mcp_case(
             "task_criteria_update",
@@ -7532,7 +6364,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "expectedVersion": version("field_definitions", bx.field),
         })]),
         mcp_case(
-            "collection_write",
+            "collection_create",
+            json!({
+                "projectId": a.project,
+                "name": "Net mcp own collection",
+                "fields": [{"name": "Net mcp field", "type": "number"}],
+            }),
+            vec![json!({"projectId": b.project, "name": "Net mcp collection"})],
+        ),
+        mcp_case(
+            "collection_update",
             json!({
                 "projectId": a.project,
                 "collection": a.collection,
@@ -7542,7 +6383,6 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![
                 json!({"projectId": a.project, "collection": b.collection, "description": "Net"}),
                 json!({"projectId": b.project, "collection": b.collection, "description": "Net"}),
-                json!({"projectId": b.project, "name": "Net mcp collection"}),
             ],
         )
         .rejecting(vec![
@@ -7565,12 +6405,11 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             }),
         ]),
         mcp_case(
-            "record_write",
+            "record_create_many",
             json!({
                 "projectId": a.project,
                 "collection": a.collection,
                 "records": [
-                    {"record": "#1", "fields": {"Notes": "Net mcp"}},
                     {"title": "Net mcp record", "fields": {"Tester": "me", "Build": a.task, "Spec": a.page}},
                 ],
             }),
@@ -7580,11 +6419,26 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             ],
         )
         .rejecting(vec![
-            json!({"projectId": a.project, "collection": a.collection, "records": [{"record": b.record, "title": "Net"}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Tester": b.rook}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Build": b.task}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": {"Spec": b.page}}]}),
             json!({"projectId": a.project, "collection": a.collection, "records": [{"title": "Net", "fields": keyed(b.collection_field, json!("Net"))}]}),
+        ]),
+        mcp_case(
+            "record_update_many",
+            json!({
+                "projectId": a.project,
+                "collection": a.collection,
+                "records": [{"record": "#1", "fields": {"Notes": "Net mcp"}}],
+            }),
+            vec![
+                json!({"projectId": a.project, "collection": b.collection, "records": [{"record": "#1", "title": "Net"}]}),
+                json!({"projectId": b.project, "collection": b.collection, "records": [{"record": "#1", "title": "Net"}]}),
+            ],
+        )
+        .rejecting(vec![
+            json!({"projectId": a.project, "collection": a.collection, "records": [{"record": b.record, "title": "Net"}]}),
+            json!({"projectId": a.project, "collection": a.collection, "records": [{"record": "#1", "fields": {"Tester": b.rook}}]}),
             // T1.36: a space's Pages records are its own pages only.
             json!({"projectId": a.project, "collection": "Pages", "records": [{"record": b.page, "fields": {}}]}),
         ]),
@@ -7607,6 +6461,16 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             // T1.30: nor from another workspace's template.
             json!({"collection": a.collection, "template": b.record_template,
                    "clientRequestId": "net-from-template-cross"}),
+        ]),
+        // C2.22: a sheet row from a message, only into a sheet here and
+        // only from a message here.
+        mcp_case(
+            "sheet_row_add",
+            json!({"sheetId": a.sheet, "fromMessageId": a.message}),
+            vec![json!({"sheetId": b.sheet, "values": {"Item": "Net"}})],
+        )
+        .rejecting(vec![
+            json!({"sheetId": a.sheet, "fromMessageId": b.message}),
         ]),
         // T1.41: a record changed (or a change proposed) only here.
         mcp_case(
@@ -7676,7 +6540,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"collection": a.collection, "field": a.collection_button, "record": b.record}),
         ]),
         mcp_case(
-            "sheet_write",
+            "sheet_create",
+            json!({"projectId": a.project, "name": "Net mcp own sheet"}),
+            vec![json!({"projectId": b.project, "name": "Net mcp sheet"})],
+        ),
+        mcp_case(
+            "sheet_update",
             json!({
                 "projectId": a.project,
                 "sheet": a.sheet,
@@ -7687,7 +6556,6 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 json!({"projectId": a.project, "sheet": b.sheet, "cells": [{"cell": "C1", "input": "Net"}]}),
                 json!({"projectId": b.project, "sheet": b.sheet, "cells": [{"cell": "C1", "input": "Net"}]}),
                 json!({"projectId": a.project, "sheet": b.sheet, "archived": true}),
-                json!({"projectId": b.project, "name": "Net mcp sheet"}),
             ],
         ),
         // C1.16: a sheet's filter views live on its tabs; B's sheet and
@@ -7712,6 +6580,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "sheet_range_set",
             json!({"sheetId": a.sheet, "name": "NetRange", "range": "A1:B2", "clientRequestId": "net-range"}),
             vec![json!({"sheetId": b.sheet, "name": "NetTaken", "range": "A1:B2", "clientRequestId": "net-range-b"})],
+        ),
+        // C1.18: B's sheet can't be given a chart from A.
+        mcp_case(
+            "sheet_chart_set",
+            json!({"sheetId": a.sheet, "title": "Net chart", "source": "A1:B2", "clientRequestId": "net-chart"}),
+            vec![json!({"sheetId": b.sheet, "title": "Net chart", "source": "A1:B2", "clientRequestId": "net-chart-b"})],
         ),
         // Views (T1.6): a view goes in the collection named; B's views and
         // collections can't be changed, pinned or made a default from A,
@@ -7895,12 +6769,12 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             .last()
         },
         mcp_case(
-            "page_edit",
+            "page_update_blocks",
             json!({"pageId": a.page, "expectedVersion": version("project_pages", &a.page), "edits": [{"op": "append", "markdown": "Net block"}]}),
             vec![json!({"pageId": b.page, "expectedVersion": version("project_pages", &b.page), "edits": [{"op": "append", "markdown": "Net"}]})],
         ),
         mcp_case(
-            "page_comment",
+            "page_comment_create",
             json!({"pageId": a.page, "text": "Net mcp comment"}),
             vec![
                 json!({"pageId": b.page, "text": "Net"}),
@@ -7934,12 +6808,14 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"proposalId": b.page_suggestions[2], "decision": "reject"})],
         ),
         mcp_case(
-            "page_write",
+            "page_update",
             json!({"pageId": a.page, "body": "Launch notes, third draft", "expectedVersion": version("project_pages", &a.page)}),
-            vec![
-                json!({"pageId": b.page, "body": "Net", "expectedVersion": version("project_pages", &b.page)}),
-                json!({"projectId": b.project, "title": "Net page", "body": "Net"}),
-            ],
+            vec![json!({"pageId": b.page, "body": "Net", "expectedVersion": version("project_pages", &b.page)})],
+        ),
+        mcp_case(
+            "page_create",
+            json!({"projectId": a.project, "title": "Net mcp created page", "body": "Net"}),
+            vec![json!({"projectId": b.project, "title": "Net page", "body": "Net"})],
         )
         .rejecting(vec![json!({
             "projectId": a.project,
@@ -7965,7 +6841,10 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "whiteboard_update_elements",
             json!({"whiteboardId": a.whiteboard, "operations": [{"op": "add", "type": "rectangle", "id": "netmcp", "text": "Net"}]}),
             vec![json!({"whiteboardId": b.whiteboard, "operations": [{"op": "add", "type": "rectangle", "id": "netmcp", "text": "Net"}]})],
-        ),
+        )
+        // C2.22: a sticky is made only from a message here.
+        .rejecting(vec![json!({"whiteboardId": a.whiteboard, "fromMessageId": b.message,
+            "operations": [{"op": "add", "type": "rectangle", "id": "netmsg", "text": "Net"}]})]),
         // C1.11: a proposal goes only on a board the caller can see.
         mcp_case(
             "whiteboard_propose",
@@ -7994,6 +6873,31 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"whiteboardId": a.whiteboard, "title": "Net mcp copy"}),
             vec![json!({"whiteboardId": b.whiteboard, "title": "Net mcp copy"})],
         ),
+        // C1.32: B's board's notes don't become tasks in A, nor A's in B.
+        mcp_case(
+            "whiteboard_to_tasks",
+            json!({"whiteboardId": a.whiteboard, "clientRequestId": "net-board-tasks"}),
+            vec![
+                json!({"whiteboardId": b.whiteboard, "clientRequestId": "net-board-tasks-b"}),
+                json!({"whiteboardId": b.whiteboard, "spaceId": a.project, "clientRequestId": "net-board-tasks-c"}),
+                json!({"whiteboardId": a.whiteboard, "spaceId": b.project, "clientRequestId": "net-board-tasks-d"}),
+            ],
+        )
+        .without_own("A's board has no notes; notes into tasks are checked in w16_whiteboards"),
+        // C1.31: nobody asks about B's board from A, or asks B's account
+        // about A's board.
+        mcp_case(
+            "whiteboard_ask",
+            json!({"whiteboardId": a.whiteboard, "elementIds": ["net"], "accountId": ax.wren,
+                   "question": "Net?"}),
+            vec![
+                json!({"whiteboardId": b.whiteboard, "elementIds": ["net"], "accountId": bx.wren,
+                       "question": "Net?"}),
+                json!({"whiteboardId": a.whiteboard, "elementIds": ["net"], "accountId": bx.wren,
+                       "question": "Net?"}),
+            ],
+        )
+        .without_own("A's board has no elements; asking is checked in discussion and privacy_inside_workspace"),
         mcp_case(
             "whiteboard_link",
             json!({"whiteboardId": a.whiteboard, "targetKind": "task", "targetId": a.subtask}),
@@ -8012,6 +6916,13 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"package": tiny_package(), "target": {"spaceId": b.project}, "planHash": "sha256:0", "clientRequestId": "net-package-b"})],
         )
         .without_own("needs a planHash from a preview; packages_install.rs covers installing"),
+        // M1.10: another workspace's install is never upgraded.
+        mcp_case(
+            "package_upgrade",
+            json!({}),
+            vec![json!({"installId": b.package_install, "package": tiny_package(), "planHash": "sha256:0", "clientRequestId": "net-package-upgrade-b"})],
+        )
+        .without_own("needs a planHash from a preview; packages_upgrade.rs covers upgrading"),
         mcp_case(
             "package_remove",
             json!({"installId": a.package_install, "parts": "keep", "clientRequestId": "net-package-remove-own"}),
@@ -8080,6 +6991,70 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             json!({"moduleId": a.module, "clientRequestId": "net-module-restore-own"}),
             vec![json!({"moduleId": b.module, "clientRequestId": "net-module-restore-b"})],
         ),
+        // Connected modules (M1.12): B's module never opens from A, and an
+        // install never lands in B. Installing needs an app serving its
+        // manifest, which connected_modules runs end to end.
+        mcp_case(
+            "connected_module_install",
+            json!({"url": "https://example.invalid/manifest.json"}),
+            vec![json!({"workspace": b.organization, "url": "https://example.invalid/manifest.json"})],
+        )
+        .without_own("needs an app serving its manifest; connected_modules runs it"),
+        mcp_case(
+            "connected_module_refresh",
+            json!({"moduleId": a.module}),
+            vec![json!({"moduleId": b.module})],
+        )
+        .without_own("needs an installed app; connected_modules runs it"),
+        mcp_case(
+            "connected_module_approve",
+            json!({"moduleId": a.module}),
+            vec![json!({"moduleId": b.module, "clientRequestId": "net-connected-approve-b"})],
+        )
+        .without_own("needs an installed app; connected_modules runs it"),
+        mcp_case(
+            "connected_module_revoke",
+            json!({"moduleId": a.module}),
+            vec![json!({"moduleId": b.module, "clientRequestId": "net-connected-revoke-b"})],
+        )
+        .without_own("needs an installed app; connected_modules runs it"),
+        // M1.13: a declared operation runs only where its install is, and
+        // a connected thing is written only in the caller's workspace.
+        mcp_case(
+            "connected_module_run",
+            json!({"operation": "acme_build_rerun", "input": {"build": "1"}}),
+            vec![json!({"workspace": b.organization, "operation": "acme_build_rerun",
+                        "input": {"build": "1"}})],
+        )
+        .without_own("needs an installed app answering it; connected_modules runs it"),
+        mcp_case(
+            "connected_module_test",
+            json!({"moduleId": a.organization}),
+            vec![json!({"workspace": b.organization, "moduleId": a.organization})],
+        )
+        .without_own("needs an installed file source answering it; connected_modules runs it"),
+        mcp_case(
+            "thing_upsert",
+            json!({"kind": "acme.build", "title": "Build 1"}),
+            vec![json!({"workspace": b.organization, "kind": "acme.build", "title": "Build 1",
+                        "clientRequestId": "net-thing-upsert-b"})],
+        )
+        .without_own("only a connected module's own account writes its kinds; connected_modules runs it"),
+        mcp_case(
+            "module_panel_press",
+            json!({"moduleId": a.organization, "panel": "builds", "action": {"id": "rerun"}}),
+            vec![json!({"workspace": b.organization, "moduleId": a.organization, "panel": "builds",
+                        "action": {"id": "rerun"}})],
+        )
+        .without_own("needs an installed app answering it; connected_modules runs it"),
+        // M1.15: a framed panel's launch is finished only by the account it
+        // was opened for, in its own workspace.
+        mcp_case(
+            "module_frame_check",
+            json!({"launchId": a.organization, "ref": "saved-1"}),
+            vec![json!({"workspace": b.organization, "launchId": a.organization, "ref": "saved-1"})],
+        )
+        .without_own("needs a launch opened in a browser; connected_modules runs it"),
         // K3.19: restoring any thing's version, by id alone.
         mcp_case(
             "history_restore",
@@ -8178,7 +7153,25 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         .rejecting(vec![
             json!({"messages": [b.message], "projectId": a.project, "clientRequestId": "net-page-make-c"}),
             json!({"messages": [a.message], "projectId": b.project, "clientRequestId": "net-page-make-d"}),
+            // C1.32: nor from B's board.
+            json!({"whiteboardId": b.whiteboard, "projectId": a.project, "clientRequestId": "net-page-make-e"}),
         ]),
+        // C1.33: a file kept on B's page can't come from A.
+        mcp_case(
+            "page_file_upload",
+            json!({"pageId": a.page, "name": "net.txt", "text": "Net", "clientRequestId": "net-page-file"}),
+            vec![json!({"pageId": b.page, "name": "net.txt", "text": "Net", "clientRequestId": "net-page-file-b"})],
+        ),
+        // C1.37: B's page can't be moved, and A's page can't be moved into B.
+        mcp_case(
+            "page_move",
+            json!({"pageId": a.page, "toSpaceId": a.project, "expectedVersion": 1}),
+            vec![
+                json!({"pageId": b.page, "toSpaceId": a.project, "expectedVersion": version("project_pages", &b.page)}),
+                json!({"pageId": a.page, "toSpaceId": b.project, "expectedVersion": version("project_pages", &a.page)}),
+            ],
+        )
+        .without_own("moving A's page away would leave the cases after it without it; moves are checked in w20_files"),
         mcp_case(
             "task_link_many",
             json!({"links": [{"taskId": a.subtask, "blockedBy": [sp.task]}]}),
@@ -8244,6 +7237,9 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         )
         .rejecting(vec![
             json!({"projectId": a.project, "importId": b.import}),
+            json!({"projectId": a.project, "importId": b.import, "cancel": true}),
+            json!({"projectId": a.project, "importId": b.import, "createLabels": false}),
+            json!({"projectId": a.project, "importId": b.import, "commit": true}),
             json!({"projectId": a.project, "source": "github", "repositoryId": b.repository}),
         ]),
         // Hosts (A1.11)
@@ -8611,6 +7607,11 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"runId": bx.reported_runs[0], "activities": [{"id": "net-b", "kind": "text_message", "payload": {"text": "Net"}}]})],
         ),
         mcp_case(
+            "run_changes_report",
+            json!({"runId": ax.reported_runs[0], "files": [{"path": "net-own.rs", "status": "added", "added": 1, "removed": 0}]}),
+            vec![json!({"runId": bx.reported_runs[0], "files": [{"path": "net-b.rs", "status": "added", "added": 1, "removed": 0}]})],
+        ),
+        mcp_case(
             "run_usage_report",
             json!({"runId": ax.reported_runs[0], "reportKey": "net-usage-own", "model": "model-a", "inputTokens": 10}),
             vec![
@@ -8640,7 +7641,7 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             vec![json!({"runId": bx.failed_run, "clientRequestId": "net-retry-b"})],
         ),
         mcp_case(
-            "run_dismiss_failure",
+            "run_failure_hide",
             json!({"runId": ax.failed_run}),
             vec![json!({"runId": bx.failed_run})],
         ),
@@ -8728,12 +7729,6 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
         ),
         // K4.8: space members, last: removing @wren from A's project would
         // take them from the cases above. B's spaces and B's people aren't A's.
-        mcp_case(
-            "space_member_add",
-            json!({"spaceId": a.project, "account": "@wren", "role": "member"}),
-            vec![json!({"spaceId": b.project, "account": "@wren", "role": "member"})],
-        )
-        .rejecting(vec![json!({"spaceId": a.project, "account": bx.wren, "role": "member"})]),
         mcp_case(
             "space_member_update",
             json!({"spaceId": a.project, "account": "@wren", "role": "viewer"}),

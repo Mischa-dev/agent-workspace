@@ -18,7 +18,7 @@ use std::process::ExitCode;
 
 use agent_workspace_delivery_contract::{
     Report, check_server,
-    webhook::{Format, check_webhook, fixture_push},
+    webhook::{check_webhook, fixture_push},
 };
 
 const USAGE: &str = "usage: AW_TOKEN=<token> delivery-contract server --origin <url> [--workspace <id or slug>]\n       delivery-contract fixtures";
@@ -65,15 +65,13 @@ async fn follow_up(origin: &str, token: &str, workspace: &str) -> Result<(), Str
 
 fn fixtures_report() -> Report {
     let mut report = Report::default();
-    for format in [Format::Standard, Format::TypedV1, Format::InboxV1] {
-        let (secret, push) = fixture_push(format);
-        let stamped = push
-            .header("x-workspace-timestamp")
-            .and_then(|at| at.parse().ok());
-        report
-            .checks
-            .extend(check_webhook(format, &secret, &push, stamped).checks);
-    }
+    let (secret, push) = fixture_push();
+    let stamped = push
+        .header("webhook-timestamp")
+        .and_then(|at| at.parse().ok());
+    report
+        .checks
+        .extend(check_webhook(&secret, &push, stamped).checks);
     report
 }
 

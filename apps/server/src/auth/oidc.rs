@@ -195,7 +195,7 @@ async fn start(
     ApiQuery(query): ApiQuery<StartQuery>,
 ) -> Result<Response, AppError> {
     let address = crate::rate_limit::client_address(&state.config, &headers);
-    state.rate_limits.check_login_sender(address).await?;
+    state.rate_limits.check_oidc_ceremony(address).await?;
     let url = begin(&state, None, safe_return(query.return_to.as_deref())).await?;
     let (location, cookie) = url;
     let mut response = Redirect::to(&location).into_response();
@@ -341,6 +341,10 @@ async fn callback(
     headers: HeaderMap,
     ApiQuery(query): ApiQuery<Callback>,
 ) -> Response {
+    let address = crate::rate_limit::client_address(&state.config, &headers);
+    if let Err(error) = state.rate_limits.check_oidc_ceremony(address).await {
+        return error.into_response();
+    }
     let mut linking = false;
     match finish(&state, &headers, query, &mut linking).await {
         Ok(response) => response,
@@ -487,7 +491,9 @@ async fn finish(
     } else {
         // Through the sign-in page: the session cookie is SameSite=Strict, so
         // it isn't sent on a redirect chain that began at the issuer.
-        let back = attempt.return_to.unwrap_or_else(|| "/home".to_owned());
+        let back = attempt
+            .return_to
+            .unwrap_or_else(|| crate::addresses::Target::Home.href());
         format!(
             "/sign-in?returnTo={}",
             url::form_urlencoded::byte_serialize(back.as_bytes()).collect::<String>()

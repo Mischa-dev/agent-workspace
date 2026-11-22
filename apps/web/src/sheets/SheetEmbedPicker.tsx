@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 
-import { sheetEmbed } from '../memory/embeds/embedModel'
+import { useProjectExperience } from '../experience/layout'
+import { sheetChartEmbed, sheetEmbed } from '../memory/embeds/embedModel'
 import { Button, SelectField, TextField, describeError } from '../ui'
 import { useSheet, useSheets } from './api'
 import { parseRange, rangeName } from './sheetModel'
@@ -22,10 +23,12 @@ export default function SheetEmbedPicker({
   projectId: string
 }) {
   const sheets = useSheets(projectId)
+  const showsCharts = useProjectExperience(projectId).shows('sheet.charts')
   const [sheetId, setSheetId] = useState('')
   const [tabId, setTabId] = useState('')
   const [range, setRange] = useState('')
   const [named, setNamed] = useState('')
+  const [chartId, setChartId] = useState('')
   const [error, setError] = useState<string | null>(null)
   const chosen = useSheet(projectId, sheetId, '')
   // While another sheet loads, the query still holds the last one's data.
@@ -37,6 +40,11 @@ export default function SheetEmbedPicker({
   const submit = (event: FormEvent) => {
     event.preventDefault()
     if (!picked) return
+    const chosenChart = picked.charts.find((entry) => entry.id === chartId)
+    if (chosenChart) {
+      onPick(sheetChartEmbed(projectId, picked.sheet, chosenChart))
+      return
+    }
     const chosenName = picked.ranges.find((entry) => entry.name === named)
     if (chosenName) {
       onPick(sheetEmbed(projectId, picked.sheet, null, tabs.length, null, chosenName.name))
@@ -84,6 +92,7 @@ export default function SheetEmbedPicker({
               setSheetId(event.target.value)
               setTabId('')
               setNamed('')
+              setChartId('')
             }}
             value={sheetId}
           >
@@ -94,7 +103,17 @@ export default function SheetEmbedPicker({
               </option>
             ))}
           </SelectField>
-          {picked && picked.ranges.length > 0 ? (
+          {showsCharts && picked && picked.charts.length > 0 ? (
+            <SelectField className="aw-live__address" compact label="Chart" onChange={(event) => setChartId(event.target.value)} value={chartId}>
+              <option value="">None: show cells</option>
+              {picked.charts.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.title}
+                </option>
+              ))}
+            </SelectField>
+          ) : null}
+          {picked && picked.ranges.length > 0 && !chartId ? (
             <SelectField className="aw-live__address" compact label="Named range" onChange={(event) => setNamed(event.target.value)} value={named}>
               <option value="">None: pick the cells below</option>
               {picked.ranges.map((entry) => (
@@ -105,7 +124,7 @@ export default function SheetEmbedPicker({
               ))}
             </SelectField>
           ) : null}
-          {named ? null : tabs.length > 1 ? (
+          {named || chartId ? null : tabs.length > 1 ? (
             <SelectField className="aw-live__address" compact label="Tab" onChange={(event) => setTabId(event.target.value)} value={tab?.id ?? ''}>
               {tabs.map((entry) => (
                 <option key={entry.id} value={entry.id}>
@@ -114,7 +133,7 @@ export default function SheetEmbedPicker({
               ))}
             </SelectField>
           ) : null}
-          {named ? null : (
+          {named || chartId ? null : (
           <TextField
             className="aw-live__address"
             compact

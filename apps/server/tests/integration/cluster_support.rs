@@ -131,31 +131,25 @@ impl Instance {
         }
     }
 
-    /// A browser's realtime socket on this instance.
+    /// A browser's realtime socket on this instance, past `ready` (protocol
+    /// 2, the only one since K5.15; no resume).
     pub(crate) async fn socket(&self, browser: &Browser) -> Socket {
-        use tokio_tungstenite::tungstenite::{
-            client::IntoClientRequest,
-            http::{
-                HeaderValue,
-                header::{COOKIE, ORIGIN},
-            },
-        };
-        let url = format!(
-            "{}/api/v1/realtime",
-            self.base.replacen("http://", "ws://", 1)
-        );
-        let mut request = url.into_client_request().expect("socket request");
-        request
-            .headers_mut()
-            .insert(ORIGIN, HeaderValue::from_static("http://127.0.0.1:3100"));
-        request.headers_mut().insert(
-            COOKIE,
-            HeaderValue::from_str(&browser.cookie).expect("cookie"),
-        );
-        tokio_tungstenite::connect_async(request)
-            .await
-            .expect("socket")
-            .0
+        use futures_util::StreamExt;
+        use tokio_tungstenite::tungstenite::Message;
+        let mut socket = self.socket_v2(browser, None).await;
+        loop {
+            let frame = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
+                .await
+                .expect("ready deadline")
+                .expect("open socket")
+                .expect("valid frame");
+            if let Message::Text(text) = frame {
+                let frame: serde_json::Value = serde_json::from_str(&text).expect("frame");
+                if frame["type"] == "ready" {
+                    return socket;
+                }
+            }
+        }
     }
 
     /// A browser's protocol 2 socket on this instance (K5.9), having said
@@ -295,10 +289,52 @@ pub(crate) async fn cluster_with(
     Some(cluster)
 }
 
+/// A cluster on a database a test has already set up, with no instances
+/// yet.
+pub(crate) fn cluster_on(db: Db, organization_id: Uuid) -> Cluster {
+    Cluster {
+        instances: Vec::new(),
+        pool: db.pool.clone(),
+        url: db.url.clone(),
+        organization_id,
+        db: Some(db),
+    }
+}
+
 impl Cluster {
+    /// Waits until every staged event has its position in the log, so what
+    /// a test just did can be replayed. Sequencing runs beside the request
+    /// that staged the event (on polls only, in a pooler run), so a resume
+    /// straight after a write can come before it.
+    pub(crate) async fn sequenced(&self) {
+        let started = std::time::Instant::now();
+        while sqlx::query_scalar::<_, i64>("SELECT count(*) FROM event_staging")
+            .fetch_one(&self.pool)
+            .await
+            .expect("staging")
+            > 0
+        {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(30),
+                "never sequenced"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
     /// Start one more instance; it gets the next name.
     pub(crate) async fn start(&mut self, extra: &[(&str, &str)]) -> &mut Instance {
-        let name = NAMES[self.instances.len()];
+        self.start_at(extra, "127.0.0.1:0").await
+    }
+
+    /// The same, listening on `address` (a restarted instance takes its
+    /// predecessor's).
+    pub(crate) async fn start_at(
+        &mut self,
+        extra: &[(&str, &str)],
+        address: &str,
+    ) -> &mut Instance {
+        let name = NAMES[self.instances.len() % NAMES.len()];
         let mut values = BTreeMap::from([
             ("AGENT_WORKSPACE_DATABASE_URL".to_owned(), self.url.clone()),
             // Stopping drains at once unless a test asks for a drain time.
@@ -327,7 +363,7 @@ impl Cluster {
             .await
             .expect("instance pool");
         let server = Server::build(config, pool).await.expect("build instance");
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let listener = TcpListener::bind(address).await.expect("listener");
         let webhooks = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("webhook listener");

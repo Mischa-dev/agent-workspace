@@ -161,6 +161,16 @@ impl<C: Consumer> Runner<C> {
         pool: &PgPool,
         lease: Option<(&Cluster, &Lease)>,
     ) -> Result<Round, AppError> {
+        // A consumer reads every workspace's events, and each one filters
+        // per subscription.
+        crate::tenancy::system("events.log", self.round_here(pool, lease)).await
+    }
+
+    async fn round_here(
+        &mut self,
+        pool: &PgPool,
+        lease: Option<(&Cluster, &Lease)>,
+    ) -> Result<Round, AppError> {
         let one_by_one = self.one_by_one_until.is_some();
         let mut transaction = crate::db::scoped_tx(pool).await?;
         if let Some((cluster, lease)) = lease {
@@ -260,6 +270,11 @@ impl<C: Consumer> Runner<C> {
     /// Retry parked events that are due; each success is resolved, each
     /// failure waits longer.
     pub async fn sweep(&self, pool: &PgPool) -> Result<usize, AppError> {
+        // Parked events of every workspace.
+        crate::tenancy::system("events.log", self.sweep_here(pool)).await
+    }
+
+    async fn sweep_here(&self, pool: &PgPool) -> Result<usize, AppError> {
         let due = crate::db::scoped_one(pool, async |connection| {
             sqlx::query_scalar::<_, i64>(
                 "SELECT event_position FROM event_consumer_failures \

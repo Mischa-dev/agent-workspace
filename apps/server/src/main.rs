@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, future::IntoFuture, sync::Arc};
 
 use agent_workspace_server::{
     bootstrap, config::AppConfig, mcp, migration_preflight, retention, seed, server::Server,
-    shutdown_signal, telemetry::init_tracing, work_items,
+    shutdown_signal, startup, telemetry::init_tracing, work_items,
 };
 use anyhow::{Context, bail};
 use tokio::{net::TcpListener, sync::watch};
@@ -42,7 +42,12 @@ async fn main() -> anyhow::Result<()> {
     // Before anything that changes the database: the release script runs this
     // with a new build to see whether it can take over.
     if std::env::args().nth(1).as_deref() == Some("preflight") {
-        let report = agent_workspace_server::preflight::run(&config, &pool).await?;
+        // Host-only, across every workspace (its mail transports and more).
+        let report = agent_workspace_server::tenancy::system(
+            "server.operator",
+            Box::pin(agent_workspace_server::preflight::run(&config, &pool)),
+        )
+        .await?;
         report.print();
         if report.failed() {
             bail!("preflight found problems; the release was not switched");
@@ -119,18 +124,26 @@ async fn main() -> anyhow::Result<()> {
             .run(&pool)
             .await
             .context("apply database migrations")?;
-        let reconciled_roles = agent_workspace_server::roles::reconcile(&pool)
-            .await
-            .context("reconcile role permissions with the catalogue")?;
+        // Both read and write every workspace's rows: under strict row rules
+        // they run server-wide, or they would see none.
+        let reconciled_roles = agent_workspace_server::tenancy::system(
+            "server.operator",
+            agent_workspace_server::roles::reconcile(&pool),
+        )
+        .await
+        .context("reconcile role permissions with the catalogue")?;
         if reconciled_roles > 0 {
             tracing::info!(
                 reconciled_roles,
                 "reconciled role permissions with the catalogue"
             );
         }
-        let provisioned_workflows = work_items::provision_missing_default_workflows(&pool)
-            .await
-            .context("provision default Work Item workflows")?;
+        let provisioned_workflows = agent_workspace_server::tenancy::system(
+            "server.operator",
+            work_items::provision_missing_default_workflows(&pool),
+        )
+        .await
+        .context("provision default Work Item workflows")?;
         if provisioned_workflows > 0 {
             tracing::info!(
                 provisioned_workflows,
@@ -144,7 +157,18 @@ async fn main() -> anyhow::Result<()> {
     // Every command migrates first; `migrate` does nothing else.
     let serving = std::env::args().nth(1).is_none();
     if !serving || config.roles.work {
-        while_starting(&mut starting, migrate).await?;
+        // Under the `server.startup` lease (H1.15): one process at a time.
+        let step = starting.as_ref().map(|starting| starting.step.clone());
+        let waiting = move || {
+            if let Some(step) = step {
+                let _ = step.send("waiting");
+            }
+        };
+        while_starting(
+            &mut starting,
+            startup::under_lease(&pool, config.startup_wait, waiting, migrate),
+        )
+        .await?;
     } else {
         drop(migrate);
     }
@@ -295,11 +319,12 @@ async fn main() -> anyhow::Result<()> {
                 .map(|value| uuid::Uuid::parse_str(value))
                 .transpose()
                 .context("--workspace-id is a workspace's id")?;
-            let queued = agent_workspace_server::files::migrate::start(
-                &pool,
-                &config,
-                required_option(&options, "to")?,
-                workspace,
+            let to = required_option(&options, "to")?;
+            let queued = agent_workspace_server::tenancy::system(
+                "server.operator",
+                Box::pin(agent_workspace_server::files::migrate::start(
+                    &pool, &config, to, workspace,
+                )),
             )
             .await
             .context("start moving files")?;
@@ -362,10 +387,11 @@ async fn main() -> anyhow::Result<()> {
         Some("retention-worktrees") => {
             let options = parse_options(arguments)?;
             reject_unknown_options(&options, &["apply"])?;
-            let result = retention::clean_worktrees(
+            let result = agent_workspace_server::hosts::builtin::worktrees::clean_worktrees(
                 &pool,
                 &config.data_root,
                 optional_bool(&options, "apply", false)?,
+                None,
             )
             .await
             .context("clean eligible retained worktrees")?;
@@ -416,49 +442,52 @@ async fn main() -> anyhow::Result<()> {
             let options = parse_options(arguments)?;
             reject_unknown_options(
                 &options,
-                &[
-                    "owner-login",
-                    "name",
-                    "handle",
-                    "token-file",
-                    "webhook-url",
-                    "wakeup-format",
-                ],
+                &["owner-login", "name", "handle", "token-file", "webhook-url"],
             )?;
             let token_file = std::path::PathBuf::from(required_option(&options, "token-file")?);
-            let (project_id, owner_actor_id) =
-                agent_workspace_server::spaces::workspace::home_for_login(
+            // Host-only: the owner's workspace is found by their login, so
+            // the command acts server-wide.
+            let owner_login = required_option(&options, "owner-login")?;
+            let (project_id, owner_actor_id) = agent_workspace_server::tenancy::system(
+                "server.operator",
+                Box::pin(agent_workspace_server::spaces::workspace::home_for_login(
                     &pool,
-                    required_option(&options, "owner-login")?,
-                )
-                .await
-                .context("find the owner's workspace space")?;
-            let agent = agent_workspace_server::external_agents::provision(
-                &pool,
-                project_id,
-                owner_actor_id,
+                    owner_login,
+                )),
+            )
+            .await
+            .context("find the owner's workspace space")?;
+            let (name, handle) = (
                 required_option(&options, "name")?,
                 required_option(&options, "handle")?,
+            );
+            let agent = agent_workspace_server::tenancy::system(
+                "server.operator",
+                Box::pin(agent_workspace_server::external_agents::provision(
+                    &pool,
+                    project_id,
+                    owner_actor_id,
+                    name,
+                    handle,
+                )),
             )
             .await
             .context("create agent")?;
             write_private_file(&token_file, &agent.token)?;
             // With --webhook-url, the signing secret goes to "<token-file>.webhook".
-            // Wakeups are typed (docs/agent-runner.md) unless
-            // --wakeup-format inbox asks for the old inbox.available body.
+            // Pushes are Standard Webhooks (docs/agent-runner.md).
             if let Some(url) = options.get("webhook-url") {
-                let typed = match options.get("wakeup-format").map(String::as_str) {
-                    None | Some("typed") => true,
-                    Some("inbox") => false,
-                    Some(_) => anyhow::bail!("--wakeup-format is typed or inbox"),
-                };
-                let secret = agent_workspace_server::external_agents::set_webhook_for_host(
-                    &pool,
-                    &config,
-                    agent.connection_id,
-                    url,
-                    &config.webhook_trusted_origins,
-                    typed,
+                let secret = agent_workspace_server::tenancy::system(
+                    "server.operator",
+                    Box::pin(
+                        agent_workspace_server::external_agents::set_webhook_for_host(
+                            &pool,
+                            &config,
+                            agent.connection_id,
+                            url,
+                            &config.webhook_trusted_origins,
+                        ),
+                    ),
                 )
                 .await
                 .context("set wakeup webhook")?;
@@ -481,9 +510,13 @@ async fn main() -> anyhow::Result<()> {
         Some("mcp-credential-list") => {
             let options = parse_options(arguments)?;
             reject_unknown_options(&options, &["project-id"])?;
-            let credentials = mcp::list_credentials(&pool, required_uuid(&options, "project-id")?)
-                .await
-                .context("list MCP credentials")?;
+            let project = required_uuid(&options, "project-id")?;
+            let credentials = agent_workspace_server::tenancy::system(
+                "server.operator",
+                mcp::list_credentials(&pool, project),
+            )
+            .await
+            .context("list MCP credentials")?;
             println!("{}", serde_json::to_string_pretty(&credentials)?);
             return Ok(());
         }
@@ -527,6 +560,43 @@ async fn main() -> anyhow::Result<()> {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({ "setupCodeFile": path }))?
+            );
+            return Ok(());
+        }
+        Some("enrol-builtin-host") => {
+            // A1.17: a one-time code for the built-in host's own program,
+            // written to a file it reads on its first start. Earlier codes
+            // and the token before stop working.
+            let options = parse_options(arguments)?;
+            reject_unknown_options(&options, &["code-file"])?;
+            let path = std::path::PathBuf::from(required_option(&options, "code-file")?);
+            // The file is made first: a path that can't be written fails
+            // before the running host's token is revoked.
+            let mut file = {
+                use std::os::unix::fs::OpenOptionsExt as _;
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&path)
+                    .with_context(|| format!("create {}", path.display()))?
+            };
+            let code = match agent_workspace_server::hosts::builtin::install::new_code(&pool).await
+            {
+                Ok(code) => code,
+                Err(error) => {
+                    let _ = std::fs::remove_file(&path);
+                    return Err(error).context("write a code for the built-in host");
+                }
+            };
+            {
+                use std::io::Write as _;
+                file.write_all(code.as_bytes())?;
+                file.sync_all()?;
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "codeFile": path }))?
             );
             return Ok(());
         }
@@ -575,6 +645,27 @@ async fn main() -> anyhow::Result<()> {
             ),
             agent_workspace_server::setup::Prepared::Done
             | agent_workspace_server::setup::Prepared::Claimed => {}
+        }
+    }
+
+    // The built-in host as its own program (A1.17): until it has enrolled,
+    // a one-time code waits where it reads it. Only the file's path is
+    // logged.
+    if config.roles.work && !config.builtin_host {
+        use agent_workspace_server::hosts::builtin::install;
+        match install::prepare(&pool, &install::code_path(&config))
+            .await
+            .context("prepare the built-in host's enrolment")?
+        {
+            install::Prepared::Written(path) | install::Prepared::Waiting(path) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    "the built-in host program hasn't enrolled yet: start agent-workspace-host \
+                     with this data folder (or AGENT_WORKSPACE_HOST_CODE_PATH) and it reads its \
+                     code from this file"
+                );
+            }
+            install::Prepared::Enrolled => {}
         }
     }
 

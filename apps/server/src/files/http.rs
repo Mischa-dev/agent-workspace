@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use super::{
     Destination, FileRow, FileStore, FileView, MAX_UPLOAD_BYTES, Reader, ThingKind, readable_file,
-    remove_file, served_content_type, store_body, task_files, thing_destination, upload_limit,
+    served_content_type, store_body, task_files, thing_destination, upload_limit,
 };
 use crate::{
     AppState,
@@ -27,7 +27,7 @@ use crate::{
     conversations::{MessageCommandActor, lock_message_conversation, require_active_conversation},
     error::{ApiPath, ApiQuery, AppError},
     policy::Action,
-    work_items::{authorize_task_change, authorize_task_view},
+    work_items::{authorize_task_change, authorize_task_comment, authorize_task_view},
 };
 
 pub fn router() -> Router<AppState> {
@@ -46,10 +46,9 @@ pub fn router() -> Router<AppState> {
             "/api/v1/things/{kind}/{id}/files",
             post(upload_to_thing).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
         )
-        .route("/api/v1/files/{id}", get(describe).delete(remove))
+        .route("/api/v1/files/{id}", get(describe))
         .route("/api/v1/files/{id}/content", get(content))
         .route("/api/v1/files/{id}/thumbnail", get(thumbnail))
-        .route("/api/v1/files/links/{token}", get(super::links::open_link))
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,7 +91,7 @@ async fn upload_to_conversation(
         via_grant_id: None,
         run_id: None,
     };
-    let mut transaction = state.pool.begin().await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let conversation = lock_message_conversation(
         &mut transaction,
         &actor,
@@ -107,10 +106,7 @@ async fn upload_to_conversation(
     let row = store_body(
         &state,
         principal.actor_id,
-        Destination::Conversation {
-            project_id: conversation.place(),
-            conversation_id: conversation.id,
-        },
+        Destination::conversation(&conversation),
         query.name,
         declared_type(&headers),
         body,
@@ -134,8 +130,14 @@ async fn upload_to_task(
         Some("comment") => true,
         Some(_) => return Err(AppError::Validation("for")),
     };
-    let mut transaction = state.pool.begin().await?;
-    authorize_task_change(&mut transaction, &principal, project_id, work_item_id).await?;
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    // A comment's files need what writing the comment needs; the task's
+    // own files need editing it.
+    if for_comment {
+        authorize_task_comment(&mut transaction, &principal, project_id, work_item_id).await?;
+    } else {
+        authorize_task_change(&mut transaction, &principal, project_id, work_item_id).await?;
+    }
     let limit = upload_limit(&mut transaction, project_id).await?;
     transaction.commit().await?;
     let row = store_body(
@@ -228,46 +230,6 @@ async fn list_task_files(
     }))
 }
 
-async fn remove(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(file_id): ApiPath<Uuid>,
-) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let row = readable_file(
-        &state.pool,
-        Reader::Browser {
-            actor_id: principal.actor_id,
-        },
-        file_id,
-    )
-    .await?;
-    let mut transaction = state.pool.begin().await?;
-    // H1.24: the route layer refuses a closed workspace; this holds it open
-    // until the removal commits.
-    crate::workspace::lifecycle::hold_open_for_space(
-        &mut transaction,
-        row.project_id,
-        "file_remove",
-    )
-    .await?;
-    let may_edit_task = match (row.attached_at.as_ref(), row.work_item_id) {
-        (Some(_), Some(work_item_id)) => {
-            authorize_task_change(&mut transaction, &principal, row.project_id, work_item_id)
-                .await
-                .is_ok()
-        }
-        _ => false,
-    };
-    remove_file(&mut transaction, &row, principal.actor_id, may_edit_task).await?;
-    transaction.commit().await?;
-    if let (Some(_), Some(work_item_id)) = (row.attached_at.as_ref(), row.work_item_id) {
-        crate::work_items::notify_files_changed(&state.pool, row.project_id, work_item_id).await?;
-    }
-    Ok(StatusCode::NO_CONTENT)
-}
-
 async fn content(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
@@ -290,7 +252,7 @@ async fn content(
         let store = FileStore::resolve(&state, &row.store_id).await?;
         if let Some(url) = store.presign_get(
             &row.storage_key,
-            super::links::DEFAULT_TTL,
+            super::link::DEFAULT_TTL,
             served_content_type(&row),
             &content_disposition(&row.name, true),
         )? {

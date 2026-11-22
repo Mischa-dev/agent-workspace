@@ -1,4 +1,4 @@
-import { spaceHref } from '../app/href'
+import { here, spaceHref } from '../app/href'
 import { lazy, Suspense, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
@@ -21,6 +21,7 @@ const PinnedViews = lazy(() => import('./PinnedViews'))
 const SidebarAgents = lazy(() => import('../agents/SidebarAgents'))
 const ChannelCreator = lazy(() => import('./ChannelCreator'))
 const SidebarSections = lazy(() => import('../conversations/SidebarSections'))
+const BuiltModuleRows = lazy(() => import('./BuiltModuleRows'))
 
 const attentionMarks: Partial<Record<SidebarThread['attention'], SidebarAttention>> = {
   response_required: 'needs-you',
@@ -121,7 +122,7 @@ export function ProjectSidebar({
         <IconButton
           icon="search"
           label={`Search ${project.name}`}
-          onClick={() => go(`/search?projectId=${encodeURIComponent(project.id)}`)}
+          onClick={() => go(here(`/search?projectId=${encodeURIComponent(project.id)}`))}
           side="bottom"
         />
       }
@@ -134,6 +135,9 @@ export function ProjectSidebar({
       <ul className="aw-section__list aw-sidebar__top">
         <SidebarLink end icon="home" label="Overview" onNavigate={onNavigate} to={base} />
         {topRows}
+        <Suspense fallback={null}>
+          <BuiltModuleRows onNavigate={onNavigate} project={project} />
+        </Suspense>
       </ul>
       {experience.shows('talk.sidebar_sections') ? (
         <Suspense fallback={null}>

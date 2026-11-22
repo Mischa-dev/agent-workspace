@@ -14,7 +14,6 @@ FIXTURES = ROOT / "tools" / "hermes-connector" / "fixtures"
 COMPATIBILITY_NOTE = ROOT / "docs" / "compatibility" / "hermes-agent.md"
 MCP_SOURCE = ROOT / "apps" / "server" / "src" / "mcp.rs"
 SERVER_SOURCE = ROOT / "apps" / "server" / "src"
-ALIASES_SOURCE = SERVER_SOURCE / "ops" / "aliases.rs"
 
 EXPECTED_DEPENDENCY_SHA256 = (
     "cdd499d4ccdaa306d7e6ef1097f8efc79f40f60f58d1b118a4c5d15de55c7c9f"
@@ -25,18 +24,16 @@ EXPECTED_ALLOWLIST = (
     "external_event_poll",
     "message_send",
     "people_search",
-    "project_open",
+    "project_get",
     "pull_request_get",
     "repository_get",
     "request_get",
     "request_respond",
     "run_request",
-    "task_comment",
+    "task_comment_create",
     "task_create",
+    "task_get",
     "task_list",
-    "task_mark_blocked",
-    "task_mark_ready_for_review",
-    "task_open",
     "task_update",
 )
 FORBIDDEN_FIXTURE_PATTERNS = (
@@ -80,24 +77,19 @@ def main() -> None:
     if len(set(allowlist)) != len(allowlist):
         fail("Hermes tool allowlist contains duplicates")
     # A tool is served when it is a hand-written tool in mcp.rs, an
-    # operation (its NAME in an ops module, or a read_op! name in a file
-    # under an ops folder), or an old name the operation alias table keeps
-    # answering.
+    # operation (its NAME, or a read_op! name, anywhere in the server).
+    # Old names are refused since K2.23.
     mcp_source = MCP_SOURCE.read_text(encoding="utf-8")
-    operation_files = sorted(
-        set(SERVER_SOURCE.rglob("ops.rs")) | set(SERVER_SOURCE.rglob("ops/*.rs"))
-    )
+    operation_files = sorted(SERVER_SOURCE.rglob("*.rs"))
     operations_source = "\n".join(
         path.read_text(encoding="utf-8") for path in operation_files
     )
-    aliases_source = ALIASES_SOURCE.read_text(encoding="utf-8")
     for tool_name in allowlist:
         name = re.escape(tool_name)
         if not (
             re.search(rf"async fn {name}\s*\(", mcp_source)
             or re.search(rf'const NAME: &\'static str = "{name}";', operations_source)
             or re.search(rf'_op!\(\w+ \{{\s*name: "{name}",', operations_source)
-            or re.search(rf'"{name}"\s*=>|name:\s*"{name}"', aliases_source)
         ):
             fail(f"Hermes allowlisted tool is missing from MCP: {tool_name}")
     if "task_link_pull_request" in allowlist:

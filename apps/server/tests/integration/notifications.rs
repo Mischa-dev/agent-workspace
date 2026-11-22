@@ -44,12 +44,24 @@ fn mention(actor: Uuid, text: &str) -> Value {
     })
 }
 
+/// Changes notifications through `notification_update`: its value when it
+/// works, its whole answer when it doesn't.
 async fn update(setup: &Setup, browser: &Browser, body: Value) -> (StatusCode, Value) {
-    send(
+    let (status, answer) = send(
         &setup.app,
-        browser.request("POST", "/api/v1/inbox/update", None, body),
+        browser.request(
+            "POST",
+            "/api/v2/ops/notification_update",
+            Some(&Uuid::now_v7().to_string()),
+            body,
+        ),
     )
-    .await
+    .await;
+    if answer["outcome"] == "ok" {
+        (status, answer["value"].clone())
+    } else {
+        (status, answer)
+    }
 }
 
 async fn attention(setup: &Setup, browser: &Browser, project: &str) -> i64 {
@@ -99,9 +111,12 @@ async fn mentions_reach_the_person_once_and_follow_the_message() {
     );
     assert_eq!(item["read"], false);
     assert_eq!(item["count"], 1);
-    assert_eq!(
-        item["href"],
-        format!("/projects/{project}/channels/{general}#message-{first}")
+    assert!(
+        item["href"]
+            .as_str()
+            .is_some_and(|href| href.starts_with("/w/")
+                && href.ends_with(&format!("/s/{project}/chat/{general}#message-{first}"))),
+        "{item}"
     );
     assert_eq!(page["unreadCount"], 1);
     assert_eq!(attention(&setup, &mara_browser, &project).await, 1);
@@ -242,7 +257,7 @@ async fn private_conversations_notify_only_people_inside() {
         items(&page)[0]["href"]
             .as_str()
             .expect("href")
-            .starts_with(&format!("/messages/{group}#message-"))
+            .starts_with(&format!("/w/-/dm/{group}#message-"))
     );
     assert_eq!(items(&page)[0]["projectName"], "Messages");
     let item = items(&page)[0].clone();
@@ -293,14 +308,13 @@ async fn a_comment_mention_reaches_the_person_and_the_attention_count() {
     let base = format!("/api/v1/projects/{project}/work-items");
 
     // Assigned on creation.
-    let (status, created) = send(
+    let (status, created) = crate::support::tasks::send(
         &setup.app,
-        setup.browser.request(
-            "POST",
-            &base,
-            Some("task-one"),
-            json!({"title": "Pick theme colours", "assigneeActorId": ben}),
-        ),
+        &setup.browser,
+        "POST",
+        &base,
+        Some("task-one"),
+        json!({"title": "Pick theme colours", "assigneeActorId": ben}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{created}");
@@ -310,9 +324,12 @@ async fn a_comment_mention_reaches_the_person_and_the_attention_count() {
     assert_eq!(items(&page).len(), 1, "{page}");
     assert_eq!(items(&page)[0]["kind"], "assigned");
     assert_eq!(items(&page)[0]["title"], "Owner assigned you TSK-1");
-    assert_eq!(
-        items(&page)[0]["href"],
-        format!("/projects/{project}/work-items/{task}")
+    assert!(
+        items(&page)[0]["href"]
+            .as_str()
+            .is_some_and(|href| href.starts_with("/w/")
+                && href.ends_with(&format!("/s/{project}/tasks/{task}"))),
+        "{page}"
     );
 
     // Read it, so the comment is what brings the count back.
@@ -324,13 +341,13 @@ async fn a_comment_mention_reaches_the_person_and_the_attention_count() {
         &setup.app,
         setup.browser.request(
             "POST",
-            &format!("{base}/{task}/comments"),
+            "/api/v2/ops/task_comment_create",
             Some("comment-one"),
-            json!({"content": mention(ben, "Can you check the palette, ")}),
+            json!({"taskId": task, "content": mention(ben, "Can you check the palette, ")}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{comment}");
+    assert_eq!(status, StatusCode::OK, "{comment}");
     drain(&setup).await;
     let page = inbox(&setup, &ben_browser, "?category=mentions").await;
     assert_eq!(items(&page).len(), 1, "{page}");
@@ -347,14 +364,13 @@ async fn a_comment_mention_reaches_the_person_and_the_attention_count() {
     // Ben watches the task he was assigned; Cara is in the project but
     // doesn't watch it. A rename reaches Ben only.
     let (_cara, cara_browser) = add_person(&setup, &[&project], "cara").await;
-    let (status, updated) = send(
+    let (status, updated) = crate::support::tasks::send(
         &setup.app,
-        setup.browser.request(
-            "PATCH",
-            &format!("{base}/{task}"),
-            Some("rename-one"),
-            json!({"expectedVersion": created["version"], "title": "Pick the theme colours"}),
-        ),
+        &setup.browser,
+        "PATCH",
+        &format!("{base}/{task}"),
+        Some("rename-one"),
+        json!({"expectedVersion": created["version"], "title": "Pick the theme colours"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{updated}");
@@ -373,13 +389,13 @@ async fn a_comment_mention_reaches_the_person_and_the_attention_count() {
         &setup.app,
         setup.browser.request(
             "POST",
-            &format!("{base}/{task}/comments"),
+            "/api/v2/ops/task_comment_create",
             Some("comment-two"),
-            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "Went with teal"}]}}),
+            json!({"taskId": task, "content": {"version": 1, "nodes": [{"type": "text", "text": "Went with teal"}]}}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{comment}");
+    assert_eq!(status, StatusCode::OK, "{comment}");
     drain(&setup).await;
     let page = inbox(&setup, &ben_browser, "").await;
     let watched = items(&page)
@@ -410,13 +426,13 @@ async fn a_comment_mention_reaches_the_person_and_the_attention_count() {
         &setup.app,
         setup.browser.request(
             "POST",
-            &format!("{base}/{task}/comments"),
+            "/api/v2/ops/task_comment_create",
             Some("comment-three"),
-            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "One more"}]}}),
+            json!({"taskId": task, "content": {"version": 1, "nodes": [{"type": "text", "text": "One more"}]}}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{comment}");
+    assert_eq!(status, StatusCode::OK, "{comment}");
     drain(&setup).await;
     assert!(items(&inbox(&setup, &ben_browser, "").await).is_empty());
 }
@@ -498,7 +514,7 @@ async fn people_read_archive_snooze_and_restore_their_own() {
         json!({"action": "snooze", "ids": [oldest], "snoozeUntil": "2020-01-01T00:00:00Z"}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 
     // When the snooze ends it comes back unread.
     sqlx::query("UPDATE notifications SET snoozed_until = now() - interval '1 minute' WHERE recipient_actor_id = $1")
@@ -552,6 +568,16 @@ async fn people_read_archive_snooze_and_restore_their_own() {
     .await
     .expect("announcements");
     assert!(announced >= 3, "{announced}");
+    // A change Mara makes names her and the call's request.
+    let attributed = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM events WHERE legacy_type = 'notifications.updated' \
+         AND actor_account_id = $1 AND request_id IS NOT NULL",
+    )
+    .bind(mara)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("attribution");
+    assert!(attributed >= 1, "{attributed}");
 }
 
 #[tokio::test]
@@ -611,7 +637,7 @@ async fn snoozed_until_activity_comes_back_with_the_next_occurrence() {
         json!({"action": "snooze_until_activity", "ids": [one], "snoozeUntil": tomorrow}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 
     // Something new on each: One comes back unread at once, Two waits.
     say(
@@ -669,7 +695,7 @@ async fn apps_connected_by_a_person_see_their_notifications() {
 
     let token = connect_app(&setup.app, &mara_browser, "Mara's app", "full").await;
     let session = initialize(&setup.app, &token).await.expect("MCP session");
-    let briefing = tool(&setup.app, &token, &session, "briefing", json!({})).await;
+    let briefing = tool(&setup.app, &token, &session, "briefing_get", json!({})).await;
     assert_eq!(briefing["outcome"], "ok", "{briefing}");
     assert_eq!(
         briefing["value"]["notifications"][0]["kind"], "mention",
@@ -788,7 +814,7 @@ async fn everyone_reaches_the_people_who_can_see_the_conversation() {
         .filter(|item| {
             item["href"]
                 .as_str()
-                .is_some_and(|href| href.starts_with(&format!("/messages/{group}")))
+                .is_some_and(|href| href.starts_with(&format!("/w/-/dm/{group}")))
         })
         .collect::<Vec<_>>();
     assert_eq!(in_group.len(), 1, "{page}");
@@ -826,7 +852,7 @@ async fn reading_through_a_connected_app_reads_the_mentions() {
         &setup.app,
         &token,
         &session,
-        "mark_read",
+        "conversation_mark_read",
         json!({"conversationId": general}),
     )
     .await;

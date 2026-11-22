@@ -698,9 +698,9 @@ async fn pull_requests_follow_their_thread_and_reach_the_right_person() {
     assert_eq!(repository["openPullRequests"], 4, "{listed}");
     assert_eq!(repository["activeRuns"], 3, "{listed}");
     assert!(
-        repository["settingsUrl"]
-            .as_str()
-            .is_some_and(|url| url.ends_with("/settings?tab=repositories")),
+        repository["settingsUrl"].as_str().is_some_and(
+            |url| url.contains("/w/-/settings/spaces/") && url.ends_with("?tab=repositories")
+        ),
         "{listed}"
     );
     let archived = sqlx::query_scalar::<_, Uuid>(
@@ -817,7 +817,7 @@ async fn agent_list_shows_work_and_never_secrets() {
     const DANA: usize = 1;
     const MARA: usize = 2;
 
-    let briefed = call(MARA, "briefing", json!({})).await;
+    let briefed = call(MARA, "briefing_get", json!({})).await;
     assert_eq!(briefed["outcome"], "ok", "{briefed}");
     let created = call(
         OWNER,
@@ -1196,9 +1196,9 @@ async fn run_controls_stay_inside_a_private_thread() {
     let interrupt = |browser: &Browser, key: &str| {
         browser.request(
             "POST",
-            &format!("/api/v1/agent-runs/{blocked_run}/interrupt"),
+            "/api/v2/ops/run_stop",
             Some(key),
-            Value::Null,
+            json!({"runId": blocked_run}),
         )
     };
     let respond = |browser: &Browser, key: &str| {
@@ -1217,14 +1217,18 @@ async fn run_controls_stay_inside_a_private_thread() {
         app,
         dana_browser.request(
             "POST",
-            &format!("/api/v1/agent-runs/{}/interrupt", Uuid::now_v7()),
+            "/api/v2/ops/run_stop",
             Some("dana-interrupt-missing"),
-            Value::Null,
+            json!({"runId": Uuid::now_v7()}),
         ),
     )
     .await;
     assert_eq!(missing_status, StatusCode::NOT_FOUND, "{missing}");
-    assert_eq!(body["error"], missing["error"], "{body} vs {missing}");
+    assert_eq!(
+        (&body["outcome"], &body["message"]),
+        (&missing["outcome"], &missing["message"]),
+        "{body} vs {missing}"
+    );
     let (status, body) = send(
         app,
         respond(&dana_browser, "0190b6a4-1c2d-7e3f-8a9b-0c1d2e3f4a61"),
@@ -1574,7 +1578,7 @@ async fn removing_a_run_prompt_message_scrubs_the_run_and_its_retries() {
         &setup.app,
         &token,
         &session,
-        "message_edit",
+        "message_update",
         json!({"messageId": prompt, "text": "Safe replacement", "clientRequestId": "edit-prompt"}),
     )
     .await;
@@ -1859,12 +1863,12 @@ async fn a_runs_task_and_code_follow_see_tasks_and_see_code() {
         .expect("task id");
     sqlx::query(
         r#"
-        INSERT INTO work_item_conversation_links
-            (project_id, work_item_id, conversation_id, created_by_actor_id)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO links
+            (workspace_id, from_thing_id, to_thing_id, kind, origin, created_by_account_id)
+        SELECT task.workspace_id, task.id, $2, 'about', 'explicit', $3
+        FROM things task WHERE task.id = $1
         "#,
     )
-    .bind(seed.project_id)
     .bind(task)
     .bind(thread)
     .bind(seed.human_actor_id)
@@ -1873,7 +1877,7 @@ async fn a_runs_task_and_code_follow_see_tasks_and_see_code() {
     .expect("the task's thread");
     let steps = json!({"runId": run_id, "includeDiff": true});
 
-    let seen = tool(app, &owner_app, &session, "run_steps", steps.clone()).await;
+    let seen = tool(app, &owner_app, &session, "run_step_list", steps.clone()).await;
     assert_eq!(seen["outcome"], "ok", "{seen}");
     assert_eq!(
         seen["value"]["run"]["taskTitle"], "Secret run task",
@@ -1889,7 +1893,7 @@ async fn a_runs_task_and_code_follow_see_tasks_and_see_code() {
     .execute(pool)
     .await
     .expect("the owner's apps see neither");
-    let limited = tool(app, &owner_app, &session, "run_steps", steps).await;
+    let limited = tool(app, &owner_app, &session, "run_step_list", steps).await;
     assert_eq!(limited["outcome"], "ok", "{limited}");
     let run = &limited["value"]["run"];
     assert_eq!(run["id"], run_id.to_string(), "{limited}");
@@ -1978,9 +1982,9 @@ async fn a_threads_run_shows_its_branch_only_to_those_who_see_code() {
     let interrupt = |browser: &Browser, key: &str| {
         browser.request(
             "POST",
-            &format!("/api/v1/agent-runs/{run_id}/interrupt"),
+            "/api/v2/ops/run_stop",
             Some(key),
-            Value::Null,
+            json!({"runId": run_id}),
         )
     };
     let shows_code = |body: &Value| {
@@ -1999,17 +2003,8 @@ async fn a_threads_run_shows_its_branch_only_to_those_who_see_code() {
     assert_eq!(shows_code(&seen), (true, true, true), "{seen}");
 
     // A role that may stop runs but not see code.
-    let (status, role) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/organizations/{}/roles", setup.organization_id),
-            None,
-            json!({"name": "No code", "baseRole": "member", "permissions": ["tasks.view", "channels.post", "runs.interrupt"]}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{role}");
+    let (status, role) = setup.browser.op_in(app, setup.organization_id, "role_create", json!({"name": "No code", "baseRole": "member", "permissions": ["tasks.view", "channels.post", "runs.interrupt"]})).await;
+    assert_eq!(status, StatusCode::OK, "{role}");
     let version: i64 = sqlx::query_scalar(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -2018,16 +2013,14 @@ async fn a_threads_run_shows_its_branch_only_to_those_who_see_code() {
     .fetch_one(pool)
     .await
     .expect("membership version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{aw}/members/{bea}"),
-            Some("bea-no-code"),
-            json!({"roleId": role["id"], "expectedVersion": version}),
-        ),
-    )
-    .await;
+    let (status, changed) = setup
+        .browser
+        .op(
+            app,
+            "space_member_update",
+            json!({"spaceId": aw, "account": bea, "role": role["id"], "expectedVersion": version}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
 
     // The thread's active run, the run her interrupt answers with, and the
@@ -2051,14 +2044,11 @@ async fn a_threads_run_shows_its_branch_only_to_those_who_see_code() {
     );
     assert_eq!(shows_code(&finished), (false, false, false), "{finished}");
 
-    // The owner sees code: the same answers carry the branch and commits.
+    // The owner sees code: run_stop's answer carries the branch (it names no
+    // commits), and the timeline carries the branch and commits.
     let (status, owner_stopped) = send(app, interrupt(&setup.browser, "owner-interrupt")).await;
     assert_eq!(status, StatusCode::OK, "{owner_stopped}");
-    assert_eq!(
-        shows_code(&owner_stopped),
-        (true, true, true),
-        "{owner_stopped}"
-    );
+    assert!(shows_code(&owner_stopped).0, "{owner_stopped}");
     let (status, owner_finished) = send(app, open(&setup.browser)).await;
     assert_eq!(status, StatusCode::OK, "{owner_finished}");
     assert_eq!(

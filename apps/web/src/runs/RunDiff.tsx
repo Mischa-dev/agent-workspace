@@ -7,16 +7,22 @@ import { splitPatch, type PatchFile } from './runModel'
 
 const STATUS_LABEL: Record<string, string> = { added: 'Added', modified: 'Changed', deleted: 'Deleted', renamed: 'Renamed' }
 
-/** Why a run has no files to list: not started, no branch, or its branch is gone. */
+/** Why a run has no files to list: still going, no branch, or its host never said what it changed. */
 function noFilesText(run: Pick<RunDetail, 'agentName' | 'baseCommit' | 'publishedCommit'>, live: boolean) {
   if (live) return `Changes show up here once ${run.agentName ?? 'the agent'} edits files.`
   if (!run.baseCommit) return 'This run didn’t work on a branch, so it has no changes to show.'
-  if (!run.publishedCommit) return 'The run’s branch is gone and was never published, so its changes can’t be read any more.'
-  return 'The run’s changes can’t be read right now.'
+  if (run.publishedCommit) return 'This run didn’t report its changes here. Open its branch to read them.'
+  return 'This run didn’t report its changes, so there are none to show.'
 }
 
 /** The files the run changed, with the diff fetched only when asked for. */
-export function RunDiff({ live, run }: { live: boolean; run: Pick<RunDetail, 'agentName' | 'baseCommit' | 'files' | 'id' | 'publishedCommit'> }) {
+export function RunDiff({
+  live,
+  run,
+}: {
+  live: boolean
+  run: Pick<RunDetail, 'agentName' | 'baseCommit' | 'files' | 'id' | 'publishedCommit'> & { changesTruncated?: boolean }
+}) {
   const { files } = run
   const [wanted, setWanted] = useState(false)
   const queryClient = useQueryClient()
@@ -32,6 +38,9 @@ export function RunDiff({ live, run }: { live: boolean; run: Pick<RunDetail, 'ag
   }, [queryClient, run.id, signature, wanted])
 
   if (files === null) return <p className="aw-runs__quiet">{noFilesText(run, live)}</p>
+  if (files.length === 0 && run.changesTruncated) {
+    return <p className="aw-runs__quiet">This run’s changes couldn’t all be listed here. Open its branch to read them.</p>
+  }
   if (files.length === 0) {
     return <p className="aw-runs__quiet">{live ? `No files changed yet. They show up here as ${run.agentName ?? 'the agent'} edits them.` : 'The run didn’t change any files.'}</p>
   }
@@ -71,7 +80,7 @@ export function RunDiff({ live, run }: { live: boolean; run: Pick<RunDetail, 'ag
         </Banner>
       ) : null}
       {diff.data?.state === 'unavailable' ? (
-        <Banner tone="info">The diff can’t be read now: the run’s worktree and published commit are both gone.</Banner>
+        <Banner tone="info">This run didn’t report its diff.</Banner>
       ) : null}
       {tooBig ? (
         <Banner tone="warning" title="The diff is too big to show here.">

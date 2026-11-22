@@ -40,16 +40,17 @@ pub(crate) async fn reader(state: &AppState, ctx: &OpContext) -> Result<McpPrinc
     principal.project_explicit =
         principal.project_id != Uuid::nil() && ctx.space_id != ctx.caller.confined_space;
     if principal.project_id.is_nil()
-        && let Some(credential) = principal.mcp_credential_id
+        && let Some(credential) = principal
+            .mcp_credential_id
+            .or(principal.oauth_grant_id)
+            .or((!principal.credential_id.is_nil()).then_some(principal.credential_id))
     {
-        let anchor = sqlx::query_scalar::<_, Uuid>(
-            "SELECT project_id FROM account_credentials WHERE id = $1 AND actor_id = $2",
-        )
-        .bind(credential)
-        .bind(principal.actor_id)
-        .fetch_optional(crate::db::scoped(&state.pool))
-        .await
-        .map_err(|error| OpError::logged(ctx.op, &error.into()))?;
+        let anchor = sqlx::query_scalar::<_, Uuid>(crate::ops::wrapped::CREDENTIAL_ANCHOR_SQL)
+            .bind(credential)
+            .bind(principal.actor_id)
+            .fetch_optional(crate::db::scoped(&state.pool))
+            .await
+            .map_err(|error| OpError::logged(ctx.op, &error.into()))?;
         if let Some(anchor) = anchor {
             principal.project_id = anchor;
         }

@@ -1,4 +1,5 @@
 import { requestJson } from '../api/client'
+import { callOp, ranOrThrow } from '../api/ops'
 
 /** The settings a run uses. Every field is optional at launch; the server
  * fills the rest from the account's defaults and the harness catalog, and
@@ -228,25 +229,34 @@ export async function listWorkspaceHarnesses(organizationId: string): Promise<Ha
 
 /** Asks the harness for its current models through one of your signed-in
  * accounts. Edits people made to the list are kept. */
-export function refreshCatalog(organizationId: string, kind: string, idempotencyKey: string) {
-  return requestJson<Harness>(`${workspaceCatalog(organizationId)}/${encodeURIComponent(kind)}/refresh`, {
-    method: 'POST',
-    idempotencyKey,
-    json: {},
-  })
+export async function refreshCatalog(organizationId: string, kind: string, idempotencyKey: string) {
+  const { harness } = ranOrThrow(
+    await callOp(
+      'model_catalog_set',
+      { projectId: 'workspace', harness: kind, refresh: true },
+      { workspaceId: organizationId, requestId: idempotencyKey },
+    ),
+    'Refreshing the list',
+  )
+  return harness as Harness
 }
 
-export function saveModel(
+export async function saveModel(
   organizationId: string,
   kind: string,
   modelId: string,
   overrides: ModelOverrides,
   idempotencyKey: string,
 ) {
-  return requestJson<Harness>(
-    `${workspaceCatalog(organizationId)}/${encodeURIComponent(kind)}/models/${encodeURIComponent(modelId)}`,
-    { method: 'PUT', idempotencyKey, json: overrides },
+  const { harness } = ranOrThrow(
+    await callOp(
+      'model_catalog_set',
+      { projectId: 'workspace', harness: kind, model: modelId, overrides },
+      { workspaceId: organizationId, requestId: idempotencyKey },
+    ),
+    'Changing the model',
   )
+  return harness as Harness
 }
 
 /** The models people can pick for a harness: its catalog without hidden ones. */

@@ -52,7 +52,7 @@ use crate::{
     accounts::{NewPerson, create_person},
     error::AppError,
     events,
-    files::store::FileStore,
+    files::store::{FileStore, Readers},
     jobs::{JobError, JobRegistry, NewJob},
     tenancy::tables,
     workspace::lifecycle::{self, NewWorkspace},
@@ -71,6 +71,8 @@ const MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
 /// How much more an entry over a megabyte may unpack to than it weighs.
 const MAX_RATIO: u64 = 400;
+/// The longest the store may go quiet while an import's archive arrives.
+const ARCHIVE_IDLE: std::time::Duration = std::time::Duration::from_secs(60);
 /// The longest line read.
 const MAX_LINE_BYTES: usize = 64 * 1024 * 1024;
 
@@ -125,6 +127,9 @@ fn declared(module: &str, kind: &str) -> Option<(&'static ExportDecl, &'static K
 struct Stub {
     id: Uuid,
     kind: String,
+    /// An agent that runs on a profile: its worker role in spaces comes
+    /// with it, and its profile is set up again after import.
+    profile: bool,
     display_name: Option<String>,
     emails: Vec<(String, bool)>,
 }
@@ -369,6 +374,7 @@ pub fn inspect(path: &Path) -> Result<Inspected, ImportError> {
                 stubs.push(Stub {
                     id,
                     kind: parsed.data["kind"].as_str().unwrap_or("person").to_owned(),
+                    profile: parsed.data["profile"].as_bool().unwrap_or(false),
                     display_name: parsed.data["displayName"].as_str().map(ToOwned::to_owned),
                     emails: parsed.data["emails"]
                         .as_array()
@@ -486,24 +492,26 @@ pub async fn start_import(
         record_map(&mut connection, id, workspace, &map).await?;
         connection.commit().await?;
 
-        // The archive goes into the new workspace's store, so any process
-        // can pick the import up.
+        // The archive goes into the server's store, so any process can pick
+        // the import up; it holds DMs, so never a workspace's own bucket.
         let store = {
             let mut connection = crate::db::scoped_tx(&state.pool).await?;
-            FileStore::for_uploads(state, &mut connection, workspace).await?
+            FileStore::for_uploads(state, &mut connection, workspace, Readers::Members).await?
         };
         let key = format!("{}/imports/{}.awx", workspace.simple(), id.simple());
         let file = tokio::fs::File::open(input.path).await.map_err(io)?;
-        store
+        let written = store
             .put_stream(&key, tokio_util::io::ReaderStream::new(file), u64::MAX)
             .await?;
         crate::db::scoped_one(&state.pool, async |connection| {
             sqlx::query(
-                "UPDATE workspace_transfers SET store_id = $2, file_key = $3 WHERE id = $1",
+                "UPDATE workspace_transfers SET store_id = $2, file_key = $3, byte_size = $4 \
+                 WHERE id = $1",
             )
             .bind(id)
             .bind(store.id())
             .bind(&key)
+            .bind(i64::try_from(written.length).unwrap_or(i64::MAX))
             .execute(&mut *connection)
             .await?;
             events::emit(connection, transfer::changed(workspace, id, input.owner)).await?;
@@ -687,6 +695,8 @@ async fn map_accounts(
             // its managers connect it again.
             let kind = if stub.kind == "app" {
                 "integration"
+            } else if stub.profile {
+                "execution_worker"
             } else {
                 "external_agent"
             };
@@ -814,19 +824,35 @@ pub async fn run_import(
 struct Claimed {
     workspace: Uuid,
     requester: Uuid,
+    /// Every id fresh (copy mode), rather than kept.
+    copy: bool,
     store_id: String,
     key: String,
+    /// The archive's size as stored: it is read back no further.
+    size: u64,
     cursor: Cursor,
 }
 
 async fn claim(state: &AppState, transfer: Uuid) -> Result<Option<Claimed>, AppError> {
     let row = crate::db::scoped_one(&state.pool, async |connection| {
-        sqlx::query_as::<_, (Uuid, Uuid, Option<String>, Option<String>, Value)>(
+        sqlx::query_as::<
+            _,
+            (
+                Uuid,
+                Uuid,
+                Option<String>,
+                Option<String>,
+                Option<i64>,
+                Value,
+                bool,
+            ),
+        >(
             "UPDATE workspace_transfers SET state = 'running', \
                  lease_until = now() + make_interval(secs => $2) \
              WHERE id = $1 AND direction = 'import' AND state IN ('queued', 'running') \
                AND (lease_until IS NULL OR lease_until < now()) \
-             RETURNING workspace_id, requested_by_actor_id, store_id, file_key, cursor",
+             RETURNING workspace_id, requested_by_actor_id, store_id, file_key, byte_size, \
+                       cursor, id_mode = 'copy'",
         )
         .bind(transfer)
         .bind(f64::from(LEASE_SECONDS))
@@ -834,17 +860,23 @@ async fn claim(state: &AppState, transfer: Uuid) -> Result<Option<Claimed>, AppE
         .await
     })
     .await?;
-    let Some((workspace, requester, store_id, key, cursor)) = row else {
+    let Some((workspace, requester, store_id, key, size, cursor, copy)) = row else {
         return Ok(None);
     };
-    let (Some(store_id), Some(key)) = (store_id, key) else {
+    let (Some(store_id), Some(key), Some(size)) = (
+        store_id,
+        key,
+        size.and_then(|size| u64::try_from(size).ok()),
+    ) else {
         return Err(AppError::Internal("the import's archive was never stored"));
     };
     Ok(Some(Claimed {
         workspace,
         requester,
+        copy,
         store_id,
         key,
+        size,
         cursor: serde_json::from_value(cursor).unwrap_or_default(),
     }))
 }
@@ -933,8 +965,23 @@ async fn unpack(
     let mut stream = stored.body.into_data_stream();
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
-    while let Some(chunk) = stream.next().await {
-        file.write_all(&chunk.map_err(io)?).await.map_err(io)?;
+    // Read back only as stored: at most its recorded size, and a store
+    // that goes quiet is given up on.
+    let mut read = 0_u64;
+    loop {
+        let next = tokio::time::timeout(ARCHIVE_IDLE, stream.next())
+            .await
+            .map_err(|_| AppError::Internal("the import's archive stopped arriving"))?;
+        let Some(chunk) = next else { break };
+        let chunk = chunk.map_err(io)?;
+        read += chunk.len() as u64;
+        if read > claimed.size {
+            return Err(AppError::Internal("the import's archive is bigger than stored").into());
+        }
+        file.write_all(&chunk).await.map_err(io)?;
+    }
+    if read != claimed.size {
+        return Err(AppError::Internal("the import's archive is not the one stored").into());
     }
     file.flush().await.map_err(io)?;
     drop(file);
@@ -998,8 +1045,13 @@ struct TableInfo {
     columns: HashSet<String>,
     has_id: bool,
     tenant: &'static str,
-    keys: Vec<Vec<String>>,
+    /// The primary key's columns.
+    primary: Vec<String>,
+    /// Each unique key's columns, with the predicate of a partial one.
+    keys: Vec<(Vec<String>, Option<String>)>,
     fks: Vec<Fk>,
+    /// Columns a CHECK constraint reads, which can't wait for the fixups.
+    checked: HashSet<String>,
     /// A unique constraint checked at commit, which `ON CONFLICT` can't
     /// arbitrate: only the id may then.
     deferred_unique: bool,
@@ -1028,9 +1080,10 @@ async fn table_info(
     .await?
     .into_iter()
     .collect::<HashSet<_>>();
-    let keys = sqlx::query_scalar::<_, Vec<String>>(
+    let keys = sqlx::query_as::<_, (Vec<String>, Option<String>)>(
         "SELECT array(SELECT a.attname::text FROM unnest(i.indkey::int2[]) k \
-                      JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k) \
+                      JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k), \
+                pg_get_expr(i.indpred, i.indrelid) \
          FROM pg_index i \
          WHERE i.indrelid = $1::regclass AND i.indisunique AND NOT i.indisprimary \
            AND i.indexprs IS NULL",
@@ -1062,6 +1115,25 @@ async fn table_info(
         referenced,
     })
     .collect();
+    let checked = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT a.attname::text FROM pg_constraint c \
+         JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey) \
+         WHERE c.contype = 'c' AND c.conrelid = $1::regclass",
+    )
+    .bind(table)
+    .fetch_all(&mut *connection)
+    .await?
+    .into_iter()
+    .collect::<HashSet<_>>();
+    let primary = sqlx::query_scalar::<_, Vec<String>>(
+        "SELECT array(SELECT a.attname::text FROM unnest(i.indkey::int2[]) k \
+                      JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k) \
+         FROM pg_index i WHERE i.indrelid = $1::regclass AND i.indisprimary",
+    )
+    .bind(table)
+    .fetch_optional(&mut *connection)
+    .await?
+    .unwrap_or_default();
     let deferred_unique = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = $1::regclass \
                         AND contype IN ('u', 'x') AND condeferrable)",
@@ -1075,8 +1147,10 @@ async fn table_info(
         columns,
         tenant: tables::tenant_column(table)
             .ok_or_else(|| refused(format!("{table} has no workspace column")))?,
+        primary,
         keys,
         fks,
+        checked,
     })
 }
 
@@ -1120,11 +1194,24 @@ fn plan(
         .collect::<BTreeSet<_>>();
     // Edges: table -> (target, nullable columns of that reference).
     let mut edges: BTreeMap<&str, Vec<(&str, Vec<String>)>> = BTreeMap::new();
+    // A table that points at itself (a task's parent, a decision's
+    // successor) is written in creation order, which a reparented row or a
+    // forward pointer breaks, so its nullable side waits for the fixups too,
+    // unless a CHECK reads it (a thread needs its channel as it goes in;
+    // those only ever point back).
+    let mut deferred: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
     for table in &tables {
         for fk in &info[table].fks {
-            if let Some(target) = tables.get(fk.target.as_str())
-                && target != table
-            {
+            if fk.target == *table {
+                deferred.entry(table).or_default().extend(
+                    fk.nullable
+                        .iter()
+                        .filter(|column| !info[table].checked.contains(*column))
+                        .cloned(),
+                );
+                continue;
+            }
+            if let Some(target) = tables.get(fk.target.as_str()) {
                 edges
                     .entry(table)
                     .or_default()
@@ -1149,7 +1236,6 @@ fn plan(
         .iter()
         .map(|table| (*table, reaches(table)))
         .collect::<BTreeMap<_, _>>();
-    let mut deferred: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
     let mut hard: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for (table, after) in AFTER {
         if let (Some(table), Some(after)) = (tables.get(table), tables.get(after)) {
@@ -1252,7 +1338,11 @@ fn ids_in(value: &Value, into: &mut HashSet<Uuid>) {
     match value {
         Value::String(text) => into.extend(uuids(text).map(|(_, id)| id)),
         Value::Array(items) => items.iter().for_each(|item| ids_in(item, into)),
-        Value::Object(fields) => fields.values().for_each(|item| ids_in(item, into)),
+        Value::Object(fields) => fields.iter().for_each(|(key, item)| {
+            // Field values are keyed by their field's id.
+            into.extend(uuids(key).map(|(_, id)| id));
+            ids_in(item, into);
+        }),
         _ => {}
     }
 }
@@ -1307,7 +1397,21 @@ fn rewrite(value: &mut Value, map: &HashMap<Uuid, Uuid>) {
             *text = out;
         }
         Value::Array(items) => items.iter_mut().for_each(|item| rewrite(item, map)),
-        Value::Object(fields) => fields.values_mut().for_each(|item| rewrite(item, map)),
+        Value::Object(fields) => {
+            // Keys too: field values are keyed by their field's id.
+            *fields = std::mem::take(fields)
+                .into_iter()
+                .map(|(key, mut item)| {
+                    rewrite(&mut item, map);
+                    let mut key = Value::String(key);
+                    rewrite(&mut key, map);
+                    match key {
+                        Value::String(key) => (key, item),
+                        _ => unreachable!("a string stays a string"),
+                    }
+                })
+                .collect();
+        }
         _ => {}
     }
 }
@@ -1475,9 +1579,11 @@ async fn fill(
         .iter()
         .map(|(_, _, table)| *table)
         .collect::<BTreeSet<_>>();
+    // Files arrive in the server's store, DMs' among them; an owner moves
+    // the rest into the workspace's own bucket once it has one.
     let store = {
         let mut connection = crate::db::scoped_tx(&state.pool).await?;
-        FileStore::for_uploads(state, &mut connection, workspace).await?
+        FileStore::for_uploads(state, &mut connection, workspace, Readers::Members).await?
     };
     let mut cursor = claimed.cursor.clone();
     if cursor.phase.is_empty() {
@@ -1564,6 +1670,7 @@ async fn fill(
             store_id: store.id(),
             info: &info,
             carried: &carried,
+            copy: claimed.copy,
         };
         if cursor.phase == "rows" {
             // A row that must go in with its companion's (a task and its
@@ -1669,6 +1776,7 @@ struct Batch<'a> {
     store_id: &'a str,
     info: &'a HashMap<&'static str, TableInfo>,
     carried: &'a BTreeSet<&'static str>,
+    copy: bool,
 }
 
 fn count(cursor: &mut Cursor, table: &str, written: u64, skipped: u64) {
@@ -1733,6 +1841,12 @@ async fn write_batch(
     blobs_missing: &HashSet<Uuid>,
 ) -> Result<(u64, u64), ImportError> {
     let info = &context.info[step.table];
+    // A page's live document is a binary Yjs state whose ids can't be
+    // rewritten like text: in copy mode it stays behind, and the page's
+    // (rewritten) Markdown becomes its document when it is first opened.
+    if context.copy && step.table == "project_page_documents" {
+        return Ok((0, 0));
+    }
     let rows = prepare(connection, context, step, &lines, blobs_missing).await?;
     keep_authors(connection, info, &rows).await?;
     let (rows, kept, dangling) =
@@ -1819,10 +1933,39 @@ async fn insert_rows(
         return Ok((0, 0));
     }
     let returning = if info.has_id { " RETURNING id" } else { "" };
-    let conflict = match (info.deferred_unique, info.has_id) {
-        (false, _) => " ON CONFLICT DO NOTHING",
-        (true, true) => " ON CONFLICT (id) DO NOTHING",
-        (true, false) => "",
+    let tenant = identifier(info.tenant);
+    // A row without an id that the new workspace already made for itself
+    // (a space's counter or instructions) takes the archive's values, so
+    // the import is lossless; one in another workspace is never touched.
+    let take_over = if !info.has_id && !info.deferred_unique && !info.primary.is_empty() {
+        let changed = columns
+            .iter()
+            .filter(|column| !info.primary.contains(column))
+            .map(|column| plain(column).map(|column| format!("{column} = EXCLUDED.{column}")))
+            .collect::<Result<Vec<_>, _>>()?;
+        let key = info
+            .primary
+            .iter()
+            .map(|column| plain(column))
+            .collect::<Result<Vec<_>, _>>()?
+            .join(", ");
+        (!changed.is_empty()).then(|| {
+            format!(
+                " ON CONFLICT ({key}) DO UPDATE SET {} WHERE {table}.{tenant} = EXCLUDED.{tenant}",
+                changed.join(", ")
+            )
+        })
+    } else {
+        None
+    };
+    if take_over.is_some() {
+        make_way(connection, workspace, step, info, &rows).await?;
+    }
+    let conflict = match (take_over, info.deferred_unique, info.has_id) {
+        (Some(take_over), _, _) => take_over,
+        (None, false, _) => " ON CONFLICT DO NOTHING".to_owned(),
+        (None, true, true) => " ON CONFLICT (id) DO NOTHING".to_owned(),
+        (None, true, false) => String::new(),
     };
     let sql = format!(
         "INSERT INTO {table} ({list}) SELECT {list} FROM jsonb_populate_recordset(NULL::{table}, $1)\
@@ -1841,7 +1984,6 @@ async fn insert_rows(
         .await?
         .into_iter()
         .collect::<HashSet<_>>();
-    let tenant = identifier(info.tenant);
     let mut matched = Vec::new();
     let mut skipped = 0;
     for ((line, row), whole) in lines.iter().zip(&rows).zip(&full) {
@@ -1868,21 +2010,34 @@ async fn insert_rows(
             )));
         }
         let mut found = None;
-        for key in &info.keys {
+        for (key, predicate) in &info.keys {
             if key
                 .iter()
                 .any(|column| whole.get(column).is_none_or(Value::is_null))
             {
                 continue;
             }
-            let condition = key
+            let columns = key
                 .iter()
-                .map(|column| plain(column).map(|column| format!("t.{column} = r.{column}")))
+                .map(|column| plain(column))
                 .collect::<Result<Vec<_>, _>>()?
-                .join(" AND ");
+                .join(", ");
+            // A partial key holds only where its predicate does, for the
+            // row arriving (inner scope) and the row found (outer scope)
+            // alike: the predicate comes from the catalogue, not the archive.
+            let partial = predicate
+                .as_deref()
+                .map(|predicate| {
+                    format!(
+                        " AND ({predicate}) AND EXISTS (SELECT 1 FROM \
+                         jsonb_populate_record(NULL::{table}, $1) arriving WHERE {predicate})"
+                    )
+                })
+                .unwrap_or_default();
             found = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(&format!(
-                "SELECT t.id, t.{tenant} FROM {table} t, \
-                 jsonb_populate_record(NULL::{table}, $1) r WHERE {condition} LIMIT 1"
+                "SELECT id, {tenant} FROM {table} \
+                 WHERE ({columns}) = (SELECT {columns} FROM jsonb_populate_record(NULL::{table}, $1)) \
+                 {partial} LIMIT 1"
             ))
             .bind(whole)
             .fetch_optional(&mut *connection)
@@ -1896,6 +2051,7 @@ async fn insert_rows(
                 if let Some(source) = line.id.as_deref().and_then(|id| id.parse::<Uuid>().ok()) {
                     matched.push((source, existing));
                 }
+                take_values(connection, step, info, workspace, existing, row).await?;
             }
             Some(_) => skipped += 1,
             None => {
@@ -1907,6 +2063,124 @@ async fn insert_rows(
     }
     record_map(connection, transfer, workspace, &matched).await?;
     Ok((inserted.len() as u64, skipped))
+}
+
+/// Rows the new workspace made for itself give way to arriving rows on
+/// their other unique keys: when the person importing has a profile whose
+/// handle an arriving profile also uses (the same name on two servers), the
+/// one made here takes a suffix, and the archive's arrives as it was.
+/// Only keys of the workspace column and one text column are eased.
+async fn make_way(
+    connection: &mut PgConnection,
+    workspace: Uuid,
+    step: &Step,
+    info: &TableInfo,
+    rows: &[Value],
+) -> Result<(), ImportError> {
+    let table = identifier(step.table);
+    let tenant = identifier(info.tenant);
+    let primary = info
+        .primary
+        .iter()
+        .map(|column| plain(column))
+        .collect::<Result<Vec<_>, _>>()?;
+    for (key, predicate) in &info.keys {
+        if predicate.is_some() || *key == info.primary || key.len() != 2 {
+            continue;
+        }
+        let Some(other) = key.iter().find(|column| column.as_str() != info.tenant) else {
+            continue;
+        };
+        if !key.iter().any(|column| column.as_str() == info.tenant) {
+            continue;
+        }
+        let text = sqlx::query_scalar::<_, bool>(
+            "SELECT data_type IN ('text', 'character varying') FROM information_schema.columns \
+             WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2",
+        )
+        .bind(step.table)
+        .bind(other)
+        .fetch_optional(&mut *connection)
+        .await?
+        .unwrap_or(false);
+        if !text {
+            continue;
+        }
+        let other = plain(other)?;
+        let same_row = primary
+            .iter()
+            .map(|column| format!("existing.{column} IS NOT DISTINCT FROM arriving.{column}"))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        sqlx::query(&format!(
+            "UPDATE {table} existing \
+             SET {other} = left(existing.{other}, 27) || '-' || substr(md5(random()::text), 1, 4) \
+             FROM jsonb_populate_recordset(NULL::{table}, $1) arriving \
+             WHERE existing.{tenant} = $2 AND existing.{other} = arriving.{other} \
+               AND NOT ({same_row})"
+        ))
+        .bind(Value::Array(rows.to_vec()))
+        .bind(workspace)
+        .execute(&mut *connection)
+        .await?;
+    }
+    // A workspace profile's handle is the one its space memberships carry
+    // (`canonical_member_profile`): touching them takes the new one.
+    if step.table == "organization_actor_profiles" {
+        sqlx::query(
+            "UPDATE project_memberships membership SET handle = profile.handle \
+             FROM organization_actor_profiles profile \
+             WHERE membership.workspace_id = $1 AND profile.organization_id = $1 \
+               AND profile.actor_id = membership.actor_id \
+               AND membership.handle IS DISTINCT FROM profile.handle",
+        )
+        .bind(workspace)
+        .execute(&mut *connection)
+        .await?;
+    }
+    Ok(())
+}
+
+/// A row the new workspace made for itself (its workspace space, a
+/// built-in role, its owner's membership) takes the archive's values, all
+/// but its id, so what arrives is what was exported.
+async fn take_values(
+    connection: &mut PgConnection,
+    step: &Step,
+    info: &TableInfo,
+    workspace: Uuid,
+    existing: Uuid,
+    row: &Value,
+) -> Result<(), ImportError> {
+    let Value::Object(fields) = row else {
+        return Ok(());
+    };
+    let columns = fields
+        .keys()
+        .filter(|column| column.as_str() != "id" && !step.deferred.contains(*column))
+        .map(|column| plain(column))
+        .collect::<Result<Vec<_>, _>>()?;
+    if columns.is_empty() {
+        return Ok(());
+    }
+    let table = identifier(step.table);
+    let tenant = identifier(info.tenant);
+    let list = columns.join(", ");
+    let from = columns
+        .iter()
+        .map(|column| format!("r.{column}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    sqlx::query(&format!(
+        "UPDATE {table} t SET ({list}) = (SELECT {from} FROM jsonb_populate_record(NULL::{table}, $1) r) \
+         WHERE t.id = $2 AND t.{tenant} = $3"
+    ))
+    .bind(row)
+    .bind(existing)
+    .bind(workspace)
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
 }
 
 /// Fills in the columns [`plan`] deferred.
@@ -1980,6 +2254,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_table_pointing_at_itself_fills_that_column_in_the_fixups() {
+        let table = |fks: Vec<Fk>| TableInfo {
+            columns: ["id", "parent_id", "project_id"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            has_id: true,
+            tenant: "organization_id",
+            primary: vec!["id".to_owned()],
+            keys: Vec::new(),
+            fks,
+            checked: HashSet::from(["kind".to_owned()]),
+            deferred_unique: false,
+        };
+        let info = HashMap::from([(
+            "work_items",
+            table(vec![Fk {
+                target: "work_items".to_owned(),
+                columns: vec!["parent_id".to_owned(), "project_id".to_owned()],
+                nullable: vec!["parent_id".to_owned()],
+                referenced: vec!["id".to_owned(), "project_id".to_owned()],
+            }]),
+        )]);
+        let steps = plan(&[("tasks", "tasks", "work_items")], &info).expect("plan");
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].deferred, vec!["parent_id".to_owned()]);
+    }
+
+    #[test]
     fn names_that_climb_out_or_hide_are_refused() {
         for name in [
             "../manifest.json",
@@ -2020,5 +2323,17 @@ mod tests {
             format!("see /tasks/{to}#x and {}", to.to_string().to_uppercase())
         );
         assert_eq!(value["other"], other);
+    }
+
+    #[test]
+    fn ids_used_as_keys_are_found_and_rewritten() {
+        let field = Uuid::now_v7();
+        let copied = Uuid::now_v7();
+        let mut value = json!({ field.to_string(): "high", "title": "x" });
+        let mut found = HashSet::new();
+        ids_in(&value, &mut found);
+        assert!(found.contains(&field));
+        rewrite(&mut value, &HashMap::from([(field, copied)]));
+        assert_eq!(value, json!({ copied.to_string(): "high", "title": "x" }));
     }
 }

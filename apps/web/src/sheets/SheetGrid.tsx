@@ -18,7 +18,10 @@ import {
   parseTable,
   type Position,
   type Selection,
+  shownBlock,
+  shownSelection,
 } from './sheetModel'
+import { markTitle, ruleBook } from './sheetValidation'
 
 /** Rows drawn past the edges of what's in view, so scrolling stays smooth. */
 const OVERSCAN = 12
@@ -40,6 +43,7 @@ const STYLE_KEYS: Record<string, 'bold' | 'italic' | 'underline'> = { b: 'bold',
 export function SheetGrid({
   cells,
   commented,
+  edited,
   editable,
   onEdits,
   onResize,
@@ -56,6 +60,8 @@ export function SheetGrid({
   cells: Map<string, SheetCell>
   /** Cells a comment thread is about, by `row:column`: they get a corner mark. */
   commented?: ReadonlyMap<string, unknown>
+  /** Cells someone changed recently, by `row:column`, with who and when: outlined. */
+  edited?: ReadonlyMap<string, string>
   editable: boolean
   onEdits: (edits: GridEdit[]) => void
   onResize: (column: number, width: number | null) => void
@@ -89,6 +95,8 @@ export function SheetGrid({
     width: number
   } | null>(null)
   const frozen = Math.min(tab.frozenRows, size.rows)
+  // Validation (C1.15): a list gives a cell choices, a checkbox a box, and a cell breaking a lenient rule a mark.
+  const rules = useMemo(() => ruleBook(tab.validations ?? []), [tab.validations])
   const width = useCallback((column: number) => (resizing?.column === column ? resizing.width : (tab.columnWidths[column] ?? DEFAULT_WIDTH)), [resizing, tab.columnWidths])
   const hidden = shown?.hiddenColumns
   const columns = useMemo(() => Array.from({ length: size.columns }, (_, index) => index + 1).filter((column) => !hidden?.has(column)), [size.columns, hidden])
@@ -193,12 +201,23 @@ export function SheetGrid({
     scroller.current?.focus()
   }
 
+  const inputAt = (row: number, column: number) => pending.get(cellKey(row, column)) ?? cells.get(cellKey(row, column))?.input ?? ''
+  /** A checkbox cell flips between TRUE and FALSE. */
+  const toggle = (row: number, column: number) => {
+    if (!editable) return
+    onEdits([{ row, column, input: /^true$/i.test(inputAt(row, column).trim()) ? 'FALSE' : 'TRUE', revision }])
+  }
+
+  /** The rows and columns the selection covers as shown. */
+  const selected = () => shownSelection(selection.anchor, selection.focus, { frozen, order, columns: hidden ? columns : null })
+
   const clearSelection = () => {
     if (!editable) return
-    const box = bounds(selection)
+    // Only what's shown: a view's hidden rows and columns between keep their cells.
+    const { rows, columns: across } = selected()
     const edits: GridEdit[] = []
-    for (let row = box.top; row <= box.bottom; row += 1) {
-      for (let column = box.left; column <= box.right; column += 1) {
+    for (const row of rows) {
+      for (const column of across) {
         if (cells.has(cellKey(row, column)) || pending.get(cellKey(row, column))) edits.push({ row, column, input: '' })
       }
     }
@@ -221,6 +240,9 @@ export function SheetGrid({
     } else if (event.key === 'Tab') {
       event.preventDefault()
       move({ row, column: stepColumn(column, extend ? -1 : 1) })
+    } else if ((event.key === 'Enter' || event.key === ' ') && editable && rules.control(row, column)?.allow === 'checkbox') {
+      event.preventDefault()
+      toggle(row, column)
     } else if (event.key === 'Enter' || event.key === 'F2') {
       event.preventDefault()
       if (editable) startEdit()
@@ -241,17 +263,14 @@ export function SheetGrid({
 
   const onCopy = (event: ClipboardEvent<HTMLDivElement>, cut = false) => {
     if (editing) return
-    const box = bounds(selection)
-    const rows: string[][] = []
-    for (let row = box.top; row <= box.bottom; row += 1) {
-      const line: string[] = []
-      for (let column = box.left; column <= box.right; column += 1) line.push(pending.get(cellKey(row, column)) ?? cells.get(cellKey(row, column))?.input ?? '')
-      rows.push(line)
-    }
+    const shown = selected()
+    const rows = shown.rows.map((row) => shown.columns.map((column) => pending.get(cellKey(row, column)) ?? cells.get(cellKey(row, column))?.input ?? ''))
     event.clipboardData.setData('text/plain', formatTable(rows))
     event.preventDefault()
     if (cut) clearSelection()
   }
+
+  const shownFrom = (row: number, column: number, height: number, breadth: number) => shownBlock({ row, column }, height, breadth, { frozen, order, columns: hidden ? columns : null })
 
   const onPaste = (event: ClipboardEvent<HTMLDivElement>) => {
     if (editing || !editable) return
@@ -259,19 +278,22 @@ export function SheetGrid({
     if (!rows.length) return
     event.preventDefault()
     const box = bounds(selection)
+    const top = order && indexOf(selection.focus.row) < indexOf(selection.anchor.row) ? selection.focus.row : order ? selection.anchor.row : box.top
+    const breadth = Math.max(...rows.map((line) => line.length))
+    const target = shownFrom(top, box.left, rows.length, breadth)
     const edits: GridEdit[] = []
     rows.forEach((line, rowOffset) =>
       line.forEach((input, columnOffset) => {
-        const row = box.top + rowOffset
-        const column = box.left + columnOffset
-        if (row <= MAX_ROWS && column <= MAX_COLUMNS) edits.push({ row, column, input })
+        const row = target.rows[rowOffset]
+        const column = target.columns[columnOffset]
+        if (row !== undefined && column !== undefined && row <= MAX_ROWS && column <= MAX_COLUMNS) edits.push({ row, column, input })
       }),
     )
     onEdits(edits)
-    const lastRow = Math.min(MAX_ROWS, box.top + rows.length - 1)
-    const lastColumn = Math.min(MAX_COLUMNS, box.left + Math.max(...rows.map((line) => line.length)) - 1)
+    const lastRow = target.rows.filter((row): row is number => row !== undefined && row <= MAX_ROWS).at(-1) ?? top
+    const lastColumn = target.columns.filter((column): column is number => column !== undefined && column <= MAX_COLUMNS).at(-1) ?? box.left
     onSelect({
-      anchor: { row: box.top, column: box.left },
+      anchor: { row: top, column: box.left },
       focus: { row: lastRow, column: lastColumn },
     })
   }
@@ -320,6 +342,9 @@ export function SheetGrid({
         const selected = contains(selection, row, column)
         const focused = focus.row === row && focus.column === column
         const isEditing = editing && editing.position.row === row && editing.position.column === column
+        const control = rules.control(row, column)
+        const input = waiting ?? cell?.input ?? ''
+        const broken = rules.broken(row, column, input)
         const className = [
           'aw-grid__cell',
           cell?.kind === 'number' && waiting === undefined ? 'is-number' : '',
@@ -329,7 +354,10 @@ export function SheetGrid({
           focused ? 'is-focused' : '',
           commented?.has(cellKey(row, column)) ? 'has-comment' : '',
           proposed?.has(key) ? 'is-proposed' : '',
+          edited?.has(key) ? 'is-edited' : '',
           (cell?.conditional ?? cell?.style)?.fill ? 'has-fill' : '',
+          control?.allow === 'list' ? 'has-choices' : '',
+          broken ? 'is-invalid' : '',
         ]
           .filter(Boolean)
           .join(' ')
@@ -355,13 +383,24 @@ export function SheetGrid({
               if (dragging) onSelect({ anchor: selection.anchor, focus: { row, column } })
             }}
             style={cellLook(cell) as CSSProperties | undefined}
-            title={cell?.input.startsWith('=') ? cell.input : undefined}
+            title={broken ? markTitle(broken) : (edited?.get(key) ?? (cell?.input.startsWith('=') ? cell.input : (control?.hint ?? undefined)))}
           >
-            {isEditing ? (
+            {control?.allow === 'checkbox' && !isEditing ? (
+              <input
+                aria-label={cellName({ row, column })}
+                checked={/^true$/i.test(input.trim())}
+                className="aw-grid__check"
+                disabled={!editable}
+                onChange={() => toggle(row, column)}
+                tabIndex={-1}
+                type="checkbox"
+              />
+            ) : isEditing ? (
               <input
                 aria-label={`Edit ${cellName({ row, column })}`}
                 autoFocus
                 className="aw-grid__editor"
+                list={control?.allow === 'list' ? `aw-grid-choices-${row}-${column}` : undefined}
                 onBlur={() => commit()}
                 onChange={(event) =>
                   setEditing({
@@ -388,6 +427,13 @@ export function SheetGrid({
             ) : (
               <span className="aw-grid__text">{waiting ?? display(cell)}</span>
             )}
+            {isEditing && control?.allow === 'list' ? (
+              <datalist id={`aw-grid-choices-${row}-${column}`}>
+                {(control.choices ?? []).map((choice) => (
+                  <option key={choice} value={choice} />
+                ))}
+              </datalist>
+            ) : null}
           </td>
         )
       })}

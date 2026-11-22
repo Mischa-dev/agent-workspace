@@ -83,8 +83,20 @@ pub enum Publish {
         )]
         position: Option<i64>,
     },
-    /// A signed-out session: its connections close.
-    Revoke { session: Uuid },
+    /// A signed-out session: its connections close. A durable one (from
+    /// the log, with its position) is kept in the window, so a connection
+    /// that opens later with a ticket cut before it is refused on any
+    /// instance; one that opens on an instance whose window starts after
+    /// its ticket resumes through `api`, which checks the session.
+    Revoke {
+        session: Uuid,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "optional_position"
+        )]
+        position: Option<i64>,
+    },
 }
 
 mod optional_position {
@@ -175,6 +187,10 @@ impl LiveRouter {
         | Publish::Stale {
             position: Some(position),
             ..
+        }
+        | Publish::Revoke {
+            position: Some(position),
+            ..
         } = item.as_ref()
         {
             let mut recent = self
@@ -263,7 +279,11 @@ pub async fn socket(State(state): State<AppState>, upgrade: WebSocketUpgrade) ->
         .max_message_size(MAX_CLIENT_FRAME_BYTES)
         .on_upgrade(move |socket| async move {
             let keys = KeyringKeys(&state.config);
-            serve(socket, &router, receiver, &keys).await;
+            crate::tenancy::system(
+                "realtime.connections",
+                serve(socket, &router, receiver, &keys, &state.pool),
+            )
+            .await;
         })
         .into_response()
 }
@@ -300,11 +320,22 @@ fn ticket_in(text: &str, kind: &str) -> Option<String> {
         .flatten()
 }
 
+/// Whether a ticket's session is still signed in.
+async fn session_open(pool: &sqlx::PgPool, session: Uuid) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM sessions WHERE id = $1 AND revoked_at IS NULL)",
+    )
+    .bind(session)
+    .fetch_one(crate::db::scoped(pool))
+    .await
+}
+
 async fn serve(
     mut socket: WebSocket,
     router: &LiveRouter,
     mut receiver: broadcast::Receiver<Delivery>,
     keys: &(dyn PublicKeys + Sync),
+    pool: &sqlx::PgPool,
 ) {
     let now = || chrono::Utc::now().timestamp();
     let hello = match tokio::time::timeout(HELLO_WAIT, socket.recv()).await {
@@ -320,6 +351,21 @@ async fn serve(
         close(&mut socket, CLOSE_TICKET, "ticket").await;
         return;
     };
+    // Signed out since the ticket was cut, on any instance: a revoke reaches
+    // the window only once the log has it, and a cookie rotated at sign-in
+    // stages none, so the session itself is asked once here. Fresh tickets
+    // on an open connection come from `api`, which asks it too.
+    match session_open(pool, ticket.session).await {
+        Ok(true) => {}
+        Ok(false) => {
+            close(&mut socket, CLOSE_TICKET, "signed_out").await;
+            return;
+        }
+        Err(_) => {
+            close(&mut socket, CLOSE_RESTART, "try_again").await;
+            return;
+        }
+    }
     let mut last = ticket.from;
     // While stale: when the grace runs out, and the position of the newest
     // change to what this connection may hear (a new ticket must be cut at
@@ -335,6 +381,14 @@ async fn serve(
         close(&mut socket, CLOSE_RESTART, "resume_through_api").await;
         return;
     };
+    // Signed out after the ticket was cut: nothing more, not even what came
+    // before.
+    if missed.iter().any(|item| {
+        matches!(item.as_ref(), Publish::Revoke { session, .. } if *session == ticket.session)
+    }) {
+        close(&mut socket, CLOSE_TICKET, "signed_out").await;
+        return;
+    }
     for item in missed {
         if let Publish::Stale {
             audiences,
@@ -465,7 +519,7 @@ async fn serve(
                             }
                         }
                     }
-                    Publish::Revoke { session } => {
+                    Publish::Revoke { session, .. } => {
                         if *session == ticket.session {
                             close(&mut socket, CLOSE_TICKET, "signed_out").await;
                             return;
@@ -577,6 +631,29 @@ mod tests {
     }
 
     #[test]
+    fn a_signed_out_session_stays_in_the_window_only_from_the_log() {
+        let router = LiveRouter::new(16, false);
+        let session = Uuid::now_v7();
+        // The bus's revoke closes open connections and is not kept.
+        router.publish(Publish::Revoke {
+            session,
+            position: None,
+        });
+        router.publish(frame(7));
+        // The log's is kept, so a later connection with an older ticket
+        // finds it.
+        let logged = Publish::Revoke {
+            session,
+            position: Some(8),
+        };
+        router.publish(logged.clone());
+        let kept = router.after(6).expect("window");
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[1].as_ref(), &logged);
+        assert!(router.after(8).expect("window").is_empty());
+    }
+
+    #[test]
     fn publishes_read_as_written() {
         let items = vec![
             frame(9_007_199_254_740_993),
@@ -586,6 +663,11 @@ mod tests {
             },
             Publish::Revoke {
                 session: Uuid::now_v7(),
+                position: None,
+            },
+            Publish::Revoke {
+                session: Uuid::now_v7(),
+                position: Some(9_007_199_254_740_995),
             },
         ];
         let text = serde_json::to_string(&PublishBody {

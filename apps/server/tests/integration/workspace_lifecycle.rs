@@ -112,8 +112,7 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     // Open: the agent works.
     let body = agent_task_list(&t, &a.agent_token).await;
     assert!(!refused_as_suspended(&body), "{body}");
-    // The owner may delete it, and a rename's answer says so too, since
-    // the settings page shows that answer in place of the one it read.
+    // The owner may delete it, before and after a rename.
     let (status, body) = send(
         &t.app,
         a.browser.request(
@@ -126,17 +125,27 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["capabilities"]["delete"], true, "{body}");
+    let (status, renamed) = op(
+        &t,
+        &a.browser,
+        a.organization,
+        "workspace_update",
+        json!({"projectId": "workspace", "name": "Renamed", "expectedVersion": body["version"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{renamed}");
     let (status, body) = send(
         &t.app,
         a.browser.request(
-            "PATCH",
+            "GET",
             &format!("/api/v1/organizations/{}", a.organization),
             None,
-            json!({"name": "Renamed", "expectedVersion": body["version"]}),
+            Value::Null,
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["name"], "Renamed", "{body}");
     assert_eq!(body["capabilities"]["delete"], true, "{body}");
 
     // A run each agent reports for itself (not one the built-in host
@@ -190,10 +199,10 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     let (status, body) = send(
         &t.app,
         a.browser.request(
-            "PATCH",
-            &format!("/api/v1/organizations/{}", a.organization),
+            "PUT",
+            &format!("/api/v1/organizations/{}/layout/mine", a.organization),
             None,
-            json!({"name": "Renamed while suspended"}),
+            json!({"hidden": [], "showHidden": false}),
         ),
     )
     .await;
@@ -264,16 +273,10 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     .await;
     assert_eq!(status, StatusCode::LOCKED, "{body}");
     // So is removing a file named by id, and the file stays.
-    let (status, body) = send(
-        &t.app,
-        a.browser.request(
-            "DELETE",
-            &format!("/api/v1/files/{}", a.task_file),
-            Some(&Uuid::now_v7().to_string()),
-            Value::Null,
-        ),
-    )
-    .await;
+    let (status, body) = a
+        .browser
+        .op(&t.app, "file_delete", json!({"fileId": a.task_file}))
+        .await;
     assert_eq!(status, StatusCode::LOCKED, "{body}");
     let removed =
         sqlx::query_scalar::<_, bool>("SELECT removed_at IS NOT NULL FROM files WHERE id = $1")
@@ -570,6 +573,24 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     .fetch_one(&t.pool)
     .await
     .expect("default connection at home in A");
+    // Past its date the deletion has begun (its own buckets go first), so
+    // it can no longer be kept.
+    sqlx::query(
+        "UPDATE organizations SET delete_after = now() - interval '1 minute' WHERE id = $1",
+    )
+    .bind(a.organization)
+    .execute(&t.pool)
+    .await
+    .expect("due");
+    let (status, body) = op(
+        &t,
+        &a.browser,
+        a.organization,
+        "workspace_delete_cancel",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
     let deleted = lifecycle::delete_now(&t.state, a.organization, true)
         .await
         .expect("delete")

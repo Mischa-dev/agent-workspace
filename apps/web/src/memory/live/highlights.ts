@@ -18,7 +18,12 @@ export type Marks = {
   active: string | null
   /** Blocks a pending suggestion changes. */
   suggested: string[]
+  /** Blocks someone changed recently (C1.10), with who and when. */
+  edited?: EditedBlock[]
 }
+
+/** A block someone changed recently, and the words its outline shows on hover. */
+export type EditedBlock = { blockId: string; title: string }
 
 export const discussionKey = new PluginKey<{ marks: Marks; decorations: DecorationSet }>('pageDiscussion')
 
@@ -72,7 +77,8 @@ export function findQuote(block: ProseMirrorNode, offset: number, quote: string)
 }
 
 function decorate(doc: ProseMirrorNode, marks: Marks) {
-  if (marks.threads.length === 0 && marks.suggested.length === 0) return DecorationSet.empty
+  const edited = new Map((marks.edited ?? []).map((block) => [block.blockId, block.title]))
+  if (marks.threads.length === 0 && marks.suggested.length === 0 && edited.size === 0) return DecorationSet.empty
   const decorations: Decoration[] = []
   const suggested = new Set(marks.suggested)
   const byBlock = new Map<string, MarkedThread[]>()
@@ -81,6 +87,8 @@ function decorate(doc: ProseMirrorNode, marks: Marks) {
     const id: unknown = block.attrs.id
     if (typeof id !== 'string') return
     if (suggested.has(id)) decorations.push(Decoration.node(offset, offset + block.nodeSize, { class: 'aw-live__suggested' }))
+    const editedBy = edited.get(id)
+    if (editedBy !== undefined) decorations.push(Decoration.node(offset, offset + block.nodeSize, { class: 'aw-live__edited', title: editedBy }))
     for (const thread of byBlock.get(id) ?? []) {
       const found = findQuote(block, offset, thread.quote)
       if (!found) continue

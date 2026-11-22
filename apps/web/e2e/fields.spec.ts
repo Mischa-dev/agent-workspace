@@ -3,6 +3,7 @@ import path from 'node:path'
 import { expect, test, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test'
 
 import { screenshotDir, seededValue, storageStatePath } from './environment'
+import { at } from './addresses'
 
 // Custom fields (AWD-89) at a desktop and a phone width, in light and dark:
 // Settings › Fields, a task with every kind of value, the list with field
@@ -24,9 +25,12 @@ async function ensureField(request: APIRequestContext, headers: (key: string) =>
   const listed = (await (await request.get(`/api/v1/projects/${projectId}/fields`)).json()) as { fields: Field[] }
   const found = listed.fields.find((field) => field.name === body.name)
   if (found) return found
-  const created = await request.post(`/api/v1/projects/${projectId}/fields`, { headers: headers(`field-${String(body.name).replace(/[^A-Za-z0-9]+/g, '-')}`), data: body })
+  const created = await request.post('/api/v2/ops/field_create', {
+    headers: headers(`field-${String(body.name).replace(/[^A-Za-z0-9]+/g, '-')}`),
+    data: { projectId, ...body },
+  })
   expect(created.ok(), await created.text()).toBe(true)
-  return (await created.json()) as Field
+  return ((await created.json()) as { value: { field: Field } }).value.field
 }
 
 async function seed(context: BrowserContext, page: Page) {
@@ -58,11 +62,12 @@ async function seed(context: BrowserContext, page: Page) {
   }
   let taskId = existing.items[0]?.id
   if (!taskId) {
-    const created = await request.post(`/api/v1/projects/${projectId}/work-items`, {
+    const created = await request.post('/api/v2/ops/task_create', {
       headers: headers('fields-task'),
       data: {
+        projectId,
         title,
-        fieldValues: {
+        fields: {
           Risk: 'High',
           Areas: ['Web', 'Agents'],
           'Story points': 5,
@@ -75,7 +80,7 @@ async function seed(context: BrowserContext, page: Page) {
       },
     })
     expect(created.ok(), await created.text()).toBe(true)
-    taskId = ((await created.json()) as { id: string }).id
+    taskId = ((await created.json()) as { value: { workItemId: string } }).value.workItemId
   }
   const columns = ['priority', 'key', 'status', 'details', 'due', `field:${risk.id}`, `field:${areas.id}`, `field:${points.id}`, 'assignee']
   return { projectId, taskId, title, columns }
@@ -132,7 +137,7 @@ for (const { scheme, theme } of schemes) {
           },
         ]
         for (const shot of shots) {
-          await page.goto(shot.path)
+          await page.goto(at(shot.path))
           await shot.ready()
           await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
           await page.screenshot({

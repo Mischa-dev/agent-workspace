@@ -104,7 +104,12 @@ pub(crate) async fn task_move(
         confined_to: confined_project(principal),
         source: command_actor(principal, source_project_id),
         target: command_actor(principal, target_project_id),
-        surface: Surface::Mcp,
+        // Through the web, a move needs no leave to write through MCP.
+        surface: if principal.authentication_class == "password_session" {
+            Surface::Web
+        } else {
+            Surface::Mcp
+        },
         poster: super::talk::message_actor(principal).ok().map(|actor| {
             (
                 actor,

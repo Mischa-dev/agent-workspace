@@ -80,7 +80,6 @@ pub fn router() -> Router<AppState> {
             "/api/v1/conversations/{id}/threads",
             get(list_threads).post(create_thread),
         )
-        .route("/api/v1/threads/{id}", axum::routing::patch(patch_thread))
         .route("/api/v1/channels/{id}/archive", post(archive_channel))
         .route("/api/v1/threads/{id}/archive", post(archive_thread))
         .route("/api/v1/channels/{id}/restore", post(restore_channel))
@@ -92,10 +91,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/conversations/{id}/mark-seen",
             post(mark_conversation_seen),
-        )
-        .route(
-            "/api/v1/conversations/{id}/mark-unread",
-            post(mark_conversation_unread),
         )
         .layer(DefaultBodyLimit::max(MAX_HTTP_BODY_BYTES))
 }
@@ -344,13 +339,6 @@ struct MarkSeenRequest {
     expected_version: Option<i64>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct MarkUnreadRequest {
-    /// The first message to show as unread; the newest when absent.
-    message_id: Option<Uuid>,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct TimelineQuery {
@@ -539,7 +527,7 @@ impl ConversationWorkItemReferenceView {
         if let Some(project_id) = self.project_id
             && self.href.is_empty()
         {
-            self.href = Target::task(project_id, self.id).legacy_path();
+            self.href = Target::task(project_id, self.id).href();
         }
         self
     }
@@ -1724,31 +1712,6 @@ pub(crate) async fn rename_conversation(
     Ok(view)
 }
 
-async fn patch_thread(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(thread_id): ApiPath<Uuid>,
-    ApiJson(patch): ApiJson<ThreadPatch>,
-) -> Result<Json<ConversationView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let view = update_thread(&mut transaction, principal.actor_id, thread_id, &patch).await?;
-    insert_audit_event(
-        &mut transaction,
-        &headers,
-        &principal,
-        view.project_id,
-        "conversation.thread_updated",
-        thread_id,
-        // No name: one suggested from a message must vanish with it.
-        serde_json::json!({ "status": view.thread_status }),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(view))
-}
-
 async fn send_channel_message(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2243,7 +2206,7 @@ pub(crate) async fn append_message_command_with(
                 title: Some(title),
                 status_category: Some(status_category),
                 archived_at,
-                href: Target::task(conversation.place(), id).legacy_path(),
+                href: Target::task(conversation.place(), id).href(),
                 project_id: conversation.project_id,
             },
         )
@@ -2798,9 +2761,10 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
         LEFT JOIN project_memberships system_membership
           ON system_membership.project_id = $2
          AND system_membership.actor_id = (entry.system_event->>'actorId')::uuid
-        LEFT JOIN project_memberships author_membership
-          ON author_membership.project_id = $2
-         AND author_membership.actor_id = message.author_actor_id
+        -- The name the author goes by here: their membership in the space,
+        -- or their workspace profile where there is no space (a DM or group).
+        LEFT JOIN LATERAL place_profile($2, message.author_actor_id) author_membership
+          ON message.author_actor_id IS NOT NULL
         LEFT JOIN LATERAL (
             SELECT jsonb_agg(
                 jsonb_build_object(
@@ -2882,9 +2846,8 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
           ON via_grant.id = message.via_oauth_grant_id AND via_grant.show_via
         LEFT JOIN mcp_oauth_clients via_client ON via_client.id = via_grant.client_id
         LEFT JOIN actors remover_actor ON remover_actor.id = message.removed_by_actor_id
-        LEFT JOIN project_memberships remover
-          ON remover.project_id = $2
-         AND remover.actor_id = message.removed_by_actor_id
+        LEFT JOIN LATERAL place_profile($2, message.removed_by_actor_id) remover
+          ON message.removed_by_actor_id IS NOT NULL
         LEFT JOIN mcp_oauth_grants removed_via_grant
           ON removed_via_grant.id = message.removed_via_oauth_grant_id
          AND removed_via_grant.show_via
@@ -2989,7 +2952,7 @@ async fn conversation_timeline(
                     'projectId', item.project_id
                 ) ORDER BY item.number, item.id
             ), '[]'::jsonb)
-            FROM work_item_conversation_links link
+            FROM task_threads link
             JOIN task_rows item
               ON item.project_id = link.project_id AND item.id = link.work_item_id
             JOIN projects project ON project.id = item.project_id
@@ -3109,31 +3072,6 @@ async fn mark_conversation_seen(
     }))
 }
 
-async fn mark_conversation_unread(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(conversation_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<MarkUnreadRequest>,
-) -> Result<Json<ReadStateView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let change = mark_unread_from(
-        &mut transaction,
-        principal.actor_id,
-        conversation_id,
-        request
-            .message_id
-            .map_or(UnreadFrom::Newest, UnreadFrom::Message),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(ReadStateView {
-        highest_seen_sequence: change.highest_seen_sequence,
-        version: change.version,
-    }))
-}
-
 /// Where `mark_unread_from` makes a conversation unread from.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum UnreadFrom {
@@ -3145,7 +3083,6 @@ pub(crate) enum UnreadFrom {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ReadMarkChange {
     pub highest_seen_sequence: i64,
-    pub version: i64,
 }
 
 /// Make `from` and everything after it unread for this actor, to come back to
@@ -3220,7 +3157,6 @@ pub(crate) async fn mark_unread_from(
                 highest_seen_sequence: unchanged
                     .as_ref()
                     .map_or(0, |row| row.highest_seen_sequence),
-                version: unchanged.as_ref().map_or(0, |row| row.version),
             });
         }
     };
@@ -3260,7 +3196,6 @@ pub(crate) async fn mark_unread_from(
     .await?;
     Ok(ReadMarkChange {
         highest_seen_sequence: row.highest_seen_sequence,
-        version: row.version,
     })
 }
 
@@ -4525,9 +4460,9 @@ where
     .await?)
 }
 
-/// Whether `viewer` is kept from a task's discussion (its comments
-/// conversation or one of that conversation's threads) because they don't
-/// see tasks in its space: by their role, or by the agent limit of an app
+/// Whether `viewer` is kept from a task's discussion (the comments
+/// conversation of a task, or of a record that is one, or one of its
+/// threads) because they don't see tasks in its space: by their role, or by the agent limit of an app
 /// acting for them. False for any other conversation, which the usual
 /// visibility rule decides alone.
 pub(crate) async fn task_discussion_hidden(
@@ -4543,7 +4478,10 @@ pub(crate) async fn task_discussion_hidden(
         JOIN conversations discussion
           ON discussion.id = CASE WHEN parent.kind = 'comments' THEN parent.id ELSE place.id END
         WHERE place.id = $1 AND discussion.kind = 'comments'
-          AND discussion.subject_kind = 'task'
+          AND (discussion.subject_kind = 'task'
+               -- A record of a collection that acts like a task is that task.
+               OR (discussion.subject_kind = 'record'
+                   AND EXISTS (SELECT 1 FROM work_items item WHERE item.id = discussion.subject_id)))
           AND conversation_visible_to(place.id, $2)
         "#,
     )

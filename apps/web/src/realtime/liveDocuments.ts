@@ -1,9 +1,8 @@
 import type { QueryClient, QueryKey } from '@tanstack/react-query'
 
 import { isThingKey, isThingReferencesKey } from '../api/queryKeys'
-import { collectionKeys } from '../collections/keys'
 import { isPageKey, memoryKeys } from '../memory/keys'
-import { sheetKeys } from '../sheets/keys'
+import { liveHandlerFor } from '../modules/live'
 import { whiteboardKeys } from '../whiteboards/keys'
 import { field, uuid, type RealtimeEnvelope } from './realtimeModel'
 
@@ -26,7 +25,7 @@ const PAGE_DETAILS_DELAY_MS = 3_000
 /** A page's comments refetch once for a burst of changes. */
 const DISCUSSION_DELAY_MS = 200
 /** A collection's open lists refetch once for a burst of changes, such as an agent adding records one by one. */
-const COLLECTION_DELAY_MS = 300
+export const COLLECTION_DELAY_MS = 300
 
 export function whiteboardChange(event: Pick<RealtimeEnvelope, 'type' | 'payload'>): WhiteboardChange | null {
   if (event.type !== 'whiteboard.updated') return null
@@ -54,9 +53,9 @@ export function discussionChange(event: Pick<RealtimeEnvelope, 'type' | 'payload
   return pageId ? { pageId } : null
 }
 
-/** A sheet's cells, tabs or named ranges changed (AWD-54, C1.20): its open tab and the list refetch. */
+/** A sheet's cells, tabs, named ranges or charts changed (AWD-54, C1.20, C1.18): its open tab and the list refetch. */
 export function sheetChange(event: Pick<RealtimeEnvelope, 'type' | 'payload'>): { sheetId: string } | null {
-  if (event.type !== 'sheet.updated' && event.type !== 'sheet.ranges_changed') return null
+  if (event.type !== 'sheet.updated' && event.type !== 'sheet.ranges_changed' && event.type !== 'sheet.charts_changed') return null
   const sheetId = uuid(field(event.payload, 'sheetId', 'sheet_id'))
   return sheetId ? { sheetId } : null
 }
@@ -108,7 +107,8 @@ function remember(change: PageChange) {
 
 const timers = new Map<string, number>()
 
-function later(key: string, delay: number, run: () => void) {
+/** Runs `run` once after `delay`, however many times it's asked for `key` meanwhile. */
+export function later(key: string, delay: number, run: () => void) {
   if (timers.has(key)) return
   timers.set(
     key,
@@ -122,13 +122,7 @@ function later(key: string, delay: number, run: () => void) {
 const isPageQuery = (projectId: string) => (query: { queryKey: QueryKey }) => isPageKey(query.queryKey, projectId)
 
 /** An operation's answer read through `opQuery`, by the operation's name. */
-const isOpKey = (key: readonly unknown[], name: string) => key[0] === 'op' && key[2] === name
-
-/** Whether a dashboard read through `dashboard_get` has a tile over this sheet. */
-function chartsSheet(data: unknown, sheetId: string) {
-  const tiles = (data as { tiles?: { sheet?: unknown }[] } | undefined)?.tiles
-  return Array.isArray(tiles) && tiles.some((tile) => tile.sheet === sheetId)
-}
+export const isOpKey = (key: readonly unknown[], name: string) => key[0] === 'op' && key[2] === name
 
 /**
  * Open dashboards read their tiles again: a tile over a collection or over
@@ -147,15 +141,18 @@ export function isCommentSummary(key: readonly unknown[], thingId?: string) {
 }
 
 /**
- * A whiteboard.updated, page.updated, page.discussion.updated,
- * collection.updated or dashboard.updated event: tells
- * whoever has the board or page open, then refreshes the lists. For a
- * collection, everything open of it refetches (its records, views and fields,
- * and a record beside them) and so does the project's list of collections,
- * which counts records.
+ * A whiteboard.updated, page.updated, page.discussion.updated or
+ * dashboard.updated event: tells whoever has the board or page open, then
+ * refreshes the lists. An event a module registers (a collection's or a
+ * sheet's, M1.5) goes to that module's handler.
  */
-
 export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelope) {
+  // A module's own events (M1.5): its handler, loaded with the first one.
+  const registered = liveHandlerFor(event.type)
+  if (registered) {
+    void registered.then((handle) => handle(queryClient, event)).catch(() => undefined)
+    return
+  }
   const board = whiteboardChange(event)
   if (board) {
     for (const listener of boards.get(board.whiteboardId) ?? []) listener(board)
@@ -165,28 +162,6 @@ export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelop
         predicate: (query) => query.queryKey[0] === whiteboardKeys.all[0] || isThingKey(query.queryKey, 'whiteboard', board.whiteboardId),
       }),
     )
-    return
-  }
-  const sheet = sheetChange(event)
-  if (sheet) {
-    later(`sheet:${event.projectId}:${sheet.sheetId}`, COLLECTION_DELAY_MS, () => {
-      void queryClient.invalidateQueries({ queryKey: sheetKeys.one(event.projectId, sheet.sheetId) })
-      void queryClient.invalidateQueries({ queryKey: sheetKeys.list(event.projectId) })
-      // Its cell discussions' anchors may have moved with rows and columns.
-      void queryClient.invalidateQueries({ predicate: (query) => isCommentSummary(query.queryKey, sheet.sheetId) })
-      // A dashboard tile charting it reads it again (C1.20).
-      void queryClient.invalidateQueries({ predicate: (query) => isOpKey(query.queryKey, 'dashboard_get') && chartsSheet(query.state.data, sheet.sheetId) })
-    })
-    return
-  }
-  const collection = collectionChange(event)
-  if (collection) {
-    later(`collection:${event.projectId}:${collection.collectionId}`, COLLECTION_DELAY_MS, () => {
-      void queryClient.invalidateQueries({ queryKey: collectionKeys.one(event.projectId, collection.collectionId) })
-      void queryClient.invalidateQueries({ queryKey: collectionKeys.lists(event.projectId) })
-      // An open dashboard's tiles read the records again.
-      refreshDashboards(queryClient)
-    })
     return
   }
   if (event.type === 'dashboard.updated') {

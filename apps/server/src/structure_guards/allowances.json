@@ -6,14 +6,12 @@
   "account_kind_strings": {},
   "active_run_states_literal": {
     "github.rs": 3,
-    "provider.rs": 2,
-    "recovery.rs": 1
+    "provider.rs": 2
   },
   "agent_runs_sql": {
     "github.rs": 8,
     "mcp/code.rs": 6,
     "provider.rs": 17,
-    "recovery.rs": 6,
     "scheduler.rs": 15,
     "usage/history.rs": 1
   },
@@ -41,8 +39,8 @@
     "ops/dispatch.rs": 1,
     "password_reset.rs": 2,
     "projects.rs": 1,
-    "roles.rs": 1,
-    "settings.rs": 1,
+    "roles/mod.rs": 1,
+    "settings/mod.rs": 1,
     "spaces/invite_links.rs": 1,
     "whiteboards.rs": 1,
     "work_item_commands.rs": 6,
@@ -50,10 +48,10 @@
   },
   "background_spawns": {
     "github.rs": 1,
-    "harnesses.rs": 1,
+    "hosts/builtin/custom.rs": 1,
+    "hosts/builtin/worktrees.rs": 1,
     "provider.rs": 1,
     "repositories.rs": 1,
-    "retention.rs": 1,
     "scheduler.rs": 1,
     "server.rs": 5
   },
@@ -92,10 +90,10 @@
     "public_api.rs": 1
   },
   "hand_built_links": {
-    "mcp.rs": 2,
+    "collections/tool_ops.rs": 1,
     "page_docs/parity.rs": 1,
     "page_docs/testing.rs": 1,
-    "whiteboards.rs": 1,
+    "sheets/tool_ops.rs": 1,
     "work_items.rs": 2
   },
   "log_readers": {
@@ -134,15 +132,15 @@
     "work_item_workflow.rs": 1,
     "work_items.rs": 1
   },
+  "server_runs_agents": {},
   "transactions_across_calls": {
     "auth/workos/agents.rs": 3
   },
   "vendor_names_core": {
-    "environments.rs": 2,
     "error.rs": 1,
     "mcp/description_words.rs": 1,
     "mcp/oauth.rs": 1,
-    "settings.rs": 1
+    "settings/mod.rs": 1
   },
   "workspace_role_enum": {}
 }

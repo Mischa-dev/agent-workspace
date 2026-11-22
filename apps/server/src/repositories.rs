@@ -1,44 +1,25 @@
-use std::path::PathBuf;
+use std::time::Duration;
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    routing::{get, post},
-};
+use axum::{Json, Router, extract::State, routing::get};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
-    error::{ApiJson, ApiPath, AppError},
-    git_runtime::{
-        RegisteredRepository, RepositoryPreparationMode, expected_repository_mirror_path,
-        prepare_repository, prepare_repository_with_token, validate_registered_ref,
-    },
-    github::repository_git_token,
-    idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
+    auth::AuthenticatedActor,
+    error::{ApiPath, AppError},
+    hosts::builtin::repositories::{self as host_repositories, Mirror},
     policy::{Action, Permission, RoleGrant},
 };
 
 const MAX_REPOSITORIES: i64 = 100;
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/api/v1/projects/{project_id}/repositories",
-            get(list_repositories).post(register_repository),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/repositories/{repository_id}/prepare",
-            post(prepare_registered_repository),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/repositories/{repository_id}/archive",
-            post(archive_repository),
-        )
+    Router::new().route(
+        "/api/v1/projects/{project_id}/repositories",
+        get(list_repositories),
+    )
 }
 
 #[derive(Debug, FromRow)]
@@ -56,7 +37,6 @@ struct RepositoryRow {
     name: String,
     clone_url: String,
     default_branch: String,
-    mirror_path: String,
     legacy_mirror_path: Option<String>,
     enabled: bool,
     trusted: bool,
@@ -82,21 +62,6 @@ struct RegisterRepositoryRequest {
     clone_url: String,
     default_branch: String,
     trust_acknowledged: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ArchiveRepositoryRequest {
-    expected_version: i64,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct EmptyRequest {}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct RepositoryCommandReference {
-    repository_id: Uuid,
 }
 
 #[derive(Debug, Serialize)]
@@ -163,79 +128,6 @@ async fn list_repositories(
     }))
 }
 
-async fn register_repository(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<RegisterRepositoryRequest>,
-) -> Result<(StatusCode, Json<RepositoryView>), AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let request = validate_registration(request)?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let scope = idempotency::resource_bound_scope("project", project_id, "repository_register")?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let role = require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::RepositoryManage,
-    )
-    .await?;
-    // The answer is the repository (owner, name, clone URL, branch): only
-    // for someone who also sees code here.
-    require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::RepositoryView,
-    )
-    .await?;
-    let reservation = match idempotency::reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let reference: RepositoryCommandReference = replay.decode()?;
-            let row = fetch_repository(&mut transaction, project_id, reference.repository_id)
-                .await?
-                .ok_or(AppError::NotFound("repository"))?;
-            transaction.commit().await?;
-            return Ok((
-                replay.status(),
-                Json(repository_view(row, role_allows_manage(role))?),
-            ));
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let repository_id = insert_repository(&state, &mut transaction, project_id, &request).await?;
-    let reference = RepositoryCommandReference { repository_id };
-    idempotency::complete(
-        &mut transaction,
-        &reservation,
-        StatusCode::CREATED,
-        &reference,
-    )
-    .await?;
-    transaction.commit().await?;
-
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let row = fetch_repository(&mut transaction, project_id, repository_id)
-        .await?
-        .ok_or(AppError::NotFound("repository"))?;
-    transaction.commit().await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(repository_view(row, role_allows_manage(role))?),
-    ))
-}
-
 /// Add a trusted repository row to a project. The caller has checked the
 /// person may manage repositories and validated the request.
 async fn insert_repository(
@@ -269,7 +161,7 @@ async fn insert_repository(
     }
 
     let repository_id = Uuid::now_v7();
-    let mirror_path = expected_repository_mirror_path(&state.config.data_root, repository_id)?;
+    let mirror_path = host_repositories::mirror_path(&state.config.data_root, repository_id)?;
     sqlx::query(
         r#"
         INSERT INTO repositories (
@@ -314,130 +206,27 @@ pub(crate) async fn register_picked_repository(
     insert_repository(state, transaction, project_id, &request).await
 }
 
-async fn prepare_registered_repository(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath((project_id, repository_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<EmptyRequest>,
-) -> Result<Json<RepositoryView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let scope = idempotency::resource_bound_scope("repository", repository_id, "prepare")?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let role = require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::RepositoryManage,
-    )
-    .await?;
-    // The answer is the repository (owner, name, clone URL, branch): only
-    // for someone who also sees code here.
-    require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::RepositoryView,
-    )
-    .await?;
-    let reservation = match idempotency::reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let reference: RepositoryCommandReference = replay.decode()?;
-            let row = fetch_repository(&mut transaction, project_id, reference.repository_id)
-                .await?
-                .ok_or(AppError::NotFound("repository"))?;
-            transaction.commit().await?;
-            return Ok(Json(repository_view(row, role_allows_manage(role))?));
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let admission_root = state.config.data_root.clone();
-    let admission_quota = state.config.data_quota_bytes;
-    let admission_free = state.config.minimum_free_bytes;
-    tokio::task::spawn_blocking(move || {
-        crate::storage_admission::require_growth(&admission_root, admission_quota, admission_free)
-    })
-    .await
-    .map_err(|_| AppError::Internal("join storage admission"))??;
-    let row = fetch_repository(&mut transaction, project_id, repository_id)
-        .await?
-        .filter(|row| row.archived_at.is_none() && row.enabled && row.trusted)
-        .ok_or(AppError::NotFound("repository"))?;
-    idempotency::complete(
-        &mut transaction,
-        &reservation,
-        StatusCode::OK,
-        &RepositoryCommandReference { repository_id },
-    )
-    .await?;
-    transaction.commit().await?;
-    let row = if state.supervisors.cluster().is_some() {
-        // The built-in host's holder prepares it on its own disk; the
-        // repository list shows how it went.
-        queue_prepare(&state, project_id, repository_id).await?;
-        row
-    } else {
-        run_preparation(&state, project_id, repository_id, row).await?
-    };
-    Ok(Json(repository_view(row, role_allows_manage(role))?))
-}
-
 async fn run_preparation(
     state: &AppState,
+    workspace_id: Uuid,
     project_id: Uuid,
     repository_id: Uuid,
     row: RepositoryRow,
 ) -> Result<RepositoryRow, AppError> {
-    let registered = RegisteredRepository {
-        id: repository_id,
-        clone_url: row.clone_url,
-        default_branch: row.default_branch,
-        mirror_path: PathBuf::from(row.mirror_path),
-    };
-    let preparation_mode = if row.legacy_mirror_path.is_some() {
-        RepositoryPreparationMode::VerifyImportedMirror
-    } else {
-        RepositoryPreparationMode::RefreshOrClone
-    };
-    let data_root = state.config.data_root.clone();
-    let prepared = match preparation_mode {
-        RepositoryPreparationMode::VerifyImportedMirror => {
-            matches!(
-                tokio::task::spawn_blocking(move || {
-                    prepare_repository(data_root.as_path(), &registered, preparation_mode)
-                })
-                .await,
-                Ok(Ok(_))
-            )
-        }
-        RepositoryPreparationMode::RefreshOrClone => {
-            match repository_git_token(state, project_id, repository_id).await {
-                Ok(token) => matches!(
-                    tokio::task::spawn_blocking(move || {
-                        prepare_repository_with_token(
-                            data_root.as_path(),
-                            &registered,
-                            preparation_mode,
-                            &token,
-                        )
-                    })
-                    .await,
-                    Ok(Ok(_))
-                ),
-                Err(_) => false,
-            }
-        }
-    };
+    // The mirror is the built-in host's: it clones or refreshes it, on its
+    // own disk.
+    let prepared = host_repositories::prepare(
+        state,
+        workspace_id,
+        project_id,
+        Mirror {
+            repository_id,
+            clone_url: row.clone_url,
+            default_branch: row.default_branch,
+            imported: row.legacy_mirror_path.is_some(),
+        },
+    )
+    .await?;
     if !prepared {
         tracing::warn!(%project_id, %repository_id, "repository preparation failed");
     }
@@ -448,9 +237,9 @@ async fn run_preparation(
     Ok(row)
 }
 
-/// The host-scoped job that clones or refreshes a repository on this
-/// machine's disk (K5.3): only the built-in host's holder runs it, and a
-/// crash leaves it queued rather than the repository pending for ever.
+/// The job that has the built-in host clone or refresh a repository on its
+/// disk: any instance asks the host, and a crash leaves it queued rather
+/// than the repository pending for ever.
 pub const PREPARE_KIND: &str = "repositories.prepare";
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -461,11 +250,34 @@ struct PreparePayload {
 }
 
 pub fn register_jobs(registry: &mut crate::jobs::JobRegistry) {
-    registry.register_host(PREPARE_KIND, |context| async move {
-        let payload = context.job.payload_as::<PreparePayload>()?;
-        prepare(context.state, payload.project_id, payload.repository_id).await?;
-        Ok(())
-    });
+    // The host may take a while to clone; the ask waits for it.
+    registry.register_with_timeout(
+        PREPARE_KIND,
+        Duration::from_secs(20 * 60),
+        |context| async move {
+            let payload = context.job.payload_as::<PreparePayload>()?;
+            let last_try = context.job.attempts >= context.job.max_attempts;
+            let state = context.state.clone();
+            if let Err(error) =
+                prepare(context.state, payload.project_id, payload.repository_id).await
+            {
+                // No more tries: say it failed rather than leave the
+                // repository waiting to be set up.
+                if last_try
+                    && let Err(marking) =
+                        give_up(&state, payload.project_id, payload.repository_id).await
+                {
+                    tracing::warn!(
+                        repository_id = %payload.repository_id,
+                        error_category = marking.log_category(),
+                        "couldn't mark the repository failed"
+                    );
+                }
+                return Err(error.into());
+            }
+            Ok(())
+        },
+    );
 }
 
 /// Clone or refresh a repository without holding up the request that added
@@ -484,8 +296,7 @@ pub(crate) fn prepare_in_background(state: AppState, project_id: Uuid, repositor
     });
 }
 
-/// Queue the host job that prepares a repository on the built-in host's
-/// disk, and wake the host. Only the lease holder runs it.
+/// Queue the job that has the built-in host prepare a repository.
 async fn queue_prepare(
     state: &AppState,
     project_id: Uuid,
@@ -498,31 +309,42 @@ async fn queue_prepare(
         })
         .unique(format!("{PREPARE_KIND}:{repository_id}"));
     crate::jobs::enqueue(&state.pool, job).await?;
-    crate::db::scoped_one(&state.pool, async |connection| {
-        sqlx::query("SELECT pg_notify(realtime_channel('control'), 'host:kick')")
-            .execute(&mut *connection)
-            .await
-    })
-    .await?;
     Ok(())
 }
 
 async fn prepare(state: AppState, project_id: Uuid, repository_id: Uuid) -> Result<(), AppError> {
-    let admission_root = state.config.data_root.clone();
-    let admission_quota = state.config.data_quota_bytes;
-    let admission_free = state.config.minimum_free_bytes;
-    tokio::task::spawn_blocking(move || {
-        crate::storage_admission::require_growth(&admission_root, admission_quota, admission_free)
-    })
-    .await
-    .map_err(|_| AppError::Internal("join storage admission"))??;
+    // The host checks its own disk has room before it clones.
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let row = fetch_repository(&mut transaction, project_id, repository_id)
         .await?
         .filter(|row| row.archived_at.is_none() && row.enabled && row.trusted)
         .ok_or(AppError::NotFound("repository"))?;
+    let workspace_id = host_repositories::workspace_of_space(&mut transaction, project_id).await?;
     transaction.commit().await?;
-    run_preparation(&state, project_id, repository_id, row).await?;
+    run_preparation(&state, workspace_id, project_id, repository_id, row).await?;
+    Ok(())
+}
+
+/// Mark a repository still waiting for its first preparation as failed once
+/// the job runs out of tries. A ready repository whose refresh never reached
+/// its mirror keeps working from the mirror it has.
+async fn give_up(state: &AppState, project_id: Uuid, repository_id: Uuid) -> Result<(), AppError> {
+    tracing::warn!(%project_id, %repository_id, "repository preparation ran out of tries");
+    sqlx::query(
+        r#"
+        UPDATE repositories
+        SET preparation_state = 'failed',
+            preparation_failure_category = 'git_prepare_failed',
+            version = version + 1,
+            updated_at = now()
+        WHERE id = $1 AND project_id = $2 AND archived_at IS NULL
+          AND preparation_state = 'pending'
+        "#,
+    )
+    .bind(repository_id)
+    .bind(project_id)
+    .execute(crate::db::scoped(&state.pool))
+    .await?;
     Ok(())
 }
 
@@ -538,73 +360,6 @@ pub(crate) async fn repository_json(
         .ok_or(AppError::NotFound("repository"))?;
     serde_json::to_value(repository_view(row, manage)?)
         .map_err(|_| AppError::Internal("repository view"))
-}
-
-async fn archive_repository(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath((project_id, repository_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<ArchiveRepositoryRequest>,
-) -> Result<Json<RepositoryView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    if request.expected_version < 1 {
-        return Err(AppError::Validation("expectedVersion"));
-    }
-    let scope = idempotency::resource_bound_scope("repository", repository_id, "archive")?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let role = require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::RepositoryManage,
-    )
-    .await?;
-    // The answer is the repository (owner, name, clone URL, branch): only
-    // for someone who also sees code here.
-    require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::RepositoryView,
-    )
-    .await?;
-    let reservation = match idempotency::reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let reference: RepositoryCommandReference = replay.decode()?;
-            let row = fetch_repository(&mut transaction, project_id, reference.repository_id)
-                .await?
-                .ok_or(AppError::NotFound("repository"))?;
-            transaction.commit().await?;
-            return Ok(Json(repository_view(row, role_allows_manage(role))?));
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    archive_in(
-        &mut transaction,
-        principal.actor_id,
-        project_id,
-        repository_id,
-        request.expected_version,
-    )
-    .await?;
-    let reference = RepositoryCommandReference { repository_id };
-    idempotency::complete(&mut transaction, &reservation, StatusCode::OK, &reference).await?;
-    let row = fetch_repository(&mut transaction, project_id, repository_id)
-        .await?
-        .ok_or(AppError::NotFound("repository"))?;
-    transaction.commit().await?;
-    Ok(Json(repository_view(row, role_allows_manage(role))?))
 }
 
 /// Archive a repository of the project (refused while a run uses it), for
@@ -655,12 +410,11 @@ pub(crate) async fn archive_in(
     Ok(())
 }
 
-/// Prepare (clone or refresh) an enabled repository of the project on this
-/// server, for someone the caller checked may manage repositories there.
-/// Prepare a repository where its mirror lives: on a server, the built-in
-/// host's holder does it as a host job (this instance may be a standby
-/// with another disk), and this returns once it is queued; a state without
-/// a server (a test's) prepares it here.
+/// Prepare (clone or refresh) an enabled repository of the project, for
+/// someone the caller checked may manage repositories there. The built-in
+/// host does it on its own disk: on a server it is a job (which asks the
+/// host), and this returns once it is queued; a state without a server (a
+/// test's) asks here.
 pub(crate) async fn prepare_in(
     state: &AppState,
     project_id: Uuid,
@@ -669,22 +423,7 @@ pub(crate) async fn prepare_in(
     if state.supervisors.cluster().is_some() {
         return queue_prepare(state, project_id, repository_id).await;
     }
-    let admission_root = state.config.data_root.clone();
-    let admission_quota = state.config.data_quota_bytes;
-    let admission_free = state.config.minimum_free_bytes;
-    tokio::task::spawn_blocking(move || {
-        crate::storage_admission::require_growth(&admission_root, admission_quota, admission_free)
-    })
-    .await
-    .map_err(|_| AppError::Internal("join storage admission"))??;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let row = fetch_repository(&mut transaction, project_id, repository_id)
-        .await?
-        .filter(|row| row.archived_at.is_none() && row.enabled && row.trusted)
-        .ok_or(AppError::NotFound("repository"))?;
-    transaction.commit().await?;
-    run_preparation(state, project_id, repository_id, row).await?;
-    Ok(())
+    prepare(state.clone(), project_id, repository_id).await
 }
 
 /// Whether this role may manage repositories (for a view's capabilities).
@@ -812,7 +551,9 @@ fn validate_registration(
     if request.clone_url != expected || request.clone_url.contains('@') {
         return Err(AppError::Validation("cloneUrl"));
     }
-    validate_registered_ref(&request.default_branch)?;
+    if !agent_workspace_host_protocol::git_ref::is_safe_ref(&request.default_branch) {
+        return Err(AppError::Invalid("unsafe Git reference"));
+    }
     Ok(request)
 }
 

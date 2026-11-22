@@ -36,8 +36,6 @@ pub struct DispatchRequest {
     pub unkeyed: Unkeyed,
     /// Run and roll back (operations with `PREVIEW`).
     pub preview: bool,
-    /// The old name the caller used (`aliases`), counted once the call is done.
-    pub renamed_from: Option<&'static str>,
     /// A long call (`Operation::runs_long`) is answered `started` and run by
     /// a job (`long`): the MCP edge, whose clients can follow it.
     pub defer_long: bool,
@@ -98,8 +96,10 @@ pub async fn dispatch(
         Err(error) => return Answer::error(&error),
     };
     // K1.25: every write the operation makes says which credential it came
-    // through, and for a run's token, the run and who asked for it.
-    let acting = crate::access::acting::Acting::of(&request.caller);
+    // through, and for a run's token, the run and who asked for it; and the
+    // request id, also in a wrapped command's own transaction.
+    let acting = crate::access::acting::Acting::of(&request.caller)
+        .for_request(request.request_id.as_deref());
     crate::access::acting::within(acting, call(state, request, input)).await
 }
 
@@ -143,6 +143,33 @@ async fn space_keys_to_ids(
     request: &DispatchRequest,
     mut input: Value,
 ) -> Result<Value, OpError> {
+    // AWD-96: "workspace" in `projectId` names the workspace's own space,
+    // as MCP's key resolution reads it; the caller joins it (as everyone in
+    // the workspace is) only when the call could then write there.
+    if input
+        .pointer("/projectId")
+        .and_then(Value::as_str)
+        .is_some_and(|name| name.trim().eq_ignore_ascii_case("workspace"))
+        && let (Some(workspace), None) = (request.workspace, request.caller.confined_space)
+    {
+        let caller = &request.caller;
+        let join = !request.preview && caller.can_write && caller.limits.is_none();
+        let mut tx = crate::db::scoped_tx(&state.pool)
+            .await
+            .map_err(|error| OpError::logged("workspace space", &error.into()))?;
+        let space = if join {
+            crate::spaces::workspace::join(&mut tx, workspace, caller.account_id).await
+        } else {
+            crate::spaces::workspace::find(&mut tx, workspace).await
+        }
+        .map_err(|error| OpError::logged("workspace space", &error))?;
+        tx.commit()
+            .await
+            .map_err(|error| OpError::logged("workspace space", &error.into()))?;
+        if let (Some(space), Some(slot)) = (space, input.pointer_mut("/projectId")) {
+            *slot = Value::String(space.to_string());
+        }
+    }
     for field in ["/spaceId", "/projectId", "/target/spaceId"] {
         // K4.9: "me" is the caller's personal space in the named workspace,
         // made on first use; a credential held to one space never reaches it.
@@ -206,7 +233,7 @@ async fn space_keys_to_ids(
         .bind(&key)
         .bind(request.caller.confined_space)
         .bind(request.workspace)
-        .fetch_all(&state.pool)
+        .fetch_all(crate::db::scoped(&state.pool))
         .await
         .map_err(|error| OpError::logged("space key", &error.into()))?;
         if let ([id], Some(slot)) = (found.as_slice(), input.pointer_mut(field)) {
@@ -236,6 +263,9 @@ async fn task_keys_to_ids(
         "/parentWorkItemId",
         "/duplicateOf",
         "/links/0/taskId",
+        // task_get's older name for taskId; other operations' `identifier`
+        // (a pull request's id or link) never has a task key's shape.
+        "/identifier",
     ]
     .iter()
     .map(|field| (*field).to_owned())
@@ -407,9 +437,7 @@ async fn admit<O: Operation>(
     target: &Target,
 ) -> Result<Admitted, OpError> {
     let writes = O::KIND.writes();
-    let mut connection = state
-        .pool
-        .acquire()
+    let mut connection = crate::db::scoped_tx(&state.pool)
         .await
         .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
     // A call that can't name its workspace needs none named when the
@@ -421,7 +449,10 @@ async fn admit<O: Operation>(
             [only] => *workspace = Some(*only),
             [] => {}
             _ if O::SPANS_WORKSPACES && !writes => spans = true,
-            several => return Err(name_the_workspace(&mut connection, several).await),
+            several => match home_workspace::<O>(&mut connection, caller, several).await? {
+                Some(home) => *workspace = Some(home),
+                None => return Err(name_the_workspace(&mut connection, several).await),
+            },
         }
     }
     if spans {
@@ -528,7 +559,8 @@ async fn pipeline<O: Operation>(
             message: format!("{} has no preview.", O::NAME).into(),
         });
     }
-    let input = space_keys_to_ids(state, &request, input).await?;
+    let mut input = space_keys_to_ids(state, &request, input).await?;
+    O::resolve_refs(state, &request.caller, request.workspace, &mut input).await?;
     let decoded =
         serde_json::from_value::<O::Input>(input).map_err(|error| decode_error(&error))?;
     // The input as the operation reads it: what the request id is held to.
@@ -584,7 +616,6 @@ async fn pipeline<O: Operation>(
         if O::PREVIEW {
             let checked = DispatchRequest {
                 preview: true,
-                renamed_from: None,
                 defer_long: false,
                 ..request.clone()
             };
@@ -617,6 +648,7 @@ async fn pipeline<O: Operation>(
             .map(|key| key.as_str().to_owned())
             .or(request.request_id),
         op: O::NAME,
+        across_workspaces: O::ACROSS_WORKSPACES,
         preview: request.preview,
     };
 
@@ -639,48 +671,61 @@ async fn pipeline<O: Operation>(
         && !request.preview
         && !ctx.workspace_id.is_nil()
     {
+        // A call on a conversation spends a budget on it too.
+        let conversation = match &ctx.target {
+            Target::Thing {
+                kind: "conversation",
+                id,
+                ..
+            } => Some(*id),
+            _ => None,
+        };
         Box::pin(crate::budgets::admit_call(
             &state.pool,
             ctx.workspace_id,
             ctx.space_id,
+            conversation,
             ctx.caller.account_id,
             writes,
         ))
         .await?;
     }
-    let mut reservation = None;
-    if let Some(key) = key.as_ref()
-        && O::IDEMPOTENCY == Idempotency::Dispatcher
-    {
-        let scope = format!("op.{}.{}", O::NAME, target.scope_id(&located).simple());
-        let hash = RequestHash::for_value(&canonical).map_err(|_| OpError::Unavailable)?;
-        let tx = call.tx().await?;
-        match idempotency::reserve(tx, ctx.caller.account_id, &scope, key, hash).await? {
-            IdempotencyOutcome::Reserved(reserved) => reservation = Some(reserved),
-            IdempotencyOutcome::Replay(replay) => {
-                if let Some(tx) = call.tx.take() {
-                    tx.commit()
-                        .await
-                        .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
-                }
-                let mut body = replay.response_body().clone();
-                body["replayed"] = true.into();
-                return Ok(Answer {
-                    status: replay.status(),
-                    body,
-                });
-            }
+    let keyed = key
+        .as_ref()
+        .filter(|_| O::IDEMPOTENCY == Idempotency::Dispatcher)
+        .map(|key| {
+            let scope = format!("op.{}.{}", O::NAME, target.scope_id(&located).simple());
+            RequestHash::for_value(&canonical)
+                .map(|hash| (key, scope, hash))
+                .map_err(|_| OpError::Unavailable)
+        })
+        .transpose()?;
+    let replay = |replay: idempotency::IdempotencyReplay| {
+        let mut body = replay.response_body().clone();
+        body["replayed"] = true.into();
+        Answer {
+            status: replay.status(),
+            body,
         }
-    }
+    };
 
     // A2.27: the workspace's guards see every change before it runs: one
     // may stop it, or hold it for review (answered ok, saying so, with the
-    // request that asks the reviewers). After a retry of a finished call has
-    // had its answer above, so a lost answer doesn't ask the reviewers again;
-    // a held or stopped call gives its reservation back (its transaction
-    // rolls back).
+    // request that asks the reviewers). A retry of a finished call has its
+    // answer first, so a lost answer doesn't ask the reviewers again. The
+    // check runs before the call's transaction opens: it takes a connection
+    // of its own, and none is held while it waits for one.
     let mut guard_hold = None;
     if writes && !request.preview {
+        if let Some((key, scope, hash)) = keyed.as_ref() {
+            let finished = crate::db::scoped_one(&state.pool, async |connection| {
+                idempotency::finished(connection, ctx.caller.account_id, scope, key, *hash).await
+            })
+            .await?;
+            if let Some(finished) = finished {
+                return Ok(replay(finished));
+            }
+        }
         // Boxed: every operation's dispatch would otherwise carry the
         // check's whole state on its stack.
         match Box::pin(crate::guards::check(
@@ -688,8 +733,12 @@ async fn pipeline<O: Operation>(
             &ctx.caller,
             &located,
             O::NAME,
-            target.audit(&located),
+            {
+                let (kind, id) = target.audit(&located);
+                (O::GUARD_KIND.unwrap_or(kind), id)
+            },
             &canonical,
+            ctx.request_id.as_deref(),
         ))
         .await?
         {
@@ -720,13 +769,101 @@ async fn pipeline<O: Operation>(
             }
         }
     }
-    if let Some(hold) = guard_hold {
-        let tx = call.tx().await?;
-        crate::guards::use_hold(tx, hold).await?;
+
+    let mut reservation = None;
+    // An operation whose command keeps its own transactions (a wrapped
+    // tool) holds none of the call's across it: its request id is reserved,
+    // and a reviewer's hold used, in a short transaction of their own, and
+    // the answer is kept in another after it. Holding the reservation open
+    // would leave the command waiting on a second connection (a pool of
+    // one stalls), on rows the reservation references, and across any
+    // network call the command makes. A call that stops between the
+    // command's commit and its answer leaves the id unanswered: retries wait,
+    // then are refused, and never run the command a second time.
+    let apart = O::OWN_TRANSACTION && !request.preview;
+    // The reviewer's hold a command apart used, to give back if it fails.
+    let mut used_hold = None;
+    if let Some((key, scope, hash)) = keyed.as_ref() {
+        let (key, hash) = (*key, *hash);
+        if apart {
+            let mut tx = begin(state, &ctx).await?;
+            match idempotency::reserve_apart(&mut tx, ctx.caller.account_id, scope, key, hash)
+                .await?
+            {
+                IdempotencyOutcome::Reserved(reserved) => reservation = Some(reserved),
+                IdempotencyOutcome::Replay(replayed) => {
+                    tx.commit()
+                        .await
+                        .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
+                    return Ok(replay(replayed));
+                }
+            }
+            if let Some(hold) = guard_hold.take() {
+                crate::guards::use_hold(&mut tx, hold, ctx.request_id.as_deref()).await?;
+                used_hold = Some(hold);
+            }
+            tx.commit()
+                .await
+                .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
+        } else {
+            let tx = call.tx().await?;
+            match idempotency::reserve(tx, ctx.caller.account_id, scope, key, hash).await? {
+                IdempotencyOutcome::Reserved(reserved) => reservation = Some(reserved),
+                IdempotencyOutcome::Replay(replayed) => {
+                    if let Some(tx) = call.tx.take() {
+                        tx.commit()
+                            .await
+                            .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
+                    }
+                    return Ok(replay(replayed));
+                }
+            }
+        }
     }
-    let output =
-        crate::policy::within_agent_limits(ctx.caller.limits.clone(), O::run(&mut call, decoded))
-            .await?;
+
+    if let Some(hold) = guard_hold {
+        if apart {
+            let mut tx = begin(state, &ctx).await?;
+            crate::guards::use_hold(&mut tx, hold, ctx.request_id.as_deref()).await?;
+            used_hold = Some(hold);
+            tx.commit()
+                .await
+                .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
+        } else {
+            let tx = call.tx().await?;
+            crate::guards::use_hold(tx, hold, ctx.request_id.as_deref()).await?;
+        }
+    }
+    let output = match crate::policy::within_agent_limits(
+        ctx.caller.limits.clone(),
+        O::run(&mut call, decoded),
+    )
+    .await
+    {
+        Ok(output) => output,
+        Err(error) => {
+            // A refused or failed command made nothing: its reservation goes,
+            // so a retry runs, and the reviewer's hold it used is given back,
+            // so the retry needs no second review (as both roll back when
+            // they are held in the call's transaction).
+            if apart && (reservation.is_some() || used_hold.is_some()) {
+                drop(call.tx.take());
+                let mut tx = begin(state, &ctx).await?;
+                if let Some(reservation) = reservation.as_ref() {
+                    idempotency::release(&mut tx, reservation).await?;
+                }
+                if let Some(hold) = used_hold {
+                    crate::guards::give_back_hold(&mut tx, hold)
+                        .await
+                        .map_err(|given| OpError::logged(O::NAME, &given))?;
+                }
+                tx.commit()
+                    .await
+                    .map_err(|released| OpError::logged(O::NAME, &released.into()))?;
+            }
+            return Err(error);
+        }
+    };
 
     let envelope = Envelope::Ok {
         value: output,
@@ -750,14 +887,6 @@ async fn pipeline<O: Operation>(
     if request.preview {
         // Dropping the transaction rolls it back.
         return Ok(answer);
-    }
-    // A spanning read has no one workspace to count its alias use in.
-    if let Some(alias) = request.renamed_from.filter(|_| !spans) {
-        let workspace_id = ctx.workspace_id;
-        let tx = call.tx().await?;
-        super::aliases::count(tx, workspace_id, alias)
-            .await
-            .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
     }
     if writes {
         let audit = call.audit.take();
@@ -813,10 +942,37 @@ fn runs_while_paused(name: &str) -> bool {
             | "status_delete"
             | "agent_resume"
             | "run_activity_report"
+            | "run_changes_report"
             | "run_result_report"
             | "run_usage_report"
             | "run_update"
     ) || name.starts_with("connection_")
+}
+
+/// The workspace the caller's credential was made in, among `reach`, for
+/// an operation that defaults to it.
+async fn home_workspace<O: Operation>(
+    connection: &mut sqlx::PgConnection,
+    caller: &Caller,
+    reach: &[Uuid],
+) -> Result<Option<Uuid>, OpError> {
+    let Some(credential) = caller
+        .credential_id
+        .filter(|_| O::HOME_WORKSPACE_BY_DEFAULT)
+    else {
+        return Ok(None);
+    };
+    sqlx::query_scalar::<_, Uuid>(&format!(
+        "SELECT space.organization_id FROM projects space \
+             WHERE space.id = ({}) AND space.organization_id = ANY($3)",
+        super::wrapped::CREDENTIAL_ANCHOR_SQL
+    ))
+    .bind(credential)
+    .bind(caller.account_id)
+    .bind(reach)
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(|error| OpError::logged(O::NAME, &error.into()))
 }
 
 /// A caller reaching several workspaces, calling an operation whose target
@@ -851,6 +1007,22 @@ async fn module_here<O: Operation>(
     located: &target::Located,
 ) -> Result<&'static str, OpError> {
     let registry = crate::modules::registry::Registry::global();
+    // In the workspace's own space, an operation it is home to keeps to the
+    // home module while its own module is on for the workspace.
+    if located.direct.is_none()
+        && let Some(space) = located.space_id
+        && let Some(home) = registry.home_of(O::NAME)
+        && crate::spaces::workspace::find(connection, located.workspace_id)
+            .await
+            .map_err(|error| OpError::logged(O::NAME, &error))?
+            == Some(space)
+        && crate::modules::state::for_member(connection, located.workspace_id, caller.account_id)
+            .await
+            .map_err(|error| OpError::logged(O::NAME, &error))?
+            .contains(O::MODULE)
+    {
+        return Ok(home);
+    }
     if located.direct.is_none() && registry.also_serving(O::NAME).next().is_some() {
         let modules = match located.space_id {
             Some(space) => {
@@ -954,21 +1126,40 @@ fn denied_error<O: Operation>(
 }
 
 /// Begin a call's transaction narrowed to the call's workspace
-/// (`db::scoped_tx` under `Tenancy::Workspace`, H1.20) and the connected
-/// app it acts through.
+/// (`db::scoped_tx` under `Tenancy::Workspace`, H1.20), or for an operation
+/// across the caller's workspaces to those, and the connected app it acts
+/// through.
 pub(super) async fn begin(
     state: &AppState,
     ctx: &OpContext,
 ) -> Result<Transaction<'static, Postgres>, OpError> {
-    let mut tx = crate::tenancy::scoped(
+    let member = || crate::tenancy::Tenancy::Member {
+        account: ctx.caller.account_id,
+        workspaces: None,
+    };
+    let scope = if ctx.across_workspaces {
+        member()
+    } else if ctx.workspace_id == crate::spaces::DIRECT {
+        // A DM or group is in no workspace: the call keeps the scope the
+        // caller arrived with (a run's credential stays in its run's
+        // workspace), so what it keeps from the DM lands in a workspace of
+        // theirs, such as a decision in their default workspace.
+        match crate::tenancy::current() {
+            Some(
+                arrived @ (crate::tenancy::Tenancy::Member { .. }
+                | crate::tenancy::Tenancy::Workspace { .. }),
+            ) => arrived,
+            _ => member(),
+        }
+    } else {
         crate::tenancy::Tenancy::Workspace {
             account: Some(ctx.caller.account_id),
             workspace: ctx.workspace_id,
-        },
-        crate::db::scoped_tx(&state.pool),
-    )
-    .await
-    .map_err(|error| OpError::logged(ctx.op, &error.into()))?;
+        }
+    };
+    let mut tx = crate::tenancy::scoped(scope, crate::db::scoped_tx(&state.pool))
+        .await
+        .map_err(|error| OpError::logged(ctx.op, &error.into()))?;
     crate::domain::set_via_grant(&mut tx, ctx.caller.via_grant_id)
         .await
         .map_err(|error| OpError::logged(ctx.op, &error))?;
@@ -997,8 +1188,24 @@ async fn audit_row(
     ctx: &OpContext,
     target_kind: &str,
     target_id: Uuid,
-    mut metadata: Value,
+    metadata: Value,
 ) -> Result<(), OpError> {
+    audit_row_as(tx, ctx, ctx.op, target_kind, target_id, metadata)
+        .await
+        .map_err(|error| OpError::logged(ctx.op, &error.into()))
+}
+
+/// The audit row of a command that names its own action (such as
+/// `role.created`), with the columns of the edge the call came by. The
+/// operation then says `audited_by_command`.
+pub(crate) async fn audit_row_as(
+    connection: &mut sqlx::PgConnection,
+    ctx: &OpContext,
+    action: &str,
+    target_kind: &str,
+    target_id: Uuid,
+    mut metadata: Value,
+) -> Result<(), sqlx::Error> {
     struct Columns<'a> {
         session_id: Option<Uuid>,
         authentication_class: &'a str,
@@ -1117,7 +1324,7 @@ async fn audit_row(
     .bind(ctx.workspace_id)
     .bind(columns.session_id)
     .bind(columns.authentication_class)
-    .bind(ctx.op)
+    .bind(action)
     .bind(target_kind)
     .bind(target_id)
     .bind(ctx.request_id.as_deref())
@@ -1135,9 +1342,8 @@ async fn audit_row(
     .bind(ctx.caller.credential_id)
     .bind(ctx.caller.requested_by)
     .bind(ctx.caller.run_id)
-    .execute(&mut **tx)
-    .await
-    .map_err(|error| OpError::logged(ctx.op, &error.into()))?;
+    .execute(connection)
+    .await?;
     Ok(())
 }
 

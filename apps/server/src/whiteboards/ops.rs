@@ -1,5 +1,5 @@
 //! Whiteboards as operations (K2.12). Drawing on a board
-//! (`whiteboard_update_elements`, alias `whiteboard_edit`) runs in the
+//! (`whiteboard_update_elements`, once `whiteboard_edit`) runs in the
 //! operation's own transaction over `access` and `edit::apply`, so the web's
 //! operations route and the agent tool write the same audit row. Creating,
 //! changing, copying and linking a board run the commands the hand-written
@@ -35,11 +35,13 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<WhiteboardUpdate>()
         .add::<WhiteboardDuplicate>()
         .add::<WhiteboardLink>()
-        .add::<WhiteboardTemplateList>();
+        .add::<WhiteboardTemplateList>()
+        .add::<super::to_tasks::WhiteboardToTasks>()
+        .add::<super::ask::WhiteboardAsk>();
 }
 
 // ---------------------------------------------------------------------------
-// whiteboard_update_elements (alias whiteboard_edit)
+// whiteboard_update_elements
 
 pub struct WhiteboardUpdateElements;
 
@@ -68,6 +70,15 @@ pub struct WhiteboardUpdateElementsInput {
     /// first, so whiteboard_update restoreRevision can undo it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirm_delete: Option<bool>,
+    /// The message what you add is made from (its id, or a link), such as
+    /// a sticky with its text, in a conversation of the board's space that
+    /// you can read (C2.22).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_message_id: Option<crate::ops::refs::MessageRef>,
+    /// With fromMessageId: also say in that conversation that you made the
+    /// message into a sticky on this board.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub say_so: bool,
 }
 
 impl Targeted for WhiteboardUpdateElementsInput {
@@ -93,8 +104,9 @@ impl Operation for WhiteboardUpdateElements {
         arrows and images, connect shapes, update, move, align, distribute, lay out, group and \
         order them, or delete them. The server turns them into elements and merges them like a \
         browser's change, so open boards update live. Pass the sceneSeq you read as \
-        expectedSceneSeq to be told when someone else changed what you touch. If you only \
-        suggest here, it becomes a proposal (proposalId).";
+        expectedSceneSeq to be told when someone else changed what you touch. Made from a \
+        message (fromMessageId, such as a sticky with its text), saySo tells the conversation. \
+        If you only suggest here, it becomes a proposal (proposalId).";
     const EMITS: &'static [&'static str] = &["whiteboard.updated", "whiteboard.proposals_changed"];
 
     type Input = WhiteboardUpdateElementsInput;
@@ -107,8 +119,35 @@ impl Operation for WhiteboardUpdateElements {
         let id = input.whiteboard_id.id();
         let caller = whiteboard_commands::caller_of(call.ctx);
         let access_caller = call.ctx.caller.clone();
+        let state = call.state;
+        // Images' bytes go to the file store before the transaction opens.
+        // A proposal keeps none; bytes it staged are swept unless a board
+        // comes to hold them.
+        let staged =
+            whiteboard_commands::stage_images(state, call.ctx.workspace_id, &input.operations)
+                .await?;
         let tx = call.tx().await?;
         let (board, mode) = board_for_writing(tx, &caller, &access_caller, id).await?;
+        // The message it's made from, only one the caller reads in the
+        // board's space.
+        let source = match input.from_message_id {
+            None => None,
+            Some(message) => Some(
+                crate::discussion::message_in_space(
+                    tx,
+                    message.id(),
+                    board.project_id,
+                    caller.actor_id,
+                )
+                .await?
+                .ok_or_else(|| {
+                    OpError::invalid(
+                        "fromMessageId",
+                        "That isn't a message you can read in this board's space.",
+                    )
+                })?,
+            ),
+        };
         if mode == WriteMode::Propose {
             let planned = edit::plan(tx, id, &input.operations, input.expected_scene_seq)
                 .await
@@ -135,8 +174,7 @@ impl Operation for WhiteboardUpdateElements {
                 proposal_id: proposal_id.map(|proposal| proposal.to_string()),
             });
         }
-        let operations =
-            whiteboard_commands::store_images(tx, &caller, id, &input.operations).await?;
+        let operations = whiteboard_commands::attach_images(state, staged, tx, &caller, id).await?;
         let outcome = edit::apply(
             tx,
             &caller,
@@ -147,6 +185,18 @@ impl Operation for WhiteboardUpdateElements {
         )
         .await
         .map_err(whiteboard_commands::edit_error)?;
+        if let Some((message_id, conversation_id, _)) = source {
+            crate::conversations::system_entries::made_from_message(
+                tx,
+                conversation_id,
+                caller.actor_id,
+                "sticky",
+                id,
+                message_id,
+                input.say_so,
+            )
+            .await?;
+        }
         call.audit_target(
             "whiteboard",
             id,
@@ -241,6 +291,11 @@ pub struct WhiteboardProposeInput {
     /// Changed elements as Excalidraw writes them.
     #[schemars(with = "Vec<serde_json::Value>")]
     pub elements: Vec<serde_json::Value>,
+    /// Each changed element's version as your drawing found it, by id (0
+    /// for one you added). One changed on the board since is refused, so
+    /// accepting never undoes a change you hadn't seen.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub read_versions: std::collections::BTreeMap<String, i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
@@ -311,6 +366,40 @@ impl Operation for WhiteboardPropose {
         let tx = call.tx().await?;
         let (board, _) = board_for_writing(tx, &caller, &access_caller, id).await?;
         let scene_seq = super::store::lock(tx, id).await?;
+        let read = input
+            .read_versions
+            .into_iter()
+            .filter(|(element, version)| {
+                *version > 0 && elements.iter().any(|sent| &sent.id == element)
+            })
+            .collect::<Vec<_>>();
+        if !read.is_empty() {
+            let (ids, versions): (Vec<String>, Vec<i32>) = read.into_iter().unzip();
+            let changed = sqlx::query_scalar::<_, String>(
+                "SELECT stored.element_id FROM whiteboard_elements stored \
+                 JOIN unnest($2::text[], $3::int[]) AS read(element_id, version) \
+                   ON read.element_id = stored.element_id \
+                 WHERE stored.whiteboard_id = $1 AND stored.version <> read.version \
+                 LIMIT 1",
+            )
+            .bind(id)
+            .bind(&ids)
+            .bind(&versions)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(crate::error::AppError::from)?;
+            if changed.is_some() {
+                return Err(OpError::Conflict {
+                    reason: ConflictReason::State {
+                        code: "changed_since_read",
+                    },
+                    message: "Someone changed part of what you drew on since you started. \
+                              Reload the board to see their change, then draw yours again."
+                        .into(),
+                    current: None,
+                });
+            }
+        }
         let (proposal_id, count) =
             propose(tx, &caller, &board, scene_seq, elements, Self::NAME, note).await?;
         if let Some(proposal) = proposal_id {

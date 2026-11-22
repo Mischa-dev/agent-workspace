@@ -4,13 +4,12 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
 import { can } from '../../auth/can'
-import { requestJson } from '../../api/client'
-import { isApiError } from '../../api/errors'
-import { callOp } from '../../api/ops'
+import { callOp, isVersionConflict } from '../../api/ops'
 import { queryKeys } from '../../api/queryKeys'
 import { describeError } from '../../app/mutations'
 import { useProjectExperience } from '../../experience/layout'
 import { roleLabel } from '../../projects/format'
+import { renameProject } from '../../projects/api'
 import { useArchiveProject, useProject } from '../../projects/hooks'
 import { ProjectInitials } from '../../projects/ProjectInitials'
 import type { Project } from '../../projects/types'
@@ -18,12 +17,6 @@ import { Banner, Button, DetailList, PageHeader, Section, TextField, showToast }
 import { markArchiving } from '../archiving'
 import type { SettingsPageProps } from '../types'
 import '../../styles/pages.css'
-
-const renameProject = (projectId: string, name: string, expectedVersion: number) =>
-  requestJson<Project>(`/api/v1/projects/${encodeURIComponent(projectId)}`, {
-    method: 'PATCH',
-    json: { name, expectedVersion },
-  })
 
 /** Project › General: about the project, its name, and archiving it. */
 export default function GeneralPage({ project: given, workspace }: SettingsPageProps) {
@@ -55,7 +48,7 @@ export default function GeneralPage({ project: given, workspace }: SettingsPageP
     } catch (reason) {
       // Only a failure clears it: after success the page leaves for Home.
       markArchiving(current.id, false)
-      if (isApiError(reason) && reason.code === 'version_conflict') {
+      if (isVersionConflict(reason)) {
         await project.refetch()
         setError('Someone changed this project while you were here. Check the details above and try again.')
       } else {
@@ -148,7 +141,7 @@ function RenameSection({ project }: { project: Project }) {
       showToast({ tone: 'success', title: `Renamed to ${renamed.name}` })
     },
     onError: async (reason) => {
-      if (isApiError(reason) && reason.code === 'version_conflict') {
+      if (isVersionConflict(reason)) {
         await queryClient.invalidateQueries({ queryKey: queryKeys.project(project.id) })
         setError('Someone changed this project while you were here. Its current name is shown; try again if you still want to change it.')
         setDraft(null)
@@ -209,7 +202,7 @@ function IconSection({ project }: { project: Project }) {
       showToast({ tone: 'success', title: next ? 'Icon saved' : 'Icon removed' })
     },
     onError: async (reason) => {
-      if (isApiError(reason) && reason.code === 'version_conflict') {
+      if (isVersionConflict(reason)) {
         await queryClient.invalidateQueries({ queryKey: queryKeys.project(project.id) })
         setError('Someone changed this project while you were here. Try again.')
         setDraft(null)

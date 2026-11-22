@@ -181,7 +181,7 @@ async fn an_update_sets_health_and_reaches_members() {
     assert_eq!(updates.len(), 1, "{my_work}");
     assert_eq!(updates[0]["spaceKey"], "WORK");
     assert_eq!(updates[0]["latestUpdate"]["threadId"], thread.as_str());
-    let (_, agent_work) = rook.call(app, tool("my_work", json!({}))).await;
+    let (_, agent_work) = rook.call(app, tool("my_work_get", json!({}))).await;
     assert_eq!(
         agent_work["value"]["updates"][0]["health"], "at_risk",
         "{agent_work}"
@@ -215,7 +215,7 @@ async fn an_update_sets_health_and_reaches_members() {
         .call(
             app,
             tool(
-                "milestone_write",
+                "milestone_create",
                 json!({"projectId": "WORK", "name": "Beta", "initiative": "Launch",
                        "clientRequestId": "beta"}),
             ),

@@ -14,6 +14,7 @@ impl CoreModule for Module {
 
     fn register(&self, module: &mut Registrar<'_>) {
         module.operations(crate::workspace::reads::register_space_ops);
+        module.operations(crate::workspace::admin_ops::register_space_ops);
         module.routes(crate::invitations::router);
         module.routes(crate::memberships::router);
     }

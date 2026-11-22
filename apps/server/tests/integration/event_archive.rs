@@ -156,14 +156,14 @@ async fn archived_facts_and_cold_page_versions_still_answer() {
 
     // A page with three versions; the two older ones go cold.
     let page = call(
-        "page_write",
+        "page_create",
         json!({"projectId": world.project("WORK"), "title": "Gate", "body": "Paint it red."}),
     )
     .await;
     let page = page["value"]["id"].as_str().expect("page").to_owned();
     for (version, body) in [(1, "Paint it blue."), (2, "Paint it green.")] {
         call(
-            "page_write",
+            "page_update",
             json!({"pageId": page, "body": body, "expectedVersion": version}),
         )
         .await;

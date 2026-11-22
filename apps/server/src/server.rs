@@ -32,8 +32,8 @@ use crate::{
     error::AppError,
     github,
     health::{self, HealthState, Process},
+    hosts::builtin::SupervisorRegistry,
     jobs,
-    provider::SupervisorRegistry,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
     router,
@@ -61,14 +61,11 @@ impl Server {
             realtime: RealtimeHub::with_contract(256, config.live_url.is_some()),
             supervisors,
         };
-        state
-            .supervisors
-            .set_host(Arc::new(crate::harness_host::ServerHost::new(
-                pool.clone(),
-                Arc::clone(&config),
-            )));
+        state.supervisors.set_host(Arc::new(
+            crate::hosts::builtin::harness_host::ServerHost::new(pool.clone(), Arc::clone(&config)),
+        ));
         // Registered harnesses load before runs of their kinds are recovered.
-        if let Err(error) = crate::harnesses::reload(&state).await {
+        if let Err(error) = crate::hosts::builtin::custom::reload(&state).await {
             tracing::warn!(
                 error_category = error.log_category(),
                 "registered harnesses not loaded"
@@ -97,14 +94,16 @@ impl Server {
             operations = operations.entries().count(),
             "modules registered"
         );
-        let tail_start = {
+        // Where this instance's tail starts: the head of every workspace's log.
+        let tail_start = crate::tenancy::system("events.log", async {
             let mut connection = crate::db::scoped_tx(&pool)
                 .await
                 .context("read the log's head")?;
             crate::events::head(&mut connection)
                 .await
-                .context("read the log's head")?
-        };
+                .context("read the log's head")
+        })
+        .await?;
         Ok(Self {
             state,
             cluster,
@@ -181,7 +180,7 @@ impl Server {
         // Every instance serves harness manifests (launches, catalogues,
         // accounts), so each reloads them: one registered or switched off
         // through another instance shows here too.
-        crate::harnesses::spawn_reloader(state.clone());
+        crate::hosts::builtin::custom::spawn_reloader(state.clone());
         // Every instance knows its cluster, host or not, so a run started
         // through this one's API wakes the lease holder instead of being
         // admitted here without the lease.
@@ -194,7 +193,13 @@ impl Server {
             let receiver = receiver.clone();
             async move {
                 if host {
-                    crate::scheduler::run_host(state, cluster, receiver).await
+                    // Claims runs of every workspace; each is then checked against
+                    // its run's space.
+                    crate::tenancy::system(
+                        "runs.host",
+                        crate::scheduler::run_host(state, cluster, receiver),
+                    )
+                    .await
                 } else {
                     wait_for_shutdown(receiver).await;
                     Ok(())
@@ -206,7 +211,7 @@ impl Server {
             let receiver = receiver.clone();
             async move {
                 if looping {
-                    github::run_jobs(state, receiver).await
+                    crate::tenancy::system("github.jobs", github::run_jobs(state, receiver)).await
                 } else {
                     wait_for_shutdown(receiver).await;
                     Ok(())
@@ -221,7 +226,10 @@ impl Server {
         // a failed step is retried on the next round (a heartbeat that
         // stays late fences this instance, it never stops it).
         let replies = tokio::spawn({
-            let replies = crate::replies::run(state.clone(), receiver.clone());
+            let replies = crate::tenancy::system(
+                "replies.sweep",
+                crate::replies::run(state.clone(), receiver.clone()),
+            );
             let sequencer = crate::events::sequencer::run(
                 state.pool.clone(),
                 Arc::clone(&wakes.log),

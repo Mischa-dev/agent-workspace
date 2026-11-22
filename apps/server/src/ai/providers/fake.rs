@@ -17,7 +17,7 @@ use super::{
     Chat, ChatRequest, Completion, CompletionRequest, ModelPart, ModelRole, ModelStop,
     ProviderError, ProviderManifest,
 };
-use crate::provider::manifest::ModelEntry;
+use crate::harness::manifest::ModelEntry;
 
 /// The gateway adds this to the instructions when it retries after a reply
 /// that didn't fit the schema.

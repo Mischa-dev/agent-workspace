@@ -113,14 +113,14 @@ async fn triage_lands_orders_rules_and_wakes_snoozes() {
         app,
         world.owner.browser.request(
             "POST",
-            &format!("/api/v1/projects/{work}/bug-report-links"),
+            "/api/v2/ops/bug_report_link_create",
             Some(&Uuid::now_v7().to_string()),
-            json!({"name": "Game"}),
+            json!({"projectId": work, "name": "Game"}),
         ),
     )
     .await;
     assert!(status.is_success(), "{status} {link}");
-    let url = link["url"].as_str().expect("url");
+    let url = link["value"]["url"].as_str().expect("url");
     let path = &url[url.find("/api/v1/bug-reports/").expect("path")..];
     let (status, reported) = send(
         app,
@@ -217,9 +217,11 @@ async fn triage_lands_orders_rules_and_wakes_snoozes() {
     .execute(pool)
     .await
     .expect("snooze due");
-    let woken = agent_workspace_server::work_items::triage::wake_snoozed(pool)
-        .await
-        .expect("wake");
+    let woken = crate::support::as_server_job(
+        agent_workspace_server::work_items::triage::wake_snoozed(pool),
+    )
+    .await
+    .expect("wake");
     assert_eq!(woken, 1);
     assert_eq!(status_of(first.clone()).await.2, None);
     assert!(in_queue(first.clone()).await);

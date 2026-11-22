@@ -43,7 +43,10 @@ export async function setModules(context: BrowserContext, page: Page) {
   const before = (await (await request.get(path)).json()) as { modules: ModuleView[] }
   const original = Object.fromEntries(before.modules.filter((module) => module.switchable).map((module) => [module.id, module.switchedOn]))
   const put = async (switches: Record<string, boolean>) => {
-    const response = await request.put(path, { headers: headers(), data: { switches } })
+    const response = await request.post(`/api/v2/w/${organization}/ops/workspace_update`, {
+      headers: headers(randomUUID()),
+      data: { projectId: 'workspace', modules: switches },
+    })
     expect(response.ok(), await response.text()).toBe(true)
   }
   return {

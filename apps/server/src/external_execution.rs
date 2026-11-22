@@ -9,13 +9,13 @@ use crate::{
     auth::AuthenticatedActor,
     domain::allocate_conversation_sequence,
     error::{ApiPath, AppError},
+    harness::run_config::RunConfig,
     hosts::builtin::http::select_run_setup,
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     mcp::McpPrincipal,
     message_content::MessageContent,
     outbox,
     policy::{Action, MembershipRole, RoleGrant},
-    provider::run_config::RunConfig,
 };
 
 pub fn router() -> Router<AppState> {
@@ -869,5 +869,5 @@ fn request_href(project_id: Uuid, request_id: Uuid) -> String {
         project_id,
         crate::addresses::Place::ExternalRequest(request_id),
     )
-    .legacy_path()
+    .href()
 }

@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use rmcp::schemars::{self, JsonSchema};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
@@ -27,7 +27,7 @@ use crate::{
 const NAME: &str = "package_install";
 
 /// An object an install made or reused.
-#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledObject {
     pub kind: String,
@@ -38,7 +38,7 @@ pub struct InstalledObject {
     pub action: String,
 }
 
-#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Installed {
     #[schemars(with = "String")]
@@ -121,14 +121,14 @@ fn apply_error(error: ApplyError) -> InstallError {
     }
 }
 
-fn part_kind_static(kind: &str) -> Option<&'static str> {
+pub(super) fn part_kind_static(kind: &str) -> Option<&'static str> {
     crate::modules::built::LINKABLE
         .iter()
         .copied()
         .find(|known| *known == kind)
 }
 
-fn invalid_at(field: String, message: String) -> OpError {
+pub(super) fn invalid_at(field: String, message: String) -> OpError {
     OpError::Invalid {
         field: field.into(),
         message: message.into(),
@@ -138,6 +138,103 @@ fn invalid_at(field: String, message: String) -> OpError {
 /// Installs `package` (its stored form `document`) at `place` as `plan`
 /// says, in the caller's transaction.
 #[allow(clippy::too_many_lines)]
+/// A form part's name, collection and questions, checked against the
+/// collection's fields. `body` has its `@<key>` references resolved.
+pub(super) async fn form_from_body(
+    tx: &mut Transaction<'static, Postgres>,
+    space: Uuid,
+    body: &Value,
+    at: &str,
+) -> Result<(String, Uuid, crate::collection_forms::FormConfig), OpError> {
+    let name = crate::bug_reports::normalize_name(body["name"].as_str().unwrap_or(""))
+        .map_err(|_| invalid_at(format!("{at}.name"), "Name the form.".to_owned()))?;
+    let collection_id = body["collection"]
+        .as_str()
+        .and_then(|id| Uuid::parse_str(id).ok())
+        .ok_or_else(|| {
+            invalid_at(
+                format!("{at}.collection"),
+                "A form names its collection as @<key>.".to_owned(),
+            )
+        })?;
+    let definitions =
+        crate::collections::field_definitions(tx, space, collection_id, false).await?;
+    let mut questions = Vec::new();
+    for asked in body["fields"].as_array().cloned().unwrap_or_default() {
+        let wanted = asked["field"].as_str().unwrap_or("").trim();
+        let found = definitions
+            .iter()
+            .find(|definition| definition.name.eq_ignore_ascii_case(wanted))
+            .ok_or_else(|| {
+                invalid_at(
+                    format!("{at}.fields"),
+                    format!("The collection has no field \"{wanted}\"."),
+                )
+            })?;
+        questions.push(crate::collection_forms::FormField {
+            field: found.id,
+            required: asked["required"].as_bool().unwrap_or(false),
+            show_if: None,
+        });
+    }
+    let form = crate::collection_forms::FormConfig {
+        intro: body["intro"].as_str().unwrap_or("").to_owned(),
+        fields: questions,
+        thanks: body["thanks"].as_str().unwrap_or("").to_owned(),
+        daily_limit: None,
+        ..Default::default()
+    };
+    let form = crate::bug_reports::checked_form_in(tx, space, collection_id, &form)
+        .await?
+        .map_err(|message| invalid_at(format!("{at}.fields"), message))?;
+    Ok((name, collection_id, form))
+}
+
+/// An automation part as a rule to check. `body` has its references
+/// resolved.
+pub(super) fn rule_from_body(
+    body: &Value,
+    at: &str,
+) -> Result<crate::automations::CreateRule, OpError> {
+    let rule = json!({
+        "name": body["name"],
+        "trigger": body["trigger"],
+        "conditions": body.get("conditions").cloned().unwrap_or_else(|| json!({})),
+        "actions": body.get("actions").cloned().unwrap_or_else(|| json!([])),
+        "enabled": body.get("enabled").cloned().unwrap_or(Value::Bool(true)),
+    });
+    serde_json::from_value::<crate::automations::CreateRule>(rule).map_err(|error| {
+        invalid_at(
+            at.to_owned(),
+            error
+                .to_string()
+                .split(" at line ")
+                .next()
+                .unwrap_or("This rule can't be read.")
+                .to_owned(),
+        )
+    })
+}
+
+/// A page or skill part as a page's title, text and skill description.
+pub(super) fn page_input(kind: ContentKind, body: &Value) -> crate::memory::PageInput {
+    if kind == ContentKind::Skill {
+        crate::memory::PageInput {
+            title: body["name"].as_str().map(str::to_owned),
+            body: body["instructions"].as_str().map(str::to_owned),
+            skill_description: body["description"].as_str().map(str::to_owned),
+            ..crate::memory::PageInput::default()
+        }
+    } else {
+        crate::memory::PageInput {
+            title: body["title"].as_str().map(str::to_owned),
+            body: body["markdown"].as_str().map(str::to_owned),
+            is_guide: body["guide"].as_bool(),
+            ..crate::memory::PageInput::default()
+        }
+    }
+}
+
 pub(crate) async fn install(
     tx: &mut Transaction<'static, Postgres>,
     who: &Installer<'_>,
@@ -145,6 +242,22 @@ pub(crate) async fn install(
     document: &Value,
     place: &Place,
     plan: &Plan,
+) -> Result<Installed, InstallError> {
+    install_keeping(tx, who, package, document, place, plan, &HashMap::new()).await
+}
+
+/// [`install`], with what an earlier version installed (by kind and
+/// package key): an upgrade's new parts name those, even where one was
+/// renamed here or upstream, and a new module may hold a page or form the
+/// upgrade leaves as it is.
+pub(crate) async fn install_keeping(
+    tx: &mut Transaction<'static, Postgres>,
+    who: &Installer<'_>,
+    package: &Package,
+    document: &Value,
+    place: &Place,
+    plan: &Plan,
+    kept: &HashMap<(String, String), Uuid>,
 ) -> Result<Installed, InstallError> {
     use crate::workspace_templates::{self as templates, TemplateDefinition, TemplateProject};
 
@@ -407,7 +520,10 @@ pub(crate) async fn install(
             }
             ContentKind::Collection => {
                 let name = body["name"].as_str().unwrap_or("").trim();
-                if let Some(space) = space
+                if let Some(id) = kept.get(&("collection".to_owned(), part.key.clone())) {
+                    collections.insert(part.key.clone(), *id);
+                    record(&mut objects, "collection", &part.key, *id);
+                } else if let Some(space) = space
                     && let Some(id) = sqlx::query_scalar::<_, Uuid>(
                         "SELECT id FROM collections WHERE project_id = $1 \
                          AND archived_at IS NULL AND lower(name) = lower($2)",
@@ -440,6 +556,24 @@ pub(crate) async fn install(
             .iter()
             .find(|line| line.kind == kind && line.key == key);
         let Some(line) = line else { continue };
+        // What an earlier version made and the upgrade leaves be: later
+        // parts (a new module's) may name it.
+        if line.action == "skip"
+            && matches!(
+                part.kind,
+                ContentKind::Form
+                    | ContentKind::Automation
+                    | ContentKind::Page
+                    | ContentKind::Skill
+                    | ContentKind::Agent
+                    | ContentKind::Module
+                    | ContentKind::Theme
+            )
+            && let Some(id) = kept.get(&(kind.to_owned(), key.to_owned()))
+        {
+            record(&mut objects, kind, key, *id);
+            continue;
+        }
         if line.action == "skip" {
             if !matches!(part.kind, ContentKind::Channels) {
                 skipped.push(format!(
@@ -458,6 +592,7 @@ pub(crate) async fn install(
                     | ContentKind::Skill
                     | ContentKind::Agent
                     | ContentKind::Module
+                    | ContentKind::Theme
             )
         {
             record(&mut objects, kind, key, id);
@@ -477,49 +612,16 @@ pub(crate) async fn install(
             body
         };
         let made = match part.kind {
+            // Offered to the workspace at once, owned by whoever installs it.
+            ContentKind::Theme => {
+                let (name, document) = super::format::check_theme(&body)
+                    .map_err(|message| invalid_at(field(""), message))?;
+                crate::themes::insert_offered(tx, workspace, actor, &name, &document).await?
+            }
             ContentKind::Form => {
                 let space = space.ok_or(OpError::Unavailable)?;
-                let name = crate::bug_reports::normalize_name(body["name"].as_str().unwrap_or(""))
-                    .map_err(|_| invalid_at(field(".name"), "Name the form.".to_owned()))?;
-                let collection_id = body["collection"]
-                    .as_str()
-                    .and_then(|id| Uuid::parse_str(id).ok())
-                    .ok_or_else(|| {
-                        invalid_at(
-                            field(".collection"),
-                            "A form names its collection as @<key>.".to_owned(),
-                        )
-                    })?;
-                let definitions =
-                    crate::collections::field_definitions(tx, space, collection_id, false).await?;
-                let mut questions = Vec::new();
-                for asked in body["fields"].as_array().cloned().unwrap_or_default() {
-                    let wanted = asked["field"].as_str().unwrap_or("").trim();
-                    let found = definitions
-                        .iter()
-                        .find(|definition| definition.name.eq_ignore_ascii_case(wanted))
-                        .ok_or_else(|| {
-                            invalid_at(
-                                field(".fields"),
-                                format!("The collection has no field \"{wanted}\"."),
-                            )
-                        })?;
-                    questions.push(crate::collection_forms::FormField {
-                        field: found.id,
-                        required: asked["required"].as_bool().unwrap_or(false),
-                        show_if: None,
-                    });
-                }
-                let form = crate::collection_forms::FormConfig {
-                    intro: body["intro"].as_str().unwrap_or("").to_owned(),
-                    fields: questions,
-                    thanks: body["thanks"].as_str().unwrap_or("").to_owned(),
-                    daily_limit: None,
-                    ..Default::default()
-                };
-                let form = crate::bug_reports::checked_form_in(tx, space, collection_id, &form)
-                    .await?
-                    .map_err(|message| invalid_at(field(".fields"), message))?;
+                let (name, collection_id, form) =
+                    form_from_body(tx, space, &body, &field("")).await?;
                 // The link's token is never returned: the form's
                 // settings make one to share.
                 let (id, _token) = crate::bug_reports::insert_link(
@@ -534,48 +636,14 @@ pub(crate) async fn install(
             }
             ContentKind::Automation => {
                 let space = space.ok_or(OpError::Unavailable)?;
-                let rule = json!({
-                    "name": body["name"],
-                    "trigger": body["trigger"],
-                    "conditions": body.get("conditions").cloned().unwrap_or_else(|| json!({})),
-                    "actions": body.get("actions").cloned().unwrap_or_else(|| json!([])),
-                    "enabled": body.get("enabled").cloned().unwrap_or(Value::Bool(true)),
-                });
-                let rule = serde_json::from_value::<crate::automations::CreateRule>(rule).map_err(
-                    |error| {
-                        invalid_at(
-                            field(""),
-                            error
-                                .to_string()
-                                .split(" at line ")
-                                .next()
-                                .unwrap_or("This rule can't be read.")
-                                .to_owned(),
-                        )
-                    },
-                )?;
+                let rule = rule_from_body(&body, &field(""))?;
                 let prepared =
                     crate::automations::prepare_in(tx, maker, space, rule, &fresh).await?;
                 crate::automations::insert(tx, maker, workspace, space, &prepared).await?
             }
             ContentKind::Page | ContentKind::Skill => {
                 let space = space.ok_or(OpError::Unavailable)?;
-                let page = if part.kind == ContentKind::Skill {
-                    crate::memory::PageInput {
-                        title: body["name"].as_str().map(str::to_owned),
-                        body: body["instructions"].as_str().map(str::to_owned),
-                        skill_description: body["description"].as_str().map(str::to_owned),
-                        ..crate::memory::PageInput::default()
-                    }
-                } else {
-                    crate::memory::PageInput {
-                        title: body["title"].as_str().map(str::to_owned),
-                        body: body["markdown"].as_str().map(str::to_owned),
-                        is_guide: body["guide"].as_bool(),
-                        ..crate::memory::PageInput::default()
-                    }
-                };
-                crate::memory::create_page(tx, writer, space, &page).await?
+                crate::memory::create_page(tx, writer, space, &page_input(part.kind, &body)).await?
             }
             ContentKind::Agent => {
                 let name = body["name"].as_str().unwrap_or("").trim().to_owned();
@@ -719,6 +787,9 @@ pub(crate) async fn install(
         .await
         .map_err(|error| OpError::logged(NAME, &error.into()))?;
     }
+    super::upgrade::record_local_hashes(tx, install_id)
+        .await
+        .map_err(|error| OpError::logged(NAME, &error))?;
     for object in objects.iter().filter(|object| object.action == "created") {
         if object.kind == "collection"
             && let Some(space) = space

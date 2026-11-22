@@ -94,7 +94,7 @@ pub async fn poll(
                 if after < kept_from {
                     return Err(AppError::Conflict(
                         "cursor_expired",
-                        "This cursor is older than the events kept. Call briefing to catch up, then read without a cursor.",
+                        "This cursor is older than the events kept. Call briefing_get to catch up, then read without a cursor.",
                     ));
                 }
                 connections::mark_read(

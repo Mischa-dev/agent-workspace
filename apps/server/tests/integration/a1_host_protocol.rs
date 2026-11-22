@@ -1024,6 +1024,44 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{refused}");
+    // A1.17: the run's reply streams live with its own credential, and
+    // only for its own run.
+    let piece = json!({"streamId": Uuid::now_v7(), "delta": "Working on it"});
+    let (status, refused) = send(
+        app,
+        host_call(
+            "POST",
+            &format!("/api/v1/host/runs/{}/stream", Uuid::now_v7()),
+            credentials.last().map(String::as_str),
+            piece.clone(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{refused}");
+    let (status, refused) = send(
+        app,
+        host_call(
+            "POST",
+            &format!("/api/v1/host/runs/{run}/stream"),
+            credentials.last().map(String::as_str),
+            json!({"streamId": Uuid::now_v7(), "delta": ""}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    let (status, shown) = send(
+        app,
+        host_call(
+            "POST",
+            &format!("/api/v1/host/runs/{run}/stream"),
+            credentials.last().map(String::as_str),
+            piece,
+        ),
+    )
+    .await;
+    // This run has no conversation to show it in, and is told so.
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{shown}");
+    assert!(shown.to_string().contains("conversation"), "{shown}");
     let starts = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM host_commands WHERE run_id = $1 AND kind = 'start'",
     )
@@ -1057,7 +1095,7 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
         app,
         &token,
         &session,
-        "run_activity",
+        "run_activity_report",
         json!({"runId": run, "activities": [
             {"id": "s1", "kind": "run_started"},
             {"id": "m1", "kind": "text_message", "payload": {"text": "On it."}}]}),
@@ -1091,25 +1129,23 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
     // It reaches the run's space only, even where the agent itself is a
     // member too.
     let elsewhere = create_project(&setup, "ELSE", "Elsewhere").await;
-    let (status, added) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{elsewhere}/members"),
-            None,
-            json!({"actorId": fixer, "role": "member"}),
-        ),
-    )
-    .await;
+    let (status, added) = setup
+        .browser
+        .op(
+            app,
+            "space_member_add",
+            json!({"spaceId": elsewhere, "account": fixer, "role": "member"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{added}");
-    let listed = tool(app, &token, &session, "projects_list", json!({})).await;
+    let listed = tool(app, &token, &session, "project_list", json!({})).await;
     assert!(!listed.to_string().contains(&elsewhere), "{listed}");
     assert!(listed.to_string().contains(&work), "{listed}");
     let opened = tool(
         app,
         &token,
         &session,
-        "project_open",
+        "project_get",
         json!({"projectId": elsewhere}),
     )
     .await;

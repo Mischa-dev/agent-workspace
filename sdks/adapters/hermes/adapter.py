@@ -332,11 +332,11 @@ class AgentWorkspaceAdapter(BasePlatformAdapter):
         try:
             await asyncio.to_thread(
                 self._call,
-                "reply_progress",
+                "reply_progress_report",
                 {"requestId": held.request_id, "generation": held.generation, "status": "Working"},
             )
         except Exception as error:  # noqa: BLE001
-            logger.debug("Agent Workspace: reply_progress failed: %r", error)
+            logger.debug("Agent Workspace: reply_progress_report failed: %r", error)
 
     async def on_processing_complete(self, event: MessageEvent, outcome) -> None:
         held = self._held.get(event.message_id or "")

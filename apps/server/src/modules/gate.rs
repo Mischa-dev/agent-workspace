@@ -142,10 +142,6 @@ pub(crate) const ID_EXEMPT: &[(&str, &str)] = &[
          in, and it was made by someone who could edit the page",
     ),
     (
-        "/api/v1/bug-report-links/",
-        "a link is managed from its project's settings, which the gate covers",
-    ),
-    (
         "/api/v1/bug-reports/",
         "a public report link by token, posted without a session; the gate answers only signed-in callers",
     ),
@@ -166,20 +162,12 @@ pub(crate) const ID_EXEMPT: &[(&str, &str)] = &[
         "a public form by token; its collection's module is checked by the handler",
     ),
     (
-        "/api/v1/later/",
-        "a person's own saved items, across workspaces",
-    ),
-    (
         "/api/v1/messages/",
         "a message is read with its conversation",
     ),
     (
         "/api/v1/project-invitations/",
-        "an invitation is revoked or replaced from its project's members screen, whose routes the gate covers",
-    ),
-    (
-        "/api/v1/reply-requests/",
-        "reply requests belong to a conversation, checked by its handler",
+        "an invitation is opened and accepted by its token, before the person is in the project",
     ),
     (
         "/api/v1/scheduled-messages/",
@@ -193,6 +181,19 @@ pub(crate) const ID_EXEMPT: &[(&str, &str)] = &[
 
 /// The scope a route named by id acts in, looked up from the database.
 pub(crate) async fn id_scope(
+    state: &AppState,
+    template: &str,
+    param: impl Fn(&str) -> Option<String>,
+) -> Result<Option<Scope>, AppError> {
+    // Where a route acts is read before its caller is known.
+    crate::tenancy::system(
+        "modules.gate",
+        Box::pin(id_scope_here(state, template, param)),
+    )
+    .await
+}
+
+async fn id_scope_here(
     state: &AppState,
     template: &str,
     param: impl Fn(&str) -> Option<String>,
@@ -249,6 +250,20 @@ enum Off {
 }
 
 async fn off_module(
+    state: &AppState,
+    module: &'static Manifest,
+    scope: &Scope,
+    plumbing: bool,
+) -> Result<Off, AppError> {
+    // A workspace's switches are read before its caller is known; only its caller learns of them.
+    crate::tenancy::system(
+        "modules.gate",
+        Box::pin(off_module_here(state, module, scope, plumbing)),
+    )
+    .await
+}
+
+async fn off_module_here(
     state: &AppState,
     module: &'static Manifest,
     scope: &Scope,

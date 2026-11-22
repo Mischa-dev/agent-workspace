@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toastError } from '../app/mutations'
 import { Section, Switch, showToast } from '../ui'
 import { layoutKeys, refreshLayouts, saveMyView, type MyView } from './api'
+import type { ModulePart } from './builtParts'
 import type { EffectiveLayout } from './layout'
 import { PartSwitches, SidebarPreview } from './LayoutEditor'
 import type { PartId } from './parts'
@@ -51,7 +52,18 @@ export function OwnRuleNote({ effective }: { effective: EffectiveLayout }) {
  * "My view": hide more for yourself, across the workspace, and (for owners
  * and admins) show what layouts hide. It saves as you switch.
  */
-export function MyViewSection({ layoutHidden, myView, organizationId }: { layoutHidden: string[]; myView: MyView; organizationId: string }) {
+export function MyViewSection({
+  layoutHidden,
+  modules = [],
+  myView,
+  organizationId,
+}: {
+  layoutHidden: string[]
+  /** Built modules' sidebar entries, which you can hide too. */
+  modules?: ModulePart[]
+  myView: MyView
+  organizationId: string
+}) {
   const queryClient = useQueryClient()
   const [hidden, setHidden] = useState(() => new Set(myView.hidden))
   const [showHidden, setShowHidden] = useState(myView.showHidden)
@@ -72,7 +84,7 @@ export function MyViewSection({ layoutHidden, myView, organizationId }: { layout
     setShowHidden(next.showHidden)
     save.mutate(next)
   }
-  const shown = new Set(REGISTRY.parts.map((part) => part.id).filter((part) => !hidden.has(part)))
+  const shown = new Set([...REGISTRY.parts.map((part) => part.id), ...modules.map((part) => part.id)].filter((part) => !hidden.has(part)))
   // What the layout hides can't be hidden again, unless you're seeing it anyway.
   const locked = showHidden && myView.canShowHidden ? undefined : { parts: new Set(layoutHidden), why: 'The layout already hides it.' }
   return (
@@ -97,6 +109,7 @@ export function MyViewSection({ layoutHidden, myView, organizationId }: { layout
         <PartSwitches
           disabled={save.isPending}
           lockedOff={locked}
+          modules={modules}
           onToggle={(part: PartId, visible) => {
             const next = new Set(hidden)
             if (visible) next.delete(part)

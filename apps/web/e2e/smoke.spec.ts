@@ -75,7 +75,8 @@ test('creates a task and moves it across the board', async ({ page }) => {
   // Each move saves with its own request; the board shows it before then.
   const moves: Response[] = []
   page.on('response', (response) => {
-    if (response.request().method() === 'POST' && /\/work-items\/[^/]+\/move$/.test(new URL(response.url()).pathname)) {
+    // A board move is a task_update with the status it moves to.
+    if (response.request().method() === 'POST' && /\/ops\/task_update$/.test(new URL(response.url()).pathname)) {
       moves.push(response)
     }
   })

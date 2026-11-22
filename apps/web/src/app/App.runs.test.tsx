@@ -175,8 +175,8 @@ describe('App Thread runs, approvals and GitHub', () => {
           queuePosition: 1,
         }, 202)
       }
-      if (path.includes('/agent-runs/run-1/acknowledge-failure')) {
-        return jsonResponse({})
+      if (path.endsWith('/ops/run_failure_hide')) {
+        return jsonResponse({ outcome: 'ok', value: { ...terminalRun, id: 'run-1' } })
       }
       return standardImplementation?.(input, init) ?? Promise.reject()
     })
@@ -187,10 +187,10 @@ describe('App Thread runs, approvals and GitHub', () => {
     )
     await waitFor(() => {
       const request = fetchMock.mock.calls.find(([path]) =>
-        String(path).includes('/agent-runs/run-1/acknowledge-failure'),
+        String(path).endsWith('/ops/run_failure_hide'),
       )
       expect(JSON.parse(String(request?.[1]?.body))).toEqual({
-        eventId: 'event-failed',
+        runId: 'run-1',
       })
     })
     expect(
@@ -234,11 +234,9 @@ describe('App Thread runs, approvals and GitHub', () => {
         return jsonResponse(terminalTimeline)
       }
       if (
-        path.includes(
-          `/projects/${projectAId}/agent-runs/run-1/publish`,
-        )
+        path.endsWith('/ops/run_publish')
       ) {
-        return jsonResponse({ jobId: 'publish-job-1', state: 'queued' }, 202)
+        return jsonResponse({ outcome: 'ok', value: { queued: true, job: { state: 'queued' } } })
       }
       return standardImplementation?.(input, init) ?? Promise.reject()
     })
@@ -250,16 +248,14 @@ describe('App Thread runs, approvals and GitHub', () => {
 
     await waitFor(() => {
       const request = fetchMock.mock.calls.find(([path]) =>
-        String(path).includes(
-          `/projects/${projectAId}/agent-runs/run-1/publish`,
-        ),
+        String(path).endsWith('/ops/run_publish'),
       )
       expect(request).toBeDefined()
       expect(request?.[1]?.method).toBe('POST')
       expect(
         new Headers(request?.[1]?.headers).get('idempotency-key'),
       ).toMatch(/^[0-9a-f-]{36}$/i)
-      expect(JSON.parse(String(request?.[1]?.body))).toEqual({})
+      expect(JSON.parse(String(request?.[1]?.body))).toEqual({ runId: 'run-1' })
     })
   })
 
@@ -303,11 +299,9 @@ describe('App Thread runs, approvals and GitHub', () => {
         return jsonResponse(terminalTimeline)
       }
       if (
-        path.includes(
-          `/projects/${projectAId}/agent-runs/run-1/pull-request`,
-        )
+        path.endsWith('/ops/pull_request_create')
       ) {
-        return jsonResponse({ requestId: 'pull-request-1', state: 'queued' }, 202)
+        return jsonResponse({ outcome: 'ok', value: { queued: true, job: { state: 'queued' } } })
       }
       return standardImplementation?.(input, init) ?? Promise.reject()
     })
@@ -319,9 +313,7 @@ describe('App Thread runs, approvals and GitHub', () => {
 
     await waitFor(() => {
       const request = fetchMock.mock.calls.find(([path]) =>
-        String(path).includes(
-          `/projects/${projectAId}/agent-runs/run-1/pull-request`,
-        ),
+        String(path).endsWith('/ops/pull_request_create'),
       )
       expect(request).toBeDefined()
       expect(request?.[1]?.method).toBe('POST')
@@ -329,9 +321,10 @@ describe('App Thread runs, approvals and GitHub', () => {
         new Headers(request?.[1]?.headers).get('idempotency-key'),
       ).toMatch(/^[0-9a-f-]{36}$/i)
       expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+        runId: 'run-1',
         title: 'AW-42: Ship exact publication',
         body: 'Created from an explicitly published Agent Workspace run.',
-        workItemIds: ['019fbc00-0000-7000-8000-000000000001'],
+        taskIds: ['019fbc00-0000-7000-8000-000000000001'],
       })
     })
   })
@@ -379,11 +372,9 @@ describe('App Thread runs, approvals and GitHub', () => {
         return jsonResponse(terminalTimeline)
       }
       if (
-        path.includes(
-          `/projects/${projectAId}/pull-requests/${pullRequestId}/refresh`,
-        )
+        path.endsWith('/ops/pull_request_refresh')
       ) {
-        return jsonResponse({ jobId: 'refresh-1', state: 'queued' }, 202)
+        return jsonResponse({ outcome: 'ok', value: { queued: true, job: { state: 'queued' } } })
       }
       return standardImplementation?.(input, init) ?? Promise.reject()
     })
@@ -398,12 +389,10 @@ describe('App Thread runs, approvals and GitHub', () => {
 
     await waitFor(() => {
       const request = fetchMock.mock.calls.find(([path]) =>
-        String(path).includes(
-          `/projects/${projectAId}/pull-requests/${pullRequestId}/refresh`,
-        ),
+        String(path).endsWith('/ops/pull_request_refresh'),
       )
       expect(request?.[1]?.method).toBe('POST')
-      expect(JSON.parse(String(request?.[1]?.body))).toEqual({})
+      expect(JSON.parse(String(request?.[1]?.body))).toEqual({ pullRequestId })
     })
   })
 })

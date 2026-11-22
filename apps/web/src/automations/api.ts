@@ -19,7 +19,7 @@ export const automationKeys = {
 
 // Automation rules
 
-/** A field filter on a record rule, as record_query takes one. */
+/** A field filter on a record rule, as record_list takes one. */
 export type RecordFilter = { field: string; op: string; values?: string[] }
 
 export type Trigger =
@@ -43,6 +43,9 @@ export type Trigger =
   | { kind: 'page_changed'; pageId?: string | null }
   | { kind: 'sheet_changed'; sheetId?: string | null }
   | { kind: 'whiteboard_changed'; whiteboardId?: string | null }
+  /** A comment on a thing, or a proposed change to one: on any thing, things of one kind, or one thing. */
+  | { kind: 'comment_posted'; thingKind?: CommentedKind | null; thingId?: string | null }
+  | { kind: 'proposal_made'; thingKind?: 'page' | 'sheet' | 'whiteboard' | null; thingId?: string | null }
   /** A signed delivery to one of the project's incoming hooks. */
   | { kind: 'incoming_hook'; hookId: string }
   | {
@@ -61,6 +64,9 @@ export type Trigger =
     }
 
 export type TriggerKind = Trigger['kind']
+
+/** The kinds of thing people comment on. */
+export type CommentedKind = 'task' | 'page' | 'sheet' | 'whiteboard' | 'record'
 
 export type Conditions = {
   viewId?: string | null

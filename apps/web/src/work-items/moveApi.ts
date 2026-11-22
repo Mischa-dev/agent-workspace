@@ -1,4 +1,6 @@
 import { requestJson } from '../api/client'
+import { callOp, heldForReview } from '../api/ops'
+import { legacyPathOf } from '../app/href'
 import type { FieldType, FieldValue } from '../fields/fieldModel'
 
 /** Moving a task, with its subtasks, to another project (AWD-102). */
@@ -61,16 +63,31 @@ export function previewMove(projectId: string, taskId: string, targetProjectId: 
 }
 
 /**
- * Moves the task with these choices, or nothing. Send the same
- * idempotencyKey to retry the same move; it returns the first result.
+ * Moves the task with these choices, or nothing, through `task_move`. Send
+ * the same idempotencyKey to retry the same move; it returns the first
+ * result.
  */
-export function moveTask(
-  projectId: string,
+export async function moveTask(
+  _projectId: string,
   taskId: string,
   input: { targetProjectId: string; snapshot: string; resolutions: MoveResolution[]; leaveUnresolved: boolean },
   idempotencyKey: string,
-) {
-  return requestJson<MoveDone>(movePath(projectId, taskId), { method: 'POST', json: input, idempotencyKey })
+): Promise<MoveDone> {
+  const done = await callOp(
+    'task_move',
+    { taskId, toProjectId: input.targetProjectId, snapshot: input.snapshot, resolutions: input.resolutions, leaveUnresolved: input.leaveUnresolved },
+    { requestId: idempotencyKey },
+  )
+  if (heldForReview(done)) throw new MoveHeldForReview()
+  return done as unknown as MoveDone
+}
+
+/** A team's review guard holds the move: nothing moved yet. Sending the same request once a reviewer allows it goes through. */
+export class MoveHeldForReview extends Error {
+  constructor() {
+    super('Moving it waits for a reviewer to allow it.')
+    this.name = 'MoveHeldForReview'
+  }
 }
 
 export type MoveDestination = { id: string; key: string; name: string }
@@ -93,7 +110,8 @@ export function listMoveDestinations(projectId: string, taskId: string) {
 export function movedTo(task: MoveDone['moved'][number]): { projectId: string; path: string } | null {
   try {
     const path = new URL(task.url, window.location.origin).pathname
-    const match = /^\/projects\/([^/]+)\/work-items\/([^/]+)$/.exec(path)
+    // Either shape of address: the server writes /w/<ws>/s/<space>/tasks/<id>.
+    const match = /^\/projects\/([^/]+)\/work-items\/([^/]+)$/.exec(legacyPathOf(path))
     return match ? { projectId: decodeURIComponent(match[1]), path } : null
   } catch {
     return null

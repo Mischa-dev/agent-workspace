@@ -1,0 +1,6 @@
+# Unoptimized builds keep every await's locals on the stack, so a test that
+# drives a whole request, job or automation inline (an operation calling
+# another through its tool) can pass the 2 MiB a test thread gets by default
+# long before an optimized server would come near it. Test threads get 8 MiB.
+[env]
+RUST_MIN_STACK = "8388608"

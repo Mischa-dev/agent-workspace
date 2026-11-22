@@ -121,7 +121,11 @@ struct Places {
 }
 
 fn settings_href(project_id: Uuid) -> String {
-    format!("/settings/projects/{project_id}/runs#environments")
+    let target = crate::addresses::Target::SpaceSettings {
+        space: project_id,
+        section: "runs",
+    };
+    format!("{}#environments", target.href())
 }
 
 /// Where the account can run for `viewer`, and where it can't and why.
@@ -219,13 +223,9 @@ async fn places(
             continue;
         };
         if environment.harness != account.adapter_kind {
-            let name = state
-                .supervisors
-                .manifest(&environment.harness)
-                .map_or_else(
-                    || environment.harness.clone(),
-                    |manifest| manifest.display_name.clone(),
-                );
+            let name = crate::harness_catalog::Harnesses::visible(state)
+                .await?
+                .name(&environment.harness);
             result.skipped.push(skip(format!(
                 "Its default environment, {}, runs on {name}.",
                 environment.name
@@ -429,13 +429,9 @@ pub(crate) async fn suggest_in(
         account_id: account.id,
         account_name: account.name.clone(),
         harness: account.adapter_kind.clone(),
-        harness_name: state
-            .supervisors
-            .manifest(&account.adapter_kind)
-            .map_or_else(
-                || account.adapter_kind.clone(),
-                |manifest| manifest.display_name.clone(),
-            ),
+        harness_name: crate::harness_catalog::Harnesses::visible(state)
+            .await?
+            .name(&account.adapter_kind),
         capacity: Capacity {
             slots,
             busy,

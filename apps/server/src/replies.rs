@@ -17,13 +17,7 @@ pub mod ops;
 
 use std::{collections::BTreeSet, time::Duration};
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::{HeaderMap, header},
-    response::IntoResponse,
-    routing::{get, post},
-};
+use axum::{Router, extract::State, http::header, response::IntoResponse, routing::get};
 use serde::Serialize;
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use tokio::sync::watch;
@@ -31,12 +25,8 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
-    conversations::{
-        ActorView, enqueue_event, insert_audit_event, insert_audit_event_for,
-        lock_seen_conversation_for,
-    },
-    error::{ApiPath, AppError},
+    conversations::{ActorView, enqueue_event, lock_seen_conversation_for},
+    error::AppError,
     outbox::{OutboxEventPayload, ReplyRequestsUpdatedPayload},
     policy::Action,
 };
@@ -49,14 +39,7 @@ pub(crate) const LEASE_MINUTES: i32 = 15;
 const WORKER_INTERVAL: Duration = Duration::from_secs(3);
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/api/v1/conversations/{id}/continue",
-            post(continue_conversation),
-        )
-        .route("/api/v1/reply-requests/{id}/retry", post(retry_request))
-        .route("/api/v1/reply-requests/{id}/stop", post(stop_request))
-        .route("/agent-runner.md", get(runner_guide))
+    Router::new().route("/agent-runner.md", get(runner_guide))
 }
 
 /// The runner contract (docs/agent-runner.md), for the people and agents
@@ -924,40 +907,6 @@ pub(crate) async fn timeline_requests(
     Ok((views, remaining))
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ContinueResponse {
-    agent_turns_remaining: i32,
-}
-
-/// Give the agents another round after the allowance ran out, and ask the other
-/// agents to respond to the latest agent message.
-async fn continue_conversation(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(conversation_id): ApiPath<Uuid>,
-) -> Result<Json<ContinueResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let outcome =
-        continue_conversation_in(&mut transaction, principal.actor_id, conversation_id).await?;
-    insert_audit_event(
-        &mut transaction,
-        &headers,
-        &principal,
-        outcome.project_id,
-        "conversation.continued",
-        conversation_id,
-        serde_json::json!({ "asked": outcome.asked.len() }),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(ContinueResponse {
-        agent_turns_remaining: outcome.agent_turns_remaining,
-    }))
-}
-
 /// What `continue_conversation_in` did.
 pub(crate) struct ContinueOutcome {
     pub project_id: Uuid,
@@ -972,7 +921,7 @@ pub(crate) struct ContinueOutcome {
 /// Let the agents in a group (or a thread under one) take another round:
 /// reset its turn allowance and, when the newest message is an agent's, ask
 /// the group's other agents to answer it. Needs `replies.steer`
-/// (roles decide who may keep a conversation going). Shared by the browser API and MCP;
+/// (roles decide who may keep a conversation going). Run by its operation;
 /// callers record their own audit rows.
 ///
 /// A removed message is never asked about: the newest message that wasn't
@@ -1069,30 +1018,6 @@ pub(crate) async fn continue_conversation_in(
     })
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RetryResponse {
-    id: Uuid,
-    status: &'static str,
-}
-
-/// Put an expired or released request back in the agent's inbox.
-async fn retry_request(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(request_id): ApiPath<Uuid>,
-) -> Result<Json<RetryResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    retry_request_in(&mut transaction, principal.actor_id, request_id).await?;
-    transaction.commit().await?;
-    Ok(Json(RetryResponse {
-        id: request_id,
-        status: "pending",
-    }))
-}
-
 /// What retrying a reply request did, for the caller's audit row.
 pub(crate) struct RetryOutcome {
     pub(crate) project_id: Uuid,
@@ -1102,7 +1027,7 @@ pub(crate) struct RetryOutcome {
 /// Put an expired, released or stopped request back in the agent's inbox
 /// and wake it, for someone who may post in its conversation. Someone who
 /// can't see the conversation gets the same answer as for a request that
-/// doesn't exist. Shared by the browser API and MCP; callers record their
+/// doesn't exist. Run by its operation; callers record their
 /// own audit rows.
 pub(crate) async fn retry_request_in(
     transaction: &mut Transaction<'_, Postgres>,
@@ -1200,48 +1125,6 @@ pub(crate) async fn retry_request_in(
     })
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct StopResponse {
-    id: Uuid,
-    status: &'static str,
-    /// Every request stopped: this one and the agent's follow-ups queued
-    /// behind it in the same place.
-    stopped: usize,
-}
-
-/// Stop an agent's work on a request: a person's Stop button.
-async fn stop_request(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(request_id): ApiPath<Uuid>,
-) -> Result<Json<StopResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let outcome = stop_request_in(&mut transaction, principal.actor_id, request_id).await?;
-    insert_audit_event_for(
-        &mut transaction,
-        &headers,
-        &principal,
-        outcome.project_id,
-        "reply_request.stopped",
-        "reply_request",
-        request_id,
-        serde_json::json!({
-            "agent_actor_id": outcome.agent_actor_id,
-            "stopped": outcome.stopped.len(),
-        }),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(StopResponse {
-        id: request_id,
-        status: "cancelled",
-        stopped: outcome.stopped.len(),
-    }))
-}
-
 /// What `stop_request_in` did.
 pub(crate) struct StopOutcome {
     pub project_id: Uuid,
@@ -1254,7 +1137,7 @@ pub(crate) struct StopOutcome {
 /// behind it where it answers. Needs `replies.steer` where the conversation
 /// is, and only those who can see the conversation. The agent's next call on any of them is refused with the
 /// reason, and its connections get a `reply.cancelled` wakeup at once.
-/// Shared by the browser API and MCP; callers record their own audit rows.
+/// Run by its operation; callers record their own audit rows.
 pub(crate) async fn stop_request_in(
     transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
@@ -1444,6 +1327,11 @@ pub async fn round(state: &AppState) {
 }
 
 async fn expire_leases(pool: &PgPool) -> Result<(), AppError> {
+    // Expires reply leases in every workspace.
+    crate::tenancy::system("replies.sweep", Box::pin(expire_leases_here(pool))).await
+}
+
+async fn expire_leases_here(pool: &PgPool) -> Result<(), AppError> {
     let mut transaction = crate::db::scoped_tx(pool).await?;
     let expired = sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"
@@ -1470,6 +1358,11 @@ async fn expire_leases(pool: &PgPool) -> Result<(), AppError> {
 /// conversation shows it, and the people who manage the account and can see
 /// the conversation hear about it once an hour at most.
 pub async fn mark_unresponsive(pool: &PgPool) -> Result<(), AppError> {
+    // Marks unresponsive agents in every workspace.
+    crate::tenancy::system("replies.sweep", Box::pin(mark_unresponsive_here(pool))).await
+}
+
+async fn mark_unresponsive_here(pool: &PgPool) -> Result<(), AppError> {
     let mut transaction = crate::db::scoped_tx(pool).await?;
     let lapsed = sqlx::query_as::<_, (Uuid, Uuid, Uuid, Uuid)>(
         r#"

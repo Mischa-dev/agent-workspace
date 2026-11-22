@@ -50,7 +50,7 @@ async fn formulas_filter_sort_survive_renames_and_show_errors() {
     };
 
     let created = call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": "WORK",
             "name": "Orders",
@@ -74,7 +74,7 @@ async fn formulas_filter_sort_survive_renames_and_show_errors() {
         .to_owned();
 
     let written = call(
-        "record_write",
+        "record_create_many",
         json!({
             "projectId": "WORK",
             "collection": "Orders",
@@ -93,7 +93,7 @@ async fn formulas_filter_sort_survive_renames_and_show_errors() {
         for (key, value) in extra.as_object().expect("object") {
             arguments[key] = value.clone();
         }
-        call("record_query", arguments)
+        call("record_list", arguments)
     };
     let all = query(json!({})).await;
     assert_eq!(all["outcome"], "ok", "{all}");
@@ -157,7 +157,7 @@ async fn formulas_filter_sort_survive_renames_and_show_errors() {
 
     // Nobody writes a formula's value.
     let refused = call(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Orders", "records": [{"title": "Figs", "fields": {"Total": 3}}]}),
     )
     .await;
@@ -165,13 +165,13 @@ async fn formulas_filter_sort_survive_renames_and_show_errors() {
 
     // Renaming a field it reads keeps it working, and shows the new name.
     let renamed = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Orders", "fields": [{"field": "Price", "name": "Cost"}]}),
     )
     .await;
     assert_eq!(renamed["outcome"], "ok", "{renamed}");
     let changed = call(
-        "record_write",
+        "record_update_many",
         json!({"projectId": "WORK", "collection": "Orders", "records": [{"record": "#1", "fields": {"Cost": 11}}]}),
     )
     .await;
@@ -179,7 +179,7 @@ async fn formulas_filter_sort_survive_renames_and_show_errors() {
     let after = query(json!({})).await;
     assert_eq!(value_of(&after, "Apples", "Total"), json!(22));
     let described = call(
-        "collection_describe",
+        "collection_get",
         json!({"projectId": "WORK", "collection": "Orders"}),
     )
     .await;
@@ -199,7 +199,7 @@ async fn formulas_filter_sort_survive_renames_and_show_errors() {
         ("{Total} + 1 +", "ends too soon"),
     ] {
         let refused = call(
-            "collection_write",
+            "collection_update",
             json!({"projectId": "WORK", "collection": "Orders", "fields": [{"name": "Broken", "type": "formula", "formula": formula}]}),
         )
         .await;
@@ -208,7 +208,7 @@ async fn formulas_filter_sort_survive_renames_and_show_errors() {
     }
     // A loop through other formulas is refused.
     let looped = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Orders", "fields": [{"field": "Total", "formula": "IF({Big}, 1, 0)"}]}),
     )
     .await;
@@ -218,7 +218,7 @@ async fn formulas_filter_sort_survive_renames_and_show_errors() {
     // A changed formula queues the recalculation of every record, which
     // brings the stored results up to date.
     let rewritten = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Orders", "fields": [{"field": "Total", "formula": "{Cost} + {Qty}"}]}),
     )
     .await;
@@ -232,11 +232,14 @@ async fn formulas_filter_sort_survive_renames_and_show_errors() {
     .await
     .expect("jobs");
     assert_eq!(queued, 1, "one queued run covers every change");
-    agent_workspace_server::collections::computed::recompute_collection(
-        &setup.pool,
-        project_id.parse::<Uuid>().expect("project"),
-        collection.parse::<Uuid>().expect("collection"),
-        None,
+    crate::support::as_job(
+        setup.organization_id,
+        agent_workspace_server::collections::computed::recompute_collection(
+            &setup.pool,
+            project_id.parse::<Uuid>().expect("project"),
+            collection.parse::<Uuid>().expect("collection"),
+            None,
+        ),
     )
     .await
     .expect("recompute");
@@ -274,7 +277,7 @@ async fn formulas_filter_sort_survive_renames_and_show_errors() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
     // A new record gets it at once, with the write.
     let written = call(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Orders", "records": [{"title": "Kiwis", "fields": {"Qty": 4}}]}),
     )
     .await;

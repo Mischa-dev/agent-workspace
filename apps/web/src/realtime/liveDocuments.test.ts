@@ -73,7 +73,7 @@ describe('live documents from the realtime socket', () => {
     expect(heard).toEqual([2, 3, 2])
   })
 
-  it('refetches what is open of a changed collection once for a burst of changes', () => {
+  it('refetches what is open of a changed collection once for a burst of changes', async () => {
     vi.useFakeTimers()
     expect(collectionChange(envelope('collection.updated', { collectionId: COLLECTION, recordIds: [] }))).toEqual({ collectionId: COLLECTION })
     expect(collectionChange(envelope('collection.updated', { collectionId: 'nope' }))).toBeNull()
@@ -82,6 +82,8 @@ describe('live documents from the realtime socket', () => {
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue()
     documentChanged(queryClient, envelope('collection.updated', { collectionId: COLLECTION, recordIds: [PAGE] }))
     documentChanged(queryClient, envelope('collection.updated', { collectionId: COLLECTION, recordIds: [BOARD] }))
+    // The collections module's handler (M1.5) loads with the first event.
+    await vi.dynamicImportSettled()
     expect(invalidate).not.toHaveBeenCalled()
     vi.advanceTimersByTime(300)
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
@@ -108,7 +110,7 @@ describe('live documents from the realtime socket', () => {
     expect(matches?.({ queryKey: ['project', PROJECT, 'collections', 'list'] } as never)).toBe(false)
   })
 
-  it('refetches an open sheet and the list of sheets once for a burst of changes', () => {
+  it('refetches an open sheet and the list of sheets once for a burst of changes', async () => {
     vi.useFakeTimers()
     expect(sheetChange(envelope('sheet.updated', { sheetId: COLLECTION, revision: 3 }))).toEqual({ sheetId: COLLECTION })
     expect(sheetChange(envelope('sheet.updated', { sheetId: 'nope' }))).toBeNull()
@@ -116,11 +118,13 @@ describe('live documents from the realtime socket', () => {
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue()
     documentChanged(queryClient, envelope('sheet.updated', { sheetId: COLLECTION, revision: 3 }))
     documentChanged(queryClient, envelope('sheet.updated', { sheetId: COLLECTION, revision: 4 }))
+    await vi.dynamicImportSettled()
     expect(invalidate).not.toHaveBeenCalled()
     vi.advanceTimersByTime(300)
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
       ['project', PROJECT, 'sheets', COLLECTION],
       ['project', PROJECT, 'sheets', 'list'],
+      undefined,
       undefined,
       undefined,
     ])
@@ -136,6 +140,11 @@ describe('live documents from the realtime socket', () => {
       ({ queryKey: ['op', null, 'dashboard_get', { dashboard: PAGE }], state: { data: { tiles: [{ kind: 'sheet', sheet }] } } }) as unknown as Parameters<NonNullable<typeof charts>>[0]
     expect(charts?.(dashboard(COLLECTION))).toBe(true)
     expect(charts?.(dashboard('other'))).toBe(false)
+    // The fifth redraws this sheet's own charts (C1.18).
+    const own = invalidate.mock.calls[4]?.[0]?.predicate
+    expect(own?.(query(['op', null, 'sheet_chart_get', { sheetId: COLLECTION, chartId: PAGE }]))).toBe(true)
+    expect(own?.(query(['op', null, 'sheet_chart_get', { sheetId: 'other', chartId: PAGE }]))).toBe(false)
+    expect(sheetChange(envelope('sheet.charts_changed', { sheetId: COLLECTION }))).toEqual({ sheetId: COLLECTION })
     // Its named ranges changing is a change to it too.
     expect(sheetChange(envelope('sheet.ranges_changed', { sheetId: COLLECTION }))).toEqual({ sheetId: COLLECTION })
   })
@@ -143,7 +152,7 @@ describe('live documents from the realtime socket', () => {
   // The pages cache under their features' key factories; the live connection
   // names the same factories (W1.2), so a key that changes shape in one place
   // still reaches what is on screen. Seeded with real queries, not literals.
-  it('refreshes what the pages cached, by their own key factories', () => {
+  it('refreshes what the pages cached, by their own key factories', async () => {
     vi.useFakeTimers()
     // Fresh ids: an earlier test's pending refresh for the same thing would swallow these.
     const [PROJECT, PAGE, BOARD, COLLECTION] = ['11', '12', '13', '14'].map((n) => `0190f5a4-0000-7000-8000-0000000000${n}`)
@@ -167,6 +176,7 @@ describe('live documents from the realtime socket', () => {
     documentChanged(queryClient, envelope('page.discussion.updated', { pageId: PAGE }))
     documentChanged(queryClient, envelope('page.updated', { pageId: PAGE, version: 9 }))
     documentChanged(queryClient, envelope('whiteboard.updated', { whiteboardId: BOARD, sceneSeq: 2, version: 2 }))
+    await vi.dynamicImportSettled()
     vi.advanceTimersByTime(5_000)
     const invalidated = (key: readonly unknown[]) => queryClient.getQueryState(key)?.isInvalidated
     const { unrelated, ...touched } = seeded

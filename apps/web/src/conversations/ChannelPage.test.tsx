@@ -31,9 +31,10 @@ class WebSocketStub extends EventTarget {
     WebSocketStub.instances.push(this)
   }
 
-  message(value: unknown) {
+  /** A durable envelope as the server sends it, inside a protocol 2 `event` frame. */
+  message(value: { event_cursor: number } & Record<string, unknown>) {
     this.dispatchEvent(
-      new MessageEvent('message', { data: JSON.stringify(value) }),
+      new MessageEvent('message', { data: JSON.stringify({ type: 'event', position: String(value.event_cursor), event: value }) }),
     )
   }
 }

@@ -1,14 +1,32 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 import { Blocks } from 'lucide-react'
 
 import { requestJson } from '../../api/client'
+import { callOp, ranOrThrow } from '../../api/ops'
+import { can } from '../../auth/can'
 import { queryKeys } from '../../api/queryKeys'
 import { toastError } from '../../app/mutations'
 import { refreshLayouts } from '../../experience/api'
-import { Button, ErrorState, Icon, PageHeader, Row, RowList, Section, SettingsSkeleton, StatusChip, Switch, showToast } from '../../ui'
+import {
+  Button,
+  ErrorState,
+  Icon,
+  PageHeader,
+  Row,
+  RowList,
+  Section,
+  SegmentedControl,
+  SettingsSkeleton,
+  StatusChip,
+  Switch,
+  showToast,
+} from '../../ui'
 import { ShapePicker } from '../../workspace-templates/ShapePicker'
 import type { SettingsPageProps } from '../types'
 import { AvailablePackages } from './AvailablePackages'
+import { BuiltModules } from './BuiltModules'
+import { ConnectedModules } from './ConnectedModules'
 
 // AWD-75: Workspace › Modules. Which whole features are on in the workspace.
 // Off hides a module everywhere (its pages, sidebar rows, palette entries,
@@ -38,21 +56,49 @@ type ModulesResponse = {
 const modulesKey = queryKeys.workspaceModules
 const modulesPath = (organizationId: string) => `/api/v1/organizations/${encodeURIComponent(organizationId)}/modules`
 
-export default function ModulesPage({ workspace }: SettingsPageProps) {
-  return workspace ? <WorkspaceModules key={workspace.id} name={workspace.name} organizationId={workspace.id} /> : null
+export default function ModulesPage({ projects, workspace }: SettingsPageProps) {
+  return workspace ? (
+    <WorkspaceModules
+      canBuild={can(workspace, 'modules.build')}
+      canConnect={can(workspace, 'modules.manage')}
+      key={workspace.id}
+      name={workspace.name}
+      organizationId={workspace.id}
+      projects={projects}
+    />
+  ) : null
 }
 
-function WorkspaceModules({ name, organizationId }: { name: string; organizationId: string }) {
+type Tab = 'installed' | 'available'
+
+function WorkspaceModules({
+  canBuild,
+  canConnect,
+  name,
+  organizationId,
+  projects,
+}: {
+  canBuild: boolean
+  canConnect: boolean
+  name: string
+  organizationId: string
+  projects: SettingsPageProps['projects']
+}) {
   const queryClient = useQueryClient()
+  const [tab, setTab] = useState<Tab>('installed')
   const modules = useQuery({
     queryKey: modulesKey(organizationId),
     queryFn: () => requestJson<ModulesResponse>(modulesPath(organizationId)),
   })
   const change = useMutation({
-    mutationFn: (body: { preset?: string; switches?: Record<string, boolean> }) =>
-      requestJson<ModulesResponse>(modulesPath(organizationId), { method: 'PUT', json: body }),
-    onSuccess: (response) => {
-      queryClient.setQueryData(modulesKey(organizationId), response)
+    // Through `workspace_update`, in the workspace's own space.
+    mutationFn: async (body: { preset?: string; switches?: Record<string, boolean> }) =>
+      ranOrThrow(
+        await callOp('workspace_update', { projectId: 'workspace', preset: body.preset, modules: body.switches }, { workspaceId: organizationId }),
+        'Switching modules',
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: modulesKey(organizationId) })
       // What everyone sees follows from the layouts, which carry the modules,
       // and the rail and the command menu from each project's modulesOff.
       void refreshLayouts(queryClient)
@@ -83,68 +129,86 @@ function WorkspaceModules({ name, organizationId }: { name: string; organization
         Which features {name} uses. A module that’s off is hidden everywhere, for people and agents, and nothing in it is
         deleted: turn it back on and everything comes back.
       </PageHeader>
-      <Section
-        description="What the workspace is for: it turns modules on and off and sets where everyone starts. Nothing is deleted when you change it."
-        title="Shape"
-      >
-        <ShapePicker canChange={manage} organizationId={organizationId} />
-      </Section>
-      <Section description="Start from one of these, then switch single modules below." title="Presets">
-        <RowList>
-          {view.presets.map((preset) => (
-            <Row
-              actions={
-                view.preset === preset.id ? (
-                  <StatusChip tone="success">In use</StatusChip>
-                ) : manage ? (
-                  <Button disabled={change.isPending} onClick={() => change.mutate({ preset: preset.id })} size="sm">
-                    Use
-                  </Button>
-                ) : null
-              }
-              key={preset.id}
-              meta={preset.description}
-              title={preset.name}
-            />
-          ))}
-        </RowList>
-      </Section>
-      <Section
-        description={manage ? 'A module needs the ones it builds on; turning one off turns off what needs it.' : 'Workspace owners and admins change these.'}
-        title="Modules"
-      >
-        <RowList>
-          {view.modules
-            .filter((module) => module.switchable)
-            .map((module) => (
-              <Row
-                actions={
-                  <Switch
-                    checked={module.switchedOn}
-                    disabled={!manage || change.isPending}
-                    label={<span className="visually-hidden">{module.name}</span>}
-                    onChange={(checked) => change.mutate({ switches: { [module.id]: checked } })}
+      <SegmentedControl<Tab>
+        label="Modules to show"
+        onChange={setTab}
+        options={[
+          { value: 'installed', label: 'Installed' },
+          { value: 'available', label: 'Available' },
+        ]}
+        value={tab}
+      />
+      {tab === 'available' ? (
+        <Section
+          description="Packages bring ready-made parts: collections, forms, automations, pages, roles and more. Built-in ones, this server’s and your workspace’s own lists, and saved templates."
+          title="Packages"
+        >
+          <AvailablePackages canManage={manage} organizationId={organizationId} />
+        </Section>
+      ) : (
+        <>
+          <Section
+            description="What the workspace is for: it turns modules on and off and sets where everyone starts. Nothing is deleted when you change it."
+            title="Shape"
+          >
+            <ShapePicker canChange={manage} organizationId={organizationId} />
+          </Section>
+          <Section description="Start from one of these, then switch single modules below." title="Presets">
+            <RowList>
+              {view.presets.map((preset) => (
+                <Row
+                  actions={
+                    view.preset === preset.id ? (
+                      <StatusChip tone="success">In use</StatusChip>
+                    ) : manage ? (
+                      <Button disabled={change.isPending} onClick={() => change.mutate({ preset: preset.id })} size="sm">
+                        Use
+                      </Button>
+                    ) : null
+                  }
+                  key={preset.id}
+                  meta={preset.description}
+                  title={preset.name}
+                />
+              ))}
+            </RowList>
+          </Section>
+          <Section
+            description={
+              manage ? 'A module needs the ones it builds on; turning one off turns off what needs it.' : 'Workspace owners and admins change these.'
+            }
+            title="Modules"
+          >
+            <RowList>
+              {view.modules
+                .filter((module) => module.switchable)
+                .map((module) => (
+                  <Row
+                    actions={
+                      <Switch
+                        checked={module.switchedOn}
+                        disabled={!manage || change.isPending}
+                        label={<span className="visually-hidden">{module.name}</span>}
+                        onChange={(checked) => change.mutate({ switches: { [module.id]: checked } })}
+                      />
+                    }
+                    key={module.id}
+                    meta={
+                      <>
+                        {module.description}
+                        {module.needs.length ? ` Needs ${module.needs.map((need) => names.get(need) ?? need).join(', ')}.` : null}
+                        {module.offBecause && module.switchedOn ? ` ${module.offBecause}` : null}
+                      </>
+                    }
+                    title={module.name}
                   />
-                }
-                key={module.id}
-                meta={
-                  <>
-                    {module.description}
-                    {module.needs.length ? ` Needs ${module.needs.map((need) => names.get(need) ?? need).join(', ')}.` : null}
-                    {module.offBecause && module.switchedOn ? ` ${module.offBecause}` : null}
-                  </>
-                }
-                title={module.name}
-              />
-            ))}
-        </RowList>
-      </Section>
-      <Section
-        description="Packages bring ready-made parts: collections, forms, automations, pages, roles and more. Built-in ones, this server’s and your workspace’s own lists, and saved templates."
-        title="Available"
-      >
-        <AvailablePackages canManage={manage} organizationId={organizationId} />
-      </Section>
+                ))}
+            </RowList>
+          </Section>
+          <BuiltModules canBuild={canBuild} projects={projects} workspaceId={organizationId} />
+          {canConnect ? <ConnectedModules workspaceId={organizationId} /> : null}
+        </>
+      )}
     </>
   )
 }

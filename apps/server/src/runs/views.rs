@@ -1,16 +1,14 @@
-//! What a run did (H5) and what it cost (U2), for the run page, the Runs
-//! page across projects and the usage totals.
+//! What a run did (H5) and what it cost (U2): the built-in run's record
+//! (`run_step_list`) and the usage totals (`run_usage_list`).
 //!
 //! Every read checks the reader can open the run's project
 //! (`actor_can_access_project`) and see its thread (`conversation_visible_to`):
 //! a run is visible exactly when its thread is. Steps were redacted and
-//! capped when they were stored (`run_log`); the diff is read live from the
-//! run's worktree, or from the mirror once the worktree is gone.
+//! capped when they were stored (`run_log`); the changes are what the
+//! run's host last reported (`runs::changes`).
 
-use std::path::PathBuf;
-
-use axum::{Json, Router, extract::State, routing::get};
 use chrono::{DateTime, NaiveDate, Utc};
+use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::FromRow;
@@ -18,25 +16,15 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::AuthenticatedActor,
-    error::{ApiPath, ApiQuery, AppError},
-    git_runtime::{ChangedFile, RunDiff},
+    error::AppError,
+    harness_catalog::Harnesses,
     run_log::{TOTALS, UsageTotals},
+    runs::changes::{self, ChangedFile, Changes},
 };
 
 /// The most steps the run page shows; long runs show their last ones.
 const MAX_STEPS: i64 = 2_000;
-/// The largest diff the run page shows inline.
-const MAX_PATCH_BYTES: usize = 768 * 1024;
 const MAX_USAGE_DAYS: i64 = 400;
-
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/v1/runs", get(list_http))
-        .route("/api/v1/runs/usage", get(usage_http))
-        .route("/api/v1/agent-runs/{run_id}", get(detail_http))
-        .route("/api/v1/agent-runs/{run_id}/diff", get(diff_http))
-}
 
 /// A run as lists and the run page's header show it.
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -115,7 +103,7 @@ const SUMMARY_SELECT: &str = r#"
     LEFT JOIN github_pull_requests pull_request
       ON pull_request.id = pull_request_request.github_pull_request_id
     LEFT JOIN LATERAL (
-        SELECT link.work_item_id FROM work_item_conversation_links link
+        SELECT link.work_item_id FROM task_threads link
         WHERE link.project_id = project.id AND link.conversation_id = run.conversation_id
         ORDER BY link.created_at, link.work_item_id
         LIMIT 1
@@ -131,25 +119,12 @@ fn summary_select() -> String {
     SUMMARY_SELECT.replace("{TOTALS}", TOTALS)
 }
 
-fn named(state: &AppState, mut run: RunSummary) -> RunSummary {
+fn named(harnesses: &Harnesses, mut run: RunSummary) -> RunSummary {
     run.harness_name = run
         .harness
         .as_deref()
-        .map(|harness| crate::agent_sessions::harness_name(state, harness));
+        .map(|harness| harnesses.name(harness));
     run
-}
-
-// ---------------------------------------------------------------------------
-// Runs page: every run, read by `runs::pages` (A1.5).
-
-async fn list_http(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    ApiQuery(query): ApiQuery<super::pages::RunListQuery>,
-) -> Result<Json<super::pages::RunList>, AppError> {
-    Ok(Json(
-        super::pages::list(&state, principal.actor_id, &query).await?,
-    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -199,8 +174,8 @@ pub struct RunDetail {
     pub hidden_steps: i64,
     pub tests: TestSummary,
     pub usage_by_model: Vec<ModelUsage>,
-    /// The files the run's branch changed against its base, when the
-    /// worktree or the published commit is still there to read.
+    /// The files the run changed against where it started, as its host last
+    /// reported them; none before its first report.
     pub files: Option<Vec<ChangedFile>>,
 }
 
@@ -211,6 +186,7 @@ async fn visible_run(
     run_id: Uuid,
 ) -> Result<(RunSummary, bool), AppError> {
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let harnesses = Harnesses::visible_on(state, &mut transaction).await?;
     let mut run = sqlx::query_as::<_, RunSummary>(&format!(
         "{} WHERE run.id = $1 AND conversation_visible_to(run.conversation_id, $2) AND actor_can_access_project($2, NULL, project.id)",
         summary_select()
@@ -219,7 +195,7 @@ async fn visible_run(
     .bind(viewer)
     .fetch_optional(&mut *transaction)
     .await?
-    .map(|run| named(state, run))
+    .map(|run| named(&harnesses, run))
     .ok_or(AppError::NotFound("agent_run"))?;
     drop(transaction);
     let sees_code = redact(state, viewer, std::slice::from_mut(&mut run)).await?;
@@ -339,23 +315,15 @@ pub async fn run_detail(
     .bind(run_id)
     .fetch_all(&mut *transaction)
     .await?;
-    drop(transaction);
     // Changed files are code: only for a viewer who sees it.
-    let files = if !code {
-        None
+    let files = if code {
+        changes::get(&mut transaction, run_id)
+            .await?
+            .map(|changes| changes.files)
     } else {
-        match read_diff(state, &run, 0).await {
-            Ok(Some(diff)) => Some(diff.files),
-            Ok(None) => None,
-            Err(error) => {
-                tracing::debug!(
-                    error_category = error.log_category(),
-                    "run diff unavailable"
-                );
-                None
-            }
-        }
+        None
     };
+    drop(transaction);
     Ok(RunDetail {
         run,
         prompt,
@@ -373,66 +341,14 @@ pub async fn run_detail(
     })
 }
 
-async fn detail_http(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    ApiPath(run_id): ApiPath<Uuid>,
-) -> Result<Json<RunDetail>, AppError> {
-    Ok(Json(run_detail(&state, principal.actor_id, run_id).await?))
-}
-
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RunDiffView {
-    /// ready, or unavailable when neither the worktree nor a published
-    /// commit is left to read.
+    /// ready, or unavailable when the run's host hasn't reported its
+    /// changes (or the viewer doesn't see its code).
     pub state: &'static str,
     #[serde(flatten)]
-    pub diff: Option<RunDiff>,
-}
-
-/// Where the run's changes can be read now: its live worktree (including
-/// uncommitted changes), else the mirror at the published commit.
-async fn read_diff(
-    state: &AppState,
-    run: &RunSummary,
-    max_patch_bytes: usize,
-) -> Result<Option<RunDiff>, AppError> {
-    let Some(base) = run.base_commit.clone() else {
-        return Ok(None);
-    };
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let location = sqlx::query_as::<_, (Option<String>, String)>(
-        r#"
-        SELECT worktree.path, repository.mirror_path
-        FROM agent_runs run
-        JOIN repositories repository ON repository.id = run.repository_id
-        LEFT JOIN git_worktrees worktree
-          ON worktree.repository_workspace_id = run.repository_workspace_id
-         AND worktree.state IN ('ready', 'dirty')
-        WHERE run.id = $1
-        "#,
-    )
-    .bind(run.id)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    drop(transaction);
-    let Some((worktree, mirror)) = location else {
-        return Ok(None);
-    };
-    let (path, bare, head) = match (worktree, &run.published_commit) {
-        (Some(worktree), _) if PathBuf::from(&worktree).is_dir() => {
-            (PathBuf::from(worktree), false, None)
-        }
-        (_, Some(published)) => (PathBuf::from(mirror), true, Some(published.clone())),
-        _ => return Ok(None),
-    };
-    let diff = tokio::task::spawn_blocking(move || {
-        crate::git_runtime::run_diff(&path, bare, &base, head.as_deref(), max_patch_bytes)
-    })
-    .await
-    .map_err(|_| AppError::Internal("read the run's diff"))??;
-    Ok(Some(diff))
+    pub diff: Option<Changes>,
 }
 
 pub async fn run_diff(
@@ -440,14 +356,17 @@ pub async fn run_diff(
     viewer: Uuid,
     run_id: Uuid,
 ) -> Result<RunDiffView, AppError> {
-    let (run, code) = visible_run(state, viewer, run_id).await?;
-    if !code {
-        return Ok(RunDiffView {
-            state: "unavailable",
-            diff: None,
-        });
-    }
-    let diff = read_diff(state, &run, MAX_PATCH_BYTES).await?;
+    // Any run, whoever runs it: the shared run view's visibility, and its
+    // code only for a viewer who sees code.
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let line = super::pages::visible_line(&mut transaction, viewer, run_id)
+        .await?
+        .ok_or(AppError::NotFound("agent_run"))?;
+    let diff = if super::pages::sees_code(&mut transaction, viewer, line.project_id).await? {
+        changes::get(&mut transaction, run_id).await?
+    } else {
+        None
+    };
     Ok(RunDiffView {
         state: if diff.is_some() {
             "ready"
@@ -456,14 +375,6 @@ pub async fn run_diff(
         },
         diff,
     })
-}
-
-async fn diff_http(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    ApiPath(run_id): ApiPath<Uuid>,
-) -> Result<Json<RunDiffView>, AppError> {
-    Ok(Json(run_diff(&state, principal.actor_id, run_id).await?))
 }
 
 // ---------------------------------------------------------------------------
@@ -599,14 +510,4 @@ pub async fn usage_report(
         totals,
         runs,
     })
-}
-
-async fn usage_http(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    ApiQuery(query): ApiQuery<UsageQuery>,
-) -> Result<Json<UsageReport>, AppError> {
-    Ok(Json(
-        usage_report(&state, principal.actor_id, &query).await?,
-    ))
 }

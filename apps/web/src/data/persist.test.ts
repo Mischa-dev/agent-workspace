@@ -91,6 +91,14 @@ describe('reading offline', () => {
     expect(picked.some((query) => query.queryKey[0] === 'account')).toBe(false)
   })
 
+  it('keeps the session however many newer shell queries there are', () => {
+    const cache = client()
+    cache.setQueryData(queryKeys.session, { authenticated: true }, { updatedAt: 1 })
+    for (let index = 0; index < 100; index += 1) cache.setQueryData(['statuses', `s${index}`], {}, { updatedAt: 1000 + index })
+    const picked = pickForOffline(cachedForOffline(cache))
+    expect(picked.some((query) => query.queryKey[0] === 'session')).toBe(true)
+  })
+
   it('shows an account’s copy at start, to that account only, and forgets it at sign-out', async () => {
     const reading = client()
     reading.setQueryData(queryKeys.timeline('p', 'c'), { messages: [{ id: 'm1' }] })
@@ -116,6 +124,21 @@ describe('reading offline', () => {
     await clearOffline()
     expect(offlineOwner()).toBeNull()
     expect(await restoreOffline(client())).toBe(false)
+  })
+
+  it('shows nothing from a copy cleared while it was being read', async () => {
+    const reading = client()
+    reading.setQueryData(queryKeys.timeline('p', 'c'), { messages: [{ id: 'm1' }] })
+    const stop = keepOffline(reading, 'alice', 10_000)
+    await saveOffline(reading, 'alice')
+    stop()
+
+    const restarted = client()
+    const restoring = restoreOffline(restarted)
+    const clearing = clearOffline()
+    expect(await restoring).toBe(false)
+    await clearing
+    expect(restarted.getQueryData(queryKeys.timeline('p', 'c'))).toBeUndefined()
   })
 
   it('stops keeping and clears when the workspace switches it off', async () => {

@@ -4,6 +4,7 @@
 //! Agents is off, "Just me" drifting from Team's switches, and changing
 //! shape back and forth losing a message, page or record.
 
+use axum::http::StatusCode;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -93,21 +94,21 @@ async fn friends_shows_only_chat_and_changing_shape_loses_nothing() {
     assert_eq!(sent["outcome"], "ok", "{sent}");
     let page = tool(
         &world,
-        "page_write",
+        "page_create",
         json!({"projectId": "WORK", "title": "Packing list", "body": "Socks."}),
     )
     .await;
     assert_eq!(page["outcome"], "ok", "{page}");
     let collection = tool(
         &world,
-        "collection_write",
+        "collection_create",
         json!({"projectId": "WORK", "name": "Places", "fields": [{"name": "Why", "type": "text"}]}),
     )
     .await;
     assert_eq!(collection["outcome"], "ok", "{collection}");
     let records = tool(
         &world,
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Places",
                "records": [{"title": "Lisbon", "fields": {"Why": "the light"}}],
                "clientRequestId": "places"}),
@@ -172,7 +173,7 @@ async fn friends_shows_only_chat_and_changing_shape_loses_nothing() {
         .as_str()
         .expect("space")
         .to_owned();
-    let settings = tool(&world, "settings_get", json!({"projectId": space})).await;
+    let settings = tool(&world, "setting_list", json!({"spaceId": space})).await;
     if settings["outcome"] == "ok" {
         for setting in settings["value"]["settings"].as_array().expect("settings") {
             let key = setting["key"].as_str().expect("key");
@@ -182,6 +183,27 @@ async fn friends_shows_only_chat_and_changing_shape_loses_nothing() {
                 "{key} shows in a Friends workspace"
             );
         }
+    }
+
+    // The workspace's project templates and model lists, set in its own
+    // space while Projects and Runs are on, are refused there now.
+    for (name, input) in [
+        (
+            "project_template_update",
+            json!({"projectId": "workspace", "template": "Launch", "expectedVersion": 1, "archived": true}),
+        ),
+        (
+            "model_catalog_set",
+            json!({"projectId": "workspace", "harness": "demo", "refresh": true}),
+        ),
+    ] {
+        let (status, refused) = world
+            .owner
+            .browser
+            .op_in(&world.app, world.organization, name, input)
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{name}: {refused}");
+        assert_eq!(refused["code"], "module_off", "{name}: {refused}");
     }
 
     // An agent joins with Agents left off, and the one already here still talks.

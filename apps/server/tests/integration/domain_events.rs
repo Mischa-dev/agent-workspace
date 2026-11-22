@@ -79,14 +79,13 @@ async fn a_task_made_any_way_is_one_task_created_by_its_maker() {
     let helper = &world.apps["helper"];
 
     // The web.
-    let (status, made) = send(
+    let (status, made) = crate::support::tasks::send(
         &world.app,
-        lena.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{project}/work-items"),
-            Some("k3-7-web-task"),
-            json!({"title": "From the web"}),
-        ),
+        &lena.browser,
+        "POST",
+        &format!("/api/v1/projects/{project}/work-items"),
+        Some("k3-7-web-task"),
+        json!({"title": "From the web"}),
     )
     .await;
     assert!(status.is_success(), "{status}: {made}");
@@ -149,29 +148,28 @@ async fn a_task_made_any_way_is_one_task_created_by_its_maker() {
     assert_eq!(facts[0].0, Some(rook.actor));
 
     // A recurring schedule acts as the person who set it up.
-    let base = format!("/api/v1/projects/{project}");
-    let (status, template) = send(
-        &world.app,
-        lena.browser.request(
-            "POST",
-            &format!("{base}/task-templates"),
-            Some("k3-7-template"),
-            json!({"name": "Weekly", "title": "From a schedule"}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let (status, template) = lena
+        .browser
+        .op(
+            &world.app,
+            "template_create",
+            json!({"projectId": project, "name": "Weekly", "title": "From a schedule"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{template}");
+    let template = &template["template"];
     let (status, recurring) = send(
         &world.app,
         lena.browser.request(
             "POST",
-            &format!("{base}/recurring-tasks"),
+            "/api/v2/ops/recurring_create",
             Some("k3-7-recurring"),
-            json!({"templateId": template["id"], "frequency": "daily", "timezone": "UTC"}),
+            json!({"projectId": project, "template": template["id"], "frequency": "daily", "timezone": "UTC"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{recurring}");
+    assert_eq!(status, StatusCode::OK, "{recurring}");
+    let recurring = &recurring["value"]["recurring"];
     sqlx::query(
         "UPDATE recurring_tasks SET next_run_at = now() - interval '1 minute' WHERE id = $1::uuid",
     )

@@ -135,35 +135,34 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
         assert!(!serialized.contains(forbidden));
     }
 
-    let update_uri = format!("{members_uri}/{member_actor_id}");
     let disable_headers = write_headers(&owner_cookie, &owner_csrf, "disable-member-exactly-once");
     let disabled = application
         .clone()
         .oneshot(request(
-            "PATCH",
-            &update_uri,
+            "POST",
+            "/api/v2/ops/space_member_remove",
             &disable_headers,
-            json!({"expectedVersion":1,"enabled":false}),
+            json!({"spaceId": seed.project_id, "account": member_actor_id, "expectedVersion": 1}),
         ))
         .await
         .expect("disable member response");
     assert_eq!(disabled.status(), StatusCode::OK);
     let disabled = response_json(disabled).await;
-    assert_eq!(disabled["enabled"], false);
-    assert_eq!(disabled["version"], 2);
+    assert_eq!(disabled["value"]["active"], false);
+    assert_eq!(disabled["value"]["version"], 2);
 
     let replay = application
         .clone()
         .oneshot(request(
-            "PATCH",
-            &update_uri,
+            "POST",
+            "/api/v2/ops/space_member_remove",
             &disable_headers,
-            json!({"expectedVersion":1,"enabled":false}),
+            json!({"spaceId": seed.project_id, "account": member_actor_id, "expectedVersion": 1}),
         ))
         .await
         .expect("disable replay response");
     assert_eq!(replay.status(), StatusCode::OK);
-    assert_eq!(response_json(replay).await["version"], 2);
+    assert_eq!(response_json(replay).await["value"]["version"], 2);
 
     assert_eq!(
         sqlx::query_as::<_, (String, i64, bool)>(
@@ -188,7 +187,7 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
     for (table, predicate) in [
         (
             "audit_events",
-            "action = 'project_membership.updated' AND target_id = $1",
+            "action = 'space_member_remove' AND target_id = $1",
         ),
         (
             crate::support::NOTICES,
@@ -214,30 +213,55 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
     let stale = application
         .clone()
         .oneshot(request(
-            "PATCH",
-            &update_uri,
+            "POST",
+            "/api/v2/ops/space_member_update",
             &write_headers(&owner_cookie, &owner_csrf, "stale-member-update"),
-            json!({"expectedVersion":1,"enabled":true}),
+            json!({"spaceId": seed.project_id, "account": member_actor_id, "role": "viewer", "expectedVersion": 1}),
         ))
         .await
         .expect("stale member response");
     assert_eq!(stale.status(), StatusCode::CONFLICT);
+    // Bringing them back keeps the same check: as read before the removal,
+    // it is refused.
+    let stale = application
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v2/ops/space_member_add",
+            &write_headers(&owner_cookie, &owner_csrf, "stale-member-restore"),
+            json!({"spaceId": seed.project_id, "account": member_actor_id, "expectedVersion": 1}),
+        ))
+        .await
+        .expect("stale restore response");
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    // A deadline that passed while they were away doesn't end the
+    // membership again the moment they come back.
+    sqlx::query(
+        "UPDATE project_memberships SET expires_at = now() - interval '1 hour' \
+         WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(seed.project_id)
+    .bind(member_actor_id)
+    .execute(&pool)
+    .await
+    .expect("lapse the deadline");
 
     let enabled = application
         .clone()
         .oneshot(request(
-            "PATCH",
-            &update_uri,
+            "POST",
+            "/api/v2/ops/space_member_add",
             &write_headers(&owner_cookie, &owner_csrf, "enable-member-once"),
-            json!({"expectedVersion":2,"enabled":true,"role":"viewer"}),
+            json!({"spaceId": seed.project_id, "account": member_actor_id, "role": "viewer", "expectedVersion": 2}),
         ))
         .await
         .expect("enable member response");
     assert_eq!(enabled.status(), StatusCode::OK);
     let enabled = response_json(enabled).await;
-    assert_eq!(enabled["enabled"], true);
-    assert_eq!(enabled["role"], "viewer");
-    assert_eq!(enabled["version"], 3);
+    assert_eq!(enabled["value"]["active"], true);
+    assert_eq!(enabled["value"]["role"], "viewer");
+    assert_eq!(enabled["value"]["version"], 3);
+    assert_eq!(enabled["value"]["expiresAt"], serde_json::Value::Null);
     assert_eq!(
         sqlx::query_scalar::<_, String>("SELECT status FROM account_credentials WHERE id = $1",)
             .bind(credential_id)
@@ -250,10 +274,10 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
     let self_denied = application
         .clone()
         .oneshot(request(
-            "PATCH",
-            &format!("{members_uri}/{}", seed.human_actor_id),
+            "POST",
+            "/api/v2/ops/space_member_remove",
             &write_headers(&owner_cookie, &owner_csrf, "self-disable-denied"),
-            json!({"expectedVersion":1,"enabled":false}),
+            json!({"spaceId": seed.project_id, "account": seed.human_actor_id, "expectedVersion": 1}),
         ))
         .await
         .expect("self-disable response");
@@ -263,10 +287,10 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
     let admin_promotion = application
         .clone()
         .oneshot(request(
-            "PATCH",
-            &format!("{members_uri}/{viewer_actor_id}"),
+            "POST",
+            "/api/v2/ops/space_member_update",
             &write_headers(&admin_cookie, &admin_csrf, "admin-promotion-denied"),
-            json!({"expectedVersion":1,"role":"admin"}),
+            json!({"spaceId": seed.project_id, "account": viewer_actor_id, "role": "admin", "expectedVersion": 1}),
         ))
         .await
         .expect("admin promotion response");
@@ -290,10 +314,10 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
     let promoted = application
         .clone()
         .oneshot(request(
-            "PATCH",
-            &format!("{members_uri}/{viewer_actor_id}"),
+            "POST",
+            "/api/v2/ops/space_member_update",
             &write_headers(&owner_cookie, &owner_csrf, "owner-promotes-viewer"),
-            json!({"expectedVersion":1,"role":"admin"}),
+            json!({"spaceId": seed.project_id, "account": viewer_actor_id, "role": "admin", "expectedVersion": 1}),
         ))
         .await
         .expect("owner promotion response");
@@ -324,10 +348,10 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
     let demoted = application
         .clone()
         .oneshot(request(
-            "PATCH",
-            &format!("{members_uri}/{viewer_actor_id}"),
+            "POST",
+            "/api/v2/ops/space_member_update",
             &write_headers(&owner_cookie, &owner_csrf, "owner-demotes-admin"),
-            json!({"expectedVersion":2,"role":"viewer"}),
+            json!({"spaceId": seed.project_id, "account": viewer_actor_id, "role": "viewer", "expectedVersion": 2}),
         ))
         .await
         .expect("owner demotion response");
@@ -364,10 +388,10 @@ async fn human_memberships_are_reversible_idempotent_and_revoke_credentials() {
     let last_owner = application
         .clone()
         .oneshot(request(
-            "PATCH",
-            &format!("{members_uri}/{admin_actor_id}"),
+            "POST",
+            "/api/v2/ops/space_member_update",
             &write_headers(&owner_cookie, &owner_csrf, "last-owner-denied"),
-            json!({"expectedVersion":1,"role":"member"}),
+            json!({"spaceId": seed.project_id, "account": admin_actor_id, "role": "member", "expectedVersion": 1}),
         ))
         .await
         .expect("last owner response");

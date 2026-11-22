@@ -18,7 +18,7 @@ use uuid::Uuid;
 use super::{HostRow, protocol::HostError};
 use crate::{
     AppState,
-    provider::adapter::{ResetCredit, ResetCredits, UsageReport, UsageWindow},
+    harness::report::{ResetCredit, ResetCredits, UsageReport, UsageWindow},
 };
 
 /// At most this many accounts per host.
@@ -144,6 +144,10 @@ pub async fn bind_described(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WindowsReport {
     pub accounts: Vec<AccountReport>,
+    /// Only the windows listed change; the rest, the plan and the banked
+    /// resets stay as they were (what a run hears mid-turn).
+    #[serde(default)]
+    pub partial: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -239,11 +243,20 @@ impl AccountReport {
     }
 }
 
+/// Who reports windows: a host, for the accounts it described, or the
+/// built-in host (A1.17), for the account homes on this machine, named by
+/// their ids.
+#[derive(Clone, Copy, Debug)]
+pub enum Reporter<'a> {
+    Host(&'a HostRow),
+    Builtin,
+}
+
 /// Stores a host's report: every account in it must be one the host
 /// described, or nothing is stored. Each account's alert rules run next.
 pub async fn report(
     state: &AppState,
-    host: &HostRow,
+    reporter: Reporter<'_>,
     report: WindowsReport,
 ) -> Result<WindowsStored, HostError> {
     if report.accounts.len() > MAX_ACCOUNTS {
@@ -252,15 +265,31 @@ pub async fn report(
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     for account in &report.accounts {
         let usage = account.usage()?;
-        let Some(account_id) = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM provider_accounts \
-             WHERE host_id = $1 AND host_account_ref = $2 AND hidden_at IS NULL",
-        )
-        .bind(host.id)
-        .bind(&account.reference)
-        .fetch_optional(&mut *transaction)
-        .await?
-        else {
+        let account_id = match reporter {
+            Reporter::Host(host) => {
+                sqlx::query_scalar::<_, Uuid>(
+                    "SELECT id FROM provider_accounts \
+                     WHERE host_id = $1 AND host_account_ref = $2 AND hidden_at IS NULL",
+                )
+                .bind(host.id)
+                .bind(&account.reference)
+                .fetch_optional(&mut *transaction)
+                .await?
+            }
+            Reporter::Builtin => match Uuid::parse_str(&account.reference) {
+                Ok(id) => {
+                    sqlx::query_scalar::<_, Uuid>(
+                        "SELECT id FROM provider_accounts \
+                         WHERE id = $1 AND host_id IS NULL AND home_path IS NOT NULL",
+                    )
+                    .bind(id)
+                    .fetch_optional(&mut *transaction)
+                    .await?
+                }
+                Err(_) => None,
+            },
+        };
+        let Some(account_id) = account_id else {
             return Err(invalid(
                 "accounts",
                 "That account isn't one this host described: describe it first.",
@@ -269,7 +298,7 @@ pub async fn report(
         let Some(stored) = crate::usage::load_account(&mut *transaction, account_id).await? else {
             return Err(invalid("accounts", "That account is gone."));
         };
-        crate::usage::store_report(&mut transaction, &stored, &usage, true).await?;
+        crate::usage::store_report(&mut transaction, &stored, &usage, !report.partial).await?;
         crate::usage::evaluate_soon(&mut transaction, &stored).await?;
     }
     transaction.commit().await?;

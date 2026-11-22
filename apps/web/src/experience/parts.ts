@@ -50,9 +50,16 @@ export const PART_IDS = [
   'page.live_editing',
   'page.comments',
   'page.import_export',
+  'page.nesting',
+  'page.recent_edits',
+  'page.move',
+  'whiteboard.convert',
+  'sheet.charts',
+  'sheet.validation',
   'page.references',
   'tech.task_keys',
   'tech.run_usage',
+  'tech.run_files',
   'tech.ids',
   'thing.activity',
   'home.working_now',
@@ -67,6 +74,7 @@ export const PART_IDS = [
   'workspace.runs',
   'workspace.hosts',
   'workspace.budgets',
+  'workspace.spend_limits',
 ] as const
 
 export type PartId = (typeof PART_IDS)[number]

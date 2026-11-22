@@ -180,7 +180,7 @@ pub(crate) struct MessageRemoval {
 }
 
 /// What the web edit route returns and stores for idempotent replays. MCP's
-/// message_edit stores the same body under the same scope, so a key retried
+/// message_update stores the same body under the same scope, so a key retried
 /// on the other surface still replays.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -334,7 +334,12 @@ pub(crate) async fn lock_message_for_change(
         return Err(AppError::ProjectArchived.into());
     }
     let is_author = message.author_actor_id == actor.actor_id;
-    let can_write = conversation.allows(actor.actor_id, Action::MessageSend)?;
+    // As sending does: in a thing's discussion, writing is that thing's
+    // "comment on" permission, not posting in channels.
+    let can_write = match crate::discussion::subject_kind_of(transaction, conversation.id).await? {
+        Some(kind) => conversation.allows_permission(actor.actor_id, kind.comment_permission())?,
+        None => conversation.allows(actor.actor_id, Action::MessageSend)?,
+    };
     let as_moderator = match change {
         Change::Edit => {
             if !is_author {
@@ -938,15 +943,28 @@ async fn scrub_thread_replays(
 ) -> Result<(), AppError> {
     let scope =
         idempotency::resource_bound_scope("channel", locked.conversation.id, "thread_create")?;
+    // The thread's creation replay, and any status or name change through
+    // thread_update (which keeps its answer, with the name, for a retry).
     sqlx::query(
         r#"
+        WITH thread AS (
+            SELECT id, name FROM conversations
+            WHERE origin_message_id = $2 AND parent_channel_id = $4 AND kind = 'thread'
+        ),
+        created AS (
+            UPDATE idempotency_keys replay
+            SET response_body = jsonb_set(replay.response_body, '{conversation,name}', to_jsonb(thread.name)),
+                request_hash = $3
+            FROM thread
+            WHERE replay.scope = $1
+              AND replay.response_body->'conversation'->>'id' = thread.id::text
+        )
         UPDATE idempotency_keys replay
-        SET response_body = jsonb_set(replay.response_body, '{conversation,name}', to_jsonb(thread.name)),
+        SET response_body = jsonb_set(replay.response_body, '{value,name}', to_jsonb(thread.name)),
             request_hash = $3
-        FROM conversations thread
-        WHERE replay.scope = $1 AND thread.origin_message_id = $2
-          AND thread.parent_channel_id = $4 AND thread.kind = 'thread'
-          AND replay.response_body->'conversation'->>'id' = thread.id::text
+        FROM thread
+        WHERE replay.scope = 'op.thread_update.' || replace(thread.id::text, '-', '')
+          AND replay.response_body ? 'value'
         "#,
     )
     .bind(scope)

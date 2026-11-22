@@ -37,7 +37,7 @@ async fn a_recurring_record_makes_one_record_per_occurrence_and_pauses_when_its_
         .call(
             app,
             tool(
-                "collection_write",
+                "collection_create",
                 json!({
                     "projectId": "WORK",
                     "name": "Check-ins",

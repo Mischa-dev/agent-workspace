@@ -24,7 +24,7 @@ use crate::{
 /// AWD-75: the projects the caller belongs to where `module` is off for
 /// them, for lists that reach projects through membership rather than a
 /// list of projects; they leave these out before counting or limiting.
-pub(super) async fn projects_with_module_off(
+pub(crate) async fn projects_with_module_off(
     state: &AppState,
     actor_id: Uuid,
     module: &str,
@@ -45,9 +45,9 @@ pub(super) async fn projects_with_module_off(
         .collect())
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct RunStartArguments {
+pub(crate) struct RunStartArguments {
     /// The thread the run works in. To work on a task: start a thread
     /// (thread_start), link it to the task (task_link), then start the run
     /// there, so the run's pull request is linked to the task.
@@ -74,24 +74,24 @@ pub(super) struct RunStartArguments {
     pub speed: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct RunGetArguments {
+pub(crate) struct RunGetArguments {
     pub run_id: String,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct RunControlArguments {
+pub(crate) struct RunControlArguments {
     /// The run's ID.
     pub run_id: String,
     /// A stable ID so a retry of this call does the same thing once.
     pub client_request_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct RunListArguments {
+pub(crate) struct RunListArguments {
     /// Only this project (ID, link or key).
     pub project_id: Option<String>,
     /// active (queued or working, the default), finished, failed, or all.
@@ -104,7 +104,7 @@ pub(super) struct RunListArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PullRequestLine {
+pub(crate) struct RunPullRequestLine {
     pub number: i64,
     pub url: String,
     pub title: String,
@@ -117,7 +117,7 @@ pub(super) struct PullRequestLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RunValue {
+pub(crate) struct RunValue {
     pub id: String,
     /// queued, working, not_responding, waiting_for_approval,
     /// waiting_for_answer, stopping, finished, failed, interrupted,
@@ -149,7 +149,7 @@ pub(super) struct RunValue {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pull_request: Option<PullRequestLine>,
+    pub pull_request: Option<RunPullRequestLine>,
     /// Approvals or other requests this run is waiting on.
     pub approvals_waiting: i64,
     /// What to do next, in words.
@@ -164,7 +164,7 @@ pub(super) struct RunValue {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RunListValue {
+pub(crate) struct RunListValue {
     pub runs: Vec<RunValue>,
 }
 
@@ -176,7 +176,7 @@ fn run_value(state: &AppState, row: brief::BriefRow) -> RunValue {
         poll_after_seconds,
     } = brief::stage(&row);
     let pull_request = match (row.pr_number, row.pr_url.clone()) {
-        (Some(number), Some(url)) => Some(PullRequestLine {
+        (Some(number), Some(url)) => Some(RunPullRequestLine {
             number,
             url,
             title: row.pr_title.clone().unwrap_or_default(),
@@ -302,7 +302,7 @@ async fn without_hidden_pull_requests(
     Ok(rows)
 }
 
-pub(super) async fn run_start(
+pub(crate) async fn run_start(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: RunStartArguments,
@@ -340,7 +340,7 @@ pub(super) async fn run_start(
             StartRunRequest {
                 prompt: arguments.prompt.clone(),
                 repository_id,
-                config: Some(crate::provider::run_config::RunConfig {
+                config: Some(crate::harness::run_config::RunConfig {
                     harness: arguments.harness.clone(),
                     model: arguments.model.clone(),
                     reasoning: arguments.reasoning.clone(),
@@ -421,7 +421,7 @@ fn control_error(error: AppError, tool: &'static str) -> ToolResult<RunValue> {
 /// Stop a run that's queued, working or waiting for an answer, as the run
 /// page's Stop button does. Its workspace is kept and its open questions
 /// are withdrawn.
-pub(super) async fn run_stop(
+pub(crate) async fn run_stop(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: RunControlArguments,
@@ -450,7 +450,7 @@ pub(super) async fn run_stop(
 /// Start a finished, failed or stopped run again: a new run in the same
 /// thread with the same prompt, repository and settings. People only, as
 /// it spends their own account.
-pub(super) async fn run_retry(
+pub(crate) async fn run_retry(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: RunControlArguments,
@@ -476,17 +476,17 @@ pub(super) async fn run_retry(
     }
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct RunDismissFailureArguments {
+pub(crate) struct RunDismissFailureArguments {
     /// The failed run's ID.
     pub run_id: String,
 }
 
 /// Dismiss a failed run's notice for the caller, as the notice's Dismiss
 /// button does: it stops showing as needing attention for them. Read state
-/// only, like mark_read: the run and its failure stay.
-pub(super) async fn run_dismiss_failure(
+/// only, like conversation_mark_read: the run and its failure stay.
+pub(crate) async fn run_dismiss_failure(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: RunDismissFailureArguments,
@@ -549,7 +549,7 @@ pub(super) async fn run_dismiss_failure(
     }
 }
 
-pub(super) async fn run_get(
+pub(crate) async fn run_get(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: RunGetArguments,
@@ -567,7 +567,7 @@ pub(super) async fn run_get(
     }
 }
 
-pub(super) async fn run_list(
+pub(crate) async fn run_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: RunListArguments,

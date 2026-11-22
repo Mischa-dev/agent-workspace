@@ -33,57 +33,61 @@ only the wakeup is missing.
 
 ## 1. Verify the wakeup
 
-Agent Workspace sends `POST` to your URL with a JSON body and these headers:
+Agent Workspace sends `POST` to your URL with a JSON body and the
+[Standard Webhooks](https://www.standardwebhooks.com/) headers:
 
-- `x-workspace-delivery`: the delivery ID. Retries reuse it, so de-duplicate
+- `webhook-id`: the event's id (`evt_…`). Retries reuse it, so de-duplicate
   on it.
-- `x-workspace-event`: the event, the same as the body's `event`.
-- `x-workspace-timestamp`: Unix seconds.
-- `x-workspace-signature`: `sha256=` and the hex HMAC-SHA256 of
-  `"{timestamp}.{body}"` with the webhook secret.
+- `webhook-timestamp`: Unix seconds.
+- `webhook-signature`: one or more space-separated `v1,<base64>` values, each
+  an HMAC-SHA256 of `"{webhook-id}.{webhook-timestamp}.{body}"` keyed with
+  the base64-decoded part of the `whsec_` secret. Accept the push if any one
+  matches (two are sent while a rotated secret retires).
 
 Reject a signature that doesn't match (compare in constant time) or a
 timestamp more than five minutes old. Answer `2xx` quickly and do the work
 afterwards: a delivery that times out (8 seconds) or fails is retried with
-backoff, up to 8 times.
+backoff, up to 8 times. The SDKs' `WorkspaceChannel` does all of this.
 
 The body never contains message text. To read what was asked, claim the
 request; every read is checked against what the agent can see.
 
 ```json
 {
-  "event": "reply.requested",
-  "deliveryId": "0199…",
-  "agentId": "0199…",
-  "projectId": "0199…",
-  "replyRequestId": "0199…",
-  "conversationId": "0199…",
-  "threadId": null,
-  "messageId": "0199…",
-  "generation": 0,
-  "followsRequestId": null,
-  "sessionRef": null,
-  "sessionHarness": null
+  "type": "reply.requested",
+  "timestamp": "2026-11-17T10:00:00.000Z",
+  "id": "evt_0199…",
+  "cursor": "c1.…",
+  "workspace": { "id": "0199…", "slug": "example" },
+  "recipient": { "accountId": "0199…" },
+  "reason": "reply_required",
+  "actor": { "accountId": "0199…", "kind": "person" },
+  "requestedBy": null,
+  "data": {
+    "replyRequestId": "0199…",
+    "conversationId": "0199…",
+    "threadId": null,
+    "messageId": "0199…",
+    "generation": 0,
+    "followsRequestId": null,
+    "required": true,
+    "thing": { "kind": "reply_request", "id": "0199…" }
+  }
 }
 ```
 
-| `event` | What happened | What to do |
+| `type` | What happened | What to do |
 |---|---|---|
 | `reply.requested` | Someone asked the agent: a tag, a DM, a group message. | Start a session and claim the request. |
 | `reply.followup` | A person wrote again in a thread where the agent holds a claim. `followsRequestId` is that claim. | Feed it into the session already working on `followsRequestId`, then claim it when you get to it. |
 | `reply.cancelled` | A person pressed Stop. | Stop the session working on `replyRequestId` now. Don't reply to it. |
 | `ping` | A person pressed **Send a test wakeup** on the Agents page. It names no request. | Verify it like any wakeup and answer `2xx`. The page shows what you answered. |
 
-`threadId` is set once a channel tag has its thread. `sessionRef` and
-`sessionHarness` name the session already working in that conversation, as you
-bound it with `session_bind` (or as a harness run recorded it), so you can
-resume it instead of starting another; both are `null` when there is none.
-
-Webhooks set up before typed wakeups receive `{"event": "inbox.available",
-"deliveryId", "agentId", "replyRequestId"}` instead, and no stop events. That
-format stays until the runner is ready: saving the webhook again keeps it,
-and **Switch to typed wakeups** on the Agents page issues a new secret and
-switches it.
+A connection hears more than reply events (whatever it subscribes to, see
+`docs/public-api.md`); a runner that only answers requests can ignore the
+rest. `threadId` is set once a channel tag has its thread. To resume the
+session already working in a conversation, keep your own map from
+conversation to the session you bound with `session_bind`.
 
 ## 2. Claim
 
@@ -116,7 +120,7 @@ you stop; Stop marks it cancelled for you.
 
 ## 3. Work in the open
 
-- `reply_progress(requestId, generation, status)`: one line (up to 200
+- `reply_progress_report(requestId, generation, status)`: one line (up to 200
   characters) shown under the agent's name, such as "Running the server
   tests". Send one when the work changes phase, and at least every 15
   minutes.
@@ -162,7 +166,7 @@ calls you already make move it.
 | You call | The run |
 |---|---|
 | `reply_claim` | `run_started`; it is `working`. |
-| `reply_progress` | a `step_started` per distinct line, and the line as its status. |
+| `reply_progress_report` | a `step_started` per distinct line, and the line as its status. |
 | `session_bind` | its link (`url`) and backend (`harness`). |
 | `reply_send` (final) | `run_finished`, `done`. |
 | `reply_release` | `run_finished`, `failed`, with your reason. |
@@ -180,7 +184,7 @@ own `id`, so a retry is a duplicate rather than an error), `run_update`
 `run_result_report` (a pull request, branch, file or link). Requests without
 a launch behind them have no run; open one yourself with `run_create` (name
 its space with `spaceId`) if you want one. The old names `run_activity`,
-`run_result` and `run_open` still work. The SDKs wrap these:
+`run_result` and `run_open` are retired. The SDKs wrap these:
 `context.runId`, `context.step(title)` and `context.result(kind, url, title)`.
 
 ## Outcomes
@@ -212,7 +216,7 @@ worker:
             "reply.requested":
                 claim = mcp.reply_claim(wakeup.replyRequestId)
                 session = sessions.resume_or_start(claim.request.replyConversationId)
-                session.run(claim, progress = mcp.reply_progress,
+                session.run(claim, progress = mcp.reply_progress_report,
                             interim = mcp.reply_send(final: false),
                             answer = mcp.reply_send)
 ```

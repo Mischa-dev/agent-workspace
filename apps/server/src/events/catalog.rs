@@ -454,6 +454,38 @@ pub static PAGE_DISCUSSION_CHANGED: EventType = signal(
     "A page's comments or suggestions changed",
 )
 .legacy(&["page.discussion.updated"]);
+// --- comments, proposals and changes on documents (C1.28) ------------------
+/// A comment on a task, page, sheet, board or record: about the thing, with
+/// the message's id (never its text).
+pub static COMMENT_CREATED: EventType = fact(
+    "comment.created",
+    "messages",
+    None,
+    "Someone commented on a task, page, sheet, whiteboard or record",
+)
+.automatable();
+/// Someone proposed a change to a page, sheet or board.
+pub static PROPOSAL_CREATED: EventType = fact(
+    "proposal.created",
+    "workspace",
+    None,
+    "Someone proposed a change to a page, sheet or whiteboard",
+)
+.automatable();
+pub static PROPOSAL_DECIDED: EventType = fact(
+    "proposal.decided",
+    "workspace",
+    None,
+    "A proposed change was accepted, rejected or withdrawn",
+);
+/// A change to a page, sheet or board was undone in a step.
+pub static CHANGE_UNDONE: EventType = fact(
+    "change.undone",
+    "pages",
+    None,
+    "A change to a page, sheet or whiteboard was undone",
+);
+
 pub static PAGE_COMMENTED: EventType = fact(
     "page.commented",
     "pages",
@@ -511,6 +543,12 @@ pub static SHEET_RANGES_CHANGED: EventType = fact(
     "sheets",
     Some("sheet"),
     "A sheet's named ranges were added, changed or removed",
+);
+pub static SHEET_CHARTS_CHANGED: EventType = fact(
+    "sheet.charts_changed",
+    "sheets",
+    Some("sheet"),
+    "A sheet's charts were added, changed or removed",
 );
 pub static SHEET_PROPOSALS_CHANGED: EventType = fact(
     "sheet.proposals_changed",
@@ -707,6 +745,25 @@ pub static SPACE_MODULES_CHANGED: EventType = fact(
 )
 .legacy(&["project.modules.updated"]);
 
+pub static SETTING_CHANGED: EventType = fact(
+    "setting.changed",
+    "workspace",
+    None,
+    "A setting was changed or reset for the workspace, a space or someone",
+);
+pub static ROLE_CHANGED: EventType = fact(
+    "role.changed",
+    "workspace",
+    Some("role"),
+    "A workspace role was made, changed or removed",
+);
+pub static WORKSPACE_MEMBER_CHANGED: EventType = fact(
+    "workspace.member_changed",
+    "workspace",
+    Some("account"),
+    "Someone's workspace role or the cap on their apps changed",
+);
+
 pub static WORKSPACE_LIFECYCLE_CHANGED: EventType = fact(
     "workspace.lifecycle_changed",
     "workspace",
@@ -771,6 +828,66 @@ pub static THEME_CHANGED: EventType = signal(
     None,
     "Someone's theme was made, changed, offered or deleted",
 );
+// A connected module's things and the events it sends in (M1.13). Their
+// kinds and types are the module's own, so the thing names them; the
+// declared type rides in the payload.
+pub static CONNECTED_THING_CHANGED: EventType = fact(
+    "connected_thing.changed",
+    "workspace",
+    None,
+    "A connected module added or changed one of its things",
+);
+pub static MODULE_OPERATION_RAN: EventType = fact(
+    "module.operation_ran",
+    "workspace",
+    None,
+    "Someone ran an operation a connected module declares",
+);
+pub static MODULE_PANEL_PRESSED: EventType = fact(
+    "module.panel_pressed",
+    "workspace",
+    None,
+    "Someone pressed a button or sent a form in a connected module's panel",
+);
+pub static MODULE_CONNECTED: EventType = signal(
+    "module.connected",
+    "workspace",
+    None,
+    "A connected module was installed, re-read, approved or revoked",
+);
+// A built module (M1.6) was made, changed, switched or archived: the
+// sidebar's module entries and settings read `module_list` again.
+pub static MODULE_CREATED: EventType = signal(
+    "module.created",
+    "workspace",
+    None,
+    "A built module was made",
+);
+pub static MODULE_UPDATED: EventType = signal(
+    "module.updated",
+    "workspace",
+    None,
+    "A built module's name, parts or navigation changed, or it was restored",
+);
+pub static MODULE_SWITCHED: EventType = signal(
+    "module.switched",
+    "workspace",
+    None,
+    "A built module was switched on or off",
+);
+pub static MODULE_REMOVED: EventType = signal(
+    "module.removed",
+    "workspace",
+    None,
+    "A built module was archived",
+);
+pub static MODULE_EVENT: EventType = fact(
+    "module.event",
+    "workspace",
+    None,
+    "A connected module sent an event it declares",
+)
+.automatable();
 pub static WORKSPACE_THEMES_CHANGED: EventType = signal(
     "workspace_themes.changed",
     "workspace",
@@ -855,6 +972,16 @@ pub static ACCOUNT_ACCESS_CHANGED: EventType = signal(
     None,
     "What someone may see changed",
 );
+/// A session was signed out (H1.63 follow-up): staged by a trigger on
+/// `sessions`, whatever revoked it, so a live connection that opens later
+/// on any instance with one of its tickets is refused. The payload names
+/// the session; the account is the audience.
+pub static SESSION_REVOKED: EventType = signal(
+    "session.revoked",
+    "workspace",
+    None,
+    "Someone signed out of a session",
+);
 pub static ACCOUNT_REF_CHANGED: EventType = signal(
     "account.ref_changed",
     "agents",
@@ -884,6 +1011,10 @@ pub fn catalog() -> &'static [&'static EventType] {
         &CONVERSATION_REPLY_REQUESTS_CHANGED,
         &CONVERSATION_READ,
         &MESSAGE_CREATED,
+        &COMMENT_CREATED,
+        &PROPOSAL_CREATED,
+        &PROPOSAL_DECIDED,
+        &CHANGE_UNDONE,
         &MESSAGE_MENTIONED,
         &MESSAGE_EDITED,
         &MESSAGE_REMOVED,
@@ -938,6 +1069,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &SHEET_VERSION_RESTORED,
         &SHEET_VIEWS_CHANGED,
         &SHEET_RANGES_CHANGED,
+        &SHEET_CHARTS_CHANGED,
         &SHEET_PROPOSALS_CHANGED,
         &DASHBOARD_UPDATED,
         &DATA_CONNECTION_CHANGED,
@@ -964,7 +1096,19 @@ pub fn catalog() -> &'static [&'static EventType] {
         &SPACE_RESTORED,
         &SPACE_MEMBER_CHANGED,
         &SPACE_MODULES_CHANGED,
+        &SETTING_CHANGED,
+        &ROLE_CHANGED,
+        &WORKSPACE_MEMBER_CHANGED,
         &WORKSPACE_LIFECYCLE_CHANGED,
+        &CONNECTED_THING_CHANGED,
+        &MODULE_OPERATION_RAN,
+        &MODULE_PANEL_PRESSED,
+        &MODULE_CONNECTED,
+        &MODULE_CREATED,
+        &MODULE_UPDATED,
+        &MODULE_SWITCHED,
+        &MODULE_REMOVED,
+        &MODULE_EVENT,
         &FILE_ATTACHED,
         &FILE_REMOVED,
         &FILE_UPLOAD_STARTED,
@@ -989,6 +1133,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &CONNECTION_CHANGED,
         &ACCOUNT_MANAGERS_CHANGED,
         &ACCOUNT_ACCESS_CHANGED,
+        &SESSION_REVOKED,
         &ACCOUNT_REF_CHANGED,
         &THING_SHARE_CHANGED,
         &GROUP_CHANGED,

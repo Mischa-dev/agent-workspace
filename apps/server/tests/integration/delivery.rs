@@ -466,7 +466,7 @@ async fn pushes_are_signed_the_standard_way_and_carry_no_text() {
         axum::serve(listener, receiver).await.expect("serve");
     });
 
-    // A connection of Rook's own, pushing in the standard format.
+    // A connection of Rook's own, with a webhook.
     let (_, made) = rook
         .call(
             &world.app,
@@ -475,7 +475,6 @@ async fn pushes_are_signed_the_standard_way_and_carry_no_text() {
                 arguments: json!({
                     "name": "Runner",
                     "webhookUrl": "https://hooks.example.test/rook",
-                    "webhookFormat": "standard",
                     "clientRequestId": "rook-runner",
                 }),
             },
@@ -727,14 +726,13 @@ async fn a_webhook_an_app_set_up_stops_when_the_app_is_disconnected() {
     .execute(world.pool())
     .await
     .expect("disconnect the app");
-    let owner_task = send(
+    let owner_task = crate::support::tasks::send(
         &world.app,
-        world.owner.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{}/work-items", world.project("WORK")),
-            Some("after-disconnect"),
-            json!({"title": "After the app left"}),
-        ),
+        &world.owner.browser,
+        "POST",
+        &format!("/api/v1/projects/{}/work-items", world.project("WORK")),
+        Some("after-disconnect"),
+        json!({"title": "After the app left"}),
     )
     .await;
     assert!(owner_task.0.is_success(), "{owner_task:?}");
@@ -898,11 +896,11 @@ async fn the_delivery_contract_holds_over_http() {
     world.finish().await;
 }
 
-/// A2.7: what the server pushes in each format passes the receiver's
-/// checks: signatures, headers and a body shaped like the fixture.
+/// A2.7: what the server pushes passes the receiver's checks: signatures,
+/// headers and a body shaped like the fixture.
 #[tokio::test]
-async fn pushes_in_every_format_meet_the_contract() {
-    use agent_workspace_delivery_contract::webhook::{Format, Received, check_webhook};
+async fn pushes_meet_the_contract() {
+    use agent_workspace_delivery_contract::webhook::{Received, check_webhook};
 
     let Some(world) = WorldBuilder::default()
         .project("WORK")
@@ -949,7 +947,7 @@ async fn pushes_in_every_format_meet_the_contract() {
     });
 
     let mut connections = Vec::new();
-    for format in ["standard", "typed_v1", "inbox_v1"] {
+    for format in ["first", "second"] {
         let (_, made) = rook
             .call(
                 &world.app,
@@ -958,7 +956,6 @@ async fn pushes_in_every_format_meet_the_contract() {
                     arguments: json!({
                         "name": format!("Receiver {format}"),
                         "webhookUrl": format!("https://hooks.example.test/{format}"),
-                        "webhookFormat": format,
                         "clientRequestId": format!("contract-{format}"),
                     }),
                 },
@@ -982,7 +979,7 @@ async fn pushes_in_every_format_meet_the_contract() {
             .expect("local hook");
         connections.push((format, connection, secret));
     }
-    // A mention asks Rook to reply, so every format has something to carry.
+    // A mention asks Rook to reply, so every connection has something to carry.
     let general = channel(&world, "general").await;
     post(
         &world,
@@ -1018,7 +1015,7 @@ async fn pushes_in_every_format_meet_the_contract() {
             .collect::<Vec<_>>();
         assert!(!mine.is_empty(), "nothing pushed to {format}: {posts:?}");
         for push in mine {
-            let report = check_webhook(Format::parse(format).expect("format"), secret, push, None);
+            let report = check_webhook(secret, push, None);
             assert!(report.passed(), "{format}: {}\n{report}", push.body);
             assert!(!push.body.contains(SECRET_WORD), "ids only: {}", push.body);
         }
@@ -1158,7 +1155,12 @@ async fn a_client_id_comes_back_and_a_file_link_follows_access() {
     let (status, body) = fetch().await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(&body[..], b"the plan");
-    let forged = path.replacen("fl1.", "fl1.A", 1);
+    let last = path.chars().last().expect("token");
+    let forged = format!(
+        "{}{}",
+        &path[..path.len() - 1],
+        if last == 'A' { 'B' } else { 'A' }
+    );
     let response = tower::ServiceExt::oneshot(
         world.app.clone(),
         axum::http::Request::builder()
@@ -1203,31 +1205,30 @@ async fn ask_an_agent_posts_as_the_maker_and_asks_them() {
     let rook = world.agents["rook"].actor;
     let work = world.project("WORK").to_owned();
     let triage = channel(&world, "triage").await;
-    let (status, rule) = send(
-        &world.app,
-        world.owner.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/automations"),
-            Some("ask-rule"),
+    let (status, rule) = world
+        .owner
+        .browser
+        .op(
+            &world.app,
+            "automation_create",
             json!({
+                "projectId": work,
                 "name": "Ask rook",
                 "trigger": {"kind": "task_created"},
                 "actions": [{"kind": "ask_agent", "accountId": rook,
                              "conversationId": triage,
                              "prompt": "Please triage {{task.title}}"}],
             }),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{rule}");
-    let (status, task) = send(
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{rule}");
+    let (status, task) = crate::support::tasks::send(
         &world.app,
-        world.owner.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("ask-task"),
-            json!({"title": "Login is slow"}),
-        ),
+        &world.owner.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("ask-task"),
+        json!({"title": "Login is slow"}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");
@@ -1246,21 +1247,21 @@ async fn ask_an_agent_posts_as_the_maker_and_asks_them() {
     assert!(text.contains("Please triage Login is slow"), "{text}");
 
     // Asking someone who isn't in the space is refused when saved.
-    let (status, refused) = send(
-        &world.app,
-        world.owner.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/automations"),
-            Some("ask-nobody"),
+    let (status, refused) = world
+        .owner
+        .browser
+        .op(
+            &world.app,
+            "automation_create",
             json!({
+                "projectId": work,
                 "name": "Ask nobody",
                 "trigger": {"kind": "task_created"},
                 "actions": [{"kind": "ask_agent", "accountId": Uuid::now_v7(),
                              "prompt": "Hello"}],
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
     world.finish().await;
 }
@@ -1597,16 +1598,11 @@ async fn a_paused_agent_waits_and_an_unanswered_ask_shows() {
     .fetch_one(world.pool())
     .await
     .expect("second ask");
-    let (status, body) = send(
-        &world.app,
-        world.owner.browser.request(
-            "POST",
-            &format!("/api/v1/reply-requests/{stopped}/stop"),
-            Some("stop-paused"),
-            json!({}),
-        ),
-    )
-    .await;
+    let (status, body) = world
+        .owner
+        .browser
+        .op(&world.app, "reply_stop", json!({"requestId": stopped}))
+        .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let page = read(&world, rook, Some(&held_at)).await;
     let cancelled = of_type(&page, "reply.cancelled");

@@ -6,21 +6,21 @@ use std::{convert::Infallible, time::Duration};
 
 use agent_workspace_host_protocol::{Ack, AckReply, CommandList};
 use axum::{
-    Extension, Json, Router,
-    extract::{Path, Query, State},
+    Json, Router,
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, StatusCode, header::ACCEPT},
     response::{
         IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
     },
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use futures_util::stream::{self, Stream};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::builtin::transport::BuiltinCaller;
+use super::builtin::install::BuiltinCall;
 use super::{
     HostRow, commands,
     protocol::{self, HostError},
@@ -35,6 +35,11 @@ pub const PROTOCOL_HEADER: &str = "aw-host-protocol";
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/hosts/enrol", post(enrol_route))
+        .route("/api/v1/host/builtin/enrol", post(builtin_enrol_route))
+        .route(
+            "/api/v1/host/builtin/harnesses",
+            put(builtin_harnesses_route),
+        )
         .route("/api/v1/host/describe", post(describe_route))
         .route("/api/v1/host/heartbeat", post(heartbeat_route))
         .route("/api/v1/host/windows", post(windows_route))
@@ -42,9 +47,16 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/host/agents/register", post(register_route))
         .route("/api/v1/host/runs", post(adopt_route))
         .route("/api/v1/host/runs/{run_id}/model", post(model_route))
+        .route("/api/v1/host/runs/{run_id}/stream", post(stream_route))
         .route("/api/v1/host/commands", get(commands_route))
         .route("/api/v1/host/commands/{command_id}", get(command_route))
-        .route("/api/v1/host/commands/{command_id}/ack", post(ack_route))
+        // An action's answer may outgrow the usual request size (a model
+        // account's catalog); `commands::ack` holds each answer to its own
+        // limit.
+        .route(
+            "/api/v1/host/commands/{command_id}/ack",
+            post(ack_route).layer(DefaultBodyLimit::max(commands::MAX_ACK_BODY_BYTES)),
+        )
 }
 
 // ---------------------------------------------------------------- hosts
@@ -134,14 +146,16 @@ async fn host_caller(state: &AppState, headers: &HeaderMap) -> Result<HostRow, H
     let token = bearer(headers).ok_or(HostError::Unauthorized)?;
     state.rate_limits.check_mcp_auth(token).await?;
     protocol_header(headers)?;
-    protocol::authenticate(&state.pool, token).await
+    let host = protocol::authenticate(&state.pool, token).await?;
+    crate::tenancy::signed_in_as(crate::tenancy::Tenancy::System("hosts.protocol"));
+    Ok(host)
 }
 
 /// The host a call about one command comes from: the caller's own, or, for
 /// the built-in host (A1.16), the built-in row the command was written for.
 async fn command_caller(
     state: &AppState,
-    builtin: Option<Extension<BuiltinCaller>>,
+    builtin: BuiltinCall,
     headers: &HeaderMap,
     command_id: Uuid,
 ) -> Result<HostRow, HostError> {
@@ -149,6 +163,9 @@ async fn command_caller(
         return host_caller(state, headers).await;
     }
     protocol_header(headers)?;
+    // The built-in host, calling in process: its commands are of every
+    // workspace, as any host's are.
+    crate::tenancy::signed_in_as(crate::tenancy::Tenancy::System("hosts.protocol"));
     let mut transaction = crate::db::scoped_tx(&state.pool)
         .await
         .map_err(AppError::from)?;
@@ -174,12 +191,66 @@ async fn enrol_route(
     headers: HeaderMap,
     ApiJson(request): ApiJson<protocol::EnrolRequest>,
 ) -> Result<(StatusCode, Json<protocol::Enrolled>), HostError> {
+    // The one-time code, not a session, names the workspace: it is known only once the code is read.
+    crate::tenancy::system(
+        "hosts.protocol",
+        Box::pin(enrol_route_here(State(state), headers, ApiJson(request))),
+    )
+    .await
+}
+
+async fn enrol_route_here(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<protocol::EnrolRequest>,
+) -> Result<(StatusCode, Json<protocol::Enrolled>), HostError> {
     state.rate_limits.check_mcp_auth(&request.code).await?;
     protocol_header(&headers)?;
     Ok((
         StatusCode::CREATED,
         Json(protocol::enrol(&state, request).await?),
     ))
+}
+
+/// A1.17: the built-in host program's first start, its one-time code for
+/// the install's token.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BuiltinEnrolRequest {
+    code: String,
+}
+
+async fn builtin_enrol_route(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<BuiltinEnrolRequest>,
+) -> Result<(StatusCode, Json<Value>), HostError> {
+    state.rate_limits.check_mcp_auth(&request.code).await?;
+    protocol_header(&headers)?;
+    let token = super::builtin::install::enrol(&state.pool, &request.code).await?;
+    Ok((StatusCode::CREATED, Json(json!({ "token": token }))))
+}
+
+/// A1.17: the harnesses the built-in host runs, sent when it takes its
+/// lease; the server offers them and checks launches against them.
+async fn builtin_harnesses_route(
+    State(state): State<AppState>,
+    builtin: BuiltinCall,
+    headers: HeaderMap,
+    ApiJson(request): ApiJson<agent_workspace_host_protocol::BuiltinHarnesses>,
+) -> Result<Json<Value>, HostError> {
+    if builtin.is_none() {
+        return Err(HostError::Unauthorized);
+    }
+    protocol_header(&headers)?;
+    use crate::harness_catalog::{Refused, StoreError, store_builtin};
+    match store_builtin(&state.pool, &request.harnesses, request.lease_token).await {
+        Ok(()) => Ok(Json(json!({ "harnesses": request.harnesses.len() }))),
+        Err(StoreError::Refused(Refused(field, message))) => {
+            Err(HostError::Invalid { field, message })
+        }
+        Err(StoreError::App(error)) => Err(error.into()),
+    }
 }
 
 async fn describe_route(
@@ -205,11 +276,20 @@ async fn heartbeat_route(
 /// A1.24: the plan windows of the accounts the host described.
 async fn windows_route(
     State(state): State<AppState>,
+    builtin: BuiltinCall,
     headers: HeaderMap,
     ApiJson(request): ApiJson<super::windows::WindowsReport>,
 ) -> Result<Json<super::windows::WindowsStored>, HostError> {
+    use super::windows::{Reporter, report};
+    if builtin.is_some() {
+        protocol_header(&headers)?;
+        // The built-in host, calling in process, about accounts of every
+        // workspace.
+        crate::tenancy::signed_in_as(crate::tenancy::Tenancy::System("hosts.protocol"));
+        return Ok(Json(report(&state, Reporter::Builtin, request).await?));
+    }
     let host = host_caller(&state, &headers).await?;
-    Ok(Json(super::windows::report(&state, &host, request).await?))
+    Ok(Json(report(&state, Reporter::Host(&host), request).await?))
 }
 
 /// A2.26: a run the host started itself, adopted once.
@@ -242,9 +322,34 @@ async fn model_route(
     if let Err(error) = state.rate_limits.check_mcp_auth(token).await {
         return error.into_response();
     }
-    match super::builtin::assistant::model_turn(&state, token, run_id, turn).await {
+    // The run's credential is read before its account is known, as the
+    // other host calls read theirs.
+    let turn = super::builtin::assistant::model_turn(&state, token, run_id, turn);
+    match crate::tenancy::system("hosts.protocol", turn).await {
         Ok(reply) => Json(reply).into_response(),
         Err(refusal) => refusal.into_response(),
+    }
+}
+
+/// A1.17: a run's reply as it arrives, shown live and never stored.
+async fn stream_route(
+    State(state): State<AppState>,
+    Path(run_id): Path<Uuid>,
+    headers: HeaderMap,
+    ApiJson(delta): ApiJson<agent_workspace_host_protocol::StreamDelta>,
+) -> Result<(StatusCode, Json<Value>), HostError> {
+    let token = bearer(&headers).ok_or(HostError::Unauthorized)?;
+    state.rate_limits.check_run_stream(token).await?;
+    // The run's credential is read before its account is known, as the
+    // other host calls read theirs.
+    let delta = super::stream::delta(&state, token, run_id, delta);
+    match crate::tenancy::system("hosts.protocol", delta).await {
+        Ok(()) => Ok((StatusCode::ACCEPTED, Json(json!({})))),
+        Err(HostError::Unauthorized) => {
+            state.rate_limits.note_mcp_auth_failure().await;
+            Err(HostError::Unauthorized)
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -292,7 +397,7 @@ const STREAM_FOR: Duration = Duration::from_secs(300);
 /// `Last-Event-ID`). Either counts as a heartbeat.
 async fn commands_route(
     State(state): State<AppState>,
-    builtin: Option<Extension<BuiltinCaller>>,
+    builtin: BuiltinCall,
     headers: HeaderMap,
     Query(query): Query<CommandsQuery>,
 ) -> Result<Response, HostError> {
@@ -300,6 +405,7 @@ async fn commands_route(
         // A1.16: the built-in host, for every workspace at once; it reads
         // in process and never waits here.
         protocol_header(&headers)?;
+        crate::tenancy::signed_in_as(crate::tenancy::Tenancy::System("hosts.protocol"));
         let after = query.after.unwrap_or(0).max(0);
         return Ok(Json(commands::due_builtin(&state.pool, after).await?).into_response());
     }
@@ -339,9 +445,13 @@ fn command_stream(
                 if tokio::time::Instant::now() >= until {
                     return None;
                 }
-                let listed = commands::long_poll(&state.pool, &host, after, 15)
-                    .await
-                    .ok()?;
+                // Polled outside the request that opened it.
+                let listed = crate::tenancy::system(
+                    "hosts.protocol",
+                    commands::long_poll(&state.pool, &host, after, 15),
+                )
+                .await
+                .ok()?;
                 after = listed.next;
                 // Popped from the end, so queued newest first.
                 queued = listed
@@ -364,7 +474,7 @@ fn command_stream(
 /// A1.12: one command whole, with any credential minted for it.
 async fn command_route(
     State(state): State<AppState>,
-    builtin: Option<Extension<BuiltinCaller>>,
+    builtin: BuiltinCall,
     headers: HeaderMap,
     Path(command_id): Path<Uuid>,
 ) -> Result<Json<Value>, HostError> {
@@ -375,7 +485,7 @@ async fn command_route(
 /// A1.12: the host's answer to a command.
 async fn ack_route(
     State(state): State<AppState>,
-    builtin: Option<Extension<BuiltinCaller>>,
+    builtin: BuiltinCall,
     headers: HeaderMap,
     Path(command_id): Path<Uuid>,
     ApiJson(ack): ApiJson<Ack>,

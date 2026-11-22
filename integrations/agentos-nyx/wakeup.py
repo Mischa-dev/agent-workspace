@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Receive signed Agent Workspace wakeups and start the matching bridge run.
+"""Receive signed Agent Workspace pushes and start the matching bridge run.
 
-A wakeup only says "check your inbox"; the bridge still claims work through
-MCP, so a missed or duplicate wakeup is harmless.
+A push only says "check your inbox"; the bridge still claims work through
+MCP, so a missed or duplicate push is harmless. Pushes are Standard Webhooks
+(`webhook-id`, `webhook-timestamp`, `webhook-signature`); only reply events
+wake the bridge.
 
 Listens on the address in agents.json ("wakeup_listen", e.g. the Tailscale IP
 and a port). Each agent entry needs "workspace_agent_id" and
-"webhook_secret_file".
+"webhook_secret_file" (the connection's `whsec_` secret).
 """
 
+import base64
 import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,7 +21,7 @@ import subprocess
 import time
 
 STATE = Path.home() / ".local/share/agent-workspace-aw-bridge"
-MAX_BODY_BYTES = 4096
+MAX_BODY_BYTES = 65536
 MAX_SKEW_SECONDS = 300
 
 
@@ -31,6 +34,31 @@ def load_agents():
     }
 
 
+def standard_key(secret):
+    """A `whsec_` secret's key: base64 in either alphabet, padded or not."""
+    encoded = secret[6:] if secret.startswith("whsec_") else secret
+    normal = encoded.replace("-", "+").replace("_", "/")
+    try:
+        key = base64.b64decode(normal + "=" * (-len(normal) % 4), validate=True)
+    except ValueError:
+        key = b""
+    return key or encoded.encode()
+
+
+def signed_by(secret, webhook_id, timestamp, signatures, body):
+    """Whether any `v1,<base64>` signature is the secret's over id, timestamp and body."""
+    digest = hmac.new(
+        standard_key(secret), f"{webhook_id}.{timestamp}.".encode() + body, hashlib.sha256
+    ).digest()
+    expected = "v1," + base64.b64encode(digest).decode()
+    return any(hmac.compare_digest(given, expected) for given in signatures.split(" "))
+
+
+def wakes(event):
+    """Reply events start a run; anything else (a test ping too) is answered and ignored."""
+    return event.get("type", "").startswith("reply.")
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
@@ -39,18 +67,19 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         try:
             event = json.loads(body)
-            slug, secret = load_agents()[event["agentId"]]
-        except (ValueError, KeyError, OSError):
+            account = (event.get("recipient") or {}).get("accountId") or event.get("agentId")
+            slug, secret = load_agents()[account]
+        except (ValueError, KeyError, OSError, AttributeError):
             return self.reply(404)
-        timestamp = self.headers.get("X-Workspace-Timestamp", "")
-        signature = self.headers.get("X-Workspace-Signature", "")
-        expected = "sha256=" + hmac.new(
-            secret.encode(), timestamp.encode() + b"." + body, hashlib.sha256
-        ).hexdigest()
-        if not hmac.compare_digest(signature, expected):
+        webhook_id = self.headers.get("webhook-id", "")
+        timestamp = self.headers.get("webhook-timestamp", "")
+        signatures = self.headers.get("webhook-signature", "")
+        if not webhook_id or not signed_by(secret, webhook_id, timestamp, signatures, body):
             return self.reply(401)
         if not timestamp.isdigit() or abs(time.time() - int(timestamp)) > MAX_SKEW_SECONDS:
             return self.reply(401)
+        if not wakes(event):
+            return self.reply(204)
         # --no-block: answer the webhook now; the unit's lock prevents overlap
         # with a timer run that is already going.
         subprocess.run(

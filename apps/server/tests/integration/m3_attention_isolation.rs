@@ -147,25 +147,11 @@ async fn failed_run_acknowledgement_is_private_durable_and_actor_scoped() {
     );
 
     assert_eq!(
-        acknowledge_failure(
-            &application,
-            &actor_a,
-            run_id,
-            failure_event_id,
-            "actor-a-first"
-        )
-        .await,
+        acknowledge_failure(&application, &actor_a, run_id, "actor-a-first").await,
         StatusCode::OK
     );
     assert_eq!(
-        acknowledge_failure(
-            &application,
-            &actor_a,
-            run_id,
-            failure_event_id,
-            "actor-a-retry"
-        )
-        .await,
+        acknowledge_failure(&application, &actor_a, run_id, "actor-a-retry").await,
         StatusCode::OK
     );
 
@@ -195,14 +181,7 @@ async fn failed_run_acknowledgement_is_private_durable_and_actor_scoped() {
     assert_eq!(acknowledgement_actors, vec![seed.human_actor_id]);
 
     assert_eq!(
-        acknowledge_failure(
-            &application,
-            &actor_b,
-            run_id,
-            failure_event_id,
-            "actor-b-first"
-        )
-        .await,
+        acknowledge_failure(&application, &actor_b, run_id, "actor-b-first").await,
         StatusCode::OK
     );
     assert_eq!(
@@ -302,7 +281,6 @@ async fn acknowledge_failure(
     application: &axum::Router,
     actor: &ActorSession,
     run_id: Uuid,
-    event_id: Uuid,
     idempotency_key: &str,
 ) -> StatusCode {
     application
@@ -310,14 +288,14 @@ async fn acknowledge_failure(
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/agent-runs/{run_id}/acknowledge-failure"))
+                .uri("/api/v2/ops/run_failure_hide")
                 .header("origin", ORIGIN)
                 .header("cookie", &actor.cookie)
                 .header("x-csrf-token", &actor.csrf)
                 .header("idempotency-key", idempotency_key)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    serde_json::to_vec(&json!({"eventId": event_id}))
+                    serde_json::to_vec(&json!({"runId": run_id}))
                         .expect("serialize acknowledgement request"),
                 ))
                 .expect("build acknowledgement request"),

@@ -977,6 +977,11 @@ pub async fn delete<'e, E: PgExecutor<'e>>(executor: E, secret_id: Uuid) -> Resu
 /// Re-seal every data key under `keys`' active master key. Values and their
 /// data keys don't change, so this is safe to run while the server serves.
 pub async fn rewrap_all(pool: &PgPool, keys: &dyn KeyEncryption) -> Result<u64, AppError> {
+    // Rewraps every workspace's secrets, run on the host.
+    crate::tenancy::system("server.operator", Box::pin(rewrap_all_here(pool, keys))).await
+}
+
+async fn rewrap_all_here(pool: &PgPool, keys: &dyn KeyEncryption) -> Result<u64, AppError> {
     let mut rewrapped = rewrap_totp_factors(pool, keys).await?;
     loop {
         let mut transaction = crate::db::scoped_tx(pool).await?;
@@ -1032,8 +1037,13 @@ async fn rewrap_rows(
 }
 
 /// Every master key id something sealed still uses.
+/// A sign-in's sealed API key lives minutes at most and isn't re-sealed;
+/// its key is kept until the host takes it or the sign-in ends.
 const KEYS_IN_USE_SQL: &str = "SELECT master_key_id FROM secrets \
-     UNION SELECT master_key_id FROM user_totp_factors ORDER BY 1";
+     UNION SELECT master_key_id FROM user_totp_factors \
+     UNION SELECT api_key_master_key_id FROM provider_login_ceremonies \
+           WHERE api_key_master_key_id IS NOT NULL \
+     UNION SELECT master_key_id FROM host_command_secrets ORDER BY 1";
 
 /// The master key ids secrets still use.
 pub async fn master_keys_in_use(pool: &PgPool) -> Result<Vec<String>, AppError> {
@@ -1112,6 +1122,18 @@ pub struct RotationResult {
 /// re-seal every data key under it, then drop keys nothing uses. Safe to
 /// re-run after an interruption.
 pub async fn rotate_master_key(
+    pool: &PgPool,
+    config: &AppConfig,
+) -> Result<RotationResult, AppError> {
+    // Rewraps every workspace's secrets, run on the host.
+    crate::tenancy::system(
+        "server.operator",
+        Box::pin(rotate_master_key_here(pool, config)),
+    )
+    .await
+}
+
+async fn rotate_master_key_here(
     pool: &PgPool,
     config: &AppConfig,
 ) -> Result<RotationResult, AppError> {

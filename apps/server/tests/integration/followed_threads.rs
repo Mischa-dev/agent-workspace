@@ -113,16 +113,14 @@ async fn followed_threads_are_the_ones_you_can_read() {
     }
     // Budget gets the newest reply; Launch settles.
     post(&lena.browser, &budget, "Agreed").await;
-    let (status, settled) = send(
-        app,
-        lena.browser.request(
-            "PATCH",
-            &format!("/api/v1/threads/{launch}"),
-            Some("followed-settle"),
-            json!({"status": "Decided", "outcome": "Ship on Friday"}),
-        ),
-    )
-    .await;
+    let (status, settled) = lena
+        .browser
+        .op(
+            app,
+            "thread_update",
+            json!({"threadId": launch, "status": "Decided", "outcome": "Ship on Friday"}),
+        )
+        .await;
     assert!(status.is_success(), "{settled}");
 
     let listed = followed(app, &nina.browser, workspace).await;
@@ -143,16 +141,14 @@ async fn followed_threads_are_the_ones_you_can_read() {
 
     // Open leaves out a settled thread, and a discussion's Resolved settles
     // one too.
-    let (status, resolved) = send(
-        app,
-        lena.browser.request(
-            "PATCH",
-            &format!("/api/v1/threads/{budget}"),
-            Some("followed-resolve"),
-            json!({"status": "Resolved"}),
-        ),
-    )
-    .await;
+    let (status, resolved) = lena
+        .browser
+        .op(
+            app,
+            "thread_update",
+            json!({"threadId": budget, "status": "Resolved"}),
+        )
+        .await;
     assert!(status.is_success(), "{resolved}");
     let open = followed_with(app, &nina.browser, workspace, json!({"openOnly": true})).await;
     let open = open

@@ -10,6 +10,10 @@
 //! revisions after it laid over. Restoring writes those inputs back as a
 //! new revision through the one write path, so values are recomputed and
 //! the restore is itself a revision.
+//!
+//! A snapshot older than 30 days that a newer one has replaced is moved to
+//! the file store, compressed, by the `history.compact` job (C1.34); it is
+//! read back from there when a revision built on it is shown or restored.
 
 use std::collections::BTreeMap;
 
@@ -19,7 +23,14 @@ use sqlx::PgConnection;
 use uuid::Uuid;
 
 use super::{Applied, Change, Look, LookPatch, Problem, Sheet, address::column_name};
-use crate::error::AppError;
+use crate::{error::AppError, files};
+
+/// Snapshots older than this are moved to the file store (C1.34).
+const COMPACT_AFTER_DAYS: i32 = 30;
+/// Snapshots moved per compaction run.
+const COMPACT_BATCH: i64 = 100;
+/// The largest moved snapshot read back, compressed.
+const MAX_PAYLOAD_BYTES: u64 = 64 * 1024 * 1024;
 
 /// One cell a revision changed, as it is after it: its input (None when
 /// nothing is typed in it) and its look.
@@ -124,6 +135,7 @@ pub async fn snapshot(
                        'id', tab.id, 'name', tab.name, 'frozenRows', tab.frozen_rows,
                        'columnWidths', tab.column_widths,
                        'conditionalFormats', tab.conditional_formats,
+                       'validations', tab.validations,
                        'cells', COALESCE((
                            SELECT jsonb_agg(jsonb_build_array(cell.row_number, cell.column_number, cell.input)
                                             ORDER BY cell.row_number, cell.column_number)
@@ -174,6 +186,9 @@ pub struct TabState {
     /// Its conditional formats (C1.17).
     #[serde(default)]
     pub conditional_formats: Vec<super::conditional::ConditionalRule>,
+    /// Its validation rules (C1.15).
+    #[serde(default)]
+    pub validations: Vec<super::validation::ValidationRule>,
 }
 
 impl State {
@@ -252,21 +267,38 @@ impl State {
 /// The sheet's tabs and inputs at `revision`, or None when its history
 /// doesn't reach back that far (revisions from before snapshots were kept).
 pub async fn state_at(
+    store: &files::FileStore,
     connection: &mut PgConnection,
     sheet_id: Uuid,
     revision: i64,
 ) -> Result<Option<State>, AppError> {
-    let Some((base, sqlx::types::Json(mut state))) =
-        sqlx::query_as::<_, (i64, sqlx::types::Json<State>)>(
-            "SELECT revision, state FROM sheet_snapshots \
+    // A moved snapshot's row holds an empty object, so the state is read
+    // as JSON first and only then as a state, from wherever it is.
+    let Some((base, stored, key)) = sqlx::query_as::<_, (i64, Json, Option<String>)>(
+        "SELECT revision, state, payload_key FROM sheet_snapshots \
              WHERE sheet_id = $1 AND revision <= $2 ORDER BY revision DESC LIMIT 1",
-        )
-        .bind(sheet_id)
-        .bind(revision)
-        .fetch_optional(&mut *connection)
-        .await?
+    )
+    .bind(sheet_id)
+    .bind(revision)
+    .fetch_optional(&mut *connection)
+    .await?
     else {
         return Ok(None);
+    };
+    let mut state: State = match key {
+        None => serde_json::from_value(stored)
+            .map_err(|_| AppError::Internal("a sheet snapshot couldn't be read"))?,
+        Some(key) => {
+            let bytes = store.read_all(&key, MAX_PAYLOAD_BYTES).await?;
+            let mut json = Vec::new();
+            std::io::Read::read_to_end(
+                &mut flate2::read::GzDecoder::new(bytes.as_slice()),
+                &mut json,
+            )
+            .map_err(|_| AppError::Internal("a moved sheet snapshot couldn't be read"))?;
+            serde_json::from_slice(&json)
+                .map_err(|_| AppError::Internal("a moved sheet snapshot couldn't be read"))?
+        }
     };
     let later = sqlx::query_as::<_, (i64, Option<Json>)>(
         "SELECT revision, cells FROM sheet_revisions \
@@ -340,13 +372,16 @@ pub fn changes_to(now: &State, target: &State) -> Vec<Change> {
             });
         }
     }
-    // A sheet keeps at least one tab: when none survives, add first.
+    // A sheet keeps at least one tab and at most its limit: when none
+    // survives, add one first, then remove, then add the rest.
     if any_survives {
         changes.extend(removals);
         changes.extend(additions);
     } else {
-        changes.extend(additions);
+        let mut additions = additions.into_iter();
+        changes.extend(additions.next());
         changes.extend(removals);
+        changes.extend(additions);
     }
     for (position, tab) in target.tabs.iter().enumerate() {
         let current = now.tabs.iter().find(|current| current.id == tab.id);
@@ -408,6 +443,15 @@ pub fn changes_to(now: &State, target: &State) -> Vec<Change> {
             changes.push(Change::ConditionalFormats {
                 tab: reference.clone(),
                 rules: tab.conditional_formats.clone(),
+            });
+        }
+        let had_validations = current
+            .map(|current| current.validations.as_slice())
+            .unwrap_or_default();
+        if had_validations != tab.validations.as_slice() {
+            changes.push(Change::Validations {
+                tab: reference.clone(),
+                rules: tab.validations.clone(),
             });
         }
         let had_cells: BTreeMap<(i32, i32), &str> = current
@@ -509,6 +553,7 @@ async fn current(connection: &mut PgConnection, sheet_id: Uuid) -> Result<State,
                     .filter(|(_, _, look)| !look.is_plain())
                     .collect(),
                 conditional_formats: tab.rules(),
+                validations: tab.validation_rules(),
                 name: tab.name,
                 frozen_rows: tab.frozen_rows,
                 column_widths: tab.column_widths,
@@ -529,12 +574,13 @@ pub enum Refusal {
 /// Puts the locked sheet's tabs and inputs back as they were at
 /// `revision`, as a new revision by `actor_id`.
 pub async fn restore(
+    store: &files::FileStore,
     connection: &mut PgConnection,
     sheet: &Sheet,
     actor_id: Uuid,
     revision: i64,
 ) -> Result<Result<Applied, Refusal>, AppError> {
-    let Some(target) = state_at(&mut *connection, sheet.id, revision).await? else {
+    let Some(target) = state_at(store, &mut *connection, sheet.id, revision).await? else {
         return Ok(Err(Refusal::NotKept));
     };
     let now = current(&mut *connection, sheet.id).await?;
@@ -550,6 +596,69 @@ pub async fn restore(
     )
     .await?
     .map_err(Refusal::Problem))
+}
+
+/// Moves the state of snapshots older than 30 days, each replaced by a
+/// newer one as its sheet's latest, into the file store, compressed, a
+/// batch per run (C1.34). The row keeps its place; revisions built on it
+/// still show and restore. Returns how many moved.
+pub async fn compact_snapshots(state: &crate::AppState) -> Result<u64, AppError> {
+    let due = sqlx::query_as::<_, (Uuid, Uuid, i64)>(
+        r#"
+        SELECT snapshot.workspace_id, snapshot.sheet_id, snapshot.revision
+        FROM sheet_snapshots snapshot
+        WHERE snapshot.payload_key IS NULL
+          AND snapshot.created_at < now() - make_interval(days => $1)
+          AND EXISTS (
+              SELECT 1 FROM sheet_snapshots newer
+              WHERE newer.sheet_id = snapshot.sheet_id AND newer.revision > snapshot.revision
+          )
+        ORDER BY snapshot.created_at
+        LIMIT $2
+        "#,
+    )
+    .bind(COMPACT_AFTER_DAYS)
+    .bind(COMPACT_BATCH)
+    .fetch_all(crate::db::scoped(&state.pool))
+    .await?;
+    let store = files::FileStore::from_config(&state.config);
+    let mut moved = 0;
+    for (workspace, sheet, revision) in due {
+        let snapshot = sqlx::query_scalar::<_, Json>(
+            "SELECT state FROM sheet_snapshots WHERE sheet_id = $1 AND revision = $2",
+        )
+        .bind(sheet)
+        .bind(revision)
+        .fetch_one(crate::db::scoped(&state.pool))
+        .await?;
+        let json = serde_json::to_vec(&snapshot)
+            .map_err(|_| AppError::Internal("a sheet snapshot couldn't be written"))?;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut encoder, &json)
+            .map_err(|_| AppError::Internal("a sheet snapshot couldn't be compressed"))?;
+        let compressed = encoder
+            .finish()
+            .map_err(|_| AppError::Internal("a sheet snapshot couldn't be compressed"))?;
+        let key = format!(
+            "{}/history/sheet-{}-{revision}.json.gz",
+            workspace.simple(),
+            sheet.simple()
+        );
+        store.put(&key, &compressed).await?;
+        // A snapshot never changes once kept, so this only guards against a
+        // second run.
+        moved += sqlx::query(
+            "UPDATE sheet_snapshots SET state = '{}'::jsonb, payload_key = $3 \
+             WHERE sheet_id = $1 AND revision = $2 AND payload_key IS NULL",
+        )
+        .bind(sheet)
+        .bind(revision)
+        .bind(&key)
+        .execute(crate::db::scoped(&state.pool))
+        .await?
+        .rows_affected();
+    }
+    Ok(moved)
 }
 
 #[cfg(test)]
@@ -568,6 +677,7 @@ mod tests {
                 .collect(),
             looks: Vec::new(),
             conditional_formats: Vec::new(),
+            validations: Vec::new(),
         }
     }
 
@@ -681,5 +791,35 @@ mod tests {
                 "moveTab"
             ]
         );
+    }
+
+    #[test]
+    fn a_full_sheet_restores_over_a_replaced_tab_within_the_limit() {
+        // Twenty tabs then, one new tab now: one added, the new one removed,
+        // then the other nineteen, so the sheet never holds 21.
+        let names = (1..=20).map(|n| format!("T{n}")).collect::<Vec<_>>();
+        let now = State {
+            tabs: vec![tab(99, "Fresh", &[])],
+        };
+        let target = State {
+            tabs: names
+                .iter()
+                .enumerate()
+                .map(|(n, name)| tab(n as u128 + 1, name, &[]))
+                .collect(),
+        };
+        let changes = changes_to(&now, &target);
+        let mut count = 1_i32;
+        let mut most = count;
+        for change in &changes {
+            match change {
+                Change::AddTab { .. } => count += 1,
+                Change::RemoveTab { .. } => count -= 1,
+                _ => {}
+            }
+            assert!(count >= 1, "a sheet keeps a tab");
+            most = most.max(count);
+        }
+        assert_eq!((count, most), (20, 20));
     }
 }

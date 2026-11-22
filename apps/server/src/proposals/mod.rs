@@ -176,7 +176,7 @@ pub async fn decide(
     else {
         return Ok(Err(suggestions::Refusal::NotFound));
     };
-    match kind.as_str() {
+    let decided = match kind.as_str() {
         "page" if parts.is_some() => Ok(Err(suggestions::Refusal::NotYours(
             "A page proposal is accepted whole; parts are for sheets and whiteboards.",
         ))),
@@ -253,6 +253,7 @@ pub async fn decide(
                 transaction,
                 writer,
                 may_edit,
+                space_id,
                 thing_id,
                 proposal_id,
                 decision,
@@ -341,7 +342,46 @@ pub async fn decide(
         _ => Ok(Err(suggestions::Refusal::NotYours(
             "Proposals on this kind of thing can't be decided yet.",
         ))),
+    }?;
+    if decided.is_ok() {
+        announce_fact(transaction, proposal_id, true).await?;
     }
+    Ok(decided)
+}
+
+/// Tells rules, webhooks and the log (C1.28) that a proposal was made or
+/// decided: about the thing it changes, with the proposal's id and status
+/// (never its content).
+pub async fn announce_fact(
+    connection: &mut PgConnection,
+    proposal_id: Uuid,
+    decided: bool,
+) -> Result<(), AppError> {
+    use crate::events::{NewEvent, catalog};
+    let Some((space_id, kind, thing_id, author, decider, status)) =
+        sqlx::query_as::<_, (Uuid, String, Uuid, Uuid, Option<Uuid>, String)>(
+            "SELECT space_id, thing_kind, thing_id, author_actor_id, decided_by_actor_id, status \
+             FROM proposals WHERE id = $1",
+        )
+        .bind(proposal_id)
+        .fetch_optional(&mut *connection)
+        .await?
+    else {
+        return Ok(());
+    };
+    let (ty, actor) = if decided {
+        (&catalog::PROPOSAL_DECIDED, decider.unwrap_or(author))
+    } else {
+        (&catalog::PROPOSAL_CREATED, author)
+    };
+    crate::events::emit(
+        connection,
+        NewEvent::thing(ty, space_id, &kind, thing_id)
+            .actor(actor)
+            .payload(serde_json::json!({"proposalId": proposal_id, "status": status})),
+    )
+    .await?;
+    Ok(())
 }
 
 /// What a proposal's request card is about.

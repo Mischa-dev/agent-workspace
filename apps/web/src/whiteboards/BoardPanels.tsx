@@ -7,6 +7,7 @@ import { HistoryPanel } from '../pieces/HistoryPanel'
 import { useProjects } from '../projects/hooks'
 import { Banner, Button, Dialog, EmptyState, IconButton, Row, RowList, SelectField, describeError } from '../ui'
 import {
+  getWhiteboard,
   linkWhiteboard,
   unlinkWhiteboard,
   whiteboardKeys,
@@ -164,7 +165,8 @@ export function HistoryDialog({
           restore={
             canEdit
               ? {
-                  expectedVersion: detail.whiteboard.sceneSeq,
+                  // The drawing moves while it's open: read its version when restoring.
+                  expectedVersion: () => getWhiteboard(detail.whiteboard.id).then((fresh) => fresh.whiteboard.sceneSeq),
                   onRestored: () => void queryClient.invalidateQueries({ queryKey: whiteboardKeys.all }),
                 }
               : undefined

@@ -64,7 +64,7 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
     // A new sheet: its first entry names the starting tab, and the
     // formulas are worked out as it's written.
     let created = call(
-        "sheet_write",
+        "sheet_create",
         json!({
             "projectId": "WORK",
             "name": "Budget",
@@ -89,7 +89,7 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
     assert_eq!(created["value"]["created"], true);
     let sheet = created["value"]["id"].as_str().expect("id").to_owned();
     let replay = call(
-        "sheet_write",
+        "sheet_create",
         json!({
             "projectId": "WORK",
             "name": "Budget",
@@ -110,12 +110,8 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
         }),
     )
     .await;
-    assert_eq!(replay["value"]["idempotentReplay"], true, "{replay}");
-    let read = call(
-        "sheet_read",
-        json!({"projectId": "WORK", "sheet": "budget"}),
-    )
-    .await;
+    assert_eq!(replay["replayed"], true, "{replay}");
+    let read = call("sheet_get", json!({"projectId": "WORK", "sheet": "budget"})).await;
     assert_eq!(read["outcome"], "ok", "{read}");
     assert_eq!(read["value"]["tab"], "Costs");
     assert_eq!(read["value"]["tabs"][0]["used"], "C4");
@@ -139,13 +135,13 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
     // Two writers: Mara (an agent) changes A2; a change to another cell
     // read at the same revision goes through, but one to A2 is refused.
     let mara_wrote = mara_call(
-        "sheet_write",
+        "sheet_update",
         json!({"projectId": "WORK", "sheet": "Budget", "cells": [{"cell": "A2", "input": "Rent (office)"}]}),
     )
     .await;
     assert_eq!(mara_wrote["outcome"], "ok", "{mara_wrote}");
     let other_cell = call(
-        "sheet_write",
+        "sheet_update",
         json!({"projectId": "WORK", "sheet": sheet, "cells": [{"cell": "B3", "input": "90", "ifRevision": revision}]}),
     )
     .await;
@@ -158,7 +154,7 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
         "the total follows: {other_cell}"
     );
     let same_cell = call(
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": "WORK",
             "sheet": sheet,
@@ -171,7 +167,7 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
     .await;
     assert_eq!(same_cell["outcome"], "conflict", "{same_cell}");
     let read = call(
-        "sheet_read",
+        "sheet_get",
         json!({"projectId": "WORK", "sheet": sheet, "range": "A1:D4"}),
     )
     .await;
@@ -196,7 +192,7 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
         .as_i64()
         .expect("revision");
     let rows = call(
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": "WORK",
             "sheet": "Budget",
@@ -209,7 +205,7 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
     .await;
     assert_eq!(rows["outcome"], "ok", "{rows}");
     let table = call(
-        "sheet_read",
+        "sheet_get",
         json!({"projectId": "WORK", "sheet": "Budget", "asRows": true}),
     )
     .await;
@@ -230,7 +226,7 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
         .expect("Water");
     assert_eq!(water["row"], 5);
     let found = call(
-        "sheet_read",
+        "sheet_get",
         json!({"projectId": "WORK", "sheet": "Budget", "asRows": true, "where": {"item": "power"}}),
     )
     .await;
@@ -239,7 +235,7 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
     // Inserting a row moves the total and its formula with it; an edit
     // read before the insert is refused, since its cell may have moved.
     let inserted = call(
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": "WORK",
             "sheet": "Budget",
@@ -249,14 +245,14 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
     .await;
     assert_eq!(inserted["outcome"], "ok", "{inserted}");
     let read = call(
-        "sheet_read",
+        "sheet_get",
         json!({"projectId": "WORK", "sheet": "Budget", "range": "A1:B6"}),
     )
     .await;
     assert_eq!(value_at(&read, "A5"), json!("Total"));
     assert_eq!(formula_at(&read, "B5"), json!("=SUM(B2:B4)"));
     let stale = call(
-        "sheet_write",
+        "sheet_update",
         json!({"projectId": "WORK", "sheet": "Budget", "cells": [{"cell": "B2", "input": "1", "ifRevision": revision}]}),
     )
     .await;
@@ -264,7 +260,7 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
 
     // A second tab that points at the first follows its rename.
     let summary = call(
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": "WORK",
             "sheet": "Budget",
@@ -275,19 +271,19 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
     .await;
     assert_eq!(summary["outcome"], "ok", "{summary}");
     let read = call(
-        "sheet_read",
+        "sheet_get",
         json!({"projectId": "WORK", "sheet": "Budget", "tab": "Summary"}),
     )
     .await;
     assert_eq!(value_at(&read, "A1"), json!(2590.0), "{read}");
     let renamed = call(
-        "sheet_write",
+        "sheet_update",
         json!({"projectId": "WORK", "sheet": "Budget", "tabs": [{"tab": "Spend", "rename": "Outgoings"}]}),
     )
     .await;
     assert_eq!(renamed["outcome"], "ok", "{renamed}");
     let read = call(
-        "sheet_read",
+        "sheet_get",
         json!({"projectId": "WORK", "sheet": "Budget", "tab": "Summary"}),
     )
     .await;
@@ -295,7 +291,7 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
 
     // All or nothing: a bad cell after a good one writes neither.
     let half = call(
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": "WORK",
             "sheet": "Budget",
@@ -305,7 +301,7 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
     .await;
     assert_eq!(half["outcome"], "not_found", "{half}");
     let read = call(
-        "sheet_read",
+        "sheet_get",
         json!({"projectId": "WORK", "sheet": "Budget", "tab": "Summary", "range": "B1"}),
     )
     .await;
@@ -349,15 +345,11 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
     .execute(&setup.pool)
     .await
     .expect("viewer");
-    let read = mara_call(
-        "sheet_read",
-        json!({"projectId": "WORK", "sheet": "Budget"}),
-    )
-    .await;
+    let read = mara_call("sheet_get", json!({"projectId": "WORK", "sheet": "Budget"})).await;
     assert_eq!(read["outcome"], "ok", "{read}");
     assert_eq!(read["value"]["canEdit"], false);
     let refused = mara_call(
-        "sheet_write",
+        "sheet_update",
         json!({"projectId": "WORK", "sheet": "Budget", "cells": [{"cell": "A1", "input": "Mine"}]}),
     )
     .await;
@@ -365,7 +357,7 @@ async fn people_and_agents_build_and_edit_a_sheet_without_losing_each_others_cel
 
     // Archiving hides it from the list; its cells stay.
     let archived = call(
-        "sheet_write",
+        "sheet_update",
         json!({"projectId": "WORK", "sheet": "Budget", "archived": true}),
     )
     .await;
@@ -400,7 +392,7 @@ async fn clears_inserts_row_keys_renames_and_retries_hold_up() {
     };
     let revision_of = |result: &Value| result["value"]["revision"].as_i64().expect("revision");
     let made = call(
-        "sheet_write",
+        "sheet_create",
         json!({
             "projectId": "EDGE",
             "name": "Log",
@@ -420,13 +412,13 @@ async fn clears_inserts_row_keys_renames_and_retries_hold_up() {
 
     // A clear is a change: an edit read before it is refused.
     let cleared = call(
-        "sheet_write",
+        "sheet_update",
         json!({"projectId": "EDGE", "sheet": "Log", "cells": [{"cell": "C2", "input": "", "ifRevision": read_at}], "clientRequestId": "edge-2"}),
     )
     .await;
     assert_eq!(cleared["outcome"], "ok", "{cleared}");
     let stale = call(
-        "sheet_write",
+        "sheet_update",
         json!({"projectId": "EDGE", "sheet": "Log", "cells": [{"cell": "C2", "input": "back", "ifRevision": read_at}], "clientRequestId": "edge-3"}),
     )
     .await;
@@ -434,13 +426,13 @@ async fn clears_inserts_row_keys_renames_and_retries_hold_up() {
 
     // A row inserted far below in the same write doesn't hide a newer B2.
     let newer = call(
-        "sheet_write",
+        "sheet_update",
         json!({"projectId": "EDGE", "sheet": "Log", "cells": [{"cell": "B2", "input": "second"}], "clientRequestId": "edge-4"}),
     )
     .await;
     assert_eq!(newer["outcome"], "ok", "{newer}");
     let hidden = call(
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": "EDGE",
             "sheet": "Log",
@@ -454,7 +446,7 @@ async fn clears_inserts_row_keys_renames_and_retries_hold_up() {
 
     // Rows by key see what this write set first, and 1.0 is the key 1.
     let keyed = call(
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": "EDGE",
             "sheet": "Log",
@@ -470,7 +462,7 @@ async fn clears_inserts_row_keys_renames_and_retries_hold_up() {
     .await;
     assert_eq!(keyed["outcome"], "ok", "{keyed}");
     let read = call(
-        "sheet_read",
+        "sheet_get",
         json!({"projectId": "EDGE", "sheet": "Log", "range": "A1:B6"}),
     )
     .await;
@@ -482,7 +474,7 @@ async fn clears_inserts_row_keys_renames_and_retries_hold_up() {
 
     // A new tab keeps its widths, and chained renames land.
     let tabs = call(
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": "EDGE",
             "sheet": "Log",
@@ -493,7 +485,7 @@ async fn clears_inserts_row_keys_renames_and_retries_hold_up() {
     .await;
     assert_eq!(tabs["outcome"], "ok", "{tabs}");
     let renamed = call(
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": "EDGE",
             "sheet": "Log",
@@ -521,7 +513,7 @@ async fn clears_inserts_row_keys_renames_and_retries_hold_up() {
 
     // Tab entries apply in order: a move, then a removal.
     let reordered = call(
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": "EDGE",
             "sheet": "Log",
@@ -542,10 +534,10 @@ async fn clears_inserts_row_keys_renames_and_retries_hold_up() {
 
     // A retry of a rename by the old name gets its first answer back.
     let rename = json!({"projectId": "EDGE", "sheet": "Log", "name": "Journal", "clientRequestId": "edge-9"});
-    let first = call("sheet_write", rename.clone()).await;
+    let first = call("sheet_update", rename.clone()).await;
     assert_eq!(first["outcome"], "ok", "{first}");
-    let retry = call("sheet_write", rename).await;
-    assert_eq!(retry["value"]["idempotentReplay"], true, "{retry}");
+    let retry = call("sheet_update", rename).await;
+    assert_eq!(retry["replayed"], true, "{retry}");
     assert_eq!(retry["value"]["name"], "Journal");
 }
 
@@ -565,7 +557,7 @@ async fn sheet_cell_writes_do_not_wait_for_the_project_lock() {
         app,
         &codex,
         &session,
-        "sheet_write",
+        "sheet_create",
         json!({"projectId": "WORK", "name": "Plan", "cells": [{"cell": "A1", "input": "1"}], "clientRequestId": "plan-1"}),
     )
     .await;
@@ -585,7 +577,7 @@ async fn sheet_cell_writes_do_not_wait_for_the_project_lock() {
             app,
             &codex,
             &session,
-            "sheet_write",
+            "sheet_update",
             json!({"projectId": "WORK", "sheet": "Plan", "cells": [{"cell": "A2", "input": "=A1*2"}], "clientRequestId": "plan-2"}),
         ),
     )
@@ -613,7 +605,7 @@ async fn any_revision_comes_back_as_a_new_one() {
         async move { tool(app, &codex, &session, name, arguments).await }
     };
     let made = call(
-        "sheet_write",
+        "sheet_create",
         json!({
             "projectId": "HIST",
             "name": "Counter",
@@ -641,11 +633,35 @@ async fn any_revision_comes_back_as_a_new_one() {
         if step == 30 {
             arguments["tabs"] = json!([{"add": "Notes"}]);
         }
-        let written = call("sheet_write", arguments).await;
+        let written = call("sheet_update", arguments).await;
         assert_eq!(written["outcome"], "ok", "{step}: {written}");
         revisions.push(written["value"]["revision"].as_i64().expect("revision"));
     }
     let now = *revisions.last().expect("revisions");
+    // C1.34: snapshots past 30 days move to the file store, all but the
+    // sheet's latest, and the revisions built on them still come back.
+    sqlx::query(
+        "UPDATE sheet_snapshots SET created_at = now() - interval '40 days' WHERE sheet_id::text = $1",
+    )
+    .bind(&sheet)
+    .execute(&setup.pool)
+    .await
+    .expect("age the snapshots");
+    let state = crate::support::app::state_on(&setup.pool);
+    let moved = crate::support::as_server_job(
+        agent_workspace_server::sheets::history::compact_snapshots(&state),
+    )
+    .await
+    .expect("compact");
+    assert!(moved > 0, "old snapshots move out");
+    let inline = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM sheet_snapshots WHERE sheet_id::text = $1 AND payload_key IS NULL",
+    )
+    .bind(&sheet)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("left inline");
+    assert_eq!(inline, 1, "the latest snapshot stays");
     // Step 12: A1 held 12, before the row moved it and before the tab.
     let twelve = revisions[11];
     let shown = call("history_show", json!({"thing": sheet, "version": twelve})).await;
@@ -669,7 +685,7 @@ async fn any_revision_comes_back_as_a_new_one() {
     assert_eq!(restored["outcome"], "ok", "{restored}");
     assert_eq!(restored["value"]["version"], now + 1, "{restored}");
     let read = call(
-        "sheet_read",
+        "sheet_get",
         json!({"projectId": "HIST", "sheet": "Counter"}),
     )
     .await;
@@ -681,7 +697,7 @@ async fn any_revision_comes_back_as_a_new_one() {
     );
     assert_eq!(value_at(&read, "A2"), Value::Null, "{read}");
     let tabs = call(
-        "sheet_read",
+        "sheet_get",
         json!({"projectId": "HIST", "sheet": "Counter", "tab": "Notes"}),
     )
     .await;
@@ -695,7 +711,7 @@ async fn any_revision_comes_back_as_a_new_one() {
     .await;
     assert_eq!(back["outcome"], "ok", "{back}");
     let read = call(
-        "sheet_read",
+        "sheet_get",
         json!({"projectId": "HIST", "sheet": "Counter"}),
     )
     .await;
@@ -724,7 +740,7 @@ async fn a_named_range_moves_with_its_rows_and_feeds_a_dashboard_tile() {
         async move { tool(app, &codex, &session, name, arguments).await }
     };
     let made = call(
-        "sheet_write",
+        "sheet_create",
         json!({
             "projectId": "SRC",
             "name": "Spend",
@@ -811,7 +827,7 @@ async fn a_named_range_moves_with_its_rows_and_feeds_a_dashboard_tile() {
 
     // A row above moves the range down; agents read it by name.
     let moved = call(
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": "SRC",
             "sheet": sheet,
@@ -823,7 +839,7 @@ async fn a_named_range_moves_with_its_rows_and_feeds_a_dashboard_tile() {
     .await;
     assert_eq!(moved["outcome"], "ok", "{moved}");
     let read = call(
-        "sheet_read",
+        "sheet_get",
         json!({"projectId": "SRC", "sheet": sheet, "range": "TOTALS"}),
     )
     .await;
@@ -834,7 +850,7 @@ async fn a_named_range_moves_with_its_rows_and_feeds_a_dashboard_tile() {
 
     // A cell changing changes the tile.
     let changed = call(
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": "SRC",
             "sheet": sheet,
@@ -857,7 +873,7 @@ async fn a_named_range_moves_with_its_rows_and_feeds_a_dashboard_tile() {
 
     // Deleting every row of it removes the name; the tile says so.
     let gone = call(
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": "SRC",
             "sheet": sheet,
@@ -881,4 +897,340 @@ async fn a_named_range_moves_with_its_rows_and_feeds_a_dashboard_tile() {
     )
     .await;
     assert_eq!(removed["outcome"], "not_found", "{removed}");
+}
+
+/// C1.15: a strict rule refuses what breaks it, naming the rule, whether a
+/// cell or a row by header is written; a lenient one keeps the input; the
+/// rules move with inserted rows.
+#[tokio::test]
+async fn a_strict_rule_refuses_what_breaks_it_and_names_the_rule() {
+    let Some(setup) = setup("c1_sheet_validation").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "VAL", "Validation").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let made = call(
+        "sheet_create",
+        json!({
+            "projectId": "VAL",
+            "name": "Tracker",
+            "tabs": [{"add": "Work"}],
+            "cells": [
+                {"cell": "A1", "input": "Task"},
+                {"cell": "B1", "input": "Done"},
+                {"cell": "C1", "input": "Effort"},
+                {"cell": "A2", "input": "Paint"},
+            ],
+            "validations": [{"tab": "Work", "rules": [
+                {"range": "b2:b50", "allow": "list", "choices": ["Yes", "No"], "hint": "Pick one"},
+                {"range": "C2:C50", "allow": "number", "min": 1, "max": 5, "whole": true, "strict": false},
+                {"range": "D2:D50", "allow": "number", "max": 5},
+            ]}],
+            "clientRequestId": "tracker-1",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let sheet = made["value"]["id"].as_str().expect("id").to_owned();
+
+    let maybe = call(
+        "sheet_update",
+        json!({"projectId": "VAL", "sheet": sheet, "cells": [{"tab": "Work", "cell": "B2", "input": "Maybe"}], "clientRequestId": "maybe"}),
+    )
+    .await;
+    assert_eq!(maybe["outcome"], "invalid_request", "{maybe}");
+    let said = maybe.to_string();
+    assert!(
+        said.contains("B2:B50") && said.contains("Yes, No") && said.contains("Pick one"),
+        "the rule is named: {said}"
+    );
+    let by_row = call(
+        "sheet_update",
+        json!({"projectId": "VAL", "sheet": sheet, "rows": [{"tab": "Work", "keyColumn": "Task", "values": {"Task": "Paint", "Done": "Later"}}],
+               "clientRequestId": "later"}),
+    )
+    .await;
+    assert_eq!(by_row["outcome"], "invalid_request", "{by_row}");
+
+    let fine = call(
+        "sheet_update",
+        json!({"projectId": "VAL", "sheet": sheet, "cells": [
+            {"tab": "Work", "cell": "B2", "input": "yes"},
+            {"tab": "Work", "cell": "C2", "input": "9"},
+        ], "clientRequestId": "fine"}),
+    )
+    .await;
+    assert_eq!(
+        fine["outcome"], "ok",
+        "lenient rules keep the input: {fine}"
+    );
+
+    let inserted = call(
+        "sheet_update",
+        json!({"projectId": "VAL", "sheet": sheet, "tabs": [{"tab": "Work", "insertRowsAt": 1, "count": 2}], "clientRequestId": "insert"}),
+    )
+    .await;
+    assert_eq!(inserted["outcome"], "ok", "{inserted}");
+    let read = call(
+        "sheet_get",
+        json!({"projectId": "VAL", "sheet": sheet, "tab": "Work"}),
+    )
+    .await;
+    assert_eq!(read["outcome"], "ok", "{read}");
+    let tab = read["value"]["tabs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|tab| tab["name"] == "Work")
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(tab["validations"][0]["range"], "B4:B52", "{tab}");
+    assert_eq!(tab["validations"][1]["range"], "C4:C52", "{tab}");
+    let moved = call(
+        "sheet_update",
+        json!({"projectId": "VAL", "sheet": sheet, "cells": [{"tab": "Work", "cell": "B4", "input": "Maybe"}], "clientRequestId": "maybe-2"}),
+    )
+    .await;
+    assert_eq!(
+        moved["outcome"], "invalid_request",
+        "the rule moved: {moved}"
+    );
+    // A number the engine keeps in its own form ("6.0" as "6") is still
+    // checked.
+    let written_otherwise = call(
+        "sheet_update",
+        json!({"projectId": "VAL", "sheet": sheet, "cells": [{"tab": "Work", "cell": "D4", "input": "6.0"}], "clientRequestId": "six"}),
+    )
+    .await;
+    assert_eq!(
+        written_otherwise["outcome"], "invalid_request",
+        "{written_otherwise}"
+    );
+}
+
+/// C1.18: a chart over a named range follows its cells: it reads them as
+/// they are, keeps to the range as rows go in above it, and draws an SVG
+/// for agents; one whose range is removed says so instead of guessing.
+#[tokio::test]
+async fn a_chart_over_a_named_range_follows_its_cells() {
+    let Some(setup) = setup("c1_sheet_charts").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "CHART", "Charts").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let made = call(
+        "sheet_create",
+        json!({
+            "projectId": "CHART",
+            "name": "Costs",
+            "cells": [
+                {"cell": "A1", "input": "Item"}, {"cell": "B1", "input": "Cost"},
+                {"cell": "A2", "input": "Rent"}, {"cell": "B2", "input": "1200"},
+                {"cell": "A3", "input": "Food"}, {"cell": "B3", "input": "300"},
+            ],
+            "clientRequestId": "costs-1",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let sheet = made["value"]["id"].as_str().expect("id").to_owned();
+    let named = call(
+        "sheet_range_set",
+        json!({"sheetId": sheet, "name": "Spend", "range": "A1:B3", "clientRequestId": "spend"}),
+    )
+    .await;
+    assert_eq!(named["outcome"], "ok", "{named}");
+    let refused = call(
+        "sheet_chart_set",
+        json!({"sheetId": sheet, "title": "Nothing", "source": "Nowhere", "clientRequestId": "bad-chart"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+    let charted = call(
+        "sheet_chart_set",
+        json!({"sheetId": sheet, "title": "Spend", "style": "bar", "source": "Spend", "clientRequestId": "chart-1"}),
+    )
+    .await;
+    assert_eq!(charted["outcome"], "ok", "{charted}");
+    let chart = charted["value"]["chartId"]
+        .as_str()
+        .expect("chart")
+        .to_owned();
+    let read = |call_name: &'static str| {
+        let chart = chart.clone();
+        let sheet = sheet.clone();
+        let call = &call;
+        async move { call(call_name, json!({"sheetId": sheet, "chartId": chart})).await }
+    };
+    let first = read("sheet_chart_get").await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert_eq!(
+        first["value"]["points"],
+        json!([{"label": "Rent", "value": 1200.0}, {"label": "Food", "value": 300.0}]),
+        "{first}"
+    );
+    assert!(
+        first["value"]["svg"]
+            .as_str()
+            .is_some_and(|svg| svg.starts_with("<svg")),
+        "{first}"
+    );
+
+    // A cell changes, and rows go in above: the chart reads the range where it is.
+    let changed = call(
+        "sheet_update",
+        json!({"projectId": "CHART", "sheet": sheet, "cells": [{"cell": "B3", "input": "450"}],
+               "clientRequestId": "costs-2"}),
+    )
+    .await;
+    assert_eq!(changed["outcome"], "ok", "{changed}");
+    let moved = call(
+        "sheet_update",
+        json!({"projectId": "CHART", "sheet": sheet,
+               "tabs": [{"tab": "Sheet1", "insertRowsAt": 1, "count": 2}], "clientRequestId": "costs-3"}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let after = read("sheet_chart_get").await;
+    assert_eq!(
+        after["value"]["points"],
+        json!([{"label": "Rent", "value": 1200.0}, {"label": "Food", "value": 450.0}]),
+        "{after}"
+    );
+
+    // The range goes: the chart says what it draws isn't there.
+    let removed = call(
+        "sheet_range_set",
+        json!({"sheetId": sheet, "name": "Spend", "remove": true, "clientRequestId": "unspend"}),
+    )
+    .await;
+    assert_eq!(removed["outcome"], "ok", "{removed}");
+    let gone = read("sheet_chart_get").await;
+    assert_eq!(gone["value"]["found"], false, "{gone}");
+    let dropped = call(
+        "sheet_chart_set",
+        json!({"sheetId": sheet, "chartId": chart, "remove": true, "clientRequestId": "drop-chart"}),
+    )
+    .await;
+    assert_eq!(dropped["outcome"], "ok", "{dropped}");
+    assert_eq!(dropped["value"]["charts"], json!([]), "{dropped}");
+}
+
+/// C1.10: every sheet write is a change, listed with the cells it touched
+/// and undone in a step: cells changed since are left and named, the undo
+/// can itself be undone, and a write that moved rows is outlined but put
+/// back by a restore instead.
+#[tokio::test]
+async fn a_sheet_write_is_undone_in_a_step() {
+    let Some(setup) = setup("c1_10_sheet_undo").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "UNDO", "Undo").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let call = |name: &'static str, arguments: Value| {
+        let codex = codex.clone();
+        let session = session.clone();
+        async move { tool(app, &codex, &session, name, arguments).await }
+    };
+    let made = call(
+        "sheet_create",
+        json!({"projectId": "UNDO", "name": "Budget",
+               "cells": [{"cell": "A1", "input": "1"}, {"cell": "B1", "input": "=A1*2"}],
+               "clientRequestId": "undo-0"}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let sheet = made["value"]["id"].as_str().expect("id").to_owned();
+    let write = |cells: Value, key: &'static str| {
+        call(
+            "sheet_update",
+            json!({"projectId": "UNDO", "sheet": "Budget", "cells": cells, "clientRequestId": key}),
+        )
+    };
+    let three = write(
+        json!([{"cell": "A1", "input": "5"}, {"cell": "A2", "input": "7"}, {"cell": "C1", "input": "3"}]),
+        "undo-1",
+    )
+    .await;
+    assert_eq!(three["outcome"], "ok", "{three}");
+    let later = write(json!([{"cell": "C1", "input": "4"}]), "undo-2").await;
+    assert_eq!(later["outcome"], "ok", "{later}");
+
+    let list = |key: &'static str| {
+        let _ = key;
+        call(
+            "change_list",
+            json!({"thingKind": "sheet", "thingId": sheet}),
+        )
+    };
+    let changes = list("list-1").await;
+    assert_eq!(changes["outcome"], "ok", "{changes}");
+    let listed = changes["value"]["changes"].as_array().expect("changes");
+    assert_eq!(listed.len(), 3, "{changes}");
+    let middle = &listed[1];
+    assert_eq!(
+        middle["touched"]["cells"].as_array().map(Vec::len),
+        Some(3),
+        "{changes}"
+    );
+    assert_eq!(middle["undoable"], true, "{changes}");
+
+    let undo = call(
+        "change_undo",
+        json!({"changeSetId": middle["id"], "clientRequestId": "undo-undo"}),
+    )
+    .await;
+    assert_eq!(undo["outcome"], "ok", "{undo}");
+    assert_eq!(undo["value"]["skipped"], json!(["Sheet1!C1"]), "{undo}");
+    let read = call("sheet_get", json!({"projectId": "UNDO", "sheet": "Budget"})).await;
+    assert_eq!(value_at(&read, "A1"), json!(1.0), "{read}");
+    assert_eq!(value_at(&read, "B1"), json!(2.0), "{read}");
+    assert_eq!(value_at(&read, "A2"), Value::Null, "{read}");
+    assert_eq!(value_at(&read, "C1"), json!(4.0), "{read}");
+
+    let again = call(
+        "change_undo",
+        json!({"changeSetId": middle["id"], "clientRequestId": "undo-again"}),
+    )
+    .await;
+    assert_eq!(again["outcome"], "conflict", "{again}");
+    let redo = call(
+        "change_undo",
+        json!({"changeSetId": undo["value"]["change"]["id"], "clientRequestId": "undo-redo"}),
+    )
+    .await;
+    assert_eq!(redo["outcome"], "ok", "{redo}");
+    let read = call("sheet_get", json!({"projectId": "UNDO", "sheet": "Budget"})).await;
+    assert_eq!(value_at(&read, "A1"), json!(5.0), "{read}");
+    assert_eq!(value_at(&read, "A2"), json!(7.0), "{read}");
+
+    let moved = call(
+        "sheet_update",
+        json!({"projectId": "UNDO", "sheet": "Budget",
+               "tabs": [{"tab": "Sheet1", "insertRowsAt": 1, "count": 1}],
+               "cells": [{"cell": "A1", "input": "top"}], "clientRequestId": "undo-3"}),
+    )
+    .await;
+    assert_eq!(moved["outcome"], "ok", "{moved}");
+    let changes = list("list-2").await;
+    assert_eq!(
+        changes["value"]["changes"][0]["undoable"], false,
+        "{changes}"
+    );
 }

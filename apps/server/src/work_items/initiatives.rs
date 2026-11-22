@@ -44,7 +44,7 @@ pub struct Initiatives {
     /// The workspace's own space, where the Initiatives collection is.
     pub space_id: Option<String>,
     /// The Initiatives collection: its records are the initiatives, changed
-    /// with record_write like any record. None until the first is made.
+    /// with record_update_many like any record. None until the first is made.
     pub collection_id: Option<String>,
     pub initiatives: Vec<Initiative>,
 }

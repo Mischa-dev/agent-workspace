@@ -14,9 +14,8 @@
 use uuid::Uuid;
 
 use crate::{
-    AppState,
-    error::AppError,
-    provider::{adapter::TokenUsage, catalog, manifest::ModelPrices},
+    AppState, error::AppError, harness::manifest::ModelPrices, harness::report::TokenUsage,
+    model_catalog as catalog,
 };
 
 pub use agent_workspace_redaction::{
@@ -44,49 +43,48 @@ pub fn price(usage: &TokenUsage, prices: &ModelPrices) -> f64 {
         )
 }
 
-/// Adds usage to the run's row for its model and prices it. Usage is a
-/// side note to the run: a failure here is logged, never the run's.
-pub async fn record_tokens(state: &AppState, run_id: Uuid, usage: TokenUsage) {
-    if let Err(error) = store_tokens(state, run_id, usage).await {
-        tracing::warn!(error_category = error.log_category(), %run_id, "run usage not recorded");
-    }
+/// Tokens a run reported for one model.
+#[derive(Clone, Copy, Debug)]
+pub struct Tokens {
+    pub input: i64,
+    pub output: i64,
+    pub cached_input: i64,
 }
 
-async fn store_tokens(state: &AppState, run_id: Uuid, usage: TokenUsage) -> Result<(), AppError> {
-    let scope = crate::runs::usage::builtin_scope(crate::db::scoped(&state.pool), run_id).await?;
-    let model = usage
-        .model
-        .clone()
-        .filter(|model| (1..=200).contains(&model.len()))
-        .or(scope.model.clone())
-        .unwrap_or_else(|| "default".to_owned());
-    let prices = match state.supervisors.manifest(&scope.adapter_kind) {
-        Some(manifest) => catalog::run_catalog(&state.pool, scope.workspace_id, &manifest)
-            .await?
-            .into_iter()
-            .find(|entry| entry.id == model)
-            .and_then(|entry| entry.prices),
-        None => None,
+/// What a built-in run's tokens cost at the workspace's catalog prices for
+/// its harness, with the currency; `None` for a run on another host or a
+/// model the catalog has no price for.
+pub async fn builtin_estimate(
+    state: &AppState,
+    run_id: Uuid,
+    model: &str,
+    tokens: Tokens,
+) -> Result<Option<(f64, String)>, AppError> {
+    let Some(scope) =
+        crate::runs::usage::builtin_scope_of(crate::db::scoped(&state.pool), run_id).await?
+    else {
+        return Ok(None);
     };
-    let clamp = |tokens: u64| i64::try_from(tokens).unwrap_or(i64::MAX);
-    crate::runs::usage::add_builtin(
-        crate::db::scoped(&state.pool),
-        run_id,
-        &crate::runs::usage::BuiltinTokens {
-            model,
-            backend: scope.adapter_kind.clone(),
-            date: scope.created_at.date_naive(),
-            input_tokens: clamp(usage.input_tokens),
-            output_tokens: clamp(usage.output_tokens),
-            cached_input_tokens: clamp(usage.cached_input_tokens),
-            estimated_cost: prices.as_ref().map(|prices| price(&usage, prices)),
-            currency: prices.as_ref().map(|prices| prices.currency.clone()),
-            reported_cost_usd: usage
-                .reported_cost_usd
-                .filter(|cost| cost.is_finite() && *cost >= 0.0),
-        },
-    )
-    .await
+    let harnesses = crate::harness_catalog::Harnesses::of(state, scope.workspace_id).await?;
+    // A registered harness switched off mid-run still prices that run.
+    let Some(manifest) = harnesses.known(&scope.adapter_kind) else {
+        return Ok(None);
+    };
+    let prices = catalog::run_catalog(&state.pool, scope.workspace_id, manifest)
+        .await?
+        .into_iter()
+        .find(|entry| entry.id == model)
+        .and_then(|entry| entry.prices);
+    let count = |tokens: i64| u64::try_from(tokens).unwrap_or(0);
+    Ok(prices.map(|prices| {
+        let usage = TokenUsage {
+            input_tokens: count(tokens.input),
+            output_tokens: count(tokens.output),
+            cached_input_tokens: count(tokens.cached_input),
+            ..TokenUsage::default()
+        };
+        (price(&usage, &prices), prices.currency.clone())
+    }))
 }
 
 /// A run's (or a set of runs') tokens and cost, for views.
@@ -121,7 +119,7 @@ pub const TOTALS: &str = r#"
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::adapter::{HarnessItem, ItemDetail, ItemKind, TestCounts};
+    use crate::harness::report::{HarnessItem, ItemDetail, ItemKind, TestCounts};
 
     #[test]
     fn credentials_are_removed_from_reported_text() {

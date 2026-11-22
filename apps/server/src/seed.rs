@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
-    config::AppConfig, error::AppError, git_runtime::expected_repository_mirror_path,
+    config::AppConfig, error::AppError, hosts::builtin::repositories::mirror_path,
     profile_runtime::prepare_private_profile_directory,
 };
 
@@ -31,6 +31,11 @@ pub const DEMO_REPOSITORY_NAME: &str = "demo-repository";
 pub const DEMO_CLONE_URL: &str = "https://github.com/example-org/demo-repository.git";
 
 pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppError> {
+    // A development server's first data, made before anyone has a scope.
+    crate::tenancy::system("server.first_run", Box::pin(dev_seed_here(pool, config))).await
+}
+
+async fn dev_seed_here(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppError> {
     if !config.environment.is_development() || !config.server_addr.ip().is_loopback() {
         return Err(AppError::DevelopmentAuthUnavailable);
     }
@@ -212,7 +217,7 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     .fetch_optional(&mut *transaction)
     .await?
     .unwrap_or_else(Uuid::now_v7);
-    let mirror_path = expected_repository_mirror_path(&config.data_root, repository_id)?;
+    let mirror_path = mirror_path(&config.data_root, repository_id)?;
     let repository_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO repositories (
@@ -310,7 +315,7 @@ pub async fn dev_seed(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, AppE
     .await?;
 
     crate::execution_setup::lock_project_setup(&mut transaction, project_id).await?;
-    let codex_manifest = crate::provider::codex_manifest();
+    let codex_manifest = crate::hosts::builtin::default_manifest();
     // Upgrade tests seed schemas from before provider accounts (S6), where
     // the profile itself held the private home directory, and from before
     // connections recorded a binary version.

@@ -78,6 +78,10 @@ async fn destination(
 ) -> Result<(super::Destination, usize), OpError> {
     let permission = match place {
         Place::Conversation(_) => Perm::ChannelsPost,
+        // A file for a comment needs only what the comment does.
+        Place::Task {
+            for_comment: true, ..
+        } => Perm::TasksComment,
         Place::Task { .. } => Perm::TasksEdit,
     };
     let located = Located {
@@ -88,16 +92,31 @@ async fn destination(
     let mut transaction = crate::db::scoped_tx(&call.state.pool)
         .await
         .map_err(AppError::from)?;
-    crate::ops::access_shim::check(
-        &mut transaction,
-        &call.ctx.caller,
-        &call.ctx.target,
-        &located,
-        Some(permission),
-        true,
-        call.ctx.op,
-    )
-    .await?;
+    match call.ctx.direct {
+        // A DM or group is in no workspace: what the caller may do there.
+        Some(conversation) => {
+            let _grant = crate::access::check(
+                &mut transaction,
+                &call.ctx.caller,
+                crate::access::Need::maybe(Some(permission)).writing(true),
+                crate::access::Target::Conversation(conversation),
+            )
+            .await?
+            .map_err(|_| OpError::not_found("That conversation"))?;
+        }
+        None => {
+            crate::ops::access_shim::check(
+                &mut transaction,
+                &call.ctx.caller,
+                &call.ctx.target,
+                &located,
+                Some(permission),
+                true,
+                call.ctx.op,
+            )
+            .await?;
+        }
+    }
     let found = upload::destination(&mut transaction, &call.ctx.into(), &call.ctx.into(), place)
         .await
         .map_err(|error| match error {
@@ -296,7 +315,7 @@ impl Operation for FileUploadFinish {
     const DESCRIPTION: &'static str = "After sending a file's bytes to the link file_upload_start \
         gave, make it a file: the server checks what arrived is the size (and SHA-256) declared, \
         and refuses and deletes it otherwise. A picture loses its location data first. Returns \
-        the file; pass its id in message_send's or task_comment's attachmentIds as with \
+        the file; pass its id in message_send's or task_comment_create's attachmentIds as with \
         file_upload. Calling it again returns the same file.";
 
     type Input = FileUploadFinishInput;

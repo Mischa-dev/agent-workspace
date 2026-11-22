@@ -380,7 +380,7 @@ async fn personal_space_is_private() {
         &world.app,
         &rook.token,
         &rook.session,
-        "page_write",
+        "page_create",
         json!({"projectId": "me", "title": "Scratch", "body": "The wombatword plan."}),
     )
     .await;
@@ -439,7 +439,7 @@ async fn personal_space_is_private() {
         &world.app,
         &rook.token,
         &rook.session,
-        "search",
+        "workspace_search",
         json!({"query": "wombatword"}),
     )
     .await;
@@ -477,7 +477,7 @@ async fn personal_space_is_private() {
             &world.app,
             &scout.token,
             &scout.session,
-            "search",
+            "workspace_search",
             json!({"query": word}),
         )
         .await;
@@ -592,23 +592,27 @@ async fn spaces_start_from_their_shape_once() {
 
     // The same shape again: nothing new.
     let space = Uuid::parse_str(&team).expect("space id");
-    let mut tx = agent_workspace_server::db::scoped_tx(world.pool())
+    let again = super::support::as_member(world.owner.actor, async {
+        let mut tx = agent_workspace_server::db::scoped_tx(world.pool())
+            .await
+            .expect("transaction");
+        let again = shape::apply(
+            &mut tx,
+            Writer {
+                actor_id: world.owner.actor,
+                actor_kind: ActorKind::Human,
+                via_grant_id: None,
+                confined_project: None,
+            },
+            space,
+            &shape::builtin(SpaceKind::Team),
+        )
         .await
-        .expect("transaction");
-    let again = shape::apply(
-        &mut tx,
-        Writer {
-            actor_id: world.owner.actor,
-            actor_kind: ActorKind::Human,
-            via_grant_id: None,
-            confined_project: None,
-        },
-        space,
-        &shape::builtin(SpaceKind::Team),
-    )
-    .await
-    .expect("apply again");
-    tx.commit().await.expect("commit");
+        .expect("apply again");
+        tx.commit().await.expect("commit");
+        again
+    })
+    .await;
     assert_eq!(again, shape::Made::default());
     assert_eq!(contents(team).await.1.len(), 1);
 
@@ -630,4 +634,39 @@ async fn spaces_start_from_their_shape_once() {
     let (channels, pages) = contents(id(&made)).await;
     assert_eq!(channels, vec!["alerts".to_owned()]);
     assert_eq!(pages, vec![("Runbook".to_owned(), false)]);
+}
+
+/// "workspace" names the workspace's own space on the web and v2 edge, as
+/// it does for MCP tools: a page made there is listed there.
+#[tokio::test]
+async fn the_workspace_space_is_named_on_every_edge() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .build("awd96_workspace_space_web")
+        .await
+    else {
+        return;
+    };
+    let made = op(
+        &world,
+        "lena",
+        "page_create",
+        json!({"projectId": "workspace", "title": "Handbook", "body": "Hello.",
+               "clientRequestId": Uuid::now_v7().to_string()}),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let listed = op(
+        &world,
+        "lena",
+        "page_list",
+        json!({"projectId": "Workspace"}),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(
+        listed.to_string().contains("Handbook"),
+        "the page is listed in the workspace's space: {listed}"
+    );
 }

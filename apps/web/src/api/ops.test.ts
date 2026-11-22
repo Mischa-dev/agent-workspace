@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { describeError } from '../ui/errorText'
 import { ApiError } from './errors'
 import type { OpErrorOutcome } from './generated/operations'
-import { callOp, heldForReview, newRequestId, OUTCOME_SENTENCES, opKey, opQuery } from './ops'
+import { callOp, heldForReview, newRequestId, OUTCOME_SENTENCES, opKey, opQuery, ranOrThrow } from './ops'
 
 // The names and inputs are cast: the test is about the call, whichever
 // operations the registry holds.
@@ -156,5 +156,14 @@ describe('heldForReview', () => {
     expect(heldForReview({ status: 'paused' })).toBeNull()
     expect(heldForReview({ pageId: 'p', version: 2 })).toBeNull()
     expect(heldForReview(null)).toBeNull()
+  })
+})
+
+describe('ranOrThrow', () => {
+  it('passes an answer through once its command ran, and refuses a held one', () => {
+    expect(ranOrThrow({ launchId: 'l-1' }, 'Cancelling it')).toEqual({ launchId: 'l-1' })
+    expect(() => ranOrThrow({ status: 'pending_review', requestId: 'req-1' }, 'Cancelling it')).toThrow(
+      'Cancelling it waits for a reviewer to allow it.',
+    )
   })
 })

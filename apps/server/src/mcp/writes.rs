@@ -45,7 +45,7 @@ const MAX_REQUEST_ID_BYTES: usize = 128;
 
 const TASK_ID_MESSAGE: &str = "Pass the task's ID, link, or key such as AWD-12.";
 const EXPECTED_VERSION_MESSAGE: &str =
-    "Pass the version you last read (from task_open or task_list) as expectedVersion.";
+    "Pass the version you last read (from task_get or task_list) as expectedVersion.";
 pub(super) const REQUEST_ID_MESSAGE: &str = "Use a clientRequestId of 1 to 128 letters, digits, dashes, dots or underscores, and send the same one when you retry.";
 pub(super) const TITLE_MESSAGE: &str = "Give it a title of 1 to 240 characters, on one line.";
 pub(super) const DESCRIPTION_MESSAGE: &str = "The description can be at most 100,000 characters, with no control characters except line breaks and tabs.";
@@ -84,17 +84,25 @@ pub struct PostUpdateArguments {
     #[serde(rename = "taskId", alias = "workItemId")]
     pub work_item_id: String,
     /// The comment or update. It may span several lines and use Markdown.
-    #[serde(rename = "text", alias = "update")]
-    pub update: String,
+    #[serde(
+        rename = "text",
+        alias = "update",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub update: Option<String>,
     pub client_request_id: String,
     /// Files to post with it: up to 10 fileIds from file_upload with taskId
     /// and forComment: true on this task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachment_ids: Option<Vec<String>>,
-    /// To answer one comment on this task, its id (task_open lists them): it
+    /// To answer one comment on this task, its id (task_get lists them): it
     /// shows quoted above yours, and its author is told.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to_comment_id: Option<String>,
+    /// Structured content instead of text, as the web composer writes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<MessageContent>,
 }
 
 // The argument structs below are also each write's idempotency request hash
@@ -1345,16 +1353,28 @@ async fn post_update_inner(
     let Some(work_item_id) = parse_id(&arguments.work_item_id) else {
         return Ok(WriteResult::invalid("workItemId", TASK_ID_MESSAGE));
     };
-    let Some(update) = normalize_comment(arguments.update.clone()) else {
-        return Ok(WriteResult::invalid("update", UPDATE_MESSAGE));
-    };
-    // `@handle` and the project's task keys become mentions and references,
-    // as the web composer writes them (P0.4).
-    let content =
-        super::common::comment_content_from_text(state, principal.project_id, &update).await?;
-    let validated = match MessageContent::from_json(content) {
-        Ok(content) => content,
-        Err(_) => return Ok(WriteResult::invalid("update", UPDATE_MESSAGE)),
+    let validated = match (arguments.update.clone(), arguments.content.clone()) {
+        (Some(update), None) => {
+            let Some(update) = normalize_comment(update) else {
+                return Ok(WriteResult::invalid("update", UPDATE_MESSAGE));
+            };
+            // `@handle` and the project's task keys become mentions and
+            // references, as the web composer writes them (P0.4).
+            let content =
+                super::common::comment_content_from_text(state, principal.project_id, &update)
+                    .await?;
+            match MessageContent::from_json(content) {
+                Ok(content) => content,
+                Err(_) => return Ok(WriteResult::invalid("update", UPDATE_MESSAGE)),
+            }
+        }
+        (None, Some(content)) => {
+            if content.validate_structure().is_err() {
+                return Ok(WriteResult::invalid("content", "The content isn't valid."));
+            }
+            content
+        }
+        _ => return Ok(WriteResult::invalid("text", "Pass either text or content.")),
     };
     let Some(key) = parse_request_id(&arguments.client_request_id) else {
         return Ok(WriteResult::invalid("clientRequestId", REQUEST_ID_MESSAGE));
@@ -1367,7 +1387,7 @@ async fn post_update_inner(
         ));
     };
     const REPLY_MESSAGE: &str =
-        "Pass the id of a comment on this task that isn't deleted (task_open lists them).";
+        "Pass the id of a comment on this task that isn't deleted (task_get lists them).";
     let reply_to = match arguments.reply_to_comment_id.as_deref() {
         None => None,
         Some(raw) => match parse_id(raw) {
@@ -1472,19 +1492,48 @@ pub async fn mark_blocked(
     principal: &McpPrincipal,
     arguments: MarkBlockedArguments,
 ) -> WriteResult {
+    let Some(reason) = normalize_blocked_reason(&arguments.reason) else {
+        return WriteResult::invalid("reason", "Say what's blocking it in 1 to 2,000 characters.");
+    };
+    set_blocker(state, principal, &arguments, Some(reason)).await
+}
+
+/// The arguments of a cleared blocker: the task, the version and the key.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearBlockerArguments {
+    pub work_item_id: String,
+    pub expected_version: i64,
+    pub client_request_id: String,
+}
+
+/// Clears a task's blocker where it stands: its status stays as it is
+/// (`mark_ready_for_review` clears it and moves it to review).
+pub async fn clear_blocker(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: ClearBlockerArguments,
+) -> WriteResult {
+    let blocked = MarkBlockedArguments {
+        work_item_id: arguments.work_item_id,
+        expected_version: arguments.expected_version,
+        reason: String::new(),
+        client_request_id: arguments.client_request_id,
+    };
+    set_blocker(state, principal, &blocked, None).await
+}
+
+/// Sets (Some) or clears (None) a task's blocked reason.
+async fn set_blocker(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: &MarkBlockedArguments,
+    reason: Option<String>,
+) -> WriteResult {
+    let clearing = reason.is_none();
     let result = async {
         let Some(work_item_id) = parse_id(&arguments.work_item_id) else {
             return Ok(WriteResult::invalid("workItemId", TASK_ID_MESSAGE));
-        };
-        let Some(reason) = normalize_text(
-            arguments.reason.clone(),
-            MAX_BLOCKED_REASON_CHARACTERS,
-            false,
-        ) else {
-            return Ok(WriteResult::invalid(
-                "reason",
-                "Say what's blocking it in 1 to 2,000 characters, on one line.",
-            ));
         };
         if arguments.expected_version < 1 {
             return Ok(WriteResult::invalid(
@@ -1499,8 +1548,16 @@ pub async fn mark_blocked(
         if let Some(result) = authorize_write(&mut transaction, principal).await? {
             return Ok(result);
         }
-        let scope = resource_bound_scope("mcp_work_items", work_item_id, "mark_blocked")?;
-        let request_hash = RequestHash::for_value(&arguments)?;
+        let scope = resource_bound_scope(
+            "mcp_work_items",
+            work_item_id,
+            if clearing {
+                "clear_blocker"
+            } else {
+                "mark_blocked"
+            },
+        )?;
+        let request_hash = RequestHash::for_value(arguments)?;
         let reservation = match reserve(
             &mut transaction,
             principal.actor_id,
@@ -1549,11 +1606,19 @@ pub async fn mark_blocked(
                 board_placement: None,
                 labels: None,
                 fields: TaskFieldChanges {
-                    blocked_reason: Some(Some(reason)),
+                    blocked_reason: Some(reason),
                     ..TaskFieldChanges::default()
                 },
-                summary: "Work Item marked blocked through MCP",
-                audit_action: "work_item.mcp_marked_blocked",
+                summary: if clearing {
+                    "Work Item unblocked through MCP"
+                } else {
+                    "Work Item marked blocked through MCP"
+                },
+                audit_action: if clearing {
+                    "work_item.mcp_unblocked"
+                } else {
+                    "work_item.mcp_marked_blocked"
+                },
                 audit_version_metadata: AuditVersionMetadata::Include,
             },
         )
@@ -2723,6 +2788,21 @@ pub(super) fn valid_priority(value: &str) -> bool {
 
 fn normalize_text(value: String, max_characters: usize, allow_empty: bool) -> Option<String> {
     crate::work_item_commands::normalize_single_line(&value, max_characters, allow_empty).ok()
+}
+
+/// A blocker note may span lines, as the web's note does; no other control
+/// characters.
+fn normalize_blocked_reason(value: &str) -> Option<String> {
+    let value = value.trim().replace("\r\n", "\n");
+    if value.is_empty()
+        || value.chars().count() > MAX_BLOCKED_REASON_CHARACTERS
+        || value
+            .chars()
+            .any(|character| character.is_control() && character != '\n')
+    {
+        return None;
+    }
+    Some(value)
 }
 
 /// Comments may span lines and carry Markdown, as they can in the web app.

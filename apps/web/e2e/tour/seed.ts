@@ -53,6 +53,13 @@ class Session {
     return this.send(method, url, data)
   }
 
+  /** An operation: its answer's value (`/api/v2/ops/{name}`). */
+  async op(name: string, input: unknown): Promise<Json> {
+    const answer = await this.send('POST', `/api/v2/ops/${name}`, input)
+    if (answer.outcome !== 'ok') throw new Error(`${name}: ${JSON.stringify(answer)}`)
+    return answer.value as Json
+  }
+
   private async send(method: string, url: string, data?: unknown): Promise<Json> {
     for (let attempt = 0; ; attempt += 1) {
       const state = await this.api.storageState()
@@ -127,26 +134,20 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   })
 
   // Projects: the busy one, and a few others for the rail and Home.
-  const project = await me.write('POST', '/api/v1/projects', {
-    organizationId: context.organizationId,
-    key: tourProject.key,
-    name: tourProject.name,
-  })
+  const makeSpace = `/api/v2/w/${context.organizationId}/ops/space_create`
+  const project = (await me.write('POST', makeSpace, { key: tourProject.key, name: tourProject.name })).value as Json
   const projectId = String(project.id)
   const others: string[] = []
   for (const other of otherProjects) {
-    const created = await me.write('POST', '/api/v1/projects', { organizationId: context.organizationId, ...other })
+    const created = (await me.write('POST', makeSpace, other)).value as Json
     others.push(String(created.id))
   }
 
   // People join by invitation and sign in as themselves.
   const team: Session[] = []
   for (const person of people) {
-    const invitation = await me.write('POST', `/api/v1/projects/${projectId}/invitations`, {
-      role: 'member',
-      expiresInHours: 24,
-    })
-    const token = String(invitation.invitationUrl ?? '').split('#token=')[1]
+    const invitation = await me.op('invitation_create', { projectId, role: 'member', expiresInHours: 24 })
+    const token = String(invitation.joinUrl ?? '').split('#token=')[1]
     if (!token) throw new Error('The invitation came back without a token')
     const api = await request.newContext({ baseURL: serverOrigin, extraHTTPHeaders: { origin: webOrigin } })
     const response = await api.post('/api/v1/project-invitations/accept-new', {
@@ -167,7 +168,7 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   }
   for (const [index, other] of others.entries()) {
     for (const member of team.filter((_, i) => (i + index) % 2 === 0)) {
-      await me.write('POST', `/api/v1/projects/${other}/members`, { actorId: member.actorId, role: 'member' })
+      await me.op('space_member_add', { spaceId: other, account: member.actorId, role: 'member' })
     }
   }
 
@@ -203,16 +204,17 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   const labelIds = new Map<string, string>()
   const palette: Record<string, string> = { rose: 'red', teal: 'teal', blue: 'blue', indigo: 'purple', green: 'green', rust: 'orange', slate: 'gray', orchid: 'pink' }
   for (const label of labels) {
-    const created = await me.write('POST', `/api/v1/projects/${projectId}/labels`, { name: label.name, color: palette[label.color] })
-    labelIds.set(label.name, String(created.id))
+    const created = await me.write('POST', '/api/v2/ops/label_create', { projectId, name: label.name, color: palette[label.color] })
+    labelIds.set(label.name, String((created.value as { label: { id: string } }).label.id))
   }
   const milestoneIds = new Map<string, string>()
   for (const [index, name] of milestones.entries()) {
-    const created = await me.write('POST', `/api/v1/projects/${projectId}/milestones`, {
+    const created = await me.write('POST', '/api/v2/ops/milestone_create', {
+      projectId,
       name,
       targetDate: `2026-${String(11 + Math.min(index, 1)).padStart(2, '0')}-${index === 2 ? '20' : '07'}`,
     })
-    milestoneIds.set(name, String(created.id))
+    milestoneIds.set(name, String((created.value as { id: string }).id))
   }
   const workflow = (await me.get(`/api/v1/projects/${projectId}/work-item-workflow`)) as {
     statuses?: Array<{ id: string; name: string }>
@@ -227,34 +229,37 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   for (const [index, task] of tourTasks().entries()) {
     const creator = team[index % team.length]
     const assignee = index % 7 === 3 ? me.actorId : task.assignee === null ? undefined : team[task.assignee].actorId
-    const created = await creator.write('POST', `/api/v1/projects/${projectId}/work-items`, {
+    const labels = task.labels.map((name) => labelIds.get(name)).filter(Boolean)
+    const created = await creator.op('task_create', {
+      projectId,
       title: task.title,
-      description: index % 5 === 0 ? `Raised in #releases. ${task.title}.` : '',
-      typeId: typeId(task.labels.includes('bug') ? 'Bug' : index % 9 === 0 ? 'Feature' : 'Task'),
-      statusId: statusId(task.status),
+      description: index % 5 === 0 ? `Raised in #releases. ${task.title}.` : undefined,
+      type: typeId(task.labels.includes('bug') ? 'Bug' : index % 9 === 0 ? 'Feature' : 'Task'),
+      status: statusId(task.status),
       priority: task.priority,
-      assigneeActorId: assignee,
-      milestoneId: task.milestone ? milestoneIds.get(task.milestone) : undefined,
-      labelIds: task.labels.map((name) => labelIds.get(name)).filter(Boolean),
+      assignee,
+      milestone: task.milestone ? milestoneIds.get(task.milestone) : undefined,
+      labels: labels.length ? labels : undefined,
       estimate: index % 4 === 0 ? (index % 8) + 1 : undefined,
       dueDate: index % 11 === 0 ? `2026-11-${String((index % 27) + 1).padStart(2, '0')}` : undefined,
     })
-    taskIds.push(String(created.id))
+    taskIds.push(String(created.workItemId))
   }
-  const featured = await team[3].write('POST', `/api/v1/projects/${projectId}/work-items`, {
+  const featured = await team[3].op('task_create', {
+    projectId,
     title: featuredTask.title,
     description: featuredTask.description,
-    typeId: typeId('Feature'),
-    statusId: statusId('In Progress'),
+    type: typeId('Feature'),
+    status: statusId('In Progress'),
     priority: 'high',
-    assigneeActorId: team[3].actorId,
-    milestoneId: milestoneIds.get(milestones[0]),
-    labelIds: [labelIds.get('dashboard'), labelIds.get('customer-reported')],
+    assignee: team[3].actorId,
+    milestone: milestoneIds.get(milestones[0]),
+    labels: [labelIds.get('dashboard'), labelIds.get('customer-reported')],
     estimate: 5,
     dueDate: '2026-11-07',
     acceptanceCriteria: featuredTask.criteria.map((criterion) => criterion.text),
   })
-  const featuredId = String(featured.id)
+  const featuredId = String(featured.workItemId)
   const opened = (await me.get(`/api/v1/projects/${projectId}/work-items/${featuredId}`)) as {
     version?: number
     workItem?: { version?: number }
@@ -263,19 +268,20 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   let version = Number(opened.version ?? opened.workItem?.version ?? 1)
   for (const criterion of opened.acceptanceCriteria ?? []) {
     if (!featuredTask.criteria.find((c) => c.text === criterion.text)?.done) continue
-    const changed = await team[3].write(
-      'PATCH',
-      `/api/v1/projects/${projectId}/work-items/${featuredId}/acceptance-criteria/${criterion.id}`,
-      { expectedVersion: version, completed: true },
-    )
-    version = Number(changed.version ?? changed.workItemVersion ?? version + 1)
+    const changed = await team[3].write('POST', '/api/v2/ops/task_criteria_update', {
+      taskId: featuredId,
+      expectedVersion: version,
+      operations: [{ op: 'check', criterion: criterion.id }],
+    })
+    version = Number((changed.value as { version?: number }).version ?? version + 1)
   }
   for (const [index, text] of featuredTask.comments.entries()) {
-    await team[[2, 0, 3][index]].write('POST', `/api/v1/projects/${projectId}/work-items/${featuredId}/comments`, {
+    await team[[2, 0, 3][index]].write('POST', '/api/v2/ops/task_comment_create', {
+      taskId: featuredId,
       content: { version: 1, nodes: [{ type: 'text', text }] },
     })
   }
-  await bots.get('Scout')!.call('task_comment', {
+  await bots.get('Scout')!.call('task_comment_create', {
     taskId: featuredId,
     text: 'Two older tasks asked for the same panel; I linked them here. Support has 14 open conversations that mention cell imbalance this month.',
     clientRequestId: randomUUID(),
@@ -365,7 +371,7 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   })) as { conversation?: { id?: string } }
   const threadId = String(thread.conversation?.id)
   await post(threadId, releasesThread.replies, () => `/api/v1/threads/${threadId}/messages`)
-  await me.write('PATCH', `/api/v1/threads/${threadId}`, { status: 'Done', outcome: 'Index added; CI now checks every partition has its parent\'s indexes.' })
+  await me.write('POST', '/api/v2/ops/thread_update', { threadId, status: 'Done', outcome: 'Index added; CI now checks every partition has its parent\'s indexes.' })
     .catch((error: unknown) => warn('thread status not set', error))
 
   // A DM with Amara (every message reaches the inbox), and a group DM.
@@ -393,9 +399,10 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   for (const [index, page] of otherPages.entries()) {
     const writer = index === 0 ? null : team[[4, 5, 7, 2][index]]
     if (writer) await writer.write('POST', `/api/v1/projects/${projectId}/pages`, page)
-    else await bots.get('Muse')!.call('page_write', { projectId, title: page.title, body: page.body })
+    else await bots.get('Muse')!.call('page_create', { projectId, title: page.title, body: page.body })
   }
-  await team[0].write('POST', `/api/v1/projects/${projectId}/decisions`, {
+  await team[0].write('POST', '/api/v2/ops/decision_record', {
+    spaceId: projectId,
     title: 'Ship 2026.11 without battery alerts',
     detail: 'The panel answers what support keeps asking; alerts follow in 2026.12.',
     sourceMessageId: releaseIds[5],
@@ -403,11 +410,11 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   }).catch((error: unknown) => warn('no decision recorded', error))
 
   // A whiteboard: the ingest pipeline.
-  const board = (await team[7].write('POST', '/api/v1/whiteboards', {
+  const board = (await team[7].write('POST', '/api/v2/ops/whiteboard_create', {
     title: 'Telemetry ingest: how a battery sample reaches the dashboard',
     projectId,
-  })) as { whiteboard?: { id?: string } }
-  const whiteboardId = String(board.whiteboard?.id)
+  })) as { value?: { whiteboard?: { id?: string } } }
+  const whiteboardId = String(board.value?.whiteboard?.id)
   const boxes = [
     ['robot', 'rectangle', 0, 0, 'Robot\nfirmware 4.12'],
     ['dock', 'rectangle', 0, 200, 'Charging dock'],
@@ -495,7 +502,7 @@ async function seedRuns(context: SeedContext, me: Session, projectId: string, ch
     VALUES (:'account', :'organization', :'me', 'demo', 'Tour account', :'home', 'available', 'authenticated');
     INSERT INTO execution_profiles (id, project_id, provider_connection_id, owner_actor_id, name, provider_account_id, status, account_state, preferred)
     VALUES (:'profile', :'project', :'connection', :'me', 'Tour profile', :'account', 'available', 'authenticated', true);
-    INSERT INTO actors (id, kind) VALUES (:'workerActor', 'execution_worker');
+    INSERT INTO actors (id, kind, owner_workspace_id) VALUES (:'workerActor', 'execution_worker', :'organization');
     INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle)
     VALUES (gen_random_uuid(), :'project', :'workerActor', 'worker', 'Fleet runner', 'fleet-runner');
     INSERT INTO execution_workers (id, project_id, actor_id, provider_connection_id, execution_profile_id, enabled)
@@ -519,24 +526,48 @@ async function seedRuns(context: SeedContext, me: Session, projectId: string, ch
     const runId = randomUUID()
     const finished = ['completed', 'failed'].includes(plan.state)
     sql(db, `
+      BEGIN;
       UPDATE conversations SET repository_id = :'repo' WHERE id = :'thread';
+      -- A built-in run's record first (its detail row references it).
+      INSERT INTO runs (id, workspace_id, space_id, account_id, title, cause_kind, conversation_id, requested_by_account_id, state,
+                        failure_reason, host_id, created_at, started_at, finished_at, last_report_at)
+      VALUES (:'run', :'organization', :'project', :'workerActor', :'title', 'thread', :'thread', :'requester',
+              CASE :'state' WHEN 'blocked' THEN 'waiting' WHEN 'completed' THEN 'done' ELSE :'state' END,
+              CASE WHEN :'state' = 'failed' THEN 'The dashboard API timed out after 3 tries.' END,
+              (SELECT id FROM hosts WHERE owner_workspace_id = :'organization' AND builtin LIMIT 1),
+              now() - make_interval(mins => :'age'::int), now() - make_interval(mins => :'age'::int),
+              CASE WHEN :'finished' = 'yes' THEN now() - make_interval(mins => :'age'::int / 2) END, now());
       INSERT INTO agent_runs (id, project_id, conversation_id, execution_worker_id, requesting_actor_id, execution_profile_id, repository_id, state, prompt, authorization_snapshot, failure_reason, started_at, finished_at, created_at)
       VALUES (:'run', :'project', :'thread', :'worker', :'requester', :'profile', :'repo', :'state', :'prompt', '{}'::jsonb,
               CASE WHEN :'state' = 'failed' THEN 'The dashboard API timed out after 3 tries.' END,
               now() - make_interval(mins => :'age'::int), CASE WHEN :'finished' = 'yes' THEN now() - make_interval(mins => :'age'::int / 2) END,
-              now() - make_interval(mins => :'age'::int));`,
-    { repo: repositoryId, thread: threadId, run: runId, project: projectId, worker: workerId, requester: requester.actorId, profile: profileId, state: plan.state, prompt: plan.prompt, age: String(20 + index * 35), finished: finished ? 'yes' : 'no' })
+              now() - make_interval(mins => :'age'::int));
+      COMMIT;`,
+    { repo: repositoryId, thread: threadId, run: runId, project: projectId, worker: workerId, requester: requester.actorId, profile: profileId, state: plan.state, prompt: plan.prompt, age: String(20 + index * 35), finished: finished ? 'yes' : 'no', organization: organizationId, workerActor: workerActorId, title: plan.name })
     for (const [step, [kind, summary]] of plan.events.entries()) {
+      // A run's steps are its activities; the old step kind rides in the payload, as the server keeps it.
       sql(db, `
-        WITH event AS (
-          INSERT INTO agent_run_events (id, agent_run_id, conversation_id, event_key, kind, summary, payload, created_at)
-          VALUES (gen_random_uuid(), :'run', :'thread', :'key', :'kind', :'summary', '{}'::jsonb, now() - make_interval(mins => :'age'::int))
+        WITH counted AS (
+          UPDATE runs SET activity_seq = activity_seq + 1 WHERE id = :'run' RETURNING activity_seq, workspace_id, account_id
+        ), activity AS (
+          INSERT INTO run_activities (id, run_id, workspace_id, seq, client_id, kind, summary, payload, occurred_at, reported_by_account_id, in_thread)
+          SELECT gen_random_uuid(), :'run', counted.workspace_id, counted.activity_seq, :'key',
+                 CASE
+                   WHEN :'kind' = 'run_state_changed' THEN 'run_started'
+                   WHEN :'kind' IN ('command_started', 'command_completed', 'file_change', 'tool_used', 'test_result') THEN 'tool_call'
+                   WHEN :'kind' = 'approval_requested' THEN 'interrupt'
+                   WHEN :'kind' IN ('run_completed', 'run_failed') THEN 'run_finished'
+                   WHEN :'kind' = 'agent_note' THEN 'text_message'
+                   ELSE 'custom'
+                 END,
+                 :'summary', jsonb_build_object('step', :'kind'), now() - make_interval(mins => :'age'::int), counted.account_id, true
+            FROM counted
           RETURNING id
         ), sequence AS (
           UPDATE conversations SET next_entry_sequence = next_entry_sequence + 1 WHERE id = :'thread' RETURNING next_entry_sequence - 1 AS value
         )
-        INSERT INTO conversation_entries (id, conversation_id, sequence, kind, agent_run_event_id)
-        SELECT gen_random_uuid(), :'thread', sequence.value, 'worker_event', event.id FROM event, sequence;`,
+        INSERT INTO conversation_entries (id, conversation_id, sequence, kind, run_activity_id)
+        SELECT gen_random_uuid(), :'thread', sequence.value, 'worker_event', activity.id FROM activity, sequence;`,
       { run: runId, thread: threadId, key: `tour:${step}`, kind, summary, age: String(20 + index * 35 - step * 4) })
     }
     if (plan.state === 'working' && !first) first = runId

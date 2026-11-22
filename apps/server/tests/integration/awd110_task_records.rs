@@ -59,7 +59,7 @@ async fn every_task_has_its_record_in_the_tasks_collection() {
     // The project already has its own collection called Tasks: it keeps
     // its name, and the first task makes the built-in one beside it.
     let own = call(
-        "collection_write",
+        "collection_create",
         json!({"projectId": "WORK", "name": "Tasks", "clientRequestId": "own-tasks"}),
     )
     .await;
@@ -116,7 +116,7 @@ async fn every_task_has_its_record_in_the_tasks_collection() {
     // A task's changes reach its record: the title through the task tool.
     // Since T1.3 the record owns the title, field values and archive state,
     // and the task keeps a copy, which can't be written directly.
-    let opened = call("task_open", json!({"taskId": task.to_string()})).await;
+    let opened = call("task_get", json!({"taskId": task.to_string()})).await;
     let version = opened["value"]["task"]["version"]
         .as_i64()
         .expect("version");
@@ -192,7 +192,7 @@ async fn every_task_has_its_record_in_the_tasks_collection() {
     assert!(inserted.is_err(), "a record added to Tasks directly");
     // Records of the project's own collection are untouched by the guard.
     let notes = call(
-        "record_write",
+        "record_create_many",
         json!({
             "projectId": "WORK",
             "collection": "Tasks",
@@ -212,7 +212,7 @@ async fn every_task_has_its_record_in_the_tasks_collection() {
     .execute(pool)
     .await
     .expect("unarchive");
-    let found = call("search", json!({"query": "zeppelin"})).await;
+    let found = call("workspace_search", json!({"query": "zeppelin"})).await;
     assert_eq!(found["outcome"], "ok", "{found}");
     let kinds = found["value"]["results"]
         .as_array()

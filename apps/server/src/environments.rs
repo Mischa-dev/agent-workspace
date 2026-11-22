@@ -11,50 +11,32 @@ pub mod ops;
 
 use std::collections::BTreeMap;
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::HeaderMap,
-    routing::{get, post, put},
-};
+use axum::{Json, Router, extract::State, routing::get};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 use sqlx::{FromRow, PgExecutor};
 use uuid::Uuid;
 
+use agent_workspace_host_protocol::account::{AccountAnswer, AccountQuestion};
+
+use crate::harness_catalog::Harnesses;
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
-    error::{ApiJson, ApiPath, AppError},
+    auth::AuthenticatedActor,
+    error::{ApiPath, AppError},
+    harness::manifest::RunLocation,
+    hosts::builtin::accounts::{Asked, ProfileAccount},
     memory,
     policy::{Action, ActorKind},
-    provider::{ProfileAccount, manifest::RunLocation},
     settings,
 };
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/api/v1/projects/{project_id}/environments",
-            get(list_environments).post(create_environment),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/environments/{environment_id}",
-            put(update_environment),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/environments/{environment_id}/archive",
-            post(archive_environment),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/environments/{environment_id}/default",
-            post(make_default),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/environments/{environment_id}/check",
-            post(check_environment),
-        )
+    Router::new().route(
+        "/api/v1/projects/{project_id}/environments",
+        get(list_environments),
+    )
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -125,11 +107,11 @@ pub(crate) struct EnvironmentList {
 }
 
 pub(crate) fn view(
-    state: &AppState,
+    catalog: &Harnesses,
     row: EnvironmentRow,
     default: Option<Uuid>,
 ) -> EnvironmentView {
-    let manifest = state.supervisors.manifest(&row.harness);
+    let manifest = catalog.manifest(&row.harness);
     EnvironmentView {
         is_default: default == Some(row.id),
         harness_name: manifest
@@ -153,11 +135,9 @@ pub(crate) fn view(
     }
 }
 
-pub(crate) fn harness_choices(state: &AppState, organization_id: Uuid) -> Vec<HarnessChoice> {
-    state
-        .supervisors
-        .manifests_in(organization_id)
-        .into_iter()
+pub(crate) fn harness_choices(catalog: &Harnesses) -> Vec<HarnessChoice> {
+    catalog
+        .manifests()
         .map(|manifest| HarnessChoice {
             kind: manifest.kind.clone(),
             display_name: manifest.display_name.clone(),
@@ -259,14 +239,15 @@ pub(crate) async fn list_for(
         default_environment(state, organization_id, project_id, actor_id).await?;
     let rows = active_environments(&state.pool, project_id).await?;
     let default = default.filter(|id| rows.iter().any(|row| row.id == *id));
+    let catalog = Harnesses::of(state, organization_id).await?;
     Ok(EnvironmentList {
         environments: rows
             .into_iter()
-            .map(|row| view(state, row, default))
+            .map(|row| view(&catalog, row, default))
             .collect(),
         default_environment_id: default,
         default_source,
-        harnesses: harness_choices(state, organization_id),
+        harnesses: harness_choices(&catalog),
         can_manage,
     })
 }
@@ -317,6 +298,13 @@ fn optional_text(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// Whether the redaction rewrites `id` (it reads like a credential, such
+/// as `Basic production`): it would reach the host changed, so a new or
+/// changed one isn't taken, and a check of one saved earlier says so.
+fn rewritten_on_the_way(id: Option<&str>) -> bool {
+    id.is_some_and(|id| crate::run_log::redact(id) != id)
+}
+
 async fn clean(
     state: &AppState,
     project_id: Uuid,
@@ -331,9 +319,9 @@ async fn clean(
             .bind(project_id)
             .fetch_one(crate::db::scoped(&state.pool))
             .await?;
-    let manifest = state
-        .supervisors
-        .manifest_in(organization_id, &request.harness)
+    let catalog = Harnesses::of(state, organization_id).await?;
+    let manifest = catalog
+        .manifest(&request.harness)
         .ok_or(AppError::Validation("harness"))?;
     let provider_environment_id = optional_text(request.provider_environment_id);
     if provider_environment_id
@@ -346,9 +334,11 @@ async fn clean(
         return Err(AppError::Validation("providerEnvironmentId"));
     }
     let branch = optional_text(request.branch);
-    if let Some(branch) = &branch {
-        crate::git_runtime::validate_registered_ref(branch)
-            .map_err(|_| AppError::Validation("branch"))?;
+    if branch
+        .as_deref()
+        .is_some_and(|branch| !agent_workspace_host_protocol::git_ref::is_safe_ref(branch))
+    {
+        return Err(AppError::Validation("branch"));
     }
     if request.setup_notes.chars().count() > 4000 {
         return Err(AppError::Validation("setupNotes"));
@@ -384,28 +374,6 @@ fn name_conflict(error: sqlx::Error) -> AppError {
     }
 }
 
-async fn audit(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    headers: &HeaderMap,
-    principal: &AuthenticatedActor,
-    project_id: Uuid,
-    action: &'static str,
-    environment_id: Uuid,
-    details: Value,
-) -> Result<(), AppError> {
-    crate::conversations::insert_audit_event_for(
-        transaction,
-        headers,
-        principal,
-        project_id,
-        action,
-        "project_environment",
-        environment_id,
-        details,
-    )
-    .await
-}
-
 async fn set_default(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     organization_id: Uuid,
@@ -428,47 +396,6 @@ async fn set_default(
     Ok(())
 }
 
-async fn create_environment(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<EnvironmentRequest>,
-) -> Result<Json<EnvironmentView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let organization_id = authorize_project(
-        &state.pool,
-        principal.actor_id,
-        project_id,
-        Action::SettingsManage,
-    )
-    .await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let row = create_in(
-        &state,
-        &mut transaction,
-        principal.actor_id,
-        organization_id,
-        project_id,
-        request,
-    )
-    .await?;
-    audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        project_id,
-        "environment.created",
-        row.id,
-        json!({ "harness": row.harness }),
-    )
-    .await?;
-    transaction.commit().await?;
-    let (default, _) =
-        default_environment(&state, organization_id, project_id, principal.actor_id).await?;
-    Ok(Json(view(&state, row, default)))
-}
-
 /// Add an environment to a project, for someone the caller checked may
 /// manage its settings. The first one, or one asked to be, becomes the
 /// default. The caller records the audit row.
@@ -482,6 +409,9 @@ pub(crate) async fn create_in(
 ) -> Result<EnvironmentRow, AppError> {
     let make_default = request.make_default;
     let clean = clean(state, project_id, request).await?;
+    if rewritten_on_the_way(clean.provider_environment_id.as_deref()) {
+        return Err(AppError::Validation("providerEnvironmentId"));
+    }
     let id = Uuid::now_v7();
     let row = sqlx::query_as::<_, EnvironmentRow>(&format!(
         r#"
@@ -528,48 +458,6 @@ pub(crate) async fn create_in(
     Ok(row)
 }
 
-async fn update_environment(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, environment_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<EnvironmentRequest>,
-) -> Result<Json<EnvironmentView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let organization_id = authorize_project(
-        &state.pool,
-        principal.actor_id,
-        project_id,
-        Action::SettingsManage,
-    )
-    .await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let row = update_in(
-        &state,
-        &mut transaction,
-        principal.actor_id,
-        organization_id,
-        project_id,
-        environment_id,
-        request,
-    )
-    .await?;
-    audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        project_id,
-        "environment.updated",
-        environment_id,
-        json!({ "harness": row.harness, "version": row.version }),
-    )
-    .await?;
-    transaction.commit().await?;
-    let (default, _) =
-        default_environment(&state, organization_id, project_id, principal.actor_id).await?;
-    Ok(Json(view(&state, row, default)))
-}
-
 /// Change an active environment (the request's expectedVersion must be
 /// current), for someone the caller checked may manage the project's
 /// settings. The caller records the audit row.
@@ -587,14 +475,20 @@ pub(crate) async fn update_in(
         .ok_or(AppError::Validation("expectedVersion"))?;
     let make_default = request.make_default;
     let clean = clean(state, project_id, request).await?;
-    let current = sqlx::query_scalar::<_, i64>(
-        "SELECT version FROM project_environments WHERE project_id = $1 AND id = $2 AND archived_at IS NULL FOR UPDATE",
+    let (current, current_target) = sqlx::query_as::<_, (i64, Option<String>)>(
+        "SELECT version, provider_environment_id FROM project_environments WHERE project_id = $1 AND id = $2 AND archived_at IS NULL FOR UPDATE",
     )
     .bind(project_id)
     .bind(environment_id)
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("environment"))?;
+    // One saved before this rule stays, so other edits still go through.
+    if clean.provider_environment_id != current_target
+        && rewritten_on_the_way(clean.provider_environment_id.as_deref())
+    {
+        return Err(AppError::Validation("providerEnvironmentId"));
+    }
     if current != expected_version {
         return Err(AppError::VersionConflict {
             resource: "environment",
@@ -641,49 +535,6 @@ pub(crate) async fn update_in(
     Ok(row)
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct EmptyRequest {}
-
-async fn archive_environment(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, environment_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(_request): ApiJson<EmptyRequest>,
-) -> Result<Json<EnvironmentList>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let organization_id = authorize_project(
-        &state.pool,
-        principal.actor_id,
-        project_id,
-        Action::SettingsManage,
-    )
-    .await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    archive_in(
-        &mut transaction,
-        organization_id,
-        project_id,
-        environment_id,
-    )
-    .await?;
-    audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        project_id,
-        "environment.archived",
-        environment_id,
-        json!({}),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(
-        list_for(&state, principal.actor_id, project_id).await?,
-    ))
-}
-
 /// Archive an active environment; a project default that pointed at it
 /// falls back to the workspace's. The caller checked who may, and records
 /// the audit row.
@@ -724,46 +575,6 @@ pub(crate) async fn archive_in(
         .await?;
     }
     Ok(())
-}
-
-async fn make_default(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, environment_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(_request): ApiJson<EmptyRequest>,
-) -> Result<Json<EnvironmentList>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let organization_id = authorize_project(
-        &state.pool,
-        principal.actor_id,
-        project_id,
-        Action::SettingsManage,
-    )
-    .await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    make_default_in(
-        &mut transaction,
-        organization_id,
-        project_id,
-        environment_id,
-        principal.actor_id,
-    )
-    .await?;
-    audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        project_id,
-        "environment.made_default",
-        environment_id,
-        json!({}),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(
-        list_for(&state, principal.actor_id, project_id).await?,
-    ))
 }
 
 /// Make an active environment the project's default. The caller checked
@@ -813,46 +624,6 @@ pub(crate) async fn own_account(
     .await?)
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CheckResult {
-    ok: bool,
-    message: String,
-    environment: EnvironmentView,
-}
-
-async fn check_environment(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, environment_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(_request): ApiJson<EmptyRequest>,
-) -> Result<Json<CheckResult>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let organization_id = authorize_project(
-        &state.pool,
-        principal.actor_id,
-        project_id,
-        Action::WorkerInvoke,
-    )
-    .await?;
-    let (ok, message, row) = check_in(
-        &state,
-        principal.actor_id,
-        organization_id,
-        project_id,
-        environment_id,
-    )
-    .await?;
-    let (default, _) =
-        default_environment(&state, organization_id, project_id, principal.actor_id).await?;
-    Ok(Json(CheckResult {
-        ok,
-        message,
-        environment: view(&state, row, default),
-    }))
-}
-
 /// Check an environment with the caller's own signed-in account for its
 /// harness, and record the result on it. The caller checked who may.
 pub(crate) async fn check_in(
@@ -866,7 +637,8 @@ pub(crate) async fn check_in(
         .await?
         .ok_or(AppError::NotFound("environment"))?;
     let account = own_account(&state.pool, organization_id, actor_id, &environment.harness).await?;
-    let manifest = state.supervisors.manifest(&environment.harness);
+    let catalog = Harnesses::of(state, organization_id).await?;
+    let manifest = catalog.manifest(&environment.harness);
     let (ok, message) = match (manifest, account) {
         (None, _) => (
             false,
@@ -879,34 +651,47 @@ pub(crate) async fn check_in(
                 manifest.display_name
             ),
         ),
+        (Some(manifest), Some(_))
+            if manifest.runs_on == RunLocation::Cloud
+                && rewritten_on_the_way(environment.provider_environment_id.as_deref()) =>
+        {
+            (
+                false,
+                "This environment's ID reads like a password, so it can't be sent as it is. Change it in the environment's settings.".to_owned(),
+            )
+        }
         (Some(manifest), Some(account)) if manifest.runs_on == RunLocation::Cloud => {
             let provider_environment = environment
                 .provider_environment_id
                 .clone()
                 .unwrap_or_default();
-            if environment.harness == crate::provider::CODEX_CLOUD_KIND {
-                match state
-                    .supervisors
-                    .codex_cloud()
-                    .check_environment(&account.handle(), &provider_environment)
-                    .await
-                {
-                    Ok(()) => (
-                        true,
-                        format!("Codex Cloud found {provider_environment} for your account."),
-                    ),
-                    Err(_) => (
-                        false,
-                        format!(
-                            "Codex Cloud couldn't find {provider_environment} for your account. Check the ID or label in Codex Cloud's environment settings."
-                        ),
-                    ),
-                }
-            } else {
-                (
+            let asked = crate::hosts::builtin::accounts::ask(
+                state,
+                organization_id,
+                account.ask(AccountQuestion::CheckEnvironment {
+                    environment: provider_environment.clone(),
+                }),
+            )
+            .await?;
+            let name = &manifest.display_name;
+            match asked {
+                Asked::Answered(AccountAnswer::Environment { found: true }) => (
                     true,
-                    format!("Your {} account is signed in.", manifest.display_name),
-                )
+                    format!("{name} found {provider_environment} for your account."),
+                ),
+                Asked::Answered(AccountAnswer::Environment { found: false }) => (
+                    false,
+                    format!(
+                        "{name} couldn't find {provider_environment} for your account. Check the ID or label in its environment settings."
+                    ),
+                ),
+                // A harness with no environments of its own: signing in is
+                // all it needs.
+                Asked::Unsupported => (true, format!("Your {name} account is signed in.")),
+                _ => (
+                    false,
+                    format!("{name} couldn't be asked about {provider_environment}; try again."),
+                ),
             }
         }
         (Some(manifest), Some(_)) => (

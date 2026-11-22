@@ -55,6 +55,13 @@ pub fn generate(registry: &Registry) -> Result<Vec<Generated>, String> {
             path: "docs/api/v2.openapi.json",
             content: pretty(&openapi::document(registry)?),
         },
+        // Not an operation's, but generated the same way: every permission
+        // key a role can hold, which the web app types its checks with
+        // (M1.3o).
+        Generated {
+            path: "apps/web/src/api/generated/permissions.ts",
+            content: permission_keys(),
+        },
         // Not an operation's, but generated the same way: the field types
         // the web app's field registry must cover (T1.13a).
         Generated {
@@ -62,6 +69,27 @@ pub fn generate(registry: &Registry) -> Result<Vec<Generated>, String> {
             content: pretty(&crate::fields::web_type_list()),
         },
     ])
+}
+
+/// The web app's list of permission keys, in the catalogue's order, each
+/// under the module that owns it.
+fn permission_keys() -> String {
+    let registry = crate::modules::registry::Registry::global();
+    let mut text = String::from(
+        "// Generated from the permission catalogue and the modules that own each\n\
+         // permission (M1.3o). Don't edit: run OPS_BLESS=1 cargo test -p\n\
+         // agent-workspace-server --lib generated_files_are_current.\n\n\
+         /** Every permission a role can hold. */\n\
+         export const PERMISSION_KEYS = [\n",
+    );
+    for info in crate::policy::PERMISSIONS {
+        let module = registry
+            .module_of_permission(info.key)
+            .map_or("workspace", |manifest| manifest.id.as_str());
+        text.push_str(&format!("  '{}', // {module}\n", info.key));
+    }
+    text.push_str("] as const\n");
+    text
 }
 
 pub(crate) fn pretty(value: &Value) -> String {

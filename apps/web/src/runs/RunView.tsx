@@ -53,9 +53,11 @@ export function RunView({ runId }: { runId: string }) {
     queryKey: runKeys.view(runId),
     queryFn: ({ signal }) => viewRun(runId, signal),
     enabled: Boolean(runId),
+    // Polled while live, built-in runs too: their file list's
+    // completeness comes from here.
     refetchInterval: (query) => {
       const data = query.state.data
-      return data && !data.builtin && isLiveRun(data.state) ? LIVE_REFRESH_MS : false
+      return data && isLiveRun(data.state) ? LIVE_REFRESH_MS : false
     },
   })
   const notFound = view.isError && isApiError(view.error) && (view.error.status === 404 || view.error.code === 'not_found')
@@ -65,7 +67,7 @@ export function RunView({ runId }: { runId: string }) {
       {view.isPending ? <PageSkeleton /> : null}
       {notFound ? <RunNotFound /> : null}
       {view.isError && !notFound ? <ErrorState error={view.error} onRetry={() => void view.refetch()} title="The run didn’t load" /> : null}
-      {view.data?.builtin ? <BuiltinRun runId={view.data.id} /> : null}
+      {view.data?.builtin ? <BuiltinRun changesTruncated={view.data.changesTruncated} runId={view.data.id} /> : null}
       {view.data && !view.data.builtin ? <ReportedRunPage onRefresh={() => void view.refetch()} run={view.data} /> : null}
     </>
   )
@@ -82,11 +84,19 @@ function RunNotFound() {
 function ReportedRunPage({ onRefresh, run }: { onRefresh: () => void; run: RunView }) {
   const now = useNow(isLiveRun(run.state))
   const experience = useProjectExperience(run.projectId ?? undefined)
-  return <ReportedRun now={now} onRefresh={onRefresh} run={run} usage={experience.shows('tech.run_usage')} />
+  return (
+    <ReportedRun
+      files={experience.shows('tech.run_files')}
+      now={now}
+      onRefresh={onRefresh}
+      run={run}
+      usage={experience.shows('tech.run_usage')}
+    />
+  )
 }
 
 /** A run on this server's own host: its full page. */
-function BuiltinRun({ runId }: { runId: string }) {
+function BuiltinRun({ changesTruncated, runId }: { changesTruncated: boolean; runId: string }) {
   const run = useQuery({
     queryKey: runKeys.detail(runId),
     queryFn: () => getRun(runId),
@@ -96,7 +106,7 @@ function BuiltinRun({ runId }: { runId: string }) {
   if (run.isPending) return <PageSkeleton />
   if (notFound) return <RunNotFound />
   if (run.isError) return <ErrorState error={run.error} onRetry={() => void run.refetch()} title="The run didn’t load" />
-  return <RunBody run={run.data} />
+  return <RunBody changesTruncated={changesTruncated} run={run.data} />
 }
 
 /** Ticks while the run is live, so its running time keeps counting. */
@@ -116,7 +126,7 @@ const STOP_TITLE: Partial<Record<RunDetail['state'], string>> = {
   canceled: 'The run was stopped.',
 }
 
-function RunBody({ run }: { run: RunDetail }) {
+function RunBody({ changesTruncated, run }: { changesTruncated: boolean; run: RunDetail }) {
   const status = runStatus(run.state)
   const live = isLiveRun(run.state)
   const now = useNow(live)
@@ -181,7 +191,9 @@ function RunBody({ run }: { run: RunDetail }) {
   const details: { label: string; value: ReactNode }[] = [{ label: 'Project', value: run.projectName }]
   if (run.agentName) details.push({ label: 'Agent', value: run.agentName })
   if (run.harnessName ?? run.harness) details.push({ label: 'Harness', value: run.harnessName ?? run.harness })
-  details.push({ label: 'Model', value: [run.model, run.reasoning, run.speed].filter(Boolean).join(' · ') || 'Harness default' })
+  // A run on the harness's own default says nothing worth a row (UI round 1).
+  const model = [run.model, run.reasoning, run.speed].filter(Boolean).join(' · ')
+  if (model) details.push({ label: 'Model', value: model })
   if (run.taskId) {
     details.push({ label: 'Task', value: <Link to={workItemHref(run.projectId, run.taskId)}>{runTitle({ ...run, threadName: null })}</Link> })
   }
@@ -268,12 +280,17 @@ function RunBody({ run }: { run: RunDetail }) {
       <div className="aw-runs__details">
         <DetailList items={details} />
       </div>
-      <Section id="run-files" title="Files changed">
-        <RunDiff live={live} run={run} />
-      </Section>
-      <Section id="run-tests" title="Tests">
-        <TestsSummary run={run} />
-      </Section>
+      {/* Empty sections on a run still working are promises, not news: they appear once there's something in them. */}
+      {experience.shows('tech.run_files') && !(live && !run.files?.length) ? (
+        <Section id="run-files" title="Files changed">
+          <RunDiff live={live} run={{ ...run, changesTruncated }} />
+        </Section>
+      ) : null}
+      {run.tests.runs === 0 ? null : (
+        <Section id="run-tests" title="Tests">
+          <TestsSummary run={run} />
+        </Section>
+      )}
       <Section
         actions={
           <div className="aw-runs__actions">
@@ -333,7 +350,9 @@ function TestsSummary({ run }: { run: RunDetail }) {
         </>
       )}
       {last ? `${last} ` : null}
-      Across {countLabel(tests.runs, 'test run')}: {tests.passed} passed, {tests.failed} failed, {tests.skipped} skipped.
+      {tests.passed + tests.failed + tests.skipped === 0
+        ? `${countLabel(tests.runs, 'test run')}, with no counts reported.`
+        : `Across ${countLabel(tests.runs, 'test run')}: ${tests.passed} passed, ${tests.failed} failed, ${tests.skipped} skipped.`}
     </p>
   )
 }

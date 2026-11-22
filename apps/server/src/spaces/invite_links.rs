@@ -586,6 +586,19 @@ struct ResolvedLink {
 async fn resolve(
     State(state): State<AppState>,
     headers: HeaderMap,
+    ApiJson(request): ApiJson<ResolveRequest>,
+) -> Result<Json<ResolvedLink>, AppError> {
+    // A link's token names the one row it opens, before any scope is known.
+    crate::tenancy::system(
+        "auth.link",
+        Box::pin(resolve_here(State(state), headers, ApiJson(request))),
+    )
+    .await
+}
+
+async fn resolve_here(
+    State(state): State<AppState>,
+    headers: HeaderMap,
     ApiJson(mut request): ApiJson<ResolveRequest>,
 ) -> Result<Json<ResolvedLink>, AppError> {
     let mut token = Zeroizing::new(std::mem::take(&mut request.token));
@@ -697,6 +710,19 @@ async fn join(
 async fn accept_new(
     State(state): State<AppState>,
     headers: HeaderMap,
+    ApiJson(request): ApiJson<AcceptNewRequest>,
+) -> Result<Response, AppError> {
+    // A link's token names the one row it opens, before any scope is known.
+    crate::tenancy::system(
+        "auth.link",
+        Box::pin(accept_new_here(State(state), headers, ApiJson(request))),
+    )
+    .await
+}
+
+async fn accept_new_here(
+    State(state): State<AppState>,
+    headers: HeaderMap,
     ApiJson(mut request): ApiJson<AcceptNewRequest>,
 ) -> Result<Response, AppError> {
     let mut token = Zeroizing::new(std::mem::take(&mut request.token));
@@ -788,6 +814,25 @@ async fn accept_new(
 }
 
 async fn accept_existing(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    principal: AuthenticatedActor,
+    ApiJson(request): ApiJson<AcceptExistingRequest>,
+) -> Result<Response, AppError> {
+    // A link's token names the one row it opens, before any scope is known.
+    crate::tenancy::system(
+        "auth.link",
+        Box::pin(accept_existing_here(
+            State(state),
+            headers,
+            principal,
+            ApiJson(request),
+        )),
+    )
+    .await
+}
+
+async fn accept_existing_here(
     State(state): State<AppState>,
     headers: HeaderMap,
     principal: AuthenticatedActor,

@@ -167,7 +167,7 @@ pub(crate) async fn task_data(
         "updatedAt": task.updated_at,
         "url": format!(
             "{origin}{}",
-            crate::addresses::Target::task(project_id, task.id).legacy_path()
+            crate::addresses::Target::task(project_id, task.id).href()
         ),
     })))
 }
@@ -229,7 +229,7 @@ pub(crate) async fn record_data(
                     record: record_id,
                 },
             )
-            .legacy_path()
+            .href()
         ),
     })))
 }
@@ -264,7 +264,7 @@ pub(crate) async fn document_data(
         task_projects: &[],
         modules,
         workspaces: &workspaces,
-        addresses: crate::addresses::Addresses::LEGACY,
+        addresses: crate::addresses::Addresses::of(state),
     };
     let Some(thing) = crate::things::get(&mut connection, &viewer, id).await? else {
         return Ok(None);

@@ -188,6 +188,26 @@ async fn set_expiry(
     Ok(())
 }
 
+/// A deadline that already passed would end a membership brought back
+/// again at once: bringing someone back clears it. One still ahead stays.
+async fn clear_lapsed(
+    connection: &mut PgConnection,
+    space: Uuid,
+    account: Uuid,
+) -> Result<(), OpError> {
+    sqlx::query(
+        "UPDATE project_memberships SET expires_at = NULL \
+         WHERE project_id = $1 AND actor_id = $2 AND NOT via_group \
+           AND expires_at <= now()",
+    )
+    .bind(space)
+    .bind(account)
+    .execute(connection)
+    .await
+    .map_err(AppError::from)?;
+    Ok(())
+}
+
 fn refused(error: AppError) -> OpError {
     match error {
         AppError::Forbidden => OpError::Denied {
@@ -224,6 +244,10 @@ pub struct SpaceMemberAddInput {
     /// a guest or anyone here for a while.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,
+    /// For someone removed: their membership's version, as you read it, so
+    /// a change made since refuses this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<i64>,
 }
 
 impl Targeted for SpaceMemberAddInput {
@@ -242,7 +266,8 @@ impl Operation for SpaceMemberAdd {
     const TITLE: &'static str = "Add someone to a space";
     const DESCRIPTION: &'static str = "Add a person or agent of this workspace to a project or \
         team space, as a member, a viewer or a custom role within yours. Someone already in it \
-        is changed with space_member_update. Returns their membership.";
+        is changed with space_member_update. Adding someone who was removed brings them back, \
+        in their old role unless you name one. Returns their membership.";
 
     type Input = SpaceMemberAddInput;
     type Output = SpaceMemberView;
@@ -256,28 +281,60 @@ impl Operation for SpaceMemberAdd {
         let tx = call.tx().await?;
         managed_space(tx, space).await?;
         let account = account_in(tx, space, &input.account).await?;
-        let (role, role_id) = match input.role.as_deref() {
-            None => (Some("member".to_owned()), None),
-            Some(text) => role_named(tx, space, text).await?,
-        };
-        let added = memberships::add_member(
-            tx,
-            caller,
-            space,
-            account,
-            role.as_deref().unwrap_or("member"),
-            role_id,
+        let removed = sqlx::query_scalar::<_, bool>(
+            "SELECT NOT enabled FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
         )
+        .bind(space)
+        .bind(account)
+        .fetch_optional(&mut **tx)
         .await
-        .map_err(refused)?;
-        if let Some(expires_at) = input.expires_at.as_deref() {
-            set_expiry(tx, space, added.member.actor_id, expiry(expires_at)?).await?;
+        .map_err(AppError::from)?
+        .unwrap_or(false);
+        if removed {
+            // Someone removed earlier comes back, in the role they had
+            // unless another is named.
+            let (role, role_id) = match input.role.as_deref() {
+                None => (None, None),
+                Some(text) => role_named(tx, space, text).await?,
+            };
+            memberships::change_member(
+                tx,
+                caller,
+                space,
+                account,
+                role.as_deref(),
+                role_id,
+                Some(true),
+                input.expected_version,
+            )
+            .await
+            .map_err(refused)?;
+        } else {
+            let (role, role_id) = match input.role.as_deref() {
+                None => (Some("member".to_owned()), None),
+                Some(text) => role_named(tx, space, text).await?,
+            };
+            memberships::add_member(
+                tx,
+                caller,
+                space,
+                account,
+                role.as_deref().unwrap_or("member"),
+                role_id,
+            )
+            .await
+            .map_err(refused)?;
         }
-        let view = member(tx, space, added.member.actor_id).await?;
+        if let Some(expires_at) = input.expires_at.as_deref() {
+            set_expiry(tx, space, account, expiry(expires_at)?).await?;
+        } else if removed {
+            clear_lapsed(tx, space, account).await?;
+        }
+        let view = member(tx, space, account).await?;
         call.audit_target(
             "account",
             account,
-            json!({ "space": space, "role": view.role, "roleId": view.role_id }),
+            json!({ "space": space, "role": view.role, "roleId": view.role_id, "restored": removed }),
         );
         Ok(view)
     }
@@ -350,8 +407,9 @@ impl Operation for SpaceMemberUpdate {
         )
         .await
         .map_err(refused)?;
-        if let Some(expires_at) = expires_at {
-            set_expiry(tx, space, account, expires_at).await?;
+        match expires_at {
+            Some(expires_at) => set_expiry(tx, space, account, expires_at).await?,
+            None => clear_lapsed(tx, space, account).await?,
         }
         let view = member(tx, space, account).await?;
         call.audit_target(

@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::{
     config::AppConfig,
     error::AppError,
-    git_runtime::{RegisteredRepository, adopt_legacy_mirror, expected_repository_mirror_path},
+    hosts::builtin::repositories::{self as host_repositories, Mirror},
     profile_runtime::{prepare_private_profile_directory, resolve_path_within_data_root},
     seed::{runtime_path_text, seed_mirror_path},
 };
@@ -40,6 +40,18 @@ pub async fn prepare_m3_repository_upgrade(
     pool: &PgPool,
     config: &AppConfig,
 ) -> Result<M3RepositoryUpgradePreflight, AppError> {
+    // Before migrating: every workspace's rows, run on the host.
+    crate::tenancy::system(
+        "server.operator",
+        Box::pin(prepare_m3_repository_upgrade_here(pool, config)),
+    )
+    .await
+}
+
+async fn prepare_m3_repository_upgrade_here(
+    pool: &PgPool,
+    config: &AppConfig,
+) -> Result<M3RepositoryUpgradePreflight, AppError> {
     if !migration_pending(pool, 8, 11).await? {
         return Ok(M3RepositoryUpgradePreflight::default());
     }
@@ -50,24 +62,22 @@ pub async fn prepare_m3_repository_upgrade(
     .await?;
     let mut upgrades = Vec::new();
     for repository in repositories {
-        let canonical = expected_repository_mirror_path(&config.data_root, repository.id)?;
+        let canonical = host_repositories::mirror_path(&config.data_root, repository.id)?;
         let legacy = PathBuf::from(&repository.mirror_path);
         if legacy == canonical {
             continue;
         }
-        let registration = RegisteredRepository {
-            id: repository.id,
-            clone_url: repository.clone_url,
-            default_branch: repository.default_branch,
-            mirror_path: canonical.clone(),
-        };
-        let data_root = config.data_root.clone();
-        let legacy_for_adoption = legacy.clone();
-        tokio::task::spawn_blocking(move || {
-            adopt_legacy_mirror(&data_root, &registration, &legacy_for_adoption)
-        })
-        .await
-        .map_err(|_| AppError::Internal("join legacy mirror adoption"))??;
+        host_repositories::adopt_legacy_mirror(
+            &config.data_root,
+            Mirror {
+                repository_id: repository.id,
+                clone_url: repository.clone_url,
+                default_branch: repository.default_branch,
+                imported: true,
+            },
+            legacy.clone(),
+        )
+        .await?;
         upgrades.push((repository.id, legacy, canonical));
     }
     if upgrades.is_empty() {
@@ -134,6 +144,18 @@ struct LegacyRepositoryPath {
 /// conservatively disables Workers whose legacy dependencies are unavailable.
 /// Unknown legacy path layouts fail closed for explicit operator repair.
 pub async fn prepare_m3_upgrade(
+    pool: &PgPool,
+    config: &AppConfig,
+) -> Result<M3UpgradePreflight, AppError> {
+    // Before migrating: every workspace's rows, run on the host.
+    crate::tenancy::system(
+        "server.operator",
+        Box::pin(prepare_m3_upgrade_here(pool, config)),
+    )
+    .await
+}
+
+async fn prepare_m3_upgrade_here(
     pool: &PgPool,
     config: &AppConfig,
 ) -> Result<M3UpgradePreflight, AppError> {

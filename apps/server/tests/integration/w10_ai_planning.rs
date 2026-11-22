@@ -101,6 +101,22 @@ impl Client {
     }
 
     async fn send(&self, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+        // The task writes moved to operations (K2.22).
+        if let Some(body) = body
+            .as_ref()
+            .filter(|body| crate::support::tasks::op_for(method, uri, body).is_some())
+        {
+            let browser = crate::support::tasks::browser(&self.cookie, &self.csrf);
+            return crate::support::tasks::send(
+                &self.application,
+                &browser,
+                method,
+                uri,
+                None,
+                body.clone(),
+            )
+            .await;
+        }
         let mut request = Request::builder()
             .method(method)
             .uri(uri)
@@ -272,9 +288,9 @@ impl Fixture {
     async fn set_workspace(&self, key: &str, value: Value) {
         let (status, body) = self
             .owner
-            .put(
-                &format!("/api/v1/settings/values/{key}"),
-                json!({"scope": "workspace", "organizationId": self.organization_id, "value": value}),
+            .post(
+                &format!("/api/v2/w/{}/ops/setting_update", self.organization_id),
+                json!({"key": key, "scope": "workspace", "value": value}),
             )
             .await;
         assert_eq!(status, StatusCode::OK, "{key}: {body}");
@@ -283,9 +299,9 @@ impl Fixture {
     async fn set_project(&self, key: &str, value: Value) {
         let (status, body) = self
             .owner
-            .put(
-                &format!("/api/v1/settings/values/{key}"),
-                json!({"scope": "project", "projectId": self.project_id, "value": value}),
+            .post(
+                "/api/v2/ops/setting_update",
+                json!({"key": key, "scope": "project", "spaceId": self.project_id, "value": value}),
             )
             .await;
         assert_eq!(status, StatusCode::OK, "{key}: {body}");
@@ -332,13 +348,16 @@ impl Fixture {
     }
 
     async fn background_run(&self) {
-        detect::request(
-            &self.pool,
+        crate::support::as_job(
             self.organization_id,
-            self.project_id,
-            Mode::Nightly,
-            None,
-            Vec::new(),
+            detect::request(
+                &self.pool,
+                self.organization_id,
+                self.project_id,
+                Mode::Nightly,
+                None,
+                Vec::new(),
+            ),
         )
         .await
         .expect("queue run");
@@ -896,15 +915,21 @@ async fn the_roadmap_imports_as_tasks_and_a_stopped_import_resumes() {
     // Two steps (milestones, the first hundred tasks), then the server
     // "stops"; the job picks up from there.
     assert_eq!(
-        plans::commit_next_step(&fixture.pool, id)
-            .await
-            .expect("step"),
+        crate::support::as_job(
+            fixture.organization_id,
+            plans::commit_next_step(&fixture.pool, id),
+        )
+        .await
+        .expect("step"),
         Step::Progress
     );
     assert_eq!(
-        plans::commit_next_step(&fixture.pool, id)
-            .await
-            .expect("step"),
+        crate::support::as_job(
+            fixture.organization_id,
+            plans::commit_next_step(&fixture.pool, id),
+        )
+        .await
+        .expect("step"),
         Step::Progress
     );
     let so_far = sqlx::query_scalar::<_, i64>(
@@ -917,9 +942,12 @@ async fn the_roadmap_imports_as_tasks_and_a_stopped_import_resumes() {
     assert_eq!(so_far, 100);
     fixture.run_jobs().await;
     assert_eq!(
-        plans::commit_next_step(&fixture.pool, id)
-            .await
-            .expect("step"),
+        crate::support::as_job(
+            fixture.organization_id,
+            plans::commit_next_step(&fixture.pool, id),
+        )
+        .await
+        .expect("step"),
         Step::Done
     );
 
@@ -1046,12 +1074,9 @@ impl Fixture {
     async fn limit_member_apps(&self, permissions: Value) {
         let (status, body) = self
             .owner
-            .put(
-                &format!(
-                    "/api/v1/organizations/{}/members/{}/agent-limit",
-                    self.organization_id, self.member_actor
-                ),
-                json!({"permissions": permissions}),
+            .post(
+                &format!("/api/v2/w/{}/ops/app_limit_set", self.organization_id),
+                json!({"account": self.member_actor, "permissions": permissions}),
             )
             .await;
         assert_eq!(status, StatusCode::OK, "{body}");
@@ -1182,9 +1207,12 @@ async fn a_plan_stops_when_its_committer_loses_what_its_steps_need() {
     fixture
         .limit_member_apps(json!(["tasks.view", "tasks.create"]))
         .await;
-    let step = plans::commit_next_step(&fixture.pool, id)
-        .await
-        .expect("step");
+    let step = crate::support::as_job(
+        fixture.organization_id,
+        plans::commit_next_step(&fixture.pool, id),
+    )
+    .await
+    .expect("step");
     assert!(
         matches!(&step, Step::Failed(message) if message.contains("app") && message.contains("change")),
         "{step:?}"
@@ -1231,9 +1259,12 @@ async fn a_plan_stops_when_its_committer_loses_what_its_steps_need() {
     .execute(&fixture.pool)
     .await
     .expect("narrow the member's role");
-    let step = plans::commit_next_step(&fixture.pool, id)
-        .await
-        .expect("step");
+    let step = crate::support::as_job(
+        fixture.organization_id,
+        plans::commit_next_step(&fixture.pool, id),
+    )
+    .await
+    .expect("step");
     assert!(
         matches!(&step, Step::Failed(message) if message.contains("can no longer create")),
         "{step:?}"

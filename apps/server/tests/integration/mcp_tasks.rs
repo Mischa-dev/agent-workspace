@@ -127,16 +127,14 @@ pub(super) async fn space(setup: &Setup) -> String {
 }
 
 pub(super) async fn add_member(setup: &Setup, project: &str, actor: Uuid, role: &str) {
-    let (status, added) = send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{project}/members"),
-            None,
-            json!({"actorId": actor, "role": role}),
-        ),
-    )
-    .await;
+    let (status, added) = setup
+        .browser
+        .op(
+            &setup.app,
+            "space_member_add",
+            json!({"spaceId": project, "account": actor, "role": role}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{added}");
 }
 
@@ -155,7 +153,7 @@ async fn an_agent_lays_out_a_plan_and_reorganizes_the_board() {
         async move { tool(app, &codex, &session, name, arguments).await }
     };
     for name in ["Mobile", "Sync"] {
-        let label = call("label_write", json!({"projectId": "WORK", "name": name})).await;
+        let label = call("label_create", json!({"projectId": "WORK", "name": name})).await;
         assert_eq!(label["outcome"], "ok", "{label}");
     }
     for (title, status) in [
@@ -204,7 +202,7 @@ async fn an_agent_lays_out_a_plan_and_reorganizes_the_board() {
         created["value"]["url"]
             .as_str()
             .expect("url")
-            .ends_with(&format!("/projects/{work}/work-items/{offline}")),
+            .ends_with(&format!("/w/-/s/{work}/tasks/{offline}")),
         "{created}"
     );
     let after = side_effects(&setup).await;
@@ -212,7 +210,7 @@ async fn an_agent_lays_out_a_plan_and_reorganizes_the_board() {
         (after.0 - before.0, after.1 - before.1, after.2 - before.2),
         (1, 1, 1)
     );
-    let opened = call("task_open", json!({"taskId": "WORK-4"})).await;
+    let opened = call("task_get", json!({"taskId": "WORK-4"})).await;
     let task = &opened["value"]["task"];
     assert_eq!(task["status"]["name"], "Ready", "{opened}");
     assert_eq!(task["itemType"]["name"], "Bug");
@@ -263,7 +261,7 @@ async fn an_agent_lays_out_a_plan_and_reorganizes_the_board() {
     let unknown = refuse(json!({"labels": ["nope"], "clientRequestId": "plan-retry"})).await;
     assert_refused(&unknown, "labels", "No label called \"nope\" in WORK");
     assert!(
-        message(&unknown).contains("Mobile") && message(&unknown).contains("label_write"),
+        message(&unknown).contains("Mobile") && message(&unknown).contains("label_create"),
         "{unknown}"
     );
     assert_refused(
@@ -326,7 +324,7 @@ async fn an_agent_lays_out_a_plan_and_reorganizes_the_board() {
     assert_eq!(subtask["outcome"], "ok", "{subtask}");
     assert_eq!(subtask["value"]["changedFields"], json!(["subtask"]));
     assert_eq!(subtask["value"]["key"], "WORK-6");
-    let opened = call("task_open", json!({"taskId": "WORK-6"})).await;
+    let opened = call("task_get", json!({"taskId": "WORK-6"})).await;
     let task = &opened["value"]["task"];
     assert_eq!(id(&task["parentWorkItemId"]), offline, "{opened}");
     assert_eq!(task["priority"], "high");
@@ -648,7 +646,7 @@ async fn reparenting_refuses_cycles_and_never_names_projects_out_of_reach() {
     assert_eq!(cleared["outcome"], "ok", "{cleared}");
     assert_eq!(cleared["value"]["changedFields"], json!(["parent"]));
     assert_eq!(cleared["value"]["version"], 2);
-    let opened = call("task_open", json!({"taskId": "WORK-3"})).await;
+    let opened = call("task_get", json!({"taskId": "WORK-3"})).await;
     assert!(
         opened["value"]["task"]["parentWorkItemId"].is_null(),
         "{opened}"
@@ -785,7 +783,7 @@ async fn labels_change_in_one_version_and_only_members_change_them() {
     };
     let mut gamma = Uuid::nil();
     for name in ["Alpha", "Beta", "Gamma"] {
-        let label = call("label_write", json!({"projectId": "WORK", "name": name})).await;
+        let label = call("label_create", json!({"projectId": "WORK", "name": name})).await;
         if name == "Gamma" {
             gamma = id(&label["value"]["label"]["id"]);
         }
@@ -846,7 +844,7 @@ async fn labels_change_in_one_version_and_only_members_change_them() {
         "\"Gamma\" is in both addLabels and removeLabels. Pick one.",
     );
     let archived = call(
-        "label_write",
+        "label_update",
         json!({"projectId": "WORK", "label": "Gamma", "archived": true}),
     )
     .await;
@@ -1130,9 +1128,9 @@ async fn an_agents_task_comment_mentions_people_and_references_tasks() {
         "text": "@rook see WORK-2 (and not WORK-99 or XWORK-2)",
         "clientRequestId": "comment-1"
     });
-    let posted = call("task_comment", comment.clone()).await;
-    assert_eq!(posted["outcome"], "applied", "{posted}");
-    let comment_id = id(&posted["activityId"]);
+    let posted = call("task_comment_create", comment.clone()).await;
+    assert_eq!(posted["outcome"], "ok", "{posted}");
+    let comment_id = id(&posted["value"]["activityId"]);
     let mentioned = sqlx::query_scalar::<_, Uuid>(
         "SELECT actor_id FROM message_mentions WHERE message_id = $1",
     )
@@ -1172,15 +1170,18 @@ async fn an_agents_task_comment_mentions_people_and_references_tasks() {
     assert_eq!(unread_mentions().await, 1);
 
     // The same request again is a replay, and tells nobody twice.
-    let replayed = call("task_comment", comment).await;
-    assert_eq!(replayed["activityId"], posted["activityId"], "{replayed}");
+    let replayed = call("task_comment_create", comment).await;
+    assert_eq!(
+        replayed["value"]["activityId"], posted["value"]["activityId"],
+        "{replayed}"
+    );
     drain(&setup).await;
     assert_eq!(unread_mentions().await, 1);
 
     // Editing it to name the owner moves the mention.
     let owner = super::message_edits::owner_id(&setup.pool).await;
     let edited = call(
-        "task_comment_edit",
+        "task_comment_update",
         json!({"taskId": tasks[0], "commentId": comment_id, "text": "@owner over to you"}),
     )
     .await;
@@ -1193,4 +1194,14 @@ async fn an_agents_task_comment_mentions_people_and_references_tasks() {
     .await
     .expect("mentions");
     assert_eq!(mentioned, [owner]);
+    // A keyed edit sent twice is made once: the retry replays its answer.
+    let keyed = json!({"taskId": tasks[0], "commentId": comment_id,
+                       "text": "@owner over to you, again", "clientRequestId": "edit-once"});
+    let first = call("task_comment_update", keyed.clone()).await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert_eq!(first["replaySafe"], true, "{first}");
+    assert_eq!(first["replayed"], false, "{first}");
+    let again = call("task_comment_update", keyed).await;
+    assert_eq!(again["replayed"], true, "{again}");
+    assert_eq!(again["value"], first["value"], "{again}");
 }

@@ -288,7 +288,9 @@ export function SearchPage() {
           ) : null}
           {results.data && results.data.hits.length > 0 ? (
             <RowList label="Results">
-              {results.data.hits.map((hit) => {
+              {results.data.hits.map((hit, _index, hits) => {
+                // A project's name on every row says nothing when every hit is in it.
+                const oneProject = Boolean(projectId) || hits.every((other) => other.projectName === hits[0]?.projectName)
                 const { status, title } = titleAndStatus(hit)
                 return (
                   <Row
@@ -299,9 +301,8 @@ export function SearchPage() {
                         <StatusChip tone={hit.kind === 'decision' || hit.kind === 'page' ? 'agent' : 'muted'}>{KIND_LABEL[hit.kind]}</StatusChip>
                         {status ? <StatusChip tone="muted">{capitalized(status)}</StatusChip> : null}
                         <span>
-                          {/* Searching one project, its name on every row says nothing. */}
-                          {[projectId ? null : hit.projectName, hit.conversationName, hit.author].filter(Boolean).join(' · ')}
-                          {projectId && !hit.conversationName && !hit.author ? '' : ' · '}
+                          {[oneProject ? null : hit.projectName, hit.conversationName, hit.author].filter(Boolean).join(' · ')}
+                          {oneProject && !hit.conversationName && !hit.author ? '' : ' · '}
                           <time dateTime={hit.at} title={formatFullDate(hit.at)}>
                             {formatRelative(hit.at)}
                           </time>

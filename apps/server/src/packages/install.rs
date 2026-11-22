@@ -118,11 +118,12 @@ impl Place {
     }
 }
 
-/// One line of the plan.
+/// One line of the plan (an install's, or an upgrade's).
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanItem {
-    /// create, reuse, update or skip.
+    /// create, reuse, update or skip; an upgrade also plans keep, conflict
+    /// (changed here and upstream) and detach (dropped upstream).
     pub action: String,
     /// The part's kind: switches, layout, role, space, channel, collection,
     /// form, automation, page, skill, agent or module.
@@ -277,6 +278,10 @@ const AGENT_BY_KEY: &str = "SELECT found.id, {visible} FROM agent_templates foun
 const MODULE_BY_KEY: &str = "SELECT found.id, {visible} FROM modules found \
      WHERE found.workspace_id = $1 AND found.archived_at IS NULL AND found.module_key = $2";
 
+/// A theme the workspace offers by this name: installing reuses it.
+const THEME_BY_NAME: &str = "SELECT id FROM themes WHERE workspace_id = $1 AND offered \
+     AND lower(name) = lower($2) ORDER BY created_at LIMIT 1";
+
 const IN_ANOTHER_SPACE: &str = "One with this key is in a space you aren't in, so it's left out.";
 
 /// A workspace-keyed thing by key, and its id only when the viewer may see it.
@@ -371,6 +376,15 @@ pub async fn plan(
                 if held.is_some() {
                     line.action = "update".to_owned();
                 }
+                line.needs_admin = true;
+                line
+            }
+            // A theme is offered to the whole workspace, which needs its
+            // settings permission wherever the package lands.
+            ContentKind::Theme => {
+                let name = text(&body, "name");
+                let held = existing(connection, THEME_BY_NAME, workspace_id, name).await?;
+                let mut line = found("theme", key, name, held);
                 line.needs_admin = true;
                 line
             }
@@ -621,6 +635,12 @@ pub struct InstallView {
     pub objects: i64,
     #[schemars(with = "String")]
     pub installed_at: chrono::DateTime<chrono::Utc>,
+    /// A newer version the workspace's directory offers, for an installed
+    /// package (package_upgrade_preview and package_upgrade, with this
+    /// install's id, move it there).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[sqlx(skip)]
+    pub newer_version: Option<String>,
 }
 
 pub const INSTALL_SELECT: &str = r#"

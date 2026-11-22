@@ -58,13 +58,13 @@ async fn relations_stay_paired_and_rollups_follow_related_records() {
     };
     let query = |collection: &'static str| {
         call(
-            "record_query",
+            "record_list",
             json!({"projectId": "WORK", "collection": collection, "limit": 50}),
         )
     };
 
     let testers = call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": "WORK",
             "name": "Testers",
@@ -74,7 +74,7 @@ async fn relations_stay_paired_and_rollups_follow_related_records() {
     .await;
     assert_eq!(testers["outcome"], "ok", "{testers}");
     let builds = call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": "WORK",
             "name": "Builds",
@@ -104,7 +104,7 @@ async fn relations_stay_paired_and_rollups_follow_related_records() {
     // The definition (what a workspace template keeps) names the rollup's
     // fields, and writing it again makes the same rollup.
     let described = call(
-        "collection_describe",
+        "collection_get",
         json!({"projectId": "WORK", "collection": "Builds"}),
     )
     .await;
@@ -122,14 +122,14 @@ async fn relations_stay_paired_and_rollups_follow_related_records() {
         "{described}"
     );
     let again = call(
-        "collection_write",
+        "collection_create",
         json!({"projectId": "WORK", "name": "Builds again", "fields": kept}),
     )
     .await;
     assert_eq!(again["outcome"], "ok", "{again}");
 
     let written = call(
-        "record_write",
+        "record_create_many",
         json!({
             "projectId": "WORK",
             "collection": "Testers",
@@ -142,7 +142,7 @@ async fn relations_stay_paired_and_rollups_follow_related_records() {
     .await;
     assert_eq!(written["outcome"], "ok", "{written}");
     let written = call(
-        "record_write",
+        "record_create_many",
         json!({
             "projectId": "WORK",
             "collection": "Builds",
@@ -182,7 +182,7 @@ async fn relations_stay_paired_and_rollups_follow_related_records() {
     // A tester's hours change three times; Build 1 is worked out once.
     for (title, hours) in [("Ada", 10), ("Bo", 5), ("Ada", 11)] {
         let changed = call(
-            "record_write",
+            "record_update_many",
             json!({
                 "projectId": "WORK",
                 "collection": "Testers",
@@ -203,9 +203,12 @@ async fn relations_stay_paired_and_rollups_follow_related_records() {
     .await
     .expect("jobs");
     assert_eq!(waiting, 1, "one queued job covers every change");
-    computed::recalculate_space(&setup.pool, project_id)
-        .await
-        .expect("recalculate");
+    crate::support::as_job(
+        setup.organization_id,
+        computed::recalculate_space(&setup.pool, project_id),
+    )
+    .await
+    .expect("recalculate");
     let fresh = query("Builds").await;
     assert_eq!(value_of(&fresh, "Build 1", "Hours"), json!(16), "{fresh}");
     assert_eq!(value_of(&fresh, "Build 2", "Hours"), json!(11));
@@ -213,7 +216,7 @@ async fn relations_stay_paired_and_rollups_follow_related_records() {
 
     // Taking Bo off Build 1 takes Build 1 off Bo.
     let changed = call(
-        "record_write",
+        "record_update_many",
         json!({
             "projectId": "WORK",
             "collection": "Builds",
@@ -253,7 +256,7 @@ async fn relations_stay_paired_and_rollups_follow_related_records() {
     // Once a tester needs a build, taking Ada off her last one from the
     // build's side is refused, as clearing it on Ada would be.
     let required = call(
-        "collection_write",
+        "collection_update",
         json!({
             "projectId": "WORK",
             "collection": "Testers",
@@ -270,9 +273,9 @@ async fn relations_stay_paired_and_rollups_follow_related_records() {
             "records": [{"record": title_ref(&builds, build), "fields": {"Tested by": []}}],
         })
     };
-    let still_one = call("record_write", off("Build 2")).await;
+    let still_one = call("record_update_many", off("Build 2")).await;
     assert_eq!(still_one["outcome"], "ok", "{still_one}");
-    let last = call("record_write", off("Build 1")).await;
+    let last = call("record_update_many", off("Build 1")).await;
     assert_ne!(last["outcome"], "ok", "{last}");
     assert!(last.to_string().contains("Ada"), "{last}");
     let people = query("Testers").await;
@@ -285,7 +288,7 @@ async fn relations_stay_paired_and_rollups_follow_related_records() {
     // A loop is refused with its path: Testers count their builds, Builds
     // add up those counts, and Testers can't then add up the Builds' sums.
     let counted = call(
-        "collection_write",
+        "collection_update",
         json!({
             "projectId": "WORK",
             "collection": "Testers",
@@ -296,7 +299,7 @@ async fn relations_stay_paired_and_rollups_follow_related_records() {
     .await;
     assert_eq!(counted["outcome"], "ok", "{counted}");
     let summed = call(
-        "collection_write",
+        "collection_update",
         json!({
             "projectId": "WORK",
             "collection": "Builds",
@@ -307,7 +310,7 @@ async fn relations_stay_paired_and_rollups_follow_related_records() {
     .await;
     assert_eq!(summed["outcome"], "ok", "{summed}");
     let looped = call(
-        "collection_write",
+        "collection_update",
         json!({
             "projectId": "WORK",
             "collection": "Testers",
@@ -352,7 +355,7 @@ async fn a_whole_collection_recalculation_carries_on_after_a_stop() {
         app,
         &codex,
         &session,
-        "collection_write",
+        "collection_create",
         json!({"projectId": "WORK", "name": "Parts", "fields": [{"name": "Weight", "type": "number"}]}),
     )
     .await;
@@ -393,7 +396,7 @@ async fn a_whole_collection_recalculation_carries_on_after_a_stop() {
         app,
         &codex,
         &session,
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Parts",
                "fields": [{"name": "Double", "type": "formula", "formula": "{Weight} * 2"}]}),
     )
@@ -402,9 +405,12 @@ async fn a_whole_collection_recalculation_carries_on_after_a_stop() {
 
     // One batch, then the run "stops": the job for the next batch is queued
     // with where it had got to.
-    computed::recompute_collection(&setup.pool, project_id, collection, None)
-        .await
-        .expect("first batch");
+    crate::support::as_job(
+        setup.organization_id,
+        computed::recompute_collection(&setup.pool, project_id, collection, None),
+    )
+    .await
+    .expect("first batch");
     let done = || async {
         sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM collection_records WHERE collection_id = $1 \
@@ -438,9 +444,12 @@ async fn a_whole_collection_recalculation_carries_on_after_a_stop() {
         let after = payload["after"]
             .as_str()
             .and_then(|id| id.parse::<Uuid>().ok());
-        computed::recompute_collection(&setup.pool, project_id, collection, after)
-            .await
-            .expect("next batch");
+        crate::support::as_job(
+            setup.organization_id,
+            computed::recompute_collection(&setup.pool, project_id, collection, after),
+        )
+        .await
+        .expect("next batch");
     }
     assert_eq!(done().await, 1200);
     let doubled = sqlx::query_scalar::<_, Value>(

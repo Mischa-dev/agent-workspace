@@ -366,16 +366,15 @@ async fn an_agent_removed_from_its_first_project_still_works_in_another() {
     let side = world.project("SIDE").to_owned();
     let (agent, token) =
         create_agent(&world.app, &world.owner.browser, &work, "Scout", "scout").await;
-    let (status, added) = send(
-        &world.app,
-        world.owner.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{side}/members"),
-            None,
-            json!({"actorId": agent, "role": "member"}),
-        ),
-    )
-    .await;
+    let (status, added) = world
+        .owner
+        .browser
+        .op(
+            &world.app,
+            "space_member_add",
+            json!({"spaceId": side, "account": agent, "role": "member"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{added}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1::uuid AND actor_id = $2",
@@ -385,16 +384,15 @@ async fn an_agent_removed_from_its_first_project_still_works_in_another() {
     .fetch_one(world.pool())
     .await
     .expect("membership version");
-    let (status, removed) = send(
-        &world.app,
-        world.owner.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{agent}"),
-            Some("remove-scout"),
-            json!({"expectedVersion": version, "enabled": false}),
-        ),
-    )
-    .await;
+    let (status, removed) = world
+        .owner
+        .browser
+        .op(
+            &world.app,
+            "space_member_remove",
+            json!({"spaceId": work, "account": agent, "expectedVersion": version}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{removed}");
     let session = initialize(&world.app, &token)
         .await
@@ -499,7 +497,7 @@ async fn an_agent_made_at_workspace_level_starts_with_workspace_things_only() {
     .expect("managers");
     assert!(manages, "its maker manages it");
     let session = initialize(&world.app, &token).await.expect("agent MCP");
-    let projects = tool(&world.app, &token, &session, "projects_list", json!({})).await;
+    let projects = tool(&world.app, &token, &session, "project_list", json!({})).await;
     let work = world.project("WORK").to_owned();
     let ids = projects["value"]["projects"]
         .as_array()
@@ -812,4 +810,52 @@ async fn renaming_an_agent_once_renames_it_in_every_space() {
     .expect("profile");
     assert_eq!(profile, "Rook the Second");
     world.finish().await;
+}
+
+/// Signing in again over a live session's cookie revokes that session, and
+/// the revoke reaches the event log for live connections on every
+/// instance, although a sign-in arrives before its account is known.
+#[tokio::test]
+async fn a_sign_in_over_a_live_cookie_signals_the_old_sessions_revoke() {
+    let Some(setup) = super::support::world::setup("rotate_signal").await else {
+        return;
+    };
+    let response = setup
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/login")
+                .header("origin", "http://127.0.0.1:3100")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &setup.browser.cookie)
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "loginName": "owner",
+                        "password": super::support::app::PASSWORD,
+                    }))
+                    .expect("login body"),
+                ))
+                .expect("login request"),
+        )
+        .await
+        .expect("login response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let rotated = sqlx::query_scalar::<_, Uuid>(
+        "SELECT rotated_from_session_id FROM sessions WHERE rotated_from_session_id IS NOT NULL",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the old session, rotated");
+    let signals = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM (SELECT type, payload FROM events \
+         UNION ALL SELECT type, payload FROM event_staging) logged \
+         WHERE type = 'session.revoked' AND payload->>'sessionId' = $1::text",
+    )
+    .bind(rotated)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("signals");
+    assert_eq!(signals, 1);
 }

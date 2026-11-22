@@ -59,9 +59,9 @@ async fn ready_task(setup: &Setup, project: &str, title: &str, priority: &str) -
         setup,
         &setup.browser,
         "POST",
-        &format!("/api/v1/projects/{project}/work-items/{id}/acceptance-criteria"),
+        "/api/v2/ops/task_criteria_update",
         Some(&format!("criterion-{}", title.replace(' ', "-"))),
-        json!({"expectedVersion": task["version"], "text": "It works"}),
+        json!({"taskId": id, "expectedVersion": task["version"], "operations": [{"op": "add", "text": "It works"}]}),
     )
     .await;
     assert!(status.is_success(), "{criterion}");
@@ -73,13 +73,16 @@ async fn environment(setup: &Setup, project: &str, harness: &str) -> String {
         setup,
         &setup.browser,
         "POST",
-        &format!("/api/v1/projects/{project}/environments"),
+        "/api/v2/ops/environment_create",
         Some(&format!("environment-{project}")),
-        json!({"name": "Here", "harness": harness, "setupNotes": "Nothing to set up."}),
+        json!({"projectId": project, "name": "Here", "harness": harness, "setupNotes": "Nothing to set up."}),
     )
     .await;
     assert!(status.is_success(), "{created}");
-    created["id"].as_str().expect("environment").to_owned()
+    created["value"]["environment"]["id"]
+        .as_str()
+        .expect("environment")
+        .to_owned()
 }
 
 fn keys(tasks: &Value) -> Vec<String> {
@@ -130,7 +133,9 @@ async fn the_alert_launches_its_batch_on_the_account_in_each_projects_environmen
             plan: None,
         },
     );
-    usage::poll_account(state, account).await.expect("poll");
+    crate::support::as_job(setup.organization_id, usage::poll_account(state, account))
+        .await
+        .expect("poll");
     let page = inbox(setup, &setup.browser, "").await;
     let alert = page["notifications"]
         .as_array()
@@ -183,7 +188,7 @@ async fn the_alert_launches_its_batch_on_the_account_in_each_projects_environmen
         &setup.app,
         &owner_app,
         &session,
-        "usage_batch",
+        "usage_batch_preview",
         batch_tool.clone(),
     )
     .await;
@@ -204,7 +209,14 @@ async fn the_alert_launches_its_batch_on_the_account_in_each_projects_environmen
     .execute(&setup.pool)
     .await
     .expect("the owner's apps no longer see tasks");
-    let listed = tool(&setup.app, &owner_app, &session, "usage_batch", batch_tool).await;
+    let listed = tool(
+        &setup.app,
+        &owner_app,
+        &session,
+        "usage_batch_preview",
+        batch_tool,
+    )
+    .await;
     assert!(!listed.to_string().contains("Fix the outage"), "{listed}");
     assert!(!listed.to_string().contains("Tidy the docs"), "{listed}");
     sqlx::query(
@@ -348,9 +360,9 @@ async fn onboarding_reads_each_step_from_what_exists_for_the_reader() {
         setup,
         &setup.browser,
         "POST",
-        &format!("/api/v1/organizations/{organization}/workspace-templates/apply"),
+        &format!("/api/v2/w/{organization}/ops/workspace_template_apply"),
         Some("use-everything"),
-        json!({"template": "everything"}),
+        json!({"projectId": "workspace", "template": "everything"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{used}");

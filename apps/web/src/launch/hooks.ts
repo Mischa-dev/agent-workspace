@@ -74,7 +74,7 @@ export function useCreateLaunches(projectId: string) {
 export function useCancelLaunch(projectId: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (launchId: string) => cancelLaunch(projectId, launchId),
+    mutationFn: (launchId: string) => cancelLaunch(launchId),
     onSettled: () => void queryClient.invalidateQueries({ queryKey: launchKeys.launches(projectId) }),
   })
 }

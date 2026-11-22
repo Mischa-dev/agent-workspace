@@ -22,16 +22,15 @@ fn templates_path(setup: &Setup) -> String {
 }
 
 async fn apply(setup: &Setup, template: &str) -> (StatusCode, Value) {
-    send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("{}/apply", templates_path(setup)),
-            None,
-            json!({"template": template}),
-        ),
-    )
-    .await
+    setup
+        .browser
+        .op_in(
+            &setup.app,
+            setup.organization_id,
+            "workspace_template_apply",
+            json!({"projectId": "workspace", "template": template}),
+        )
+        .await
 }
 
 async fn onboarding(setup: &Setup) -> Value {
@@ -266,27 +265,23 @@ async fn only_people_who_manage_the_workspace_use_or_save_templates() {
     .await;
     assert_eq!(status, StatusCode::OK, "{listed}");
     assert_eq!(listed["canUse"], false);
-    let (status, refused) = send(
-        app,
-        bea.request(
-            "POST",
-            &format!("{}/apply", templates_path(&setup)),
-            None,
-            json!({"template": "chat_with_agents"}),
-        ),
-    )
-    .await;
+    let (status, refused) = bea
+        .op_in(
+            app,
+            setup.organization_id,
+            "workspace_template_apply",
+            json!({"projectId": "workspace", "template": "chat_with_agents"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
-    let (status, refused) = send(
-        app,
-        bea.request(
-            "POST",
-            &templates_path(&setup),
-            None,
-            json!({"name": "Bea's"}),
-        ),
-    )
-    .await;
+    let (status, refused) = bea
+        .op_in(
+            app,
+            setup.organization_id,
+            "workspace_template_save",
+            json!({"projectId": "workspace", "name": "Bea's"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
     assert_eq!(
         count(
@@ -347,19 +342,7 @@ async fn only_people_who_manage_the_workspace_use_or_save_templates() {
     .execute(&setup.pool)
     .await
     .expect("make admin");
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea_id}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["settings.manage", "roles.manage", "projects.view", "projects.create"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup.browser.op_in(app, setup.organization_id, "app_limit_set", json!({"account": bea_id, "permissions": ["settings.manage", "roles.manage", "projects.view", "projects.create"]})).await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let bea_app = connect_app(app, &bea, "Bea's app", "full").await;
     let bea_session = initialize(app, &bea_app).await.expect("bea app");
@@ -384,19 +367,7 @@ async fn only_people_who_manage_the_workspace_use_or_save_templates() {
     );
     // With making channels and building collections in her limit, her app
     // uses it, in the project it makes.
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea_id}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["settings.manage", "roles.manage", "projects.view", "projects.create", "channels.create", "collections.build"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup.browser.op_in(app, setup.organization_id, "app_limit_set", json!({"account": bea_id, "permissions": ["settings.manage", "roles.manage", "projects.view", "projects.create", "channels.create", "collections.build"]})).await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let bea_session = initialize(app, &bea_app).await.expect("bea app");
     let used = tool(
@@ -440,10 +411,12 @@ async fn only_people_who_manage_the_workspace_use_or_save_templates() {
     let layout = send(
         app,
         setup.browser.request(
-            "PUT",
-            &format!("/api/v1/organizations/{}/layout", setup.organization_id),
-            None,
-            json!({"layout": custom}),
+            "POST",
+            &format!("/api/v2/w/{}/ops/layout_update", setup.organization_id),
+            Some("custom-layout"),
+            json!({"projectId": "workspace", "wholeWorkspace": true, "preset": "software_team",
+                "show": {"area.timeline": false},
+                "words": {"task": {"one": "ticket", "many": "tickets"}}}),
         ),
     )
     .await;
@@ -521,4 +494,39 @@ async fn only_people_who_manage_the_workspace_use_or_save_templates() {
     )
     .await;
     assert_eq!(gone["outcome"], "not_found", "{gone}");
+}
+
+/// A wrapped command keeps its own transaction: with a request id and a
+/// pool of one connection, using a template (which makes a space the
+/// caller joins) still finishes, and a retry with the same id replays it.
+#[tokio::test]
+async fn a_template_is_used_on_a_one_connection_pool() {
+    let Some(setup) = setup("awd76_one_connection").await else {
+        return;
+    };
+    let one = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(10))
+        .connect_with((*setup.pool.connect_options()).clone())
+        .await
+        .expect("a pool of one");
+    let app = super::support::app::test_app(one, "postgres://fixture/unused");
+    let key = Uuid::now_v7().to_string();
+    let path = format!(
+        "/api/v2/w/{}/ops/workspace_template_apply",
+        setup.organization_id
+    );
+    let input = json!({"projectId": "workspace", "template": "software_team"});
+    for attempt in ["first", "retry"] {
+        let request = setup
+            .browser
+            .request("POST", &path, Some(&key), input.clone());
+        let (status, body) =
+            tokio::time::timeout(std::time::Duration::from_secs(60), send(&app, request))
+                .await
+                .unwrap_or_else(|_| panic!("the {attempt} call waited on itself"));
+        assert_eq!(status, StatusCode::OK, "{attempt}: {body}");
+        assert_eq!(body["outcome"], "ok", "{attempt}: {body}");
+        assert_eq!(body["replayed"], attempt == "retry", "{attempt}: {body}");
+    }
 }

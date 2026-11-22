@@ -142,7 +142,7 @@ async fn group_members_change_who_can_see_everything() {
         .await;
     assert_eq!(opened["outcome"], "not_found", "{opened}");
     let searched = rook_mcp
-        .call(&setup, "search", json!({"query": "zeppelin"}))
+        .call(&setup, "workspace_search", json!({"query": "zeppelin"}))
         .await;
     assert_eq!(searched["outcome"], "ok", "{searched}");
     assert!(
@@ -153,7 +153,7 @@ async fn group_members_change_who_can_see_everything() {
     let added = codex
         .call(
             &setup,
-            "conversation_members",
+            "conversation_members_update",
             json!({"conversationId": group, "add": ["@rook"]}),
         )
         .await;
@@ -174,7 +174,7 @@ async fn group_members_change_who_can_see_everything() {
         .await;
     assert_eq!(opened["outcome"], "ok", "{opened}");
     assert!(opened.to_string().contains("zeppelin budget"), "{opened}");
-    let briefing = rook_mcp.call(&setup, "briefing", json!({})).await;
+    let briefing = rook_mcp.call(&setup, "briefing_get", json!({})).await;
     assert_eq!(briefing["outcome"], "ok", "{briefing}");
     assert!(
         !briefing["value"]["unread"].to_string().contains(&group),
@@ -185,7 +185,7 @@ async fn group_members_change_who_can_see_everything() {
     let again = codex
         .call(
             &setup,
-            "conversation_members",
+            "conversation_members_update",
             json!({"conversationId": group, "add": [rook.to_string()]}),
         )
         .await;
@@ -196,7 +196,7 @@ async fn group_members_change_who_can_see_everything() {
     let removed = codex
         .call(
             &setup,
-            "conversation_members",
+            "conversation_members_update",
             json!({"conversationId": group, "remove": ["@rook"]}),
         )
         .await;
@@ -210,13 +210,13 @@ async fn group_members_change_who_can_see_everything() {
     for (name, arguments) in [
         ("conversation_open", json!({"conversationId": group})),
         ("conversation_read", json!({"conversationId": group})),
-        ("mark_read", json!({"conversationId": group})),
+        ("conversation_mark_read", json!({"conversationId": group})),
         (
-            "mark_read",
+            "conversation_mark_read",
             json!({"conversationId": group, "unread": true}),
         ),
         (
-            "conversation_members",
+            "conversation_members_update",
             json!({"conversationId": group, "remove": ["@rook"]}),
         ),
     ] {
@@ -230,13 +230,13 @@ async fn group_members_change_who_can_see_everything() {
         );
     }
     let searched = rook_mcp
-        .call(&setup, "search", json!({"query": "zeppelin"}))
+        .call(&setup, "workspace_search", json!({"query": "zeppelin"}))
         .await;
     assert!(
         !searched.to_string().contains("zeppelin budget"),
         "{searched}"
     );
-    let briefing = rook_mcp.call(&setup, "briefing", json!({})).await;
+    let briefing = rook_mcp.call(&setup, "briefing_get", json!({})).await;
     assert!(!briefing.to_string().contains(&group), "{briefing}");
 
     // Only Rook hears that he was removed, with no conversation scope.
@@ -286,7 +286,7 @@ async fn removing_an_agent_withdraws_its_reply_requests() {
     let removed = codex
         .call(
             &setup,
-            "conversation_members",
+            "conversation_members_update",
             json!({"conversationId": group, "remove": [mara.to_string()]}),
         )
         .await;
@@ -384,7 +384,7 @@ async fn adding_others_follows_the_role_and_anyone_can_leave() {
         json!({"conversationId": group, "remove": ["@mara", "@pat"]}),
     ] {
         let denied = mara_mcp
-            .call(&setup, "conversation_members", arguments.clone())
+            .call(&setup, "conversation_members_update", arguments.clone())
             .await;
         assert_eq!(
             denied["outcome"], "permission_denied",
@@ -397,7 +397,7 @@ async fn adding_others_follows_the_role_and_anyone_can_leave() {
     let removed = mara_mcp
         .call(
             &setup,
-            "conversation_members",
+            "conversation_members_update",
             json!({"conversationId": thread_id, "remove": ["@pat"]}),
         )
         .await;
@@ -410,7 +410,7 @@ async fn adding_others_follows_the_role_and_anyone_can_leave() {
     let denied = reader
         .call(
             &setup,
-            "conversation_members",
+            "conversation_members_update",
             json!({"conversationId": group, "add": ["@rook"]}),
         )
         .await;
@@ -427,7 +427,7 @@ async fn adding_others_follows_the_role_and_anyone_can_leave() {
         let refused = codex
             .call(
                 &setup,
-                "conversation_members",
+                "conversation_members_update",
                 json!({"conversationId": conversation, "add": ["@rook"]}),
             )
             .await;
@@ -436,7 +436,7 @@ async fn adding_others_follows_the_role_and_anyone_can_leave() {
     let refused = codex
         .call(
             &setup,
-            "conversation_members",
+            "conversation_members_update",
             json!({"conversationId": group, "add": ["@rook"], "remove": ["@rook"]}),
         )
         .await;
@@ -445,7 +445,7 @@ async fn adding_others_follows_the_role_and_anyone_can_leave() {
     let through_thread = codex
         .call(
             &setup,
-            "conversation_members",
+            "conversation_members_update",
             json!({"conversationId": thread_id, "add": ["@rook"]}),
         )
         .await;
@@ -459,7 +459,7 @@ async fn adding_others_follows_the_role_and_anyone_can_leave() {
     let left = mara_mcp
         .call(
             &setup,
-            "conversation_members",
+            "conversation_members_update",
             json!({"conversationId": group, "remove": ["@mara"]}),
         )
         .await;
@@ -566,7 +566,7 @@ async fn group_member_cap_holds_for_adds() {
     let full = codex
         .call(
             &setup,
-            "conversation_members",
+            "conversation_members_update",
             json!({"conversationId": group, "add": ["@p18"]}),
         )
         .await;
@@ -574,7 +574,7 @@ async fn group_member_cap_holds_for_adds() {
     let over = codex
         .call(
             &setup,
-            "conversation_members",
+            "conversation_members_update",
             json!({"conversationId": group, "add": ["@p19"]}),
         )
         .await;
@@ -594,7 +594,7 @@ async fn group_member_cap_holds_for_adds() {
     let swapped = codex
         .call(
             &setup,
-            "conversation_members",
+            "conversation_members_update",
             json!({"conversationId": group, "add": ["@p19"], "remove": ["@p0"]}),
         )
         .await;
@@ -618,19 +618,19 @@ async fn member_changes_replay_without_undoing_later_ones() {
 
     let add = json!({"conversationId": group, "add": ["@rook"], "clientRequestId": "add-rook-1"});
     let added = codex
-        .call(&setup, "conversation_members", add.clone())
+        .call(&setup, "conversation_members_update", add.clone())
         .await;
     assert_eq!(added["outcome"], "ok", "{added}");
     let removed = codex
         .call(
             &setup,
-            "conversation_members",
+            "conversation_members_update",
             json!({"conversationId": group, "remove": ["@rook"], "clientRequestId": "rm-rook-1"}),
         )
         .await;
     assert_eq!(removed["outcome"], "ok", "{removed}");
 
-    let replayed = codex.call(&setup, "conversation_members", add).await;
+    let replayed = codex.call(&setup, "conversation_members_update", add).await;
     assert_eq!(replayed["outcome"], "ok", "{replayed}");
     assert_eq!(replayed["value"]["idempotentReplay"], true);
     assert!(
@@ -641,7 +641,7 @@ async fn member_changes_replay_without_undoing_later_ones() {
     let mismatch = codex
         .call(
             &setup,
-            "conversation_members",
+            "conversation_members_update",
             json!({"conversationId": group, "add": ["@rook", "@mara"], "clientRequestId": "add-rook-1"}),
         )
         .await;
@@ -651,7 +651,7 @@ async fn member_changes_replay_without_undoing_later_ones() {
     let stale = codex
         .call(
             &setup,
-            "conversation_members",
+            "conversation_members_update",
             json!({"conversationId": group, "add": ["@rook"], "expectedVersion": current - 1}),
         )
         .await;
@@ -850,7 +850,11 @@ async fn marking_unread_brings_a_conversation_back_and_never_marks_anything_read
     let mara_before = mara_mark().await;
 
     let read = codex
-        .call(&setup, "mark_read", json!({"conversationId": group}))
+        .call(
+            &setup,
+            "conversation_mark_read",
+            json!({"conversationId": group}),
+        )
         .await;
     assert_eq!(read["outcome"], "ok", "{read}");
     assert_eq!(read["value"]["lastReadSequence"], 3);
@@ -866,14 +870,14 @@ async fn marking_unread_brings_a_conversation_back_and_never_marks_anything_read
     let unread = codex
         .call(
             &setup,
-            "mark_read",
+            "conversation_mark_read",
             json!({"conversationId": group, "unread": true, "fromMessageId": sent[1]}),
         )
         .await;
     assert_eq!(unread["outcome"], "ok", "{unread}");
     assert_eq!(unread["value"]["lastReadSequence"], 1);
     assert_eq!(unread["value"]["unreadCount"], 2);
-    let briefing = codex.call(&setup, "briefing", json!({})).await;
+    let briefing = codex.call(&setup, "briefing_get", json!({})).await;
     let listed = briefing["value"]["unread"]
         .as_array()
         .expect("unread")
@@ -893,7 +897,9 @@ async fn marking_unread_brings_a_conversation_back_and_never_marks_anything_read
         json!({"conversationId": group, "unread": true, "fromMessageId": link}),
         json!({"conversationId": group, "unread": true}),
     ] {
-        let kept = codex.call(&setup, "mark_read", arguments).await;
+        let kept = codex
+            .call(&setup, "conversation_mark_read", arguments)
+            .await;
         assert_eq!(kept["outcome"], "ok", "{kept}");
         assert_eq!(kept["value"]["lastReadSequence"], 1, "{kept}");
     }
@@ -904,7 +910,9 @@ async fn marking_unread_brings_a_conversation_back_and_never_marks_anything_read
         json!({"conversationId": group, "fromMessageId": sent[0]}),
         json!({"conversationId": group, "unread": true, "fromMessageId": "nope"}),
     ] {
-        let refused = codex.call(&setup, "mark_read", arguments.clone()).await;
+        let refused = codex
+            .call(&setup, "conversation_mark_read", arguments.clone())
+            .await;
         assert_eq!(
             refused["outcome"], "invalid_request",
             "{arguments}: {refused}"
@@ -915,7 +923,7 @@ async fn marking_unread_brings_a_conversation_back_and_never_marks_anything_read
     let denied = reader
         .call(
             &setup,
-            "mark_read",
+            "conversation_mark_read",
             json!({"conversationId": group, "unread": true}),
         )
         .await;
@@ -936,18 +944,16 @@ async fn marking_unread_brings_a_conversation_back_and_never_marks_anything_read
     assert!(timeline["readState"]["version"].as_i64().expect("version") > read_version);
 
     // The web's Mark unread shares the command.
-    let (status, body) = send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/conversations/{group}/mark-unread"),
-            None,
-            json!({ "messageId": sent[0] }),
-        ),
-    )
-    .await;
+    let (status, body) = setup
+        .browser
+        .op(
+            &setup.app,
+            "conversation_mark_read",
+            json!({ "conversationId": group, "unread": true, "fromMessageId": sent[0] }),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["highestSeenSequence"], 0);
+    assert_eq!(body["lastReadSequence"], 0);
 
     // Nothing else can move a mark backwards.
     sqlx::query(
@@ -1013,13 +1019,17 @@ async fn marking_unread_brings_a_conversation_back_and_never_marks_anything_read
     .expect("a system entry after the last message");
     transaction.commit().await.expect("commit");
     let read = codex
-        .call(&setup, "mark_read", json!({"conversationId": group}))
+        .call(
+            &setup,
+            "conversation_mark_read",
+            json!({"conversationId": group}),
+        )
         .await;
     assert_eq!(read["value"]["lastReadSequence"], 4, "{read}");
     let unread = codex
         .call(
             &setup,
-            "mark_read",
+            "conversation_mark_read",
             json!({"conversationId": group, "unread": true}),
         )
         .await;

@@ -18,7 +18,9 @@ WORKDIR /src
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN corepack enable
 COPY . .
-RUN pnpm install --frozen-lockfile && pnpm build
+RUN pnpm install --frozen-lockfile && pnpm build \
+ && node tools/licenses/web-licenses.mjs --check \
+ && node tools/licenses/web-licenses.mjs --notices > /src/WEB-NOTICES
 
 FROM docker.io/library/rust:${RUST_VERSION}-bookworm AS server
 WORKDIR /src
@@ -47,9 +49,11 @@ RUN useradd --system --uid 10001 --user-group --home-dir /var/lib/agent-workspac
  && install -d -o agent-workspace -g agent-workspace -m 0700 \
       /var/lib/agent-workspace /var/lib/agent-workspace-keys
 COPY --from=server /src/target/release/agent-workspace-server /usr/local/bin/agent-workspace-server
+COPY --from=server /src/target/release/agent-workspace-host /usr/local/bin/agent-workspace-host
 COPY --from=web /src/apps/web/dist /app/web
 COPY NOTICE /app/NOTICE
 COPY --from=server /src/THIRD-PARTY-NOTICES /app/THIRD-PARTY-NOTICES
+COPY --from=web /src/WEB-NOTICES /app/THIRD-PARTY-NOTICES-WEB
 ENV AGENT_WORKSPACE_ENV=production \
     AGENT_WORKSPACE_SERVER_ADDR=0.0.0.0:3100 \
     AGENT_WORKSPACE_WEB_ROOT=/app/web \

@@ -1,0 +1,81 @@
+//! A1.17: a reply's words as they arrive, from any host. The run's own
+//! credential sends them; the server shows them live to the sockets of the
+//! run's conversation on every instance and keeps nothing (the finished
+//! reply is sent as a message, the only place its words are stored).
+
+use agent_workspace_host_protocol::{MAX_STREAM_DELTA_BYTES, StreamDelta};
+use serde_json::json;
+use uuid::Uuid;
+
+use super::protocol::HostError;
+use crate::{AppState, realtime::RealtimeEvent, runs};
+
+/// Shows one piece of a run's streamed reply. Refused for another run's
+/// credential, a run that has ended, a run with no conversation, or one
+/// whose agent can no longer read its conversation.
+pub async fn delta(
+    state: &AppState,
+    token: &str,
+    run_id: Uuid,
+    delta: StreamDelta,
+) -> Result<(), HostError> {
+    // The run's own token (K1.24's narrow token bound to the run).
+    let holder = crate::access::tokens::resolve(&state.pool, token)
+        .await?
+        .filter(|holder| holder.run_id == Some(run_id))
+        .ok_or(HostError::Unauthorized)?;
+    let run = runs::store::get(crate::db::scoped(&state.pool), run_id)
+        .await?
+        .ok_or(HostError::Unauthorized)?;
+    // Charged before anything else is checked, so a piece refused below
+    // still spends the run's agent's and workspace's budgets.
+    state
+        .rate_limits
+        .check_run_stream_of(run.account_id, run.workspace_id, delta.delta.len())
+        .await?;
+    if delta.delta.is_empty() || delta.delta.len() > MAX_STREAM_DELTA_BYTES {
+        return Err(HostError::Invalid {
+            field: "delta",
+            message: format!("Send 1 to {MAX_STREAM_DELTA_BYTES} bytes at a time."),
+        });
+    }
+    if runs::RunState::terminal_keys().contains(&run.state.as_str()) {
+        return Err(HostError::Invalid {
+            field: "runId",
+            message: "The run has ended.".to_owned(),
+        });
+    }
+    let Some(conversation_id) = run.conversation_id else {
+        return Err(HostError::Invalid {
+            field: "runId",
+            message: "The run has no conversation to show its reply in.".to_owned(),
+        });
+    };
+    // Words go only where the run's agent can still read: one taken out of
+    // the conversation since the run started streams nothing more there.
+    let visible = sqlx::query_scalar::<_, bool>("SELECT conversation_visible_to($1, $2)")
+        .bind(conversation_id)
+        .bind(run.account_id)
+        .fetch_one(crate::db::scoped(&state.pool))
+        .await
+        .map_err(crate::error::AppError::from)?;
+    if !visible {
+        return Err(HostError::App(crate::error::AppError::Forbidden));
+    }
+    crate::realtime::ephemeral::stream_delta(
+        state,
+        RealtimeEvent {
+            event_id: Uuid::now_v7(),
+            kind: "message.delta",
+            project_id: holder.space_id,
+            conversation_id: Some(conversation_id),
+            payload: json!({
+                "message_id": delta.stream_id,
+                "agent_run_id": run_id,
+                "delta": delta.delta,
+            }),
+        },
+    )
+    .await;
+    Ok(())
+}

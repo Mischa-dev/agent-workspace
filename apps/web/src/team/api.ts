@@ -1,4 +1,6 @@
 import { requestJson } from '../api/client'
+import { callOp } from '../api/ops'
+import type { SpaceMemberAddOutput } from '../api/generated/operations'
 
 export type TeamRole = 'owner' | 'admin' | 'member' | 'viewer'
 
@@ -47,7 +49,8 @@ export type Invitation = {
   createdAt: string
 }
 
-export type IssuedInvitation = Invitation & { invitationUrl: string }
+/** A new join link, shown once. */
+export type IssuedInvitation = { invitationUrl: string }
 
 export function listMembers(projectId: string) {
   return requestJson<{ members: Member[] }>(
@@ -55,15 +58,24 @@ export function listMembers(projectId: string) {
   )
 }
 
-export function updateMember(
+/** What a change to someone's membership returns: enough to name them and undo it. */
+export type MemberChange = { actorId: string; displayName: string; version: number }
+
+function changed(member: SpaceMemberAddOutput): MemberChange {
+  return { actorId: member.accountId, displayName: member.name, version: member.version }
+}
+
+/** Gives someone another role, or turns their access off or back on. */
+export async function updateMember(
   projectId: string,
   actorId: string,
   input: { expectedVersion: number; role?: TeamRole; roleId?: string; enabled?: boolean },
-) {
-  return requestJson<Member>(
-    `/api/v1/projects/${projectId}/members/${actorId}`,
-    { method: 'PATCH', json: input, idempotencyKey: crypto.randomUUID() },
-  )
+): Promise<MemberChange> {
+  const who = { spaceId: projectId, account: actorId }
+  if (input.enabled === false) return changed(await callOp('space_member_remove', { ...who, expectedVersion: input.expectedVersion }))
+  if (input.enabled === true) return changed(await callOp('space_member_add', { ...who, expectedVersion: input.expectedVersion }))
+  const role = input.roleId ?? input.role ?? 'member'
+  return changed(await callOp('space_member_update', { ...who, role, expectedVersion: input.expectedVersion }))
 }
 
 export function listInvitations(projectId: string) {
@@ -72,34 +84,37 @@ export function listInvitations(projectId: string) {
   )
 }
 
-export function issueInvitation(
+/**
+ * An invitation's link is shown once: a retried request the server had
+ * already done answers without it. Say so rather than offer an empty link.
+ */
+function joinUrl(url: string | null | undefined): string {
+  if (!url) throw new Error("Its link didn't arrive. Replace the invitation from the list to get a new one.")
+  return url
+}
+
+export async function issueInvitation(
   projectId: string,
   role: Exclude<TeamRole, 'owner'>,
   expiresInHours: number,
   roleId?: string,
-) {
-  return requestJson<IssuedInvitation>(
-    `/api/v1/projects/${projectId}/invitations`,
-    { method: 'POST', json: roleId ? { role, roleId, expiresInHours } : { role, expiresInHours } },
-  )
+): Promise<IssuedInvitation> {
+  const issued = await callOp('invitation_create', { projectId, role: roleId ?? role, expiresInHours })
+  return { invitationUrl: joinUrl(issued.joinUrl) }
 }
 
-export function revokeInvitation(invitationId: string, expectedVersion: number) {
-  return requestJson<Invitation>(
-    `/api/v1/project-invitations/${invitationId}/revoke`,
-    { method: 'POST', json: { expectedVersion } },
-  )
+export async function revokeInvitation(projectId: string, invitationId: string, expectedVersion: number) {
+  await callOp('invitation_update', { projectId, invitation: invitationId, revoke: true, expectedVersion })
 }
 
-export function replaceInvitation(
+export async function replaceInvitation(
+  projectId: string,
   invitationId: string,
   expectedVersion: number,
   expiresInHours = 24,
-) {
-  return requestJson<IssuedInvitation>(
-    `/api/v1/project-invitations/${invitationId}/replace`,
-    { method: 'POST', json: { expectedVersion, expiresInHours } },
-  )
+): Promise<IssuedInvitation> {
+  const issued = await callOp('invitation_update', { projectId, invitation: invitationId, replace: true, expectedVersion, expiresInHours })
+  return { invitationUrl: joinUrl(issued.joinUrl) }
 }
 
 export type MemberCandidate = { actorId: string; actorKind: string; displayName: string; handle: string }
@@ -110,9 +125,6 @@ export const teamKeys = {
 export function listMemberCandidates(projectId: string) {
   return requestJson<MemberCandidate[]>(`/api/v1/projects/${projectId}/member-candidates`)
 }
-export function addExistingMember(projectId: string, actorId: string, role: 'member' | 'viewer', roleId?: string) {
-  return requestJson<Member>(`/api/v1/projects/${projectId}/members`, {
-    method: 'POST',
-    json: roleId ? { actorId, role, roleId } : { actorId, role },
-  })
+export async function addExistingMember(projectId: string, actorId: string, role: 'member' | 'viewer', roleId?: string): Promise<MemberChange> {
+  return changed(await callOp('space_member_add', { spaceId: projectId, account: actorId, role: roleId ?? role }))
 }

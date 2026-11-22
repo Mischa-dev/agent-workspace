@@ -16,7 +16,7 @@
   "modules/things.rs": 1,
   "onboarding.rs": 2,
   "projects.rs": 2,
-  "roles.rs": 2,
+  "roles/mod.rs": 2,
   "runs/reads.rs": 1,
   "sheets/http.rs": 1,
   "usage/batch.rs": 1,

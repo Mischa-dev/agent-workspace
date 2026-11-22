@@ -318,13 +318,13 @@ async fn every_edge_runs_the_same_operation() {
     assert_eq!(mcp["replaySafe"], true, "{mcp}");
 
     // An automation rule that runs it, run by hand.
-    let (status, rule) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{space}/automations"),
-            None,
+    let (status, rule) = setup
+        .browser
+        .op(
+            app,
+            "automation_create",
             json!({
+                "projectId": space,
                 "name": "Echo",
                 "trigger": {"kind": "task_created"},
                 "actions": [{
@@ -333,21 +333,18 @@ async fn every_edge_runs_the_same_operation() {
                     "input": { "space": space, "text": "rule {{rule.name}}" }
                 }],
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_success(), "{status}: {rule}");
     let rule_id = rule["id"].as_str().expect("rule");
-    let (status, run) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{space}/automations/{rule_id}/run"),
-            None,
-            json!({}),
-        ),
-    )
-    .await;
+    let (status, run) = setup
+        .browser
+        .op(
+            app,
+            "automation_run_start",
+            json!({ "projectId": space, "ruleId": rule_id }),
+        )
+        .await;
     assert!(status.is_success(), "{status}: {run}");
     let automated: i64 =
         sqlx::query_scalar("SELECT count(*) FROM ops_kernel_echo WHERE text = 'rule Echo'")
@@ -355,21 +352,78 @@ async fn every_edge_runs_the_same_operation() {
             .await
             .expect("automated row");
     assert_eq!(automated, 1, "{run}");
-    // An operation no rule may run is refused when the rule is saved.
-    let (status, unknown) = send(
+    // A keyed try sent again finds the run it queued: the rule fires once.
+    for replay in [false, true] {
+        let (status, keyed) = super::support::app::send(
+            app,
+            setup.browser.request(
+                "POST",
+                "/api/v2/ops/automation_run_start",
+                Some("try-rule-once"),
+                json!({ "projectId": space, "ruleId": rule_id }),
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "{status}: {keyed}");
+        assert_eq!(keyed["replayed"], replay, "{keyed}");
+        assert_eq!(keyed["replaySafe"], true, "{keyed}");
+    }
+    let automated: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ops_kernel_echo WHERE text = 'rule Echo'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("automated rows");
+    assert_eq!(automated, 2, "a keyed retry fires nothing more");
+    // The same key for another rule is refused, not fired.
+    let (status, second) = setup
+        .browser
+        .op(
+            app,
+            "automation_create",
+            json!({
+                "projectId": space,
+                "name": "Echo again",
+                "trigger": {"kind": "task_created"},
+                "actions": [{
+                    "kind": "run_operation",
+                    "operation": "echo_create",
+                    "input": { "space": space, "text": "rule {{rule.name}}" }
+                }],
+            }),
+        )
+        .await;
+    assert!(status.is_success(), "{status}: {second}");
+    let (status, reused) = super::support::app::send(
         app,
         setup.browser.request(
             "POST",
-            &format!("/api/v1/projects/{space}/automations"),
-            None,
+            "/api/v2/ops/automation_run_start",
+            Some("try-rule-once"),
+            json!({ "projectId": space, "ruleId": second["id"] }),
+        ),
+    )
+    .await;
+    assert_eq!(status.as_u16(), 409, "{reused}");
+    let again: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ops_kernel_echo WHERE text LIKE 'rule Echo%'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("automated rows");
+    assert_eq!(again, 2, "a reused key fires no other rule");
+    // An operation no rule may run is refused when the rule is saved.
+    let (status, unknown) = setup
+        .browser
+        .op(
+            app,
+            "automation_create",
             json!({
+                "projectId": space,
                 "name": "Nothing",
                 "trigger": {"kind": "task_created"},
                 "actions": [{ "kind": "run_operation", "operation": "no_such_op", "input": {} }],
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_client_error(), "{status}: {unknown}");
 
     // One audit row per write, each naming its edge.
@@ -394,6 +448,8 @@ async fn every_edge_runs_the_same_operation() {
             "mcp",
             "mcp",
             "mcp",
+            // The rule tried by hand, then the keyed try (its retry fires nothing).
+            "automation",
             "automation"
         ],
         "{rows:?}"
@@ -530,7 +586,7 @@ async fn every_edge_runs_the_same_operation() {
         &session,
         json!({
             "jsonrpc": "2.0", "id": 7, "method": "tools/call",
-            "params": { "name": "project_open", "arguments": { "projectId": "EDG" } }
+            "params": { "name": "project_get", "arguments": { "projectId": "EDG" } }
         }),
     )
     .await;
@@ -546,7 +602,7 @@ async fn every_edge_runs_the_same_operation() {
         &session,
         json!({
             "jsonrpc": "2.0", "id": 7, "method": "tools/call",
-            "params": { "name": "project_open", "arguments": { "projectId": "EDG" } }
+            "params": { "name": "project_get", "arguments": { "projectId": "EDG" } }
         }),
     )
     .await;
@@ -622,17 +678,16 @@ async fn every_edge_runs_the_same_operation() {
         .expect("watcher")
         .parse()
         .expect("watcher id");
-    let (status, readers) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/organizations/{workspace}/roles"),
-            None,
+    let (status, readers) = setup
+        .browser
+        .op_in(
+            app,
+            workspace,
+            "role_create",
             json!({"name": "Readers", "baseRole": "member", "permissions": ["tasks.view"]}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{readers}");
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{readers}");
     let readers: Uuid = readers["id"]
         .as_str()
         .expect("role")
@@ -656,35 +711,23 @@ async fn every_edge_runs_the_same_operation() {
     assert!(!listed.contains(&"echo_create".to_owned()), "{listed:?}");
 }
 
-/// K2.6: an old tool name runs its operation with its old arguments,
-/// answers in its old shape byte for byte, says what to use instead, and is
-/// counted once per call.
+/// K2.23: a retired old tool name runs nothing and says what to use instead,
+/// on MCP and on the public API's v1 route, and isn't listed.
 #[tokio::test]
-async fn an_old_name_answers_in_its_old_shape_and_is_counted() {
-    use agent_workspace_server::ops::aliases::{Alias, register_alias_for_tests};
-
-    let Some(setup) = setup("k2_ops_alias").await else {
+async fn a_retired_name_says_what_to_use_instead() {
+    let Some(setup) = setup("k2_ops_retired").await else {
         return;
     };
-    register_for_tests(add_echo);
-    register_alias_for_tests(Alias {
-        name: "echo_make",
-        canonical: |_| "echo_create",
-        runs: &["echo_create"],
-        adapt_in: |mut arguments| {
-            if let Some(words) = arguments.remove("words") {
-                arguments.insert("text".into(), words);
-            }
-            arguments
-        },
-        adapt_out: |_, value, _| json!({ "echo": { "words": value["text"] } }),
-        sunset: Some("2027-06-01"),
-    });
-    scratch_table(&setup.pool).await;
     let app = &setup.app;
-    let space = create_project(&setup, "ALI", "Aliases").await;
+    let space = create_project(&setup, "RET", "Retired").await;
     let token = connect_app(app, &setup.browser, "Old client", "full").await;
     let session = initialize(app, &token).await.expect("MCP session");
+    let pages = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM project_pages WHERE title = 'Kept'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("pages")
+    };
 
     let (status, reply) = rpc(
         app,
@@ -694,8 +737,8 @@ async fn an_old_name_answers_in_its_old_shape_and_is_counted() {
         json!({
             "jsonrpc": "2.0", "id": 9, "method": "tools/call",
             "params": {
-                "name": "echo_make",
-                "arguments": { "space": space, "words": "kept", "clientRequestId": "old-1" }
+                "name": "page_write",
+                "arguments": { "projectId": space, "title": "Kept", "body": "Old" }
             }
         }),
     )
@@ -705,74 +748,54 @@ async fn an_old_name_answers_in_its_old_shape_and_is_counted() {
         .pointer("/result/structuredContent")
         .cloned()
         .unwrap_or_else(|| panic!("no structured content: {reply}"));
+    assert_eq!(answered["outcome"], "not_found", "{answered}");
     assert_eq!(
-        serde_json::to_string(&answered).expect("JSON"),
-        r#"{"echo":{"words":"kept"}}"#
+        answered["message"],
+        "`page_write` was renamed: use `page_create` or `page_update` (see tools/list)."
     );
     assert_eq!(
-        reply.pointer("/result/_meta/deprecated"),
-        Some(&json!(
-            "use echo_create; echo_make stops working after 2027-06-01"
-        )),
-        "{reply}"
+        answered["useInstead"],
+        json!(["page_create", "page_update"])
     );
-    // The old name isn't listed; the canonical one is.
+    assert_eq!(pages().await, 0, "an old name runs nothing");
     let names = tool_names(app, &token).await;
-    assert!(names.iter().any(|name| name == "echo_create"), "{names:?}");
-    assert!(!names.iter().any(|name| name == "echo_make"), "{names:?}");
+    assert!(names.iter().any(|name| name == "page_create"), "{names:?}");
+    assert!(!names.iter().any(|name| name == "page_write"), "{names:?}");
 
-    // The public API's v1 route: the old shape, with Deprecation and Sunset.
+    // The public API's v1 route answers the same, as not found.
     let response = app
         .clone()
         .oneshot(bearer(
             &token,
             "POST",
-            "/api/public/v1/echo_make",
+            "/api/public/v1/page_write",
             None,
-            &json!({ "space": space, "words": "again", "clientRequestId": "old-2" }),
+            &json!({ "projectId": space, "title": "Kept", "body": "Old" }),
         ))
         .await
         .expect("response");
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response
-            .headers()
-            .get("deprecation")
-            .and_then(|value| value.to_str().ok()),
-        Some("true")
-    );
-    assert_eq!(
-        response
-            .headers()
-            .get("sunset")
-            .and_then(|value| value.to_str().ok()),
-        Some("Tue, 01 Jun 2027 00:00:00 GMT")
-    );
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let bytes = to_bytes(response.into_body(), 1_000_000)
         .await
         .expect("body");
+    let body: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON");
     assert_eq!(
-        std::str::from_utf8(&bytes).expect("utf-8"),
-        r#"{"echo":{"words":"again"}}"#
+        body["useInstead"],
+        json!(["page_create", "page_update"]),
+        "{body}"
     );
+    assert_eq!(pages().await, 0);
 
-    // Each call ran the operation once and was counted once.
-    let rows: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM ops_kernel_echo WHERE text IN ('kept', 'again')")
+    // A refused call changes nothing on the way: "me" doesn't make the
+    // caller's personal space.
+    let spaces = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM projects")
             .fetch_one(&setup.pool)
             .await
-            .expect("rows");
-    assert_eq!(rows, 2);
-    let calls: i64 = sqlx::query_scalar(
-        "SELECT calls FROM operation_alias_usage WHERE workspace_id = $1 AND alias = 'echo_make'",
-    )
-    .bind(setup.organization_id)
-    .fetch_one(&setup.pool)
-    .await
-    .expect("usage");
-    assert_eq!(calls, 2);
-    // A retry with the same request id replays without counting again.
-    let (_, again) = rpc(
+            .expect("spaces")
+    };
+    let before = spaces().await;
+    let (status, reply) = rpc(
         app,
         &token,
         "/api/v1/mcp",
@@ -780,20 +803,83 @@ async fn an_old_name_answers_in_its_old_shape_and_is_counted() {
         json!({
             "jsonrpc": "2.0", "id": 10, "method": "tools/call",
             "params": {
-                "name": "echo_make",
-                "arguments": { "space": space, "words": "kept", "clientRequestId": "old-1" }
+                "name": "page_write",
+                "arguments": { "projectId": "me", "title": "Kept", "body": "Old" }
             }
         }),
     )
     .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
     assert_eq!(
-        again.pointer("/result/structuredContent"),
-        Some(&json!({ "echo": { "words": "kept" } })),
-        "{again}"
+        reply.pointer("/result/structuredContent/outcome"),
+        Some(&json!("not_found")),
+        "{reply}"
     );
-    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM ops_kernel_echo WHERE text = 'kept'")
-        .fetch_one(&setup.pool)
+    let response = app
+        .clone()
+        .oneshot(bearer(
+            &token,
+            "POST",
+            "/api/public/v1/page_write",
+            None,
+            &json!({ "spaceId": "me", "title": "Kept", "body": "Old" }),
+        ))
         .await
-        .expect("rows");
-    assert_eq!(rows, 1);
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(spaces().await, before, "no personal space was made");
+}
+
+/// A command that keeps its own transactions reserves its request id apart
+/// from its write. A retry while the first call is still unanswered waits
+/// (503); once that call has had time to finish, the id is refused (409)
+/// rather than run again, since its write may have been made.
+#[tokio::test]
+async fn an_unanswered_call_is_never_run_again() {
+    let Some(setup) = setup("k2_ops_unanswered").await else {
+        return;
+    };
+    let app = &setup.app;
+    let space = create_project(&setup, "UNA", "Unanswered").await;
+    let create = || {
+        setup.browser.request(
+            "POST",
+            "/api/v2/ops/page_create",
+            Some("page-once"),
+            json!({ "projectId": space, "title": "Once", "body": "Made once." }),
+        )
+    };
+    let pages = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM project_pages WHERE title = 'Once'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("pages")
+    };
+    let (status, first) = super::support::app::send(app, create()).await;
+    assert!(status.is_success(), "{status}: {first}");
+    assert_eq!(pages().await, 1);
+
+    // As if the call stopped after the page was made, before its answer
+    // was kept.
+    let pool = setup.pool.clone();
+    let unanswer = |age: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "UPDATE idempotency_keys SET response_status = NULL, response_body = NULL, \
+                 created_at = now() - $1::interval WHERE key = 'page-once'",
+            )
+            .bind(age)
+            .execute(&pool)
+            .await
+            .expect("unanswered");
+        }
+    };
+    unanswer("1 minute").await;
+    let (status, waiting) = super::support::app::send(app, create()).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{waiting}");
+    unanswer("1 hour").await;
+    let (status, refused) = super::support::app::send(app, create()).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(pages().await, 1, "a retry never makes it again");
 }

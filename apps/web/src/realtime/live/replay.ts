@@ -142,9 +142,13 @@ export async function replay(frames: Frame[], seed: Seed, { settleMs = 200 } = {
   try {
     render(createElement(QueryClientProvider, { client: queryClient }, createElement(RealtimeProvider, null, null)))
     const socket = () => ReplaySocket.instances[ReplaySocket.instances.length - 1]
-    // The stream starts on an open connection: what opening refetches isn't the stream's.
+    // The stream starts on an open connection: what opening refetches isn't
+    // the stream's, including the refresh a fresh start's `ready` brings.
+    const [first] = frames
+    const opening = first && !('$' in first) && first.type === 'ready' && first.resumed === false
     await act(async () => {
       socket().open()
+      if (opening) socket().receive(first)
       await settle(50)
     })
     for (const entry of seed.open ?? []) fetches[entry.name] = 0
@@ -153,7 +157,7 @@ export async function replay(frames: Frame[], seed: Seed, { settleMs = 200 } = {
     for (const query of queryClient.getQueryCache().getAll()) query.reset()
     for (const entry of [...(seed.open ?? []), ...(seed.cached ?? [])]) queryClient.setQueryData(seedKey(entry.key), entry.data ?? {})
     await act(async () => {
-      for (const frame of frames) {
+      for (const frame of opening ? frames.slice(1) : frames) {
         if ('$' in frame && frame.$ === 'close') socket().close()
         else if ('$' in frame && frame.$ === 'open') {
           // The browser came back online: the connection reconnects at once.

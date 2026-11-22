@@ -1,4 +1,6 @@
 import { requestJson } from '../api/client'
+import { isApiError } from '../api/errors'
+import { callOp, heldForReview } from '../api/ops'
 import { normalizeLocation, safeProjectHref } from './locations'
 import type {
   Project,
@@ -125,18 +127,22 @@ export async function createProject(input: {
   templateId?: string
   idempotencyKey: string
 }): Promise<Project> {
-  const payload = await requestJson<unknown>('/api/v1/projects', {
-    method: 'POST',
-    idempotencyKey: input.idempotencyKey,
-    json: {
-      organizationId: input.organizationId,
+  const space = await callOp(
+    'space_create',
+    {
       key: input.key,
       name: input.name,
       ...(input.templateId ? { templateId: input.templateId } : {}),
     },
-  })
-  const record = asRecord(payload)
-  return normalizeProject(record.project ?? payload)
+    { workspaceId: input.organizationId, requestId: input.idempotencyKey },
+  )
+  // A workspace guard can hold it for a reviewer: nothing is made yet, and
+  // sending the same form again (same request id) once they allow it makes it.
+  if (heldForReview(space)) {
+    throw new Error('This project waits for a reviewer to allow it. Once they have, create it again.')
+  }
+  // It's made: a failed read afterwards doesn't undo that.
+  return getProject(space.id).catch(() => normalizeProject({ ...space, organizationId: input.organizationId }))
 }
 
 export async function getProject(projectId: string): Promise<Project> {
@@ -147,19 +153,22 @@ export async function getProject(projectId: string): Promise<Project> {
   return normalizeProject(record.project ?? payload)
 }
 
+/** Archives a project, against the version the caller read; returns it as it now reads. */
 export async function archiveProject(
   projectId: string,
   expectedVersion: number,
 ): Promise<Project> {
-  const payload = await requestJson<unknown>(
-    `/api/v1/projects/${encodeURIComponent(projectId)}/archive`,
-    {
-      method: 'POST',
-      json: { expectedVersion },
-    },
-  )
-  const record = asRecord(payload)
-  return normalizeProject(record.project ?? payload)
+  try {
+    await callOp('space_archive', { spaceId: projectId }, { expectedVersion })
+  } catch (error) {
+    // A retry after a lost answer finds the space already archived, which
+    // the server treats as closed; it did what was asked.
+    if (!isApiError(error) || error.code !== 'not_found') throw error
+    const current = await getProject(projectId).catch(() => null)
+    if (!current?.archivedAt) throw error
+    return current
+  }
+  return getProject(projectId)
 }
 
 /** Brings an archived project back, against the version the caller read. */
@@ -167,15 +176,18 @@ export async function restoreProject(
   projectId: string,
   expectedVersion: number,
 ): Promise<Project> {
-  const payload = await requestJson<unknown>(
-    `/api/v1/projects/${encodeURIComponent(projectId)}/restore`,
-    {
-      method: 'POST',
-      json: { expectedVersion },
-    },
-  )
-  const record = asRecord(payload)
-  return normalizeProject(record.project ?? payload)
+  await callOp('space_restore', { spaceId: projectId }, { expectedVersion })
+  return getProject(projectId)
+}
+
+/** Renames a project, against the version the caller read. */
+export async function renameProject(
+  projectId: string,
+  name: string,
+  expectedVersion: number,
+): Promise<Project> {
+  await callOp('space_update', { spaceId: projectId, name }, { expectedVersion })
+  return getProject(projectId)
 }
 
 export async function getProjectNavigation(

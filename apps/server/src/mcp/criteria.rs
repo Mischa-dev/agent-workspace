@@ -45,7 +45,7 @@ pub struct TaskCriteriaArguments {
     /// The task's ID, link, or key such as AWD-12.
     #[serde(rename = "taskId", alias = "workItemId")]
     pub task_id: String,
-    /// The task's version you last read (from task_open or task_list).
+    /// The task's version you last read (from task_get or task_list).
     pub expected_version: i64,
     /// 1 to 50 operations, applied in order. Either all apply or none do.
     pub operations: Vec<CriterionOperationArgument>,
@@ -97,7 +97,7 @@ impl CriterionOp {
     }
 }
 
-/// task_criteria's result. It is stored for replays, so it deserializes too.
+/// task_criteria_update's result. It is stored for replays, so it deserializes too.
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CriteriaValue {
@@ -233,7 +233,7 @@ fn check(arguments: &TaskCriteriaArguments) -> Result<Vec<CheckedOperation>, Pro
     if arguments.expected_version < 1 {
         return Err((
             "expectedVersion".to_owned(),
-            "Pass the version you last read (from task_open or task_list).".to_owned(),
+            "Pass the version you last read (from task_get or task_list).".to_owned(),
         ));
     }
     let mut checked = Vec::with_capacity(arguments.operations.len());
@@ -269,7 +269,7 @@ fn check(arguments: &TaskCriteriaArguments) -> Result<Vec<CheckedOperation>, Pro
             return Err((
                 field("criterion"),
                 format!(
-                    "Operation {number} ({name}) needs criterion: its ID or its position, such as 2 (task_open lists them)."
+                    "Operation {number} ({name}) needs criterion: its ID or its position, such as 2 (task_get lists them)."
                 ),
             ));
         }
@@ -319,7 +319,7 @@ fn check(arguments: &TaskCriteriaArguments) -> Result<Vec<CheckedOperation>, Pro
                 (
                     field("criterion"),
                     format!(
-                        "Operation {number}: name the criterion by its ID or its position, such as 2 (task_open lists them)."
+                        "Operation {number}: name the criterion by its ID or its position, such as 2 (task_get lists them)."
                     ),
                 )
             })?),
@@ -388,7 +388,7 @@ fn plan_refusal(
             ToolResult::invalid(
                 &format!("operations[{operation_index}].criterion"),
                 format!(
-                    "Operation {}: {key} has no criterion {reference} at version {version}. It has {}; use an ID or position from task_open.",
+                    "Operation {}: {key} has no criterion {reference} at version {version}. It has {}; use an ID or position from task_get.",
                     operation_index + 1,
                     plural(criteria, "criterion", "criteria"),
                 ),

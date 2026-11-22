@@ -252,7 +252,7 @@ pub(super) struct WhiteboardReadArguments {
 pub(super) struct WhiteboardValue {
     pub whiteboard: WhiteboardLine,
     pub can_edit: bool,
-    /// Pass it to whiteboard_edit as expectedSceneSeq.
+    /// Pass it to whiteboard_update_elements as expectedSceneSeq.
     pub scene_seq: i64,
     /// Every live element, in stacking order (back to front).
     pub elements: Vec<ElementSummary>,
@@ -456,7 +456,7 @@ pub(super) async fn whiteboard_render(
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let files = store::files_for(&state.pool, id, &elements).await?;
+        let files = store::files_for(state, id, &elements).await?;
         Ok::<_, AppError>((view.scene_seq, elements, files))
     }
     .await;
@@ -539,7 +539,7 @@ pub(super) struct WhiteboardCreateArguments {
     /// (retrospective, user-journey, flowchart, two-by-two). Its drawing is
     /// copied in before any operations.
     pub from_template_id: Option<String>,
-    /// Draw something straight away: the same operations as whiteboard_edit.
+    /// Draw something straight away: the same operations as whiteboard_update_elements.
     pub operations: Option<Vec<Operation>>,
     /// Makes creating safe to retry: send the same one again and you get
     /// the board the first call made, not a second one.
@@ -655,6 +655,21 @@ pub(super) async fn whiteboard_create(
         }
     }
     let result = async {
+        // An image's bytes go to the file store before the transaction
+        // opens; the board, made inside it, then keeps them.
+        let staged = match arguments.operations.as_deref() {
+            Some(operations) if !operations.is_empty() => {
+                let workspace = match placement {
+                    Placement::Workspace(workspace) => workspace,
+                    Placement::Project(project) => {
+                        crate::files::organization_of(crate::db::scoped(&state.pool), project)
+                            .await?
+                    }
+                };
+                Some(stage_images(state, workspace, operations).await?)
+            }
+            _ => None,
+        };
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let reservation = match reserve_create(
             &mut transaction,
@@ -693,12 +708,12 @@ pub(super) async fn whiteboard_create(
         if let Some((kind, target_id)) = link {
             whiteboards::set_link(&mut transaction, &caller, id, kind, target_id, true).await?;
         }
-        let edit = match arguments.operations.as_deref() {
-            Some(operations) if !operations.is_empty() => {
-                let operations = store_images(&mut transaction, &caller, id, operations).await?;
+        let edit = match staged {
+            Some(staged) => {
+                let operations = staged.attach(state, &mut transaction, &caller, id).await?;
                 Some(edit::apply(&mut transaction, &caller, id, &operations, None, false).await?)
             }
-            _ => None,
+            None => None,
         };
         // A retry answers with the drawing this call did, too.
         let kept = serde_json::json!({ "edit": edit });
@@ -720,16 +735,25 @@ pub(super) async fn whiteboard_create(
     }
 }
 
-/// Stores the images added operations carry, as the web stores an image
-/// dropped on the board, and points those operations at them by file id.
-/// An image named by fileId must already be on this board.
-pub(super) async fn store_images(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    caller: &whiteboards::Caller,
-    whiteboard_id: Uuid,
+/// The images an edit's operations carry, read and their bytes written to
+/// the file store before the edit's transaction opens (`StagedImages::
+/// attach` then keeps them on the board inside it). The operations point at
+/// them by file id. No board is looked at here.
+pub(crate) struct StagedImages {
+    operations: Vec<Operation>,
+    images: Vec<(String, String, Vec<u8>, crate::files::StagedContent)>,
+    named: Vec<String>,
+}
+
+/// Reads the images added operations carry and writes their bytes for
+/// `workspace`, before any transaction opens.
+pub(crate) async fn stage_images(
+    state: &AppState,
+    workspace: Uuid,
     operations: &[Operation],
-) -> Result<Vec<Operation>, EditError> {
+) -> Result<StagedImages, EditError> {
     let mut stored = Vec::with_capacity(operations.len());
+    let mut images = Vec::new();
     let mut named = Vec::new();
     for (position, operation) in operations.iter().enumerate() {
         let mut operation = operation.clone();
@@ -769,15 +793,8 @@ pub(super) async fn store_images(
                     )));
                 }
             };
-            store::put_file(
-                transaction,
-                caller,
-                whiteboard_id,
-                &file_id,
-                &mime_type,
-                &bytes,
-            )
-            .await?;
+            let staged = crate::files::stage_content(state, workspace, &bytes).await?;
+            images.push((file_id.clone(), mime_type, bytes, staged));
             operation.file_id = Some(file_id);
         } else if operation.mime_type.is_some() {
             return Err(EditError::Invalid(format!(
@@ -789,15 +806,47 @@ pub(super) async fn store_images(
         }
         stored.push(operation);
     }
-    if !named.is_empty() {
-        let on_board = store::stored_files(transaction, whiteboard_id, &named).await?;
-        if let Some(missing) = named.iter().find(|file| !on_board.contains(file)) {
-            return Err(EditError::Invalid(format!(
-                "This board has no image {missing}. Send the image itself as dataBase64."
-            )));
+    Ok(StagedImages {
+        operations: stored,
+        images,
+        named,
+    })
+}
+
+impl StagedImages {
+    /// Keeps the staged images on the board, as the web keeps an image
+    /// dropped on it, in the edit's transaction; an image named by fileId
+    /// must already be there. The operations to apply.
+    pub(crate) async fn attach(
+        self,
+        state: &AppState,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        caller: &whiteboards::Caller,
+        whiteboard_id: Uuid,
+    ) -> Result<Vec<Operation>, EditError> {
+        for (file_id, mime_type, bytes, staged) in &self.images {
+            store::put_file(
+                state,
+                transaction,
+                caller,
+                whiteboard_id,
+                file_id,
+                mime_type,
+                bytes,
+                staged,
+            )
+            .await?;
         }
+        if !self.named.is_empty() {
+            let on_board = store::stored_files(transaction, whiteboard_id, &self.named).await?;
+            if let Some(missing) = self.named.iter().find(|file| !on_board.contains(file)) {
+                return Err(EditError::Invalid(format!(
+                    "This board has no image {missing}. Send the image itself as dataBase64."
+                )));
+            }
+        }
+        Ok(self.operations)
     }
-    Ok(stored)
 }
 
 // ---------------------------------------------------------------------------
@@ -868,7 +917,14 @@ pub(super) async fn whiteboard_update(
         whiteboards::change(&mut transaction, &caller, id, &change).await?;
         if let Some(revision) = arguments.restore_revision {
             let board = whiteboards::access(&mut transaction, &caller, id, true).await?;
-            store::restore_revision(&mut transaction, &caller, id, revision).await?;
+            store::restore_revision(
+                &crate::files::FileStore::from_config(&state.config),
+                &mut transaction,
+                &caller,
+                id,
+                revision,
+            )
+            .await?;
             whiteboards::audit(
                 &mut transaction,
                 &caller,

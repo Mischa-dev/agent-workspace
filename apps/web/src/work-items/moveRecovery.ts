@@ -1,5 +1,5 @@
 import { isApiError } from '../api/errors'
-import { moveTask, type MoveDone } from './moveApi'
+import { MoveHeldForReview, moveTask, type MoveDone } from './moveApi'
 import { changed, generation, listeners, pending, type PendingMove } from './moveStore'
 
 /**
@@ -56,9 +56,13 @@ export function subscribeMoves(listener: () => void) {
  * No answer, a server failure, or an answer that can't be read (even a 200)
  * says nothing either way.
  */
-export function outcomeOf(error: unknown, retry: boolean): 'refused' | 'unknown' {
+export function outcomeOf(error: unknown, retry: boolean, held = false): 'refused' | 'unknown' | 'held' {
+  if (error instanceof MoveHeldForReview) return 'held'
   if (!isApiError(error) || error.status < 400 || error.status >= 500) return 'unknown'
   if (!retry) return 'refused'
+  // Sent again while a reviewer held it: a 403 is their decline, a settled
+  // refusal (the request was never carried out), so it can start over.
+  if (held && error.status === 403) return 'refused'
   return error.status === 409 || error.status === 422 ? 'refused' : 'unknown'
 }
 
@@ -86,7 +90,8 @@ export async function sendMove(
   if (!base) return
   const retry = !move
   const started = generation
-  const sending: PendingMove = { ...base, actorId, state: { kind: 'sending', retry } }
+  const held = current?.state.kind === 'held'
+  const sending: PendingMove = { ...base, actorId, state: { kind: 'sending', retry, held: retry && held } }
   pending.set(key, sending)
   changed()
   const settle = (state: PendingMove['state']) => {
@@ -100,10 +105,13 @@ export async function sendMove(
     const done = await moveTask(projectId, taskId, sending.body, sending.key)
     if (settle({ kind: 'done', done })) onDone?.(done)
   } catch (error) {
+    const outcome = outcomeOf(error, retry, retry && held)
     settle(
-      outcomeOf(error, retry) === 'refused'
-        ? { kind: 'refused', status: isApiError(error) ? error.status : 0, message: messageOf(error), retry }
-        : { kind: 'unknown', message: messageOf(error) },
+      outcome === 'held'
+        ? { kind: 'held' }
+        : outcome === 'refused'
+          ? { kind: 'refused', status: isApiError(error) ? error.status : 0, message: messageOf(error), retry }
+          : { kind: 'unknown', message: messageOf(error) },
     )
   }
 }

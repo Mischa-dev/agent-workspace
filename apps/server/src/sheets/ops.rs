@@ -4,7 +4,7 @@
 //! no data. A shared view is for everyone who sees the sheet and needs
 //! sheets.edit to make or change; a personal one is its owner's alone.
 //!
-//! Replacing what a search found is an ordinary `sheet_write` with the
+//! Replacing what a search found is an ordinary `sheet_update` with the
 //! revision the search returned as each cell's `ifRevision`.
 
 use rmcp::schemars::{self, JsonSchema};
@@ -29,7 +29,10 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<SheetViewCreate>()
         .add::<SheetViewUpdate>()
         .add::<SheetViewDelete>()
-        .add::<SheetRangeSet>();
+        .add::<SheetRangeSet>()
+        .add::<super::row_ops::SheetRowAdd>()
+        .add::<super::chart_ops::SheetChartSet>()
+        .add::<super::chart_ops::SheetChartGet>();
 }
 
 const SHEET: &str = "That sheet";
@@ -107,7 +110,7 @@ pub struct SheetMatch {
 #[serde(rename_all = "camelCase")]
 pub struct SheetSearchOutput {
     /// The sheet's revision: pass it as each cell's ifRevision to replace
-    /// what was found with sheet_write.
+    /// what was found with sheet_update.
     pub revision: i64,
     pub matches: Vec<SheetMatch>,
     /// More matched than came back.
@@ -139,7 +142,7 @@ impl Operation for SheetSearch {
     const TITLE: &'static str = "Find in a sheet";
     const DESCRIPTION: &'static str = "Find cells in a sheet by what they show (or, with \
         inFormulas, by their formulas), in reading order, with the sheet's revision. To replace \
-        what was found, write the new inputs with sheet_write, giving that revision as each \
+        what was found, write the new inputs with sheet_update, giving that revision as each \
         cell's ifRevision so a cell someone changed since isn't overwritten.";
 
     type Input = SheetSearchInput;
@@ -926,7 +929,7 @@ impl Operation for SheetRangeSet {
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
     const TITLE: &'static str = "Name a sheet range";
     const DESCRIPTION: &'static str = "Give a block of a sheet a name, such as Budget for \
-        Summary!A1:B12, or move or remove one. Dashboards, page embeds and sheet_read read a \
+        Summary!A1:B12, or move or remove one. Dashboards, page embeds and sheet_get read a \
         named range by its name; it moves with rows and columns inserted around it.";
     const EMITS: &'static [&'static str] = &["sheet.ranges_changed"];
 

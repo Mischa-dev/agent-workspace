@@ -34,46 +34,22 @@ use super::{
     command_line::{CommandSpec, spawn_child},
     host::{HostCell, host_of},
     line_process::{Line, LineProcess},
-    manifest::{AdapterManifest, ModelEntry, RunLocation, VersionRange},
+    manifest::{AdapterManifest, ModelEntry},
     run_config::RunConfig,
     slots::{RunSlot, RunSlots},
 };
 use agent_workspace_redaction::SecretValue;
 
-/// The ACP version this client speaks.
-pub const PROTOCOL_VERSION: u64 = 1;
+/// The ACP version this client speaks, and how a registration's manifest
+/// is built.
+pub use agent_workspace_host_protocol::harness::registered::{
+    ACP_PROTOCOL_VERSION as PROTOCOL_VERSION, acp_manifest as build_manifest,
+};
 /// How long `initialize`, `session/new` and `session/load` may take.
 const SETUP_SECONDS: u64 = 60;
 /// How long a cancelled prompt has to answer before the agent is stopped.
 const CANCEL_SECONDS: u64 = 5;
 const THREAD_PREFIX: &str = "acp:";
-
-/// The manifest of an ACP registration: a command-line harness's, with
-/// what the protocol always gives (streamed messages, tool calls, file
-/// changes, permission requests).
-pub fn build_manifest(kind: &str, name: &str, manifest: &Value) -> Result<AdapterManifest, String> {
-    let mut built =
-        super::command_line::build_manifest(kind, name, manifest, RunLocation::LocalHost)?;
-    let described = manifest
-        .get("description")
-        .and_then(Value::as_str)
-        .is_some_and(|text| !text.trim().is_empty());
-    if !described {
-        built.description =
-            "An agent that speaks the Agent Client Protocol, registered in this workspace."
-                .to_owned();
-    }
-    built.versions = VersionRange {
-        minimum: format!("{PROTOCOL_VERSION}.0.0"),
-        below: Some(format!("{}.0.0", PROTOCOL_VERSION + 1)),
-    };
-    built.features.streaming = true;
-    built.features.commands = true;
-    built.features.file_changes = true;
-    built.features.approvals = true;
-    built.features.questions = false;
-    Ok(built)
-}
 
 pub struct AcpAdapter {
     spec: Arc<CommandSpec>,

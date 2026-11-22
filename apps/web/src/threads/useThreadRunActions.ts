@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { type FormEvent, useMemo, useState } from 'react'
 
 import { requestJson } from '../api/client'
+import { callOp, ranOrThrow } from '../api/ops'
 import { queryKeys } from '../api/queryKeys'
 import { useInstantMutation } from '../app/mutations'
 import { isSafeMessageText } from '../conversations/messageContentModel'
@@ -26,16 +27,17 @@ const post = (path: string, idempotencyKey: string, json: unknown = {}) =>
 const threadApi = {
   startRun: (threadId: string, prompt: string, key: string) =>
     post(`/api/v1/threads/${encodeURIComponent(threadId)}/agent-runs`, key, { prompt }),
-  interrupt: (runId: string) => post(`/api/v1/agent-runs/${encodeURIComponent(runId)}/interrupt`, `interrupt-${runId}`),
+  // Stopping or dismissing twice changes nothing, so each try is its own request.
+  interrupt: (runId: string) => callOp('run_stop', { runId }),
   retry: (runId: string) => post(`/api/v1/agent-runs/${encodeURIComponent(runId)}/retry`, `retry-${runId}`),
-  publish: (projectId: string, runId: string, key: string) =>
-    post(`/api/v1/projects/${encodeURIComponent(projectId)}/agent-runs/${encodeURIComponent(runId)}/publish`, key),
-  createPullRequest: (projectId: string, runId: string, key: string, json: { title: string; body: string; workItemIds: string[] }) =>
-    post(`/api/v1/projects/${encodeURIComponent(projectId)}/agent-runs/${encodeURIComponent(runId)}/pull-request`, key, json),
-  refreshPullRequest: (projectId: string, pullRequestId: string) =>
-    post(`/api/v1/projects/${encodeURIComponent(projectId)}/pull-requests/${encodeURIComponent(pullRequestId)}/refresh`, crypto.randomUUID()),
-  acknowledgeFailure: (runId: string, eventId: string) =>
-    post(`/api/v1/agent-runs/${encodeURIComponent(runId)}/acknowledge-failure`, `acknowledge-failure-${runId}-${eventId}`, { eventId }),
+  // A write a review guard holds hasn't run: it fails here, saying so.
+  publish: async (runId: string, key: string) =>
+    ranOrThrow(await callOp('run_publish', { runId }, { requestId: key }), 'Publishing the branch'),
+  createPullRequest: async (runId: string, key: string, input: { title: string; body: string; taskIds: string[] }) =>
+    ranOrThrow(await callOp('pull_request_create', { runId, ...input }, { requestId: key }), 'Opening the pull request'),
+  refreshPullRequest: async (pullRequestId: string) =>
+    ranOrThrow(await callOp('pull_request_refresh', { pullRequestId }), 'Refreshing the pull request'),
+  acknowledgeFailure: (runId: string) => callOp('run_failure_hide', { runId }),
 }
 
 /**
@@ -139,7 +141,7 @@ export function useThreadRunActions({
     }
     const commandKey = publishIdempotencyKey ?? crypto.randomUUID()
     if (!publishIdempotencyKey) setPublishIdempotencyKey(commandKey)
-    void perform('publish', () => threadApi.publish(projectId, runId, commandKey)).then((succeeded) => {
+    void perform('publish', () => threadApi.publish(runId, commandKey)).then((succeeded) => {
       if (succeeded) setPublishIdempotencyKey(null)
     })
   }
@@ -166,10 +168,10 @@ export function useThreadRunActions({
     const commandKey = pullRequestIdempotencyKey ?? crypto.randomUUID()
     if (!pullRequestIdempotencyKey) setPullRequestIdempotencyKey(commandKey)
     void perform('pull-request', () =>
-      threadApi.createPullRequest(projectId, runId, commandKey, {
+      threadApi.createPullRequest(runId, commandKey, {
         title,
         body: 'Created from an explicitly published Agent Workspace run.',
-        workItemIds: activeWorkItems.map((item) => item.id),
+        taskIds: activeWorkItems.map((item) => item.id),
       }),
     ).then((succeeded) => {
       if (succeeded) setPullRequestIdempotencyKey(null)
@@ -184,7 +186,7 @@ export function useThreadRunActions({
     ) {
       return
     }
-    void perform('pull-request-refresh', () => threadApi.refreshPullRequest(projectId, pullRequestId))
+    void perform('pull-request-refresh', () => threadApi.refreshPullRequest(pullRequestId))
   }
 
   const acknowledgeFailure = () => {
@@ -197,8 +199,7 @@ export function useThreadRunActions({
       return
     }
     const runId = latestTerminalRun.id
-    const eventId = latestFailureEvent.id
-    void perform('acknowledge-failure', () => threadApi.acknowledgeFailure(runId, eventId)).then((succeeded) => {
+    void perform('acknowledge-failure', () => threadApi.acknowledgeFailure(runId)).then((succeeded) => {
       if (succeeded) setAcknowledgedRunId(runId)
     })
   }

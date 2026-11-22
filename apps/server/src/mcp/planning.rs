@@ -282,7 +282,7 @@ pub(crate) async fn own_task_ref(
     }))
 }
 
-/// The task a link change (task_depend, task_relate) was on. Someone who may
+/// The task a link change (task_link) was on. Someone who may
 /// change tasks here but not see them (their role, or an app's agent limit)
 /// gets only its id and key: no title, status or whether it's finished.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -940,7 +940,7 @@ pub(crate) struct MilestoneValue {
     pub canceled: i64,
     /// Open tasks past the target date make it overdue.
     pub overdue: bool,
-    /// Pass as expectedVersion to milestone_write.
+    /// Pass as expectedVersion to milestone_update.
     pub version: i64,
     pub url: String,
     /// The initiative it is part of (initiative_list), by name.
@@ -1074,8 +1074,8 @@ pub(crate) struct MilestoneWriteArguments {
     pub remove_tasks: Option<Vec<String>>,
     /// The version you last read. Leave it out to change the current one.
     pub expected_version: Option<i64>,
-    /// Makes creating safe to retry: send the same one again and you get
-    /// the milestone the first call made. Changes need expectedVersion.
+    /// Makes the call safe to retry: send the same one again and you get
+    /// what the first call did, without making or changing anything twice.
     pub client_request_id: Option<String>,
 }
 
@@ -1124,12 +1124,13 @@ pub(crate) async fn milestone_write(
     if add.len() + remove.len() > 200 {
         return ToolResult::invalid("addTasks", "Move at most 200 tasks in one call.");
     }
+    // A create and a change each keep their key, so a retry replays.
     let retry_key = match arguments.client_request_id.as_deref() {
-        Some(value) if arguments.milestone_id.is_none() => match parse_request_id(value) {
+        Some(value) => match parse_request_id(value) {
             Some(key) => Some(key),
             None => return ToolResult::invalid("clientRequestId", REQUEST_ID_MESSAGE),
         },
-        _ => None,
+        None => None,
     };
     let result = async {
         let references = add.iter().chain(remove.iter()).cloned().collect::<Vec<_>>();
@@ -1157,7 +1158,11 @@ pub(crate) async fn milestone_write(
         let reservation = match reserve_create(
             &mut transaction,
             principal,
-            "milestones",
+            if arguments.milestone_id.is_some() {
+                "milestone_changes"
+            } else {
+                "milestones"
+            },
             retry_key.as_ref(),
             &arguments,
         )
@@ -1236,7 +1241,10 @@ pub(crate) async fn milestone_write(
                 )
                 .await?
                 {
-                    Ok(()) => id,
+                    Ok(()) => {
+                        complete_create(&mut transaction, reservation.as_ref(), id).await?;
+                        id
+                    }
                     Err(MilestoneRefusal::NotFound) => {
                         return Ok(ToolResult::not_found("That milestone"));
                     }

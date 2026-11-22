@@ -170,13 +170,13 @@ async fn members_never_read_what_they_are_not_in() {
     .await;
     let task_key = string_at(&task, "/value/key");
     owner_call(
-        "task_comment",
+        "task_comment_create",
         json!({"workItemId": task_key, "update": format!("{TASK} is half done"), "clientRequestId": "quokka-comment"}),
     )
     .await;
     // WORK-1, which most of the cases name, carries it too.
     owner_call(
-        "task_comment",
+        "task_comment_create",
         json!({"workItemId": "WORK-1", "update": format!("The {TASK} estimate"), "clientRequestId": "quokka-comment-1"}),
     )
     .await;
@@ -192,6 +192,27 @@ async fn members_never_read_what_they_are_not_in() {
         .execute(pool)
         .await
         .expect("pull request title");
+    // A1.17: what A's run changed, as its host reported it, is code: only
+    // a reader who sees the run's thread and its code reads the files.
+    let reported = sqlx::query(
+        r#"
+        INSERT INTO run_changes (
+            run_id, workspace_id, space_id, files, patch, truncated, reported_by_account_id
+        )
+        SELECT run.id, run.workspace_id, run.space_id, $2, $3, false, agent_run.requesting_actor_id
+        FROM runs run JOIN agent_runs agent_run ON agent_run.id = run.id
+        WHERE run.id = $1
+        "#,
+    )
+    .bind(a.run)
+    .bind(
+        json!([{"path": format!("src/{TASK}.rs"), "status": "modified", "added": 1, "removed": 0}]),
+    )
+    .bind(format!("diff --git a/src/{TASK}.rs b/src/{TASK}.rs\n"))
+    .execute(pool)
+    .await
+    .expect("run changes");
+    assert_eq!(reported.rows_affected(), 1, "A's run has its runs row");
 
     // The callers.
     let outsider = add_person(
@@ -291,13 +312,20 @@ async fn members_never_read_what_they_are_not_in() {
         }
     }
 
-    for case in mcp_cases(a, b) {
+    let mut tool_cases = mcp_cases(a, b);
+    for (tool, extra) in extra_tool_calls(a) {
+        match tool_cases.iter_mut().find(|case| case.tool == tool) {
+            Some(case) => case.own.extend(extra),
+            None => panic!("extra_tool_calls names {tool}, which has no isolation case"),
+        }
+    }
+    for case in tool_cases {
         if case.own.is_empty() {
             unwalked.push(case.tool);
             continue;
         }
         let mut arguments = case.own.clone();
-        if case.tool == "search" {
+        if case.tool == "workspace_search" {
             arguments.extend([PRIVATE, TASK].map(|word| json!({"query": word})));
         }
         for own in &case.own {
@@ -392,12 +420,12 @@ async fn members_never_read_what_they_are_not_in() {
 /// Gives `actor` a custom workspace role that keeps everything a member has
 /// except tasks and code, applied to their projects.
 async fn narrow(setup: &Setup, actor: Uuid) {
-    let (status, role) = send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/organizations/{}/roles", setup.organization_id),
-            None,
+    let (status, role) = setup
+        .browser
+        .op_in(
+            &setup.app,
+            setup.organization_id,
+            "role_create",
             json!({
                 "name": "No tasks or code",
                 "baseRole": "member",
@@ -406,9 +434,8 @@ async fn narrow(setup: &Setup, actor: Uuid) {
                     "whiteboards.edit", "collections.edit", "sheets.edit", "directory.view"
                 ]
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_success(), "narrowed role: {status} {role}");
     let role_id = role["role"]["id"].clone();
     let role_id = if role_id.is_null() {
@@ -424,19 +451,7 @@ async fn narrow(setup: &Setup, actor: Uuid) {
     .fetch_one(&setup.pool)
     .await
     .expect("membership version");
-    let (status, changed) = send(
-        &setup.app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{actor}/role",
-                setup.organization_id
-            ),
-            None,
-            json!({"roleId": role_id, "applyToProjects": true, "expectedVersion": version}),
-        ),
-    )
-    .await;
+    let (status, changed) = setup.browser.op_in(&setup.app, setup.organization_id, "role_assign", json!({"account": actor, "role": role_id, "applyToProjects": true, "expectedVersion": version})).await;
     assert!(status.is_success(), "narrow {actor}: {status} {changed}");
 }
 
@@ -459,6 +474,35 @@ fn extra_requests(a: &World, task: &str) -> Vec<(&'static str, Vec<String>)> {
                 "/api/v1/projects/{}/work-items/{task}/project-move?targetProjectId={}",
                 a.project, a.space
             )],
+        ),
+    ]
+}
+
+/// Tool calls walked here that the isolation net can't make as A's own,
+/// because A's call there has to succeed: a connected module's panels and
+/// files are asked of the module live, and no module answers in this world.
+/// Walking them still checks the gate in front of the module.
+fn extra_tool_calls(a: &World) -> Vec<(&'static str, Vec<Value>)> {
+    let module = a.module.to_string();
+    vec![
+        (
+            "module_panel_open",
+            vec![
+                json!({"moduleId": module, "panel": "main"}),
+                json!({"moduleId": module, "panel": "main", "spaceId": a.project}),
+            ],
+        ),
+        ("file_source_list", vec![json!({"moduleId": module})]),
+        // M1.10: an upgrade's plan, walked against the fixture install.
+        (
+            "package_upgrade_preview",
+            vec![json!({"installId": a.package_install, "package": {
+                "format": "agent-workspace-package/1", "id": "fixture", "version": "2.0.0",
+                "name": "Fixture", "target": "space", "contents": []}})],
+        ),
+        (
+            "file_source_get",
+            vec![json!({"moduleId": module, "ref": "f1"})],
         ),
     ]
 }
@@ -1316,6 +1360,7 @@ async fn naming_an_agents_managers_follows_the_one_rule() {
 async fn comment_writes_keep_to_what_the_writer_may_see() {
     let Some(world) = super::support::world::WorldBuilder::default()
         .project("WORK")
+        .project("HOME")
         .person("lena", "member")
         .person("mara", "member")
         .person("omar", "member")
@@ -1383,7 +1428,7 @@ async fn comment_writes_keep_to_what_the_writer_may_see() {
         app,
         &phone.token,
         &phone.session,
-        "sheet_write",
+        "sheet_create",
         json!({"projectId": work, "name": "Budget", "cells": [{"cell": "A1", "input": "Rent"}],
                "clientRequestId": "privacy-sheet"}),
     )
@@ -1463,6 +1508,122 @@ async fn comment_writes_keep_to_what_the_writer_may_see() {
     .await
     .expect("thread status");
     assert_ne!(status_now.to_lowercase(), "resolved");
+
+    // Nate's role doesn't edit pages: he keeps no file on one (C1.33); Lena
+    // does.
+    let page = super::support::app::tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "page_create",
+        json!({"projectId": work, "title": "Plan", "body": "Ship it."}),
+    )
+    .await;
+    assert_eq!(page["outcome"], "ok", "{page}");
+    let page = string_at(&page, "/value/id");
+    let file = |name: &str| json!({"pageId": page, "name": name, "text": "notes"});
+    let (status, refused) = op(
+        &world.people["nate"].browser,
+        "page_file_upload",
+        file("nate.txt"),
+    )
+    .await;
+    assert!(
+        !status.is_success(),
+        "nate keeps a file: {status} {refused}"
+    );
+    let (status, kept) = op(
+        &world.people["lena"].browser,
+        "page_file_upload",
+        file("lena.txt"),
+    )
+    .await;
+    assert!(status.is_success(), "lena keeps a file: {status} {kept}");
+
+    // Nor does he move a page to another space (C1.37); Lena does.
+    let home = world.project("HOME").to_owned();
+    let version =
+        sqlx::query_scalar::<_, i64>("SELECT version FROM project_pages WHERE id = $1::uuid")
+            .bind(&page)
+            .fetch_one(pool)
+            .await
+            .expect("page version");
+    let moving = json!({"pageId": page, "toSpaceId": home, "expectedVersion": version});
+    let (status, refused) = op(&world.people["nate"].browser, "page_move", moving.clone()).await;
+    assert!(
+        !status.is_success(),
+        "nate moves a page: {status} {refused}"
+    );
+    let (status, moved) = op(&world.people["lena"].browser, "page_move", moving).await;
+    assert!(status.is_success(), "lena moves a page: {status} {moved}");
+
+    // Nor does a role without tasks make tasks of a board's notes (C1.32).
+    let board = super::support::app::tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "whiteboard_create",
+        json!({"projectId": work, "title": "Ideas"}),
+    )
+    .await;
+    assert_eq!(board["outcome"], "ok", "{board}");
+    let board = string_at(&board, "/value/whiteboard/id");
+    let drawn = super::support::app::tool(
+        app,
+        &phone.token,
+        &phone.session,
+        "whiteboard_update_elements",
+        json!({"whiteboardId": board, "operations": [
+            {"op": "add", "type": "text", "id": "idea", "x": 0, "y": 0, "text": "Try it"}]}),
+    )
+    .await;
+    assert_eq!(drawn["outcome"], "ok", "{drawn}");
+    let notes = json!({"whiteboardId": board});
+    let (status, refused) = op(
+        &world.people["nate"].browser,
+        "whiteboard_to_tasks",
+        notes.clone(),
+    )
+    .await;
+    assert!(!status.is_success(), "nate makes tasks: {status} {refused}");
+    let (status, made) = op(&world.people["lena"].browser, "whiteboard_to_tasks", notes).await;
+    assert!(status.is_success(), "lena makes tasks: {status} {made}");
+
+    // Asking about part of the board (C1.31): someone out of its space
+    // neither asks nor is asked; Lena asks Mara.
+    sqlx::query(
+        "UPDATE project_memberships SET enabled = false WHERE project_id = $1::uuid AND actor_id = $2",
+    )
+    .bind(&work)
+    .bind(world.people["omar"].actor)
+    .execute(pool)
+    .await
+    .expect("omar leaves WORK");
+    let ask = |who: Uuid| {
+        json!({"whiteboardId": board, "elementIds": ["idea"], "accountId": who,
+               "question": "Worth it?"})
+    };
+    let (status, refused) = op(
+        &world.people["omar"].browser,
+        "whiteboard_ask",
+        ask(world.people["mara"].actor),
+    )
+    .await;
+    assert!(!status.is_success(), "omar asks: {status} {refused}");
+    let (status, refused) = op(
+        &world.people["lena"].browser,
+        "whiteboard_ask",
+        ask(world.people["omar"].actor),
+    )
+    .await;
+    assert!(!status.is_success(), "lena asks omar: {status} {refused}");
+    let (status, asked) = op(
+        &world.people["lena"].browser,
+        "whiteboard_ask",
+        ask(world.people["mara"].actor),
+    )
+    .await;
+    assert!(status.is_success(), "lena asks mara: {status} {asked}");
     world.finish().await;
 }
 
@@ -2132,6 +2293,24 @@ async fn personal_sheet_views_stay_their_owners() {
     )
     .await;
     assert_eq!(body["outcome"], "ok", "lena names a range: {status} {body}");
+    // A chart (C1.18) changes the sheet for everyone too: sheets.edit.
+    let (status, body) = op(
+        nate,
+        "sheet_chart_set",
+        json!({"sheetId": sheet, "title": "Nate's", "source": "A1:B2"}),
+    )
+    .await;
+    assert_ne!(body["outcome"], "ok", "nate charts: {status} {body}");
+    let (status, body) = op(
+        &world.people["lena"].browser,
+        "sheet_chart_set",
+        json!({"sheetId": sheet, "title": "Lena's", "source": "Lenas"}),
+    )
+    .await;
+    assert_eq!(
+        body["outcome"], "ok",
+        "lena charts her range: {status} {body}"
+    );
     world.finish().await;
 }
 
@@ -2356,14 +2535,14 @@ async fn history_restore_needs_the_things_edit_permission() {
     };
 
     let written = as_mara(
-        "page_write",
+        "page_create",
         json!({"projectId": "REST", "title": "Gate", "body": "Paint it red."}),
     )
     .await;
     assert_eq!(written["outcome"], "ok", "{written}");
     let page = written["value"]["id"].as_str().expect("page").to_owned();
     let edited = as_mara(
-        "page_write",
+        "page_update",
         json!({"pageId": page, "body": "Paint it blue.", "expectedVersion": 1}),
     )
     .await;
@@ -2633,6 +2812,13 @@ async fn a_shared_page_opens_only_itself() {
         pages.push(page["id"].as_str().expect("page").to_owned());
     }
     let (plan, salaries) = (&pages[0], &pages[1]);
+    // Salaries sits inside Plan: sharing Plan doesn't tell its title.
+    sqlx::query("UPDATE project_pages SET parent_page_id = $1::uuid WHERE id = $2::uuid")
+        .bind(plan)
+        .bind(salaries)
+        .execute(world.pool())
+        .await
+        .expect("nest salaries");
     let read = |browser: &Browser, uri: String| browser.request("GET", &uri, None, Value::Null);
     let op = |browser: &Browser, name: &str, key: &str, body: Value| {
         browser.request(
@@ -2692,6 +2878,10 @@ async fn a_shared_page_opens_only_itself() {
     .await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert_eq!(page["title"], "Plan");
+    assert!(
+        !page.to_string().contains("Salaries"),
+        "a shared page names no page inside it: {page}"
+    );
     for uri in [
         format!("/api/v1/pages/{salaries}"),
         format!("/api/v1/projects/{secret}/pages"),
@@ -2729,6 +2919,10 @@ async fn a_shared_page_opens_only_itself() {
     .await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert_eq!(page["id"], plan.as_str());
+    assert!(
+        !page.to_string().contains("Salaries"),
+        "a linked page names no page inside it: {page}"
+    );
     let (status, _) = send(
         &world.app,
         read(&mara.browser, format!("/api/v1/pages/{salaries}")),
@@ -3087,6 +3281,219 @@ async fn themes_are_their_makers_until_offered() {
     world.finish().await;
 }
 
+/// K2.17: roles and caps change only for whoever the role rules allow. A
+/// member (no "Manage roles", no "Manage members", no member list) makes,
+/// changes, removes and gives no role, caps nobody else's apps and reads
+/// nobody else's permissions; they cap their own and read their own.
+#[tokio::test]
+async fn roles_and_caps_change_only_for_those_the_rules_allow() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("milo", "member")
+        .build("privacy_roles")
+        .await
+    else {
+        return;
+    };
+    let op = |name: &str| format!("/api/v2/w/{}/ops/{name}", world.organization);
+    let owner = &world.owner.browser;
+    let lena = &world.people["lena"].browser;
+    let milo = world.people["milo"].actor.to_string();
+    let (status, made) = send(
+        &world.app,
+        owner.request(
+            "POST",
+            &op("role_create"),
+            Some("r-1"),
+            json!({"name": "Helpers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
+        ),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    let role = made["value"]["id"].as_str().expect("role id").to_owned();
+    let version = made["value"]["version"].clone();
+
+    let refused = |name: &'static str, key: &'static str, body: Value| {
+        let request = lena.request("POST", &op(name), Some(key), body);
+        let app = world.app.clone();
+        async move {
+            let (status, body) = send(&app, request).await;
+            assert_ne!(body["outcome"], "ok", "{name}: {status} {body}");
+        }
+    };
+    refused(
+        "role_create",
+        "l-1",
+        json!({"name": "Mine", "baseRole": "member", "permissions": ["tasks.view"]}),
+    )
+    .await;
+    refused(
+        "role_update",
+        "l-2",
+        json!({"role": role, "expectedVersion": version, "permissions": ["tasks.view", "tasks.edit", "tasks.delete"]}),
+    )
+    .await;
+    refused("role_delete", "l-3", json!({"role": role})).await;
+    refused("role_assign", "l-4", json!({"account": milo, "role": role})).await;
+    refused(
+        "role_assign",
+        "l-5",
+        json!({"account": "@lena", "role": "admin"}),
+    )
+    .await;
+    refused(
+        "app_limit_set",
+        "l-6",
+        json!({"account": milo, "permissions": ["tasks.view"]}),
+    )
+    .await;
+    refused("permissions_get", "l-7", json!({"account": milo})).await;
+
+    // Their own: a cap on their apps, and what they may do.
+    let (_, capped) = send(
+        &world.app,
+        lena.request(
+            "POST",
+            &op("app_limit_set"),
+            Some("l-8"),
+            json!({"permissions": ["tasks.view"]}),
+        ),
+    )
+    .await;
+    assert_eq!(capped["outcome"], "ok", "{capped}");
+    let (_, mine) = send(
+        &world.app,
+        lena.request("POST", &op("permissions_get"), None, json!({})),
+    )
+    .await;
+    assert_eq!(mine["outcome"], "ok", "{mine}");
+    // Required keys (reading pages, seeing conversations) come with any cap.
+    let cap = mine["value"]["personalAgentLimit"].to_string();
+    assert!(
+        cap.contains("\"tasks.view\"") && !cap.contains("tasks.create"),
+        "{mine}"
+    );
+
+    // Nothing of the owner's changed.
+    let (name, permissions) = sqlx::query_as::<_, (String, Vec<String>)>(
+        "SELECT name, permissions FROM workspace_roles WHERE id = $1::uuid",
+    )
+    .bind(&role)
+    .fetch_one(world.pool())
+    .await
+    .expect("role");
+    assert_eq!(name, "Helpers");
+    assert!(
+        !permissions.contains(&"tasks.delete".to_owned()),
+        "{permissions:?}"
+    );
+    let held = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM organization_memberships WHERE role_id = $1::uuid",
+    )
+    .bind(&role)
+    .fetch_one(world.pool())
+    .await
+    .expect("holders");
+    assert_eq!(held, 0);
+    let milo_cap = sqlx::query_scalar::<_, Option<Vec<String>>>(
+        "SELECT agent_limit FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2::uuid",
+    )
+    .bind(world.organization)
+    .bind(&milo)
+    .fetch_one(world.pool())
+    .await
+    .expect("cap");
+    assert_eq!(milo_cap, None);
+    world.finish().await;
+}
+
+/// M1.12: connected modules are managed only with `modules.manage`. A
+/// role that manages settings and members but not modules lists, installs,
+/// re-reads, approves and revokes nothing, and its refusal comes before the
+/// module is looked up or its manifest fetched; the owner, asking the same,
+/// gets past the gate.
+#[tokio::test]
+async fn connected_modules_are_managed_only_by_holders_of_modules_manage() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .build("privacy_connected_modules")
+        .await
+    else {
+        return;
+    };
+    let op = |name: &str| format!("/api/v2/w/{}/ops/{name}", world.organization);
+    let owner = &world.owner.browser;
+    let lena = &world.people["lena"].browser;
+    let (status, made) = send(
+        &world.app,
+        owner.request(
+            "POST",
+            &op("role_create"),
+            Some("cm-role"),
+            json!({"name": "Settings, not modules", "baseRole": "admin",
+                   "permissions": ["projects.view", "settings.manage", "members.view"]}),
+        ),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{status} {made}");
+    let role = made["value"]["id"].as_str().expect("role id").to_owned();
+    let (status, assigned) = send(
+        &world.app,
+        owner.request(
+            "POST",
+            &op("role_assign"),
+            Some("cm-assign"),
+            json!({"account": "@lena", "role": role}),
+        ),
+    )
+    .await;
+    assert_eq!(assigned["outcome"], "ok", "{status} {assigned}");
+
+    let unknown = Uuid::now_v7().to_string();
+    // An address nothing answers at: reaching the fetch at all is the
+    // owner's, never the narrowed role's.
+    let url = "https://modules.invalid/manifest.json";
+    let calls = [
+        ("connected_module_list", json!({})),
+        ("connected_module_install", json!({"url": url})),
+        ("connected_module_refresh", json!({"moduleId": unknown})),
+        ("connected_module_approve", json!({"moduleId": unknown})),
+        ("connected_module_revoke", json!({"moduleId": unknown})),
+    ];
+    for (index, (name, body)) in calls.iter().enumerate() {
+        let key = format!("cm-lena-{index}");
+        let (status, refused) = send(
+            &world.app,
+            lena.request("POST", &op(name), Some(&key), body.clone()),
+        )
+        .await;
+        assert_eq!(
+            refused["outcome"], "permission_denied",
+            "{name} as the narrowed role: {status} {refused}"
+        );
+        let key = format!("cm-owner-{index}");
+        let (status, answered) = send(
+            &world.app,
+            owner.request("POST", &op(name), Some(&key), body.clone()),
+        )
+        .await;
+        assert_ne!(
+            answered["outcome"], "permission_denied",
+            "{name} as the owner: {status} {answered}"
+        );
+    }
+    let installed =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM module_apps WHERE workspace_id = $1")
+            .bind(world.organization)
+            .fetch_one(world.pool())
+            .await
+            .expect("module apps");
+    assert_eq!(installed, 0);
+    world.finish().await;
+}
+
 /// K5.20: a direct upload goes only into a conversation the caller may post
 /// in (never a private group they aren't in), and only someone who may
 /// manage settings sees or changes the workspace's own bucket.
@@ -3134,6 +3541,47 @@ async fn direct_uploads_and_the_workspace_bucket_stay_inside_their_rules() {
         .await;
         assert_ne!(refused["outcome"], "ok", "{op}: {status} {refused}");
     }
+
+    // A group's file is read by its members only: it is marked so and can
+    // never name a workspace's own bucket.
+    let ana = &world.people["ana"];
+    let file = upload(
+        &world.app,
+        &ana.browser,
+        &format!("/api/v1/conversations/{secret}/files?name=plan.txt"),
+        "text/plain",
+        b"the plan".to_vec(),
+    )
+    .await;
+    let pool = &world.state.pool;
+    let (members_only, store) = sqlx::query_as::<_, (bool, String)>(
+        "SELECT members_only, store_id FROM files WHERE id = $1",
+    )
+    .bind(file)
+    .fetch_one(pool)
+    .await
+    .expect("the group's file");
+    assert!(members_only, "a group's file is for its members");
+    assert!(!store.starts_with("ws-"), "{store}");
+    let forced = sqlx::query("UPDATE files SET members_only = false WHERE id = $1")
+        .bind(file)
+        .execute(pool)
+        .await;
+    assert!(forced.is_ok());
+    let still = sqlx::query_scalar::<_, bool>("SELECT members_only FROM files WHERE id = $1")
+        .bind(file)
+        .fetch_one(pool)
+        .await
+        .expect("members only");
+    assert!(still, "the conversation decides, not the writer");
+    let into_bucket = sqlx::query("UPDATE files SET store_id = 'ws-0123' WHERE id = $1")
+        .bind(file)
+        .execute(pool)
+        .await;
+    assert!(
+        into_bucket.is_err(),
+        "a group's file can't name a workspace's bucket"
+    );
     world.finish().await;
 }
 
@@ -3320,7 +3768,7 @@ async fn an_export_is_for_its_requester_alone() {
     .await;
     assert_eq!(started["outcome"], "ok", "{status} {started}");
     let id = started["value"]["id"].as_str().expect("id").to_owned();
-    agent_workspace_server::export::transfer::run_export(&world.state, id.parse().expect("uuid"))
+    crate::support::run_export(&world.state, id.parse().expect("uuid"))
         .await
         .expect("export runs");
     for (op, body) in [
@@ -3595,6 +4043,99 @@ async fn channel_writes_keep_to_private_channels() {
         "{timeline}"
     );
 
+    // C1.25, C2.22: a page, a sheet row or a sticky is made only from a
+    // message its maker reads, and saying so puts a line in the channel.
+    let (status, sheet) = send(
+        app,
+        lena.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/sheets"),
+            Some(&Uuid::now_v7().to_string()),
+            json!({"name": "Plans"}),
+        ),
+    )
+    .await;
+    let sheet = sheet
+        .pointer("/sheet/id")
+        .or_else(|| sheet.pointer("/id"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("lena makes a sheet: {status} {sheet}"))
+        .to_owned();
+    let (status, board) = op(
+        &lena.browser,
+        "whiteboard_create",
+        json!({"title": "Plans", "projectId": work}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{board}");
+    let board = board["value"]["whiteboard"]["id"]
+        .as_str()
+        .expect("board")
+        .to_owned();
+    let sticky = |from: &str| {
+        json!({"whiteboardId": board, "fromMessageId": from, "saySo": true, "operations": [
+            {"op": "add", "type": "rectangle", "text": "From the channel"},
+        ]})
+    };
+    for (name, input) in [
+        ("page_make", json!({"messages": [hidden], "saySo": true})),
+        (
+            "sheet_row_add",
+            json!({"sheetId": sheet, "fromMessageId": hidden, "saySo": true}),
+        ),
+        ("whiteboard_update_elements", sticky(&hidden)),
+    ] {
+        let (status, refused) = op(&omar.browser, name, input).await;
+        assert!(!status.is_success(), "{name}: {refused}");
+        assert!(
+            !refused.to_string().contains("secret-plans"),
+            "{name}: {refused}"
+        );
+    }
+    let mut made_things = Vec::new();
+    for (name, input) in [
+        ("page_make", json!({"messages": [shown], "saySo": true})),
+        (
+            "sheet_row_add",
+            json!({"sheetId": sheet, "fromMessageId": shown, "saySo": true}),
+        ),
+        ("whiteboard_update_elements", sticky(&shown)),
+    ] {
+        let (status, made) = op(&omar.browser, name, input).await;
+        assert_eq!(status, StatusCode::OK, "{name}: {made}");
+        made_things.push(made);
+    }
+    let cell = sqlx::query_scalar::<_, String>(
+        "SELECT cell.input FROM sheet_cells cell JOIN sheet_tabs tab ON tab.id = cell.tab_id \
+         WHERE tab.sheet_id = $1::uuid AND cell.row_number = $2",
+    )
+    .bind(&sheet)
+    .bind(
+        made_things[1]["value"]["row"]
+            .as_i64()
+            .and_then(|row| i32::try_from(row).ok())
+            .expect("row"),
+    )
+    .fetch_one(pool)
+    .await
+    .expect("the row");
+    assert_eq!(cell, "Open plans launch day");
+    let request = lena.browser.request(
+        "GET",
+        &format!("/api/v1/conversations/{open}/timeline"),
+        None,
+        Value::Null,
+    );
+    let (_, timeline) = send(app, request).await;
+    let said = timeline["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .filter_map(|entry| entry["system"]["thingKind"].as_str())
+        .collect::<Vec<_>>();
+    for kind in ["page", "sheet_row", "sticky"] {
+        assert!(said.contains(&kind), "a line for the {kind}: {timeline}");
+    }
     // Someone who may make tasks but not post in the channel makes one from
     // a message quietly: saySo posts nothing for them.
     let tess = &world.people["tess"];
@@ -3765,6 +4306,53 @@ async fn channel_writes_keep_to_private_channels() {
     world.finish().await;
 }
 
+/// H1.27: only someone who may manage settings lists or sets budgets, and
+/// never on a direct conversation they aren't in.
+#[tokio::test]
+async fn spend_limits_need_settings_manage_and_keep_to_what_the_setter_sees() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("ana", "member")
+        .person("lena", "member")
+        .dm("ana", "lena")
+        .build("privacy_spend_limits")
+        .await
+    else {
+        return;
+    };
+    let route = |op: &str| format!("/api/v2/w/{}/ops/{op}", world.organization);
+    let lena = &world.people["lena"];
+    for (op, body) in [
+        ("budget_list", json!({})),
+        (
+            "budget_set",
+            json!({"scope": "workspace", "meter": "messages", "period": "day", "hardLimit": 5}),
+        ),
+    ] {
+        let (status, refused) = send(
+            &world.app,
+            lena.browser
+                .request("POST", &route(op), Some(&format!("lena-{op}")), body),
+        )
+        .await;
+        assert_ne!(refused["outcome"], "ok", "{op}: {status} {refused}");
+    }
+    let secret = world.conversations["ana+lena"].clone();
+    let (status, refused) = send(
+        &world.app,
+        world.owner.browser.request(
+            "POST",
+            &route("budget_set"),
+            Some("owner-secret-limit"),
+            json!({"scope": "conversation", "scopeId": secret, "meter": "messages",
+                   "period": "minute", "eachAccount": true, "hardLimit": 1}),
+        ),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "not_found", "{status} {refused}");
+    world.finish().await;
+}
+
 /// K1.27: a role given to someone's group adds to their own seat in a
 /// space, in chat as everywhere else: a Viewer whose group is a Member
 /// there posts in its channels.
@@ -3881,14 +4469,13 @@ async fn a_groups_role_counts_beside_a_lower_seat() {
             ),
         )
         .await;
-        let (task, _) = send(
+        let (task, _) = crate::support::tasks::send(
             app,
-            lena.request(
-                "POST",
-                &format!("/api/v1/projects/{team}/work-items"),
-                Some(&format!("{key}-task")),
-                json!({"title": format!("Task {key}")}),
-            ),
+            lena,
+            "POST",
+            &format!("/api/v1/projects/{team}/work-items"),
+            Some(&format!("{key}-task")),
+            json!({"title": format!("Task {key}")}),
         )
         .await;
         (page.is_success(), task.is_success())
@@ -4434,7 +5021,7 @@ async fn triage_keeps_to_the_edit_and_workflow_permissions() {
         Some(3),
         "{listed}"
     );
-    let opened = as_owner("task_open", json!({"taskId": key})).await;
+    let opened = as_owner("task_get", json!({"taskId": key})).await;
     let planned = json!({"taskId": key, "expectedVersion": opened["value"]["task"]["version"], "cycle": "current"});
     let refused = as_rook("task_update", planned.clone()).await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
@@ -4493,7 +5080,7 @@ async fn triage_keeps_to_the_edit_and_workflow_permissions() {
     .expect("viewer in the workspace space");
     // Milestones (T1.42): a viewer can't reorder them.
     let made = as_owner(
-        "milestone_write",
+        "milestone_create",
         json!({"projectId": "TRI", "name": "Ordered", "clientRequestId": "ordered"}),
     )
     .await;
@@ -4688,13 +5275,13 @@ async fn record_changes_keep_to_roles_that_edit_records() {
         desk.call(app, Call::Tool { name, arguments }).await.1
     };
     let made = tool(
-        "collection_write",
+        "collection_create",
         json!({"projectId": "WORK", "name": "Accounts", "fields": [{"name": "Tier", "type": "text"}]}),
     )
     .await;
     assert_eq!(made["outcome"], "ok", "{made}");
     let written = tool(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Accounts", "clientRequestId": "acct",
                "records": [{"title": "Globex", "fields": {"Tier": "gold"}}]}),
     )
@@ -4997,7 +5584,7 @@ async fn a_private_channels_memory_stays_with_its_members() {
         .call(
             &world.app,
             Call::Tool {
-                name: "page_edit",
+                name: "page_update_blocks",
                 arguments: json!({
                     "pageId": page,
                     "edits": [{ "op": "append", "markdown": "Overwritten." }],
@@ -5029,7 +5616,7 @@ async fn a_private_channels_memory_stays_with_its_members() {
         .call(
             &world.app,
             Call::Tool {
-                name: "record_query",
+                name: "record_list",
                 arguments: json!({ "projectId": "WORK", "collection": "Pages" }),
             },
         )

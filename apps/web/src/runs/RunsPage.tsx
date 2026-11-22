@@ -1,4 +1,5 @@
 import { here } from '../app/href'
+import { useWorkspaceId } from '../app/workspace'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 
@@ -105,7 +106,9 @@ export function RunsPage({ project }: { project?: Project } = {}) {
   const projectId = project?.id ?? params.get('project') ?? undefined
   const agentId = params.get('agent') ?? undefined
   const hostId = params.get('host') ?? undefined
-  const filter: RunListFilter = { status, mine, projectId, agentId, hostId }
+  // Every run in the workspace the person is in, unless a project names its own.
+  const workspaceId = useWorkspaceId() ?? undefined
+  const filter: RunListFilter = { workspaceId: projectId ? undefined : workspaceId, status, mine, projectId, agentId, hostId }
   // Tokens and cost follow the project's layout when one is picked, else the workspace's.
   const projectExperience = useProjectExperience(projectId)
   const homeExperience = useHomeExperience()

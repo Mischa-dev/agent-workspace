@@ -1,4 +1,4 @@
-import { here } from '../app/href'
+import { here, legacyPathOf } from '../app/href'
 import { useState, type FormEvent } from 'react'
 
 import { callOp } from '../api/ops'
@@ -125,7 +125,7 @@ export function NotificationDetail({
         <ReplyInPlace conversationId={item.replyConversationId} key={item.id} onSent={onReplied} to={item.actor?.name ?? null} />
       ) : null}
       <div className="aw-inbox__actions">
-        {item.request && item.href === '/inbox' ? null : external ? (
+        {item.request && legacyPathOf(item.href) === '/inbox' ? null : external ? (
           <Button icon="external" onClick={onOpen} variant="primary">
             Open on GitHub
           </Button>

@@ -254,7 +254,7 @@ function ImportStep({ maxBytes }: { maxBytes: number }) {
         <div className="field">
           <label htmlFor="setup-archive">Archive</label>
           <input
-            accept=".zip,application/zip"
+            accept=".awx,.zip,application/zip"
             disabled={busy}
             id="setup-archive"
             onChange={(event) => setArchive(event.target.files?.[0] ?? null)}

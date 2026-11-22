@@ -54,16 +54,14 @@ async fn only_owners_change_projects_and_archived_ones_come_back() {
         .expect("space")
         .to_owned();
     let (mara, mara_token) = create_agent(app, &setup.browser, &space, "Mara", "mara").await;
-    let (status, added) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/members"),
-            None,
-            json!({"actorId": mara, "role": "member"}),
-        ),
-    )
-    .await;
+    let (status, added) = setup
+        .browser
+        .op(
+            app,
+            "space_member_add",
+            json!({"spaceId": work, "account": mara, "role": "member"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{added}");
     let codex = connect_app(app, &setup.browser, "Codex", "full").await;
     let session = initialize(app, &codex).await.expect("Codex MCP");
@@ -186,7 +184,7 @@ async fn only_owners_change_projects_and_archived_ones_come_back() {
     .await;
     assert_eq!(archived["outcome"], "ok", "{archived}");
     assert_eq!(archived["value"]["archived"], true);
-    let listed = tool(app, &codex, &session, "projects_list", json!({})).await;
+    let listed = tool(app, &codex, &session, "project_list", json!({})).await;
     assert!(
         !listed["value"]["projects"]
             .as_array()
@@ -199,7 +197,7 @@ async fn only_owners_change_projects_and_archived_ones_come_back() {
         app,
         &codex,
         &session,
-        "projects_list",
+        "project_list",
         json!({"includeArchived": true}),
     )
     .await;
@@ -231,7 +229,7 @@ async fn only_owners_change_projects_and_archived_ones_come_back() {
     .await;
     assert_eq!(restored["outcome"], "ok", "{restored}");
     assert_eq!(restored["value"]["archived"], false);
-    let listed = tool(app, &codex, &session, "projects_list", json!({})).await;
+    let listed = tool(app, &codex, &session, "project_list", json!({})).await;
     assert!(
         listed["value"]["projects"]
             .as_array()
@@ -308,6 +306,81 @@ async fn channels_threads_pins_and_decisions_can_be_shaped() {
     )
     .await;
     let thread_id = thread["value"]["id"].as_str().expect("thread").to_owned();
+    // A named thread with its first message, sent twice with one key: the
+    // retry answers with the same thread and message, made once.
+    let keyed = json!({"conversationId": design_id, "name": "Tokens plan",
+                       "text": "Starting here.", "clientRequestId": "thread-once-1"});
+    let first = tool(app, &codex, &session, "thread_start", keyed.clone()).await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert_eq!(first["replayed"], false, "{first}");
+    assert_eq!(first["replaySafe"], true, "{first}");
+    let again = tool(app, &codex, &session, "thread_start", keyed.clone()).await;
+    assert_eq!(again["replayed"], true, "{again}");
+    assert_eq!(again["value"]["id"], first["value"]["id"], "{again}");
+    assert_eq!(
+        again["value"]["message"]["messageId"], first["value"]["message"]["messageId"],
+        "{again}"
+    );
+    // Once the opening message is removed, a retry finds the thread and
+    // never posts the removed text again.
+    let removed = tool(
+        app,
+        &codex,
+        &session,
+        "message_delete",
+        json!({"messageId": first["value"]["message"]["messageId"]}),
+    )
+    .await;
+    assert_eq!(removed["outcome"], "ok", "{removed}");
+    let after = tool(app, &codex, &session, "thread_start", keyed).await;
+    assert_eq!(after["replayed"], true, "{after}");
+    assert_eq!(after["value"]["id"], first["value"]["id"], "{after}");
+    assert!(after["value"]["message"].is_null(), "{after}");
+    let read = tool(
+        app,
+        &codex,
+        &session,
+        "conversation_read",
+        json!({"conversationId": first["value"]["id"]}),
+    )
+    .await;
+    assert_eq!(read["outcome"], "ok", "{read}");
+    assert!(!read.to_string().contains("Starting here."), "{read}");
+    // Two calls with their own keys that find the same thread each send
+    // their own opening message.
+    let mut opened = Vec::new();
+    for (key, text) in [("from-a", "First words."), ("from-b", "Second words.")] {
+        let call = tool(
+            app,
+            &codex,
+            &session,
+            "thread_start",
+            json!({"conversationId": design_id, "fromMessageId": message_id,
+                   "text": text, "clientRequestId": key}),
+        )
+        .await;
+        assert_eq!(call["value"]["id"], thread_id, "{call}");
+        assert!(call["value"]["message"]["messageId"].is_string(), "{call}");
+        opened.push(call["value"]["message"]["messageId"].clone());
+    }
+    assert_ne!(opened[0], opened[1]);
+    // Each retried with its own key gets its own message back.
+    for ((key, text), sent) in [("from-a", "First words."), ("from-b", "Second words.")]
+        .into_iter()
+        .zip(&opened)
+    {
+        let retried = tool(
+            app,
+            &codex,
+            &session,
+            "thread_start",
+            json!({"conversationId": design_id, "fromMessageId": message_id,
+                   "text": text, "clientRequestId": key}),
+        )
+        .await;
+        assert_eq!(retried["replayed"], true, "{retried}");
+        assert_eq!(&retried["value"]["message"]["messageId"], sent, "{retried}");
+    }
     let decided = tool(
         app,
         &codex,
@@ -604,16 +677,14 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
         .to_owned();
     // Mara works only in the old project, so she can't follow the task.
     let (mara, mara_token) = create_agent(app, &setup.browser, &space, "Mara", "mara").await;
-    let (status, added) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{old}/members"),
-            None,
-            json!({"actorId": mara, "role": "member"}),
-        ),
-    )
-    .await;
+    let (status, added) = setup
+        .browser
+        .op(
+            app,
+            "space_member_add",
+            json!({"spaceId": old, "account": mara, "role": "member"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{added}");
     let codex = connect_app(app, &setup.browser, "Codex", "full").await;
     let session = initialize(app, &codex).await.expect("Codex MCP");
@@ -650,12 +721,12 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
         app,
         &codex,
         &session,
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": "OLD-1", "text": "Repro: the clone needs a token.", "clientRequestId": "c1"}),
     )
     .await;
     assert_eq!(
-        commented["outcome"], "applied",
+        commented["outcome"], "ok",
         "keys work in task_comment: {commented}"
     );
     let started = tool(
@@ -671,9 +742,13 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
         app,
         setup.browser.request(
             "POST",
-            &format!("/api/v1/projects/{old}/work-items/{task}/acceptance-criteria"),
+            "/api/v2/ops/task_criteria_update",
             Some("criterion-1"),
-            json!({"expectedVersion": started["value"]["version"], "text": "Mirrors prepare with a token"}),
+            json!({
+                "taskId": task,
+                "expectedVersion": started["value"]["version"],
+                "operations": [{"op": "add", "text": "Mirrors prepare with a token"}]
+            }),
         ),
     )
     .await;
@@ -708,7 +783,7 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
         app,
         &codex,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": "OLD-1"}),
     )
     .await;
@@ -778,7 +853,7 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
         app,
         &mara_token,
         &mara_session,
-        "task_open",
+        "task_get",
         json!({"taskId": "OLD-1"}),
     )
     .await;
@@ -788,7 +863,7 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
         app,
         &mara_token,
         &mara_session,
-        "task_open",
+        "task_get",
         json!({"taskId": new_task}),
     )
     .await;
@@ -824,21 +899,21 @@ async fn dependencies_refuse_cycles_and_milestones_track_progress() {
 
     // Ship waits on Build, Build on Design.
     let shipped = call(
-        "task_depend",
+        "task_link",
         json!({"taskId": "PLAN-3", "blockedBy": ["PLAN-2"]}),
     )
     .await;
     assert_eq!(shipped["outcome"], "ok", "{shipped}");
     assert_eq!(shipped["value"]["ready"], false);
     let built = call(
-        "task_depend",
+        "task_link",
         json!({"taskId": "PLAN-2", "blockedBy": ["PLAN-1"]}),
     )
     .await;
     assert_eq!(built["value"]["blocks"][0]["key"], "PLAN-3", "{built}");
     // Design waiting on Ship would close a cycle.
     let cycle = call(
-        "task_depend",
+        "task_link",
         json!({"taskId": "PLAN-1", "blockedBy": ["PLAN-3"]}),
     )
     .await;
@@ -851,7 +926,7 @@ async fn dependencies_refuse_cycles_and_milestones_track_progress() {
     );
     // A blocker may be in another project of the same workspace.
     let elsewhere = call(
-        "task_depend",
+        "task_link",
         json!({"taskId": "PLAN-1", "blocks": ["ELSE-1"]}),
     )
     .await;
@@ -864,13 +939,13 @@ async fn dependencies_refuse_cycles_and_milestones_track_progress() {
         app,
         &reader,
         &reader_session,
-        "task_depend",
+        "task_link",
         json!({"taskId": "PLAN-1", "blocks": ["PLAN-3"]}),
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
     let removed = call(
-        "task_depend",
+        "task_link",
         json!({"taskId": "PLAN-3", "blockedBy": ["PLAN-2"], "remove": true}),
     )
     .await;
@@ -878,28 +953,37 @@ async fn dependencies_refuse_cycles_and_milestones_track_progress() {
 
     // A milestone with a target date holds the tasks and counts progress.
     let milestone = call(
-        "milestone_write",
+        "milestone_create",
         json!({"projectId": "PLAN", "name": "v1", "targetDate": "2020-01-01", "addTasks": ["PLAN-1", "PLAN-2", "PLAN-3"]}),
     )
     .await;
     assert_eq!(milestone["outcome"], "ok", "{milestone}");
     assert_eq!(milestone["value"]["total"], 3);
     assert_eq!(milestone["value"]["overdue"], true);
-    let again = call("milestone_write", json!({"projectId": work, "name": "V1"})).await;
+    let again = call("milestone_create", json!({"projectId": work, "name": "V1"})).await;
     assert_eq!(again["value"]["id"], milestone["value"]["id"], "{again}");
     let wrong = call(
-        "milestone_write",
+        "milestone_create",
         json!({"projectId": work, "name": "v2", "addTasks": ["ELSE-1"]}),
     )
     .await;
     assert_eq!(wrong["outcome"], "invalid_request", "{wrong}");
     let trimmed = call(
-        "milestone_write",
+        "milestone_update",
         json!({"projectId": work, "milestoneId": milestone["value"]["id"], "removeTasks": ["PLAN-3"], "targetDate": ""}),
     )
     .await;
     assert_eq!(trimmed["value"]["total"], 2, "{trimmed}");
     assert_eq!(trimmed["value"]["overdue"], false);
+    // A keyed change sent again replays instead of changing it twice.
+    let keyed = json!({"projectId": work, "milestoneId": milestone["value"]["id"],
+                       "description": "Keyed", "clientRequestId": "milestone-change-1"});
+    let first = call("milestone_update", keyed.clone()).await;
+    assert_eq!(first["outcome"], "ok", "{first}");
+    assert_eq!(first["replayed"], false, "{first}");
+    let again = call("milestone_update", keyed).await;
+    assert_eq!(again["outcome"], "ok", "{again}");
+    assert_eq!(again["replayed"], true, "{again}");
     let listed = call("milestone_list", json!({"projectId": "PLAN"})).await;
     assert_eq!(listed["value"]["milestones"][0]["name"], "v1", "{listed}");
 
@@ -1282,7 +1366,7 @@ async fn dependency_cycles_longer_than_two_hundred_tasks_are_refused() {
         &setup.app,
         &token,
         &session,
-        "task_depend",
+        "task_link",
         json!({"taskId": tasks[200], "blocks": [tasks[0]]}),
     )
     .await;
@@ -1523,9 +1607,12 @@ async fn a_fresh_project_gets_its_worker_when_someone_connects_codex() {
         .execute(&setup.pool)
         .await
         .expect("sign in");
-    agent_workspace_server::execution_setup::activate_pending_worker(&setup.pool, profile_id)
-        .await
-        .expect("activate");
+    crate::support::as_job(
+        setup.organization_id,
+        agent_workspace_server::execution_setup::activate_pending_worker(&setup.pool, profile_id),
+    )
+    .await
+    .expect("activate");
     assert_eq!(counts(setup.pool.clone()).await, (1, 1, 1, 1));
     let (status, workers) = send(
         &app,

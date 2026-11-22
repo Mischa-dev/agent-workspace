@@ -1,7 +1,7 @@
 //! Messages as operations (K2.7): send, update, delete, react, forward,
 //! mark read, history, schedule, change a scheduled message, and hide link
-//! previews. Agents call them as tools of the same names (`message_edit`
-//! and `mark_read` stay as aliases), scripts through the v2 route, and
+//! previews. Agents call them as tools of the same names (the old
+//! `message_edit` and `mark_read` are retired, `ops::retired`), scripts through the v2 route, and
 //! rules as actions. Each runs the message command the web runs
 //! (`mcp::messaging`), which keeps its own idempotency (the web's scopes,
 //! so a request id retried on either surface replays) and its own checks
@@ -198,7 +198,7 @@ impl Operation for MessageForward {
 }
 
 // ---------------------------------------------------------------------------
-// message_update (alias message_edit)
+// message_update
 
 pub struct MessageUpdate;
 
@@ -470,7 +470,7 @@ impl Operation for MessageReact {
 }
 
 // ---------------------------------------------------------------------------
-// conversation_mark_read (alias mark_read)
+// conversation_mark_read
 
 pub struct ConversationMarkRead;
 
@@ -621,9 +621,12 @@ pub struct ScheduledMessageUpdate;
 pub struct ScheduledMessageUpdateInput {
     /// The scheduled message, from message_schedule or later_list.
     pub id: IdRef,
-    /// New text.
+    /// New text. @handles of people in the space become mentions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// New structured content instead of text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<MessageContent>,
     /// A new time, as RFC 3339.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub send_at: Option<String>,
@@ -647,6 +650,9 @@ impl Operation for ScheduledMessageUpdate {
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "messages";
     const PERMISSION: Option<Perm> = Some(Perm::ChannelsPost);
+    // Not replayed by the dispatcher: a stored answer would skip the
+    // command's check that the author still reaches the conversation, and
+    // a send-now refusal can follow a saved edit. replaySafe stays false.
     const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const TITLE: &'static str = "Change scheduled message";
     const DESCRIPTION: &'static str = "Change a message you scheduled: its text or time \
@@ -662,14 +668,13 @@ impl Operation for ScheduledMessageUpdate {
         input: ScheduledMessageUpdateInput,
     ) -> Result<ScheduledUpdateValue, OpError> {
         let id = input.id.id();
-        // The scheduled-message command keeps no request ids, so a retry
-        // after a later edit would write again: replaySafe stays false.
         let updated = messaging::scheduled_update(
             call.state,
             call.ctx,
             id,
             ScheduledChange {
                 text: input.text,
+                content: input.content,
                 send_at: input.send_at,
                 send_now: input.send_now,
                 cancel: input.cancel,
@@ -719,7 +724,7 @@ pub struct ConversationMembers {
     #[schemars(with = "String")]
     pub conversation_id: uuid::Uuid,
     pub members: Vec<ConversationMember>,
-    /// Whether you can add and remove others (conversation_members).
+    /// Whether you can add and remove others (conversation_members_update).
     pub can_manage: bool,
 }
 
@@ -732,7 +737,7 @@ impl Operation for ConversationMemberList {
     const TITLE: &'static str = "List members";
     const DESCRIPTION: &'static str = "Who is in a private channel or a group (or the one a \
         thread is in), which of them manage a private channel, and whether you can add and \
-        remove others with conversation_members. An open channel has no member list: everyone \
+        remove others with conversation_members_update. An open channel has no member list: everyone \
         in its space reads it.";
 
     type Input = ConversationMemberListInput;
@@ -861,7 +866,7 @@ impl Operation for ConversationTaskList {
     const IDEMPOTENCY: Idempotency = Idempotency::None;
     const TITLE: &'static str = "List a conversation's tasks";
     const DESCRIPTION: &'static str = "The tasks linked to a conversation or made from one of \
-        its messages, in the conversation's own space, newest first. task_open opens one.";
+        its messages, in the conversation's own space, newest first. task_get opens one.";
 
     type Input = ConversationTaskListInput;
     type Output = ConversationTasks;
@@ -877,15 +882,11 @@ impl Operation for ConversationTaskList {
             r#"
             WITH linked AS (
                 SELECT link.work_item_id, 'about' AS how, link.created_at
-                FROM work_item_links link
+                FROM task_links link
                 WHERE link.target_kind = 'conversation' AND link.target_id = $1
                 UNION ALL
-                SELECT link.work_item_id, 'about', link.created_at
-                FROM work_item_conversation_links link
-                WHERE link.conversation_id = $1
-                UNION ALL
                 SELECT link.work_item_id, 'made_from', link.created_at
-                FROM work_item_links link
+                FROM task_links link
                 JOIN messages message ON message.id = link.target_id
                 WHERE link.target_kind = 'message' AND message.conversation_id = $1
                   AND message.removed_at IS NULL

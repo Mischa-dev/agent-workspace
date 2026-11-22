@@ -19,9 +19,9 @@ use super::{
 };
 use crate::{AppState, error::AppError, github, policy::Action};
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct RunPublishArguments {
+pub(crate) struct RunPublishArguments {
     /// The finished run whose branch to push to GitHub.
     pub run_id: String,
 }
@@ -53,7 +53,7 @@ pub(crate) struct PullRequestRefreshArguments {
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PullRequestMergeArguments {
-    /// The pull request (pull_request_list, pull_request_get, task_open).
+    /// The pull request (pull_request_list, pull_request_get, task_get).
     pub pull_request_id: String,
     /// Merge only if its head is still this commit (pull_request_get's
     /// headSha). Default: the head Agent Workspace last read.
@@ -112,7 +112,7 @@ async fn run_project(
         .ok_or(AppError::NotFound("agent_run"))
 }
 
-pub(super) async fn run_publish(
+pub(crate) async fn run_publish(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: RunPublishArguments,
@@ -134,12 +134,25 @@ pub(super) async fn run_publish(
             Action::RepositoryPublish,
         )
         .await?;
+        transaction.commit().await?;
+        // The host looks at the branch first, with no transaction open while
+        // it does; the queueing then checks again under its locks.
+        let inspected =
+            github::inspect_for_publish(state, principal.actor_id, project_id, run_id).await?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        github::require_project_access_as(
+            &mut transaction,
+            principal.actor_id,
+            project_id,
+            Action::RepositoryPublish,
+        )
+        .await?;
         let queued = github::queue_publish_in(
-            state,
             &mut transaction,
             principal.actor_id,
             project_id,
             run_id,
+            inspected,
         )
         .await?;
         if queued.new {
@@ -390,7 +403,7 @@ fn outcome(result: Result<QueuedValue, AppError>, tool: &'static str) -> ToolRes
                 "Another run is working in that run's workspace. Wait for it to finish."
             }
             ("github_installation", "repository_unavailable") => {
-                "The project's GitHub installation doesn't reach that repository (github_integration_write)."
+                "The project's GitHub installation doesn't reach that repository (github_installation_link)."
             }
             ("repository_workspace", _) => "That run's workspace isn't where it should be.",
             _ => why,

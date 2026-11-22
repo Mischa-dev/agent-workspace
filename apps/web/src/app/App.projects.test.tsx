@@ -44,7 +44,7 @@ describe('App Project creation and settings', () => {
         if (path.startsWith('/api/v1/projects?') && method === 'GET') {
           return jsonResponse({ projects: [] })
         }
-        if (path.endsWith('/projects') && method === 'POST') {
+        if (path.endsWith('/ops/space_create') && method === 'POST') {
           idempotencyKeys.push(
             new Headers(init?.headers).get('idempotency-key'),
           )
@@ -59,7 +59,7 @@ describe('App Project creation and settings', () => {
                 },
                 500,
               )
-            : jsonResponse(created, 201)
+            : jsonResponse({ outcome: 'ok', value: { id: created.id } })
         }
         if (path.endsWith(`/${created.id}/switch`)) {
           return jsonResponse({
@@ -237,7 +237,11 @@ describe('App Project creation and settings', () => {
           })
         }
         if (path.endsWith(`/projects/${projectBId}`)) {
-          return jsonResponse(projectB)
+          return jsonResponse(
+            archived
+              ? { ...projectB, archivedAt: '2026-07-31T07:00:00Z', version: 2 }
+              : projectB,
+          )
         }
         if (path.endsWith(`/projects/${projectBId}/navigation`)) {
           return jsonResponse({
@@ -246,16 +250,9 @@ describe('App Project creation and settings', () => {
             href: `/projects/${projectBId}/settings`,
           })
         }
-        if (
-          path.endsWith(`/projects/${projectBId}/archive`) &&
-          method === 'POST'
-        ) {
+        if (path.endsWith('/ops/space_archive') && method === 'POST') {
           archived = true
-          return jsonResponse({
-            ...projectB,
-            archivedAt: '2026-07-31T07:00:00Z',
-            version: 2,
-          })
+          return jsonResponse({ outcome: 'ok', value: { id: projectBId, archived: true, version: 2 } })
         }
         throw new Error(`Unexpected request: ${method} ${path}`)
       },
@@ -275,9 +272,11 @@ describe('App Project creation and settings', () => {
       await screen.findByText(/Beta Project was archived/),
     ).toBeVisible()
     const archiveCall = fetchMock.mock.calls.find(([path]) =>
-      String(path).endsWith(`/${projectBId}/archive`),
+      String(path).endsWith('/ops/space_archive'),
     )
-    expect(archiveCall?.[1]?.body).toBe(JSON.stringify({ expectedVersion: 1 }))
+    expect(archiveCall?.[1]?.body).toBe(
+      JSON.stringify({ spaceId: projectBId, expectedVersion: 1 }),
+    )
     expect(new Headers(archiveCall?.[1]?.headers).get('x-csrf-token')).toBe(
       'test-csrf',
     )
@@ -288,12 +287,12 @@ describe('App Project creation and settings', () => {
 
   it.each([
     {
-      code: 'version_conflict',
+      code: 'version',
       message: 'Project changed. Reload before archiving.',
       details: { currentVersion: 2 },
     },
     {
-      code: 'project_has_active_runs',
+      code: 'space_has_active_runs',
       message: 'Interrupt active runs before archiving.',
     },
   ])('keeps archive conflicts recoverable for $code', async ({
@@ -321,7 +320,7 @@ describe('App Project creation and settings', () => {
           // Someone else changed the Project before the first archive attempt.
           return jsonResponse({
             ...projectB,
-            version: code === 'version_conflict' && archiveAttempts > 0 ? 2 : 1,
+            version: code === 'version' && archiveAttempts > 0 ? 2 : 1,
           })
         }
         if (
@@ -334,12 +333,9 @@ describe('App Project creation and settings', () => {
             href: `/projects/${projectBId}/settings`,
           })
         }
-        if (
-          path.endsWith(`/projects/${projectBId}/archive`) &&
-          method === 'POST'
-        ) {
+        if (path.endsWith('/ops/space_archive') && method === 'POST') {
           archiveAttempts += 1
-          return jsonResponse({ error: { code, details, message } }, 409)
+          return jsonResponse({ outcome: 'conflict', code, details, message }, 409)
         }
         throw new Error(`Unexpected request: ${method} ${path}`)
       },
@@ -355,7 +351,7 @@ describe('App Project creation and settings', () => {
 
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(
-      code === 'version_conflict' ? 'Someone changed this project' : message,
+      code === 'version' ? 'Someone changed this project' : message,
     )
     await waitFor(() => expect(alert).toHaveFocus())
     expect(window.location.pathname).toBe(
@@ -365,27 +361,27 @@ describe('App Project creation and settings', () => {
       screen.getByRole('link', { name: 'Beta Project' }),
     ).toBeVisible()
     const archiveCall = fetchMock.mock.calls.find(([path]) =>
-      String(path).endsWith(`/${projectBId}/archive`),
+      String(path).endsWith('/ops/space_archive'),
     )
     expect(archiveCall?.[1]?.body).toBe(
-      JSON.stringify({ expectedVersion: 1 }),
+      JSON.stringify({ spaceId: projectBId, expectedVersion: 1 }),
     )
-    if (code === 'version_conflict') {
+    if (code === 'version') {
       fireEvent.click(
         screen.getByRole('button', { name: 'Archive project' }),
       )
       await waitFor(() =>
         expect(
           fetchMock.mock.calls.filter(([path]) =>
-            String(path).endsWith(`/${projectBId}/archive`),
+            String(path).endsWith('/ops/space_archive'),
           ),
         ).toHaveLength(2),
       )
       const archiveCalls = fetchMock.mock.calls.filter(([path]) =>
-        String(path).endsWith(`/${projectBId}/archive`),
+        String(path).endsWith('/ops/space_archive'),
       )
       expect(archiveCalls[1][1]?.body).toBe(
-        JSON.stringify({ expectedVersion: 2 }),
+        JSON.stringify({ spaceId: projectBId, expectedVersion: 2 }),
       )
     }
   })

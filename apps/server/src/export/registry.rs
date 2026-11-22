@@ -46,6 +46,15 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 text_references: &[],
                 exclude: &[],
             },
+            // Spend limits (H1.27): a limit's scope is the workspace, an
+            // account, a space or a conversation, mapped with every other id.
+            KindDecl {
+                kind: "spend_limits",
+                table: "spend_limits",
+                references: &[("set_by_actor_id", "actors")],
+                text_references: &[],
+                exclude: &[],
+            },
             KindDecl {
                 kind: "saved_searches",
                 table: "saved_searches",
@@ -124,7 +133,8 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("removed_by_actor_id", "actors"),
                 ],
                 text_references: &[],
-                exclude: &[],
+                // A move in progress on this server (K5.13).
+                exclude: &["move_lease", "move_lease_until"],
             },
             KindDecl {
                 kind: "layout_presets",
@@ -187,6 +197,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("package_id", "packages"),
                     ("installed_by_actor_id", "actors"),
                     ("via_app_actor_id", "actors"),
+                    ("upgraded_from", "package_installs"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -287,6 +298,26 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
             ),
             (
+                "module_apps",
+                "a connected module's app account and secrets; connect it again after import",
+            ),
+            (
+                "module_kinds",
+                "read from a connected module's manifest; made again when it is connected again",
+            ),
+            (
+                "module_things",
+                "which connected module owns a thing; set again when it is connected again",
+            ),
+            (
+                "module_event_receipts",
+                "runtime state of this server (signed events already taken, so replays are refused)",
+            ),
+            (
+                "module_frame_launches",
+                "a credential or one-time link; never exported (connections are listed in needs/connections.jsonl)",
+            ),
+            (
                 "background_jobs",
                 "runtime state of this server (queues, leases, retries)",
             ),
@@ -331,10 +362,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "deliveries this server took from its billing provider (H1.33); billing stays with the server that bills",
             ),
             (
-                "spend_limits",
-                "nothing sets one yet: H1.27, which adds the operations that do, adds them to the export",
-            ),
-            (
                 "workspace_transfers",
                 "this server's record of exports and imports (H1.9): an archive never carries itself",
             ),
@@ -375,10 +402,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             (
                 "workspace_slugs",
                 "the addresses a workspace had on this server; an import takes its own slug",
-            ),
-            (
-                "operation_alias_usage",
-                "daily counts of calls to old operation names, kept to retire them (K2); this server's own measure",
             ),
             (
                 "operation_tasks",
@@ -1018,18 +1041,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
-                kind: "work_item_conversation_links",
-                table: "work_item_conversation_links",
-                references: &[
-                    ("project_id", "projects"),
-                    ("work_item_id", "work_items"),
-                    ("conversation_id", "conversations"),
-                    ("created_by_actor_id", "actors"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
                 kind: "work_item_handoffs",
                 table: "work_item_handoffs",
                 references: &[
@@ -1060,17 +1071,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("work_item_id", "work_items"),
                     ("label_id", "project_labels"),
                     ("added_by_actor_id", "actors"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
-                kind: "work_item_links",
-                table: "work_item_links",
-                references: &[
-                    ("work_item_id", "work_items"),
-                    ("project_id", "projects"),
-                    ("created_by_actor_id", "actors"),
                 ],
                 text_references: &[],
                 exclude: &[],
@@ -1221,6 +1221,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 table: "project_pages",
                 references: &[
                     ("project_id", "projects"),
+                    ("parent_page_id", "project_pages"),
                     ("created_by_actor_id", "actors"),
                     ("updated_by_actor_id", "actors"),
                 ],
@@ -1419,6 +1420,17 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "sheet_charts",
+                table: "sheet_charts",
+                references: &[
+                    ("space_id", "projects"),
+                    ("sheet_id", "sheets"),
+                    ("created_by_actor_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "sheet_named_ranges",
                 table: "sheet_named_ranges",
                 references: &[
@@ -1504,17 +1516,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 table: "whiteboard_files",
                 references: &[
                     ("whiteboard_id", "whiteboards"),
-                    ("created_by_actor_id", "actors"),
-                ],
-                text_references: &[],
-                exclude: &[],
-            },
-            KindDecl {
-                kind: "whiteboard_links",
-                table: "whiteboard_links",
-                references: &[
-                    ("whiteboard_id", "whiteboards"),
-                    ("target_project_id", "projects"),
                     ("created_by_actor_id", "actors"),
                 ],
                 text_references: &[],
@@ -1911,6 +1912,17 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 exclude: &[],
             },
             KindDecl {
+                kind: "run_changes",
+                table: "run_changes",
+                references: &[
+                    ("run_id", "runs"),
+                    ("space_id", "projects"),
+                    ("reported_by_account_id", "actors"),
+                ],
+                text_references: &[],
+                exclude: &[],
+            },
+            KindDecl {
                 kind: "run_usage",
                 table: "run_usage",
                 references: &[
@@ -2054,6 +2066,10 @@ pub const DECLARATIONS: &[ExportDecl] = &[
             (
                 "host_a2a_tasks",
                 "an outside agent's task for a run in flight; a run that moves ends rather than resumes",
+            ),
+            (
+                "host_command_secrets",
+                "a token handed to a host with one command, taken when fetched; never exported",
             ),
             (
                 "host_commands",

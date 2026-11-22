@@ -130,10 +130,43 @@ pub fn join(earlier: Inverse, later: Inverse) -> Inverse {
                     blocks.remove(index);
                 }
             }
+            None if entry.after_hash.is_none() => {
+                // A block taken out later followed, before the earlier
+                // change, every block that change took out after its
+                // anchor: it goes back after the last of them.
+                let mut entry = entry;
+                while let Some(gone) = blocks.iter().find(|kept| {
+                    kept.after_hash.is_none()
+                        && kept.before.is_some()
+                        && kept.previous == entry.previous
+                }) {
+                    entry.previous = Some(gone.id.clone());
+                }
+                blocks.push(entry);
+            }
             None => blocks.push(entry),
         }
     }
     Inverse { blocks }
+}
+
+/// Removed blocks in an order where each comes after the removed block it
+/// followed, so its anchor is back before it is.
+fn anchors_first(mut pending: Vec<&Entry>) -> Vec<&Entry> {
+    let mut ordered = Vec::with_capacity(pending.len());
+    while !pending.is_empty() {
+        let ready = pending
+            .iter()
+            .position(|entry| {
+                entry
+                    .previous
+                    .as_ref()
+                    .is_none_or(|previous| pending.iter().all(|other| &other.id != previous))
+            })
+            .unwrap_or(0);
+        ordered.push(pending.remove(ready));
+    }
+    ordered
 }
 
 /// The result of undoing a change on the page as it is now.
@@ -157,7 +190,7 @@ pub fn undo(current: &[Block], inverse: &Inverse) -> Undone {
         .blocks
         .iter()
         .partition(|entry| entry.after_hash.is_none());
-    for entry in rest.into_iter().chain(removed) {
+    for entry in rest.into_iter().chain(anchors_first(removed)) {
         let edit = match (&entry.before, &entry.after_hash) {
             (None, Some(hash)) => Edit {
                 op: EditOp::Delete,
@@ -261,6 +294,43 @@ mod tests {
         let ids = |blocks: &[Block]| blocks.iter().map(|b| b.id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(&undone.blocks), ids(&before));
         assert_eq!(strip_ids(&undone.blocks), strip_ids(&before));
+    }
+
+    #[test]
+    fn undo_after_joined_deletions_keeps_their_order() {
+        let ids = |blocks: &[Block]| blocks.iter().map(|b| b.id.clone()).collect::<Vec<_>>();
+        let start = with_ids(from_markdown("A\n\nB\n\nC\n\nD\n\nE\n"), "b");
+        // B, then C, in two saves.
+        let first = vec![
+            start[0].clone(),
+            start[2].clone(),
+            start[3].clone(),
+            start[4].clone(),
+        ];
+        let second = vec![start[0].clone(), start[3].clone(), start[4].clone()];
+        let joined = join(diff(&start, &first), diff(&first, &second));
+        let undone = undo(&second, &joined);
+        assert!(undone.skipped.is_empty());
+        assert_eq!(ids(&undone.blocks), ids(&start));
+
+        // D, then B and C together: B comes back before the D it left.
+        let first = vec![
+            start[0].clone(),
+            start[1].clone(),
+            start[2].clone(),
+            start[4].clone(),
+        ];
+        let second = vec![start[0].clone(), start[4].clone()];
+        let undone = undo(&second, &join(diff(&start, &first), diff(&first, &second)));
+        assert!(undone.skipped.is_empty());
+        assert_eq!(ids(&undone.blocks), ids(&start));
+
+        // The first block, then the new first one.
+        let first = start[1..].to_vec();
+        let second = start[2..].to_vec();
+        let undone = undo(&second, &join(diff(&start, &first), diff(&first, &second)));
+        assert!(undone.skipped.is_empty());
+        assert_eq!(ids(&undone.blocks), ids(&start));
     }
 
     #[test]

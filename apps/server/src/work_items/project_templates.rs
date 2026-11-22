@@ -9,31 +9,23 @@
 //! name something (a repository, an environment) stay behind, because they
 //! point into the source project.
 
-use axum::{
-    Json,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-};
+use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use sqlx::{FromRow, PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
-use super::{
-    planning::{invalid, refusal},
-    templates::{
-        SubtaskDraft, TaskTemplateView, TemplateFields, insert_template, list_templates,
-        normalize_template, normalize_template_name,
-    },
+use super::templates::{
+    SubtaskDraft, TaskTemplateView, TemplateFields, insert_template, list_templates,
+    normalize_template, normalize_template_name,
 };
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
-    error::{ApiJson, ApiPath, AppError},
+    auth::AuthenticatedActor,
+    error::{ApiPath, AppError},
     policy::{Permission, RoleGrant},
     settings::{self, SettingType, Target},
-    work_item_commands::{AuditAttribution, CommandActor},
+    work_item_commands::CommandActor,
     work_item_labels::{self, NewLabel},
     work_item_workflow::{
         StatusDraft, TransitionDraft, TransitionsDraft, TypeDraft, WorkflowDocument,
@@ -459,14 +451,6 @@ fn copyable_setting(key: &str, value: &Value) -> bool {
     })
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct SaveAsTemplateRequest {
-    name: String,
-    #[serde(default)]
-    description: String,
-}
-
 fn normalize_description(value: &str) -> Option<String> {
     let text = value.trim();
     (text.chars().count() <= MAX_DESCRIPTION_CHARACTERS
@@ -474,15 +458,6 @@ fn normalize_description(value: &str) -> Option<String> {
             .chars()
             .any(|character| character.is_control() && character != '\n'))
     .then(|| text.to_owned())
-}
-
-fn name_taken() -> Response {
-    refusal(
-        StatusCode::CONFLICT,
-        "name_taken",
-        "The workspace already has a project template with that name.".to_owned(),
-        json!({ "field": "name" }),
-    )
 }
 
 /// What saving or changing a project template came to.
@@ -493,46 +468,6 @@ pub(crate) enum ProjectTemplateOutcome {
     NameTaken,
     LimitReached,
     TooLarge,
-}
-
-pub(super) async fn save_as_template(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<SaveAsTemplateRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    if let Some(refused) = check_name_and_description(&request.name, &request.description) {
-        return Ok(outcome_response(refused, StatusCode::CREATED));
-    }
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let organization_id =
-        settings::authorize_project_manage(&mut *transaction, &principal, project_id).await?;
-    let outcome = save_project_template(
-        &mut transaction,
-        principal.actor_id,
-        organization_id,
-        project_id,
-        &request.name,
-        &request.description,
-    )
-    .await?;
-    if let ProjectTemplateOutcome::Done(view, _) = &outcome {
-        settings::audit(
-            &mut transaction,
-            &headers,
-            &principal,
-            Some(project_id),
-            "project_template.created",
-            "project_template",
-            Some(view.id),
-            json!({ "organizationId": organization_id }),
-        )
-        .await?;
-        transaction.commit().await?;
-    }
-    Ok(outcome_response(outcome, StatusCode::CREATED))
 }
 
 /// A name or description the template can't take, checked before anything
@@ -551,29 +486,6 @@ fn check_name_and_description(name: &str, description: &str) -> Option<ProjectTe
         ));
     }
     None
-}
-
-/// The web's answer for an outcome: `done` is the status of a success.
-fn outcome_response(outcome: ProjectTemplateOutcome, done: StatusCode) -> Response {
-    match outcome {
-        ProjectTemplateOutcome::Done(view, _) => (done, Json(*view)).into_response(),
-        ProjectTemplateOutcome::Invalid(field, message) => invalid(field, message),
-        ProjectTemplateOutcome::NameTaken => name_taken(),
-        ProjectTemplateOutcome::LimitReached => refusal(
-            StatusCode::CONFLICT,
-            "limit_reached",
-            format!(
-                "A workspace can keep {MAX_PROJECT_TEMPLATES} project templates. Archive one first."
-            ),
-            json!({}),
-        ),
-        ProjectTemplateOutcome::TooLarge => refusal(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "too_large",
-            "This project's setup is too large to save as a template.".to_owned(),
-            json!({}),
-        ),
-    }
 }
 
 /// Save `project_id`'s setup as a new template of `organization_id`, its
@@ -658,58 +570,6 @@ async fn template_row(
     .bind(template_id)
     .fetch_optional(&mut *connection)
     .await?)
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct UpdateProjectTemplateRequest {
-    expected_version: i64,
-    name: Option<String>,
-    description: Option<String>,
-    archived: Option<bool>,
-}
-
-pub(super) async fn update_project_template(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((organization_id, template_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<UpdateProjectTemplateRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let outcome = change_project_template(
-        &mut transaction,
-        TemplateReader::browser(&principal),
-        organization_id,
-        template_id,
-        TemplateChange {
-            expected_version: request.expected_version,
-            name: request.name.as_deref(),
-            description: request.description.as_deref(),
-            archived: request.archived,
-        },
-    )
-    .await?;
-    if let ProjectTemplateOutcome::Done(_, archived_now) = &outcome {
-        settings::audit(
-            &mut transaction,
-            &headers,
-            &principal,
-            None,
-            if *archived_now {
-                "project_template.archived"
-            } else {
-                "project_template.updated"
-            },
-            "project_template",
-            Some(template_id),
-            json!({ "organizationId": organization_id }),
-        )
-        .await?;
-        transaction.commit().await?;
-    }
-    Ok(outcome_response(outcome, StatusCode::OK))
 }
 
 /// A change to a project template: what's left out stays as it is.
@@ -1068,25 +928,10 @@ async fn workflow_document(
     })
 }
 
-/// The command actor for setting up a new project as its creator.
-pub(crate) fn creator_actor(
-    principal: &AuthenticatedActor,
-    project_id: Uuid,
-) -> Result<CommandActor, AppError> {
-    Ok(CommandActor {
-        actor_id: principal.actor_id,
-        actor_kind: crate::accounts::actor_kind(&principal.actor_kind)?,
-        project_id,
-        audit: AuditAttribution::Browser {
-            session_id: principal.session_id,
-            request_id: None,
-        },
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn named_settings_stay_behind() {

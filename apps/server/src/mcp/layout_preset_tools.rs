@@ -24,9 +24,9 @@ use crate::{
 const MANAGERS_ONLY: &str =
     "Saving or changing layout presets takes a role that manages the workspace's settings.";
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct LayoutPresetWriteArguments {
+pub(crate) struct LayoutPresetWriteArguments {
     /// A project in the workspace: its ID, link or key (such as "AWD").
     pub project_id: String,
     /// One of the workspace's saved presets, by name or ID, to change or
@@ -62,14 +62,14 @@ pub(super) struct LayoutPresetWriteArguments {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(super) struct PresetWord {
+pub(crate) struct PresetWord {
     pub one: String,
     pub many: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LayoutPresetWriteValue {
+pub(crate) struct LayoutPresetWriteValue {
     /// "saved", "changed" or "removed".
     pub done: String,
     pub id: String,
@@ -81,7 +81,7 @@ pub(super) struct LayoutPresetWriteValue {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LayoutPresetLine {
+pub(crate) struct LayoutPresetLine {
     pub description: String,
     /// The built-in preset it starts from, by ID.
     pub base: String,
@@ -132,7 +132,7 @@ fn words_of(words: Option<BTreeMap<String, PresetWord>>) -> BTreeMap<String, Wor
         .collect()
 }
 
-pub(super) async fn layout_preset_write(
+pub(crate) async fn layout_preset_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: LayoutPresetWriteArguments,
@@ -201,7 +201,7 @@ pub(super) async fn layout_preset_write(
         .await?;
         let base = match arguments.base.as_deref() {
             Some(text) => {
-                match layouts::find_preset(&mut transaction, organization_id, text).await? {
+                match layouts::find_preset_in_use(&mut transaction, organization_id, text).await? {
                     Some(base) => Some(base),
                     None => {
                         let names =

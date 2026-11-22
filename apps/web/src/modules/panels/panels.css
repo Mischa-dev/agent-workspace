@@ -1,0 +1,210 @@
+/* A connected module's panel (M1.14), drawn by the stopgap renderer until
+   W1.25's PanelBlocks replaces it. Tokens only. */
+
+.aw-panel-host {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.aw-panel-blocks {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.aw-panel-text {
+  margin: 0;
+  color: var(--content-fg);
+  font: var(--t-body);
+}
+
+.aw-panel-text--heading {
+  font: var(--t-title);
+  font-weight: var(--weight-semibold);
+}
+
+.aw-panel-text--muted {
+  color: var(--content-fg-muted);
+}
+
+.aw-panel-text--callout {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.aw-panel-status {
+  display: grid;
+  gap: var(--space-1-5);
+  justify-items: start;
+}
+
+.aw-panel-status progress {
+  width: 100%;
+  accent-color: var(--link);
+}
+
+.aw-panel-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.aw-panel-form {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.aw-panel-form__choices {
+  display: grid;
+  gap: var(--space-1-5);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.aw-panel-form__choices legend {
+  margin-bottom: var(--space-1);
+  font: var(--t-small);
+  font-weight: var(--weight-semibold);
+}
+
+.aw-panel-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: var(--border-width) solid var(--content-border);
+}
+
+.aw-panel-list__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) 0;
+  border: 0;
+  border-bottom: var(--border-width) solid var(--content-border);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+}
+
+button.aw-panel-list__row {
+  cursor: pointer;
+}
+
+button.aw-panel-list__row:hover {
+  background: var(--content-hover);
+}
+
+.aw-panel-list__title {
+  font-weight: var(--weight-semibold);
+}
+
+.aw-panel-table {
+  overflow-x: auto;
+}
+
+.aw-panel-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--t-body);
+}
+
+.aw-panel-table th,
+.aw-panel-table td {
+  padding: var(--space-2);
+  border-bottom: var(--border-width) solid var(--content-border);
+  text-align: start;
+}
+
+.aw-panel-table th {
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+  font-weight: var(--weight-semibold);
+}
+
+.aw-panel-table__open {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--link);
+  font: inherit;
+  cursor: pointer;
+}
+
+.aw-panel-number {
+  margin: 0;
+  font: var(--t-display);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-panel-section {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: var(--border-width) solid var(--content-border);
+}
+
+@media (max-width: 640px) {
+  .aw-panel-table thead {
+    display: none;
+  }
+
+  .aw-panel-table tr {
+    display: grid;
+    padding: var(--space-2) 0;
+    border-bottom: var(--border-width) solid var(--content-border);
+  }
+
+  .aw-panel-table td {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+    border: 0;
+    padding: var(--space-1) 0;
+  }
+
+  .aw-panel-table td::before {
+    content: attr(data-label);
+    color: var(--content-fg-muted);
+  }
+}
+
+/* A framed page (M1.15): Workspace's host page for the app, sized as the app
+   asks within 100-2000px, with whose page it is and a way out. */
+
+.aw-frame-host {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.aw-frame-host__frame {
+  display: block;
+  width: 100%;
+  border: var(--border-width) solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.aw-frame-host__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.aw-frame-host__origin {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--content-fg-muted);
+  font: var(--t-small);
+  overflow-wrap: anywhere;
+}

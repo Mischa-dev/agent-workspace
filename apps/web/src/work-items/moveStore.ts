@@ -15,7 +15,10 @@ export type PendingMove = {
   body: MoveBody
   key: string
   state:
-    | { kind: 'sending'; retry: boolean }
+    /** `held`: sent again while a reviewer held it. */
+    | { kind: 'sending'; retry: boolean; held?: boolean }
+    /** A team's review guard holds it: nothing moved yet; once a reviewer allows it, the same request goes through. */
+    | { kind: 'held' }
     /** No answer, or one that doesn't say whether it happened. */
     | { kind: 'unknown'; message: string }
     | { kind: 'done'; done: MoveDone }

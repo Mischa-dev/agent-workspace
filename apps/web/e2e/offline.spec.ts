@@ -99,12 +99,12 @@ test('a task edit made with no connection goes through when it comes back', asyn
   const stamp = `${Date.now() % 100000}-${testInfo.project.name}`
   await page.goto(`/projects/${projectId}/work-items`)
   const headers = await writer(page)
-  const created = await page.request.post(`/api/v1/projects/${projectId}/work-items`, {
+  const created = await page.request.post('/api/v2/ops/task_create', {
     headers: headers(`offline-task-${stamp}`),
-    data: { title: `Edited on the train ${stamp}` },
+    data: { projectId, title: `Edited on the train ${stamp}` },
   })
   expect(created.ok(), await created.text()).toBe(true)
-  const { id: taskId } = (await created.json()) as { id: string }
+  const taskId = ((await created.json()) as { value: { workItemId: string } }).value.workItemId
   await page.goto(`/projects/${projectId}/work-items/${taskId}`)
   const title = page.getByRole('textbox', { name: 'Title' })
   await expect(title).toHaveValue(`Edited on the train ${stamp}`)

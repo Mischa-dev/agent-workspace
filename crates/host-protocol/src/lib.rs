@@ -329,12 +329,29 @@ pub struct DescribedAccount {
     pub name: String,
 }
 
+/// `PUT /api/v1/host/builtin/harnesses`: the harnesses the built-in host
+/// runs, sent when it takes its lease. A full list: a kind no longer listed
+/// is gone. Only the built-in host may send it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuiltinHarnesses {
+    pub harnesses: Vec<harness::manifest::AdapterManifest>,
+    /// The fencing token of the lease the host holds while it sends this:
+    /// a host that has lost its lease can't replace the list its successor
+    /// sent.
+    pub lease_token: i64,
+}
+
 /// `POST /api/v1/host/windows`: the plan windows of described accounts.
-/// A full report: windows an account no longer lists are gone.
+/// A full report: windows an account no longer lists are gone. A `partial`
+/// one (what a run hears mid-turn) only updates the windows it lists, and
+/// leaves the rest, the plan and the banked resets as they were.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowsReport {
     pub accounts: Vec<AccountWindows>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub partial: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -366,6 +383,21 @@ pub struct PlanWindow {
     #[serde(default)]
     pub limit_reached: bool,
 }
+
+/// `POST /api/v1/host/runs/{runId}/stream`: words of the agent's reply as
+/// they arrive, shown live to the people in the run's conversation and
+/// never stored. Every piece of one reply carries the same `streamId`; the
+/// finished reply is still sent as a message (or a `text_message`
+/// activity said in the thread).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamDelta {
+    pub stream_id: Uuid,
+    pub delta: String,
+}
+
+/// The most one streamed piece may carry, in bytes.
+pub const MAX_STREAM_DELTA_BYTES: usize = 16 * 1024;
 
 /// `POST /api/v1/host/runs`: a run the host started itself (a schedule or
 /// trigger on its side) for one of its bound agents. Adopted once: the same
@@ -475,8 +507,12 @@ pub fn new_push_secret(random: [u8; 32]) -> String {
     format!("whsec_{}", STANDARD.encode(random))
 }
 
+pub mod account;
 mod client;
+pub mod git_ref;
+pub mod harness;
 mod model;
+pub mod repository;
 pub use client::{
     ClientError, HostClient, HttpRequest, HttpResponse, ReqwestTransport, RunReporter, Transport,
     TransportFuture,

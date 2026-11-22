@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
+import { callOp, ranOrThrow } from '../api/ops'
 import { queryKeys } from '../api/queryKeys'
 import { normalizeField, type FieldDefinition, type StatusCategory } from './fieldModel'
 
@@ -63,6 +64,20 @@ export async function createField(
   },
 ) {
   const { idempotencyKey, ...json } = input
+  // A task field goes through `field_create`; a collection's keeps its route
+  // until the collection operations carry formulas, buttons and rollups.
+  if (!scope.path) {
+    const { name, type, description, options, target } = input
+    const written = await callOp(
+      'field_create',
+      { projectId: scope.projectId, name, type, description, options, target },
+      { requestId: idempotencyKey },
+    )
+    const result = ranOrThrow(written, 'Adding the field')
+    // field_create answers with the field already called that, unchanged.
+    if (!result.created) throw new Error(result.note ?? `A field is already called “${name}”.`)
+    return normalizeField(result.field)
+  }
   return normalizeField(await requestJson<unknown>(scopePath(scope), { method: 'POST', idempotencyKey, json }))
 }
 
@@ -88,6 +103,15 @@ export async function updateField(
   },
 ) {
   const { fieldId, idempotencyKey, ...json } = input
+  if (!scope.path) {
+    const { expectedVersion, name, description, options, position, archived } = input
+    const written = await callOp(
+      'field_update',
+      { projectId: scope.projectId, field: fieldId, name, description, options, position, archived },
+      { requestId: idempotencyKey, expectedVersion },
+    )
+    return normalizeField(ranOrThrow(written, 'Changing the field').field)
+  }
   return normalizeField(
     await requestJson<unknown>(`${scopePath(scope)}/${encodeURIComponent(fieldId)}`, { method: 'PATCH', idempotencyKey, json }),
   )

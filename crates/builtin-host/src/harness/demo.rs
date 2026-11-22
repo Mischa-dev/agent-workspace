@@ -596,7 +596,7 @@ impl HarnessSession for DemoSession {
         Box::pin(async move {
             match usage {
                 Some(usage) => Ok(usage),
-                None => Ok(UsageReport::from_rate_limits(
+                None => Ok(super::adapter::usage_from_rate_limits(
                     self.read_rate_limits().await?,
                 )),
             }

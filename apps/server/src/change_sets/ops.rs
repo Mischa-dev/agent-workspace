@@ -22,7 +22,7 @@ pub fn register_ops(registry: &mut Registry) {
 const CHANGE: &str = "That change";
 
 /// The kinds that record change sets today.
-const KINDS: &[&str] = &["page"];
+const KINDS: &[&str] = &["page", "sheet", "whiteboard"];
 
 // ------------------------------------------------------------------ list
 
@@ -32,7 +32,7 @@ pub struct ChangeList;
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChangeListInput {
-    /// The kind of thing: page.
+    /// The kind of thing: page, sheet or whiteboard.
     pub thing_kind: String,
     /// The thing: its id or link.
     pub thing_id: IdRef,
@@ -71,9 +71,10 @@ impl Operation for ChangeList {
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::None;
     const TITLE: &'static str = "List recent changes";
-    const DESCRIPTION: &'static str = "List a page's recent changes, newest first: who made each, \
-        the versions it spans, which blocks it touched (by lasting id), and whether it can be \
-        undone. Undo one with change_undo.";
+    const DESCRIPTION: &'static str = "List a page's, sheet's or whiteboard's recent changes, \
+        newest first: who made each, the versions it spans, what it touched (a page's blocks by \
+        lasting id, a sheet's cells, a board's elements), and whether it can be undone. Undo one \
+        with change_undo.";
 
     type Input = ChangeListInput;
     type Output = ChangeListOutput;
@@ -83,7 +84,10 @@ impl Operation for ChangeList {
         input: ChangeListInput,
     ) -> Result<ChangeListOutput, OpError> {
         let kind = known_kind(&input.thing_kind).ok_or_else(|| {
-            OpError::invalid("thingKind", "Only pages keep changes so far (page).")
+            OpError::invalid(
+                "thingKind",
+                "Pages, sheets and whiteboards keep changes (page, sheet, whiteboard).",
+            )
         })?;
         let viewer = call.account_id();
         let hours = i32::from(input.since_hours.unwrap_or(24).clamp(1, 2_160));
@@ -151,6 +155,13 @@ fn refused(refusal: Refusal) -> OpError {
             message: "It's archived. Bring it back first.".into(),
             current: None,
         },
+        Refusal::Refused(message) => OpError::Conflict {
+            reason: ConflictReason::State {
+                code: "changed_since",
+            },
+            message: message.into(),
+            current: None,
+        },
         Refusal::NothingLeft => OpError::Conflict {
             reason: ConflictReason::State {
                 code: "changed_since",
@@ -172,11 +183,11 @@ impl Operation for ChangeUndo {
     const PERMISSION: Option<Perm> = None;
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
     const DESTRUCTIVE: bool = true;
-    const EMITS: &'static [&'static str] = &["page.updated"];
+    const EMITS: &'static [&'static str] = &["page.updated", "sheet.updated", "whiteboard.updated"];
     const TITLE: &'static str = "Undo a change";
-    const DESCRIPTION: &'static str = "Undo one change to a page (change_list finds them): what it \
-        replaced comes back for every block nobody has changed since, and the rest are listed as \
-        skipped. The undo is a change of its own, so it can be undone too. Needs edit access.";
+    const DESCRIPTION: &'static str = "Undo one change to a page, sheet or whiteboard (change_list \
+        finds them): what it replaced comes back for every block, cell or element nobody has \
+        changed since, and the rest are listed as skipped. The undo is a change of its own, so it can be undone too. Needs edit access.";
 
     type Input = ChangeUndoInput;
     type Output = ChangeUndoOutput;
@@ -187,10 +198,11 @@ impl Operation for ChangeUndo {
     ) -> Result<ChangeUndoOutput, OpError> {
         let caller = call.ctx.caller.clone();
         let writer = Writer::from(call.ctx);
+        let board_caller = crate::whiteboards::Caller::from(call.ctx);
         let viewer = call.account_id();
         let id = input.change_set_id.id();
         let tx = call.tx().await?;
-        let undid = super::undo(tx, &caller, writer, id)
+        let undid = super::undo(tx, &caller, &board_caller, writer, id)
             .await?
             .map_err(refused)?;
         let change = super::get(tx, viewer, undid.change_set_id)

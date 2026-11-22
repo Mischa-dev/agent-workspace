@@ -65,7 +65,7 @@ async fn the_record_owns_title_values_and_archive_state() {
         async move { tool(app, &token, &session, name, arguments).await }
     };
     let field = call(
-        "field_write",
+        "field_create",
         json!({"projectId": "WORK", "name": "Notes", "type": "text"}),
     )
     .await;
@@ -225,7 +225,7 @@ async fn a_task_has_one_revision_whichever_side_writes_it() {
         async move { tool(app, &token, &session, name, arguments).await }
     };
     let field = call(
-        "field_write",
+        "field_create",
         json!({"projectId": "WORK", "name": "Notes", "type": "text"}),
     )
     .await;
@@ -254,7 +254,7 @@ async fn a_task_has_one_revision_whichever_side_writes_it() {
             app,
             &token,
             &session,
-            "task_open",
+            "task_get",
             json!({"taskId": "WORK-1"}),
         )
         .await;
@@ -357,7 +357,7 @@ async fn a_search_finds_words_split_between_title_and_description() {
     .await;
     assert_eq!(made["outcome"], "ok", "{made}");
 
-    let found = call("search", json!({"query": "bridge repair"})).await;
+    let found = call("workspace_search", json!({"query": "bridge repair"})).await;
     let kinds = found["value"]["results"]
         .as_array()
         .into_iter()
@@ -442,7 +442,7 @@ async fn tasks_as_records_search_built_in_names_and_sort_by_the_tasks_change() {
 
     // By priority name, in neither title.
     let found = call(
-        "record_query",
+        "record_list",
         json!({"projectId": "WORK", "collection": "Tasks", "search": "urgent"}),
     )
     .await;
@@ -460,7 +460,7 @@ async fn tasks_as_records_search_built_in_names_and_sort_by_the_tasks_change() {
     .await;
     assert_eq!(moved["outcome"], "ok", "{moved}");
     let found = call(
-        "record_query",
+        "record_list",
         json!({"projectId": "WORK", "collection": "Tasks", "search": "ready"}),
     )
     .await;
@@ -480,7 +480,7 @@ async fn tasks_as_records_search_built_in_names_and_sort_by_the_tasks_change() {
     .await;
     assert_eq!(moved["outcome"], "ok", "{moved}");
     let sorted = call(
-        "record_query",
+        "record_list",
         json!({
             "projectId": "WORK", "collection": "Tasks",
             "sort": [{"field": "updated", "direction": "desc"}],

@@ -308,7 +308,7 @@ async fn an_install_runs_only_the_plan_previewed_by_someone_allowed() {
     let made = tool(
         &world,
         "desk",
-        "collection_write",
+        "collection_create",
         json!({"projectId": space, "name": "Bugs"}),
     )
     .await;
@@ -622,7 +622,7 @@ async fn a_new_space_is_planned_as_the_install_makes_it() {
     let made = tool(
         &world,
         "desk",
-        "collection_write",
+        "collection_create",
         json!({"projectId": theirs, "name": "Feedback"}),
     )
     .await;
@@ -674,5 +674,146 @@ async fn a_new_space_is_planned_as_the_install_makes_it() {
     .await
     .expect("feedback");
     assert_eq!(feedback, 1);
+    world.finish().await;
+}
+
+fn theme_package(id: &str, css: &str) -> Value {
+    json!({
+        "format": "agent-workspace-package/1",
+        "id": id,
+        "version": "1.0.0",
+        "name": "Harbor look",
+        "target": "workspace",
+        "contents": [
+            {"kind": "theme", "key": "harbor", "body": {
+                "name": "Harbor",
+                "document": {
+                    "format": 1,
+                    "light": {"base": "quiet", "tokens": {"accent": "#2255aa"}},
+                    "dark": {"base": "quiet-dark", "tokens": {}},
+                    "css": css,
+                }}}
+        ],
+        "needsAdmin": ["theme:harbor"]
+    })
+}
+
+/// Themes in packages: a package's theme is offered to the whole
+/// workspace, so installing it needs the workspace's settings permission;
+/// a second install reuses the offered theme, the workspace exports it
+/// back, and a theme that loads from elsewhere is refused before anything
+/// is planned.
+#[tokio::test]
+async fn a_theme_in_a_package_is_offered_to_the_workspace() {
+    let Some(world) = WorldBuilder::default()
+        .agent("rook", "member")
+        .connected_app("desk")
+        .build("m19_install_theme")
+        .await
+    else {
+        return;
+    };
+    let pool = world.pool().clone();
+    let offered = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM themes WHERE name = 'Harbor' AND offered",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("themes")
+    };
+
+    // A member without settings.manage sees the plan but can't install it.
+    let preview = tool(
+        &world,
+        "rook",
+        "package_preview",
+        json!({"package": theme_package("harbor", "")}),
+    )
+    .await;
+    assert_eq!(preview["outcome"], "ok", "{preview}");
+    let line = &preview["value"]["items"][0];
+    assert_eq!(line["kind"], "theme", "{preview}");
+    assert_eq!(line["action"], "create", "{preview}");
+    assert_eq!(line["needsAdmin"], true, "{preview}");
+    let refused = tool(
+        &world,
+        "rook",
+        "package_install",
+        json!({"package": theme_package("harbor", ""),
+               "planHash": preview["value"]["planHash"], "clientRequestId": "harbor-rook"}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
+    assert_eq!(offered().await, 0);
+
+    // The owner's app installs it: offered to everyone at once.
+    let preview = tool(
+        &world,
+        "desk",
+        "package_preview",
+        json!({"package": theme_package("harbor", "")}),
+    )
+    .await;
+    let installed = tool(
+        &world,
+        "desk",
+        "package_install",
+        json!({"package": theme_package("harbor", ""),
+               "planHash": preview["value"]["planHash"], "clientRequestId": "harbor-desk"}),
+    )
+    .await;
+    assert_eq!(installed["outcome"], "ok", "{installed}");
+    assert_eq!(offered().await, 1);
+    let listed = tool(&world, "rook", "theme_list", json!({})).await;
+    assert!(
+        listed["value"]["themes"]
+            .as_array()
+            .is_some_and(|themes| themes.iter().any(|theme| theme["name"] == "Harbor")),
+        "{listed}"
+    );
+
+    // Another package with a theme of the same name reuses it.
+    let again = tool(
+        &world,
+        "desk",
+        "package_preview",
+        json!({"package": theme_package("harbor_again", "")}),
+    )
+    .await;
+    assert_eq!(again["value"]["items"][0]["action"], "reuse", "{again}");
+
+    // The workspace exports the themes it offers.
+    let exported = tool(
+        &world,
+        "desk",
+        "package_export",
+        json!({"wholeWorkspace": true}),
+    )
+    .await;
+    assert_eq!(exported["outcome"], "ok", "{exported}");
+    let theme = exported["value"]["package"]["contents"]
+        .as_array()
+        .expect("contents")
+        .iter()
+        .find(|part| part["kind"] == "theme")
+        .cloned()
+        .unwrap_or_else(|| panic!("a theme in {exported}"));
+    assert_eq!(theme["body"]["name"], "Harbor", "{theme}");
+    assert_eq!(
+        theme["body"]["document"]["light"]["tokens"]["accent"], "#2255aa",
+        "{theme}"
+    );
+
+    // CSS that loads from elsewhere never gets as far as a plan.
+    let leaky = tool(
+        &world,
+        "desk",
+        "package_preview",
+        json!({"package": theme_package(
+            "leaky", ".aw-card { background: url(https://example.com/x.png) }")}),
+    )
+    .await;
+    assert_eq!(leaky["outcome"], "invalid_request", "{leaky}");
     world.finish().await;
 }

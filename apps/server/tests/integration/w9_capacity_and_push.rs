@@ -151,6 +151,10 @@ pub(super) async fn call(
     key: Option<&str>,
     body: Value,
 ) -> (StatusCode, Value) {
+    // The task writes moved to operations (K2.22).
+    if crate::support::tasks::op_for(method, uri, &body).is_some() {
+        return crate::support::tasks::send(&setup.app, browser, method, uri, key, body).await;
+    }
     send(&setup.app, browser.request(method, uri, key, body)).await
 }
 
@@ -275,7 +279,9 @@ async fn a_plan_with_only_a_weekly_window_alerts_its_owner_once_with_ready_tasks
             plan: Some("pro".to_owned()),
         },
     );
-    usage::poll_account(state, account).await.expect("poll");
+    crate::support::as_job(setup.organization_id, usage::poll_account(state, account))
+        .await
+        .expect("poll");
     let (status, page) = get(setup, &setup.browser, "/api/v1/usage").await;
     assert_eq!(status, StatusCode::OK, "{page}");
     let listed = page["accounts"]
@@ -292,13 +298,16 @@ async fn a_plan_with_only_a_weekly_window_alerts_its_owner_once_with_ready_tasks
     assert!(windows[0]["resetsAt"].is_string());
 
     // Reading it fired the alert; later reads this cycle don't repeat it.
-    usage::poll_account(state, account)
+    crate::support::as_job(setup.organization_id, usage::poll_account(state, account))
         .await
         .expect("poll again");
     assert_eq!(
-        usage::alerts::evaluate(state, account, Utc::now())
-            .await
-            .expect("evaluate again"),
+        crate::support::as_job(
+            setup.organization_id,
+            usage::alerts::evaluate(state, account, Utc::now()),
+        )
+        .await
+        .expect("evaluate again"),
         0,
         "an alert fires once a cycle"
     );
@@ -386,7 +395,9 @@ async fn a_plan_with_only_a_weekly_window_alerts_its_owner_once_with_ready_tasks
             plan: Some("pro".to_owned()),
         },
     );
-    usage::poll_account(state, account).await.expect("poll");
+    crate::support::as_job(setup.organization_id, usage::poll_account(state, account))
+        .await
+        .expect("poll");
     let spend = format!("/api/v1/usage/accounts/{account}/reset-credits/spend");
     let (status, body) = call(
         setup,

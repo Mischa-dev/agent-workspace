@@ -114,7 +114,6 @@ pub(crate) async fn run_for_session(
         request_id: text("idempotency-key"),
         unkeyed: Unkeyed::RunOnce,
         preview: false,
-        renamed_from: None,
         defer_long: false,
     };
     let mut outcome = dispatch(state, request, name, input).await;
@@ -231,7 +230,7 @@ async fn call(
     };
     let workspace = match workspace {
         Some(named) => {
-            let mut connection = match state.pool.acquire().await {
+            let mut connection = match crate::db::scoped_tx(&state.pool).await {
                 Ok(connection) => connection,
                 Err(error) => return refused(&OpError::logged(meta.name, &error.into())),
             };
@@ -264,7 +263,6 @@ async fn call(
         // The web app and scripts on v2 always send one (R52).
         unkeyed: Unkeyed::Refuse("Idempotency-Key"),
         preview,
-        renamed_from: None,
         defer_long: false,
     };
     answer(dispatch(state, request, name, input).await)

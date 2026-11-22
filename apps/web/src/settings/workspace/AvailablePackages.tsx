@@ -59,6 +59,8 @@ export function AvailablePackages({ canManage, organizationId }: { canManage: bo
       setAsking(null)
       refreshAfterTemplate(queryClient, organizationId)
       void queryClient.invalidateQueries({ queryKey: opPrefix('directory_list', organizationId) })
+      // A package can bring built modules, whose entries the sidebar draws.
+      void queryClient.invalidateQueries({ queryKey: opPrefix('module_list', organizationId) })
       showToast({
         tone: 'success',
         title: `${entry.name} installed`,

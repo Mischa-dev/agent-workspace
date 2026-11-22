@@ -14,4 +14,5 @@ pub mod install;
 pub mod ops;
 pub mod secrets_check;
 pub mod source;
+pub mod upgrade;
 pub mod zipped;

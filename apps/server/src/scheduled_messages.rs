@@ -11,12 +11,7 @@
 //! If the send is refused, the message is kept as failed, with why, and the
 //! author is told.
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    routing::{get, patch, post},
-};
+use axum::{Json, Router, extract::State, routing::get};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
@@ -25,13 +20,13 @@ use uuid::Uuid;
 use crate::{
     AppState,
     addresses::{Addresses, Target},
-    auth::{AuthenticatedActor, require_authenticated_write},
+    auth::AuthenticatedActor,
     conversations::{
         ActorView, MessageCommandActor, MessageMcpCredential, append_message_command,
         fetch_actor_views, lock_message_conversation, message_content_error,
         require_active_conversation, resolve_message_content,
     },
-    error::{ApiJson, ApiPath, ApiQuery, AppError},
+    error::{ApiQuery, AppError},
     idempotency::IdempotencyKey,
     jobs::{self, JobError, JobRegistry, NewJob},
     later::{message_href, message_target, timestamp},
@@ -294,7 +289,7 @@ async fn check(
                     "title": title,
                     "statusCategory": status_category,
                     "archivedAt": archived_at,
-                    "href": Target::task(conversation.place(), *id).legacy_path(),
+                    "href": Target::task(conversation.place(), *id).href(),
                 })
             })
             .collect(),
@@ -317,30 +312,6 @@ async fn check(
         mentioned_actors,
         referenced_work_items,
     })
-}
-
-/// Schedule `content` to be sent into `conversation_id` at `send_at`, as
-/// `actor`.
-pub(crate) async fn schedule(
-    state: &AppState,
-    actor: &MessageCommandActor,
-    conversation_id: Uuid,
-    content: serde_json::Value,
-    send_at: &str,
-    through_app: bool,
-) -> Result<ScheduledMessageView, AppError> {
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let id = schedule_in(
-        &mut transaction,
-        actor,
-        conversation_id,
-        content,
-        send_at,
-        through_app,
-    )
-    .await?;
-    transaction.commit().await?;
-    get_scheduled(&state.pool, Addresses::of(state), actor.actor_id, id).await
 }
 
 /// [`schedule`] in the caller's transaction, which commits it (with a
@@ -876,30 +847,7 @@ async fn fail(
 // HTTP
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/v1/scheduled-messages", get(list_http))
-        .route(
-            "/api/v1/conversations/{id}/scheduled-messages",
-            post(schedule_http),
-        )
-        .route(
-            "/api/v1/scheduled-messages/{id}",
-            patch(update_http).delete(cancel_http),
-        )
-        .route(
-            "/api/v1/scheduled-messages/{id}/send-now",
-            post(send_now_http),
-        )
-}
-
-fn browser_actor(principal: &AuthenticatedActor) -> MessageCommandActor {
-    MessageCommandActor {
-        actor_id: principal.actor_id,
-        actor_kind: principal.actor_kind.clone(),
-        mcp_credential: None,
-        via_grant_id: None,
-        run_id: None,
-    }
+    Router::new().route("/api/v1/scheduled-messages", get(list_http))
 }
 
 #[derive(Debug, Deserialize)]
@@ -929,96 +877,6 @@ async fn list_http(
         )
         .await?,
     }))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ScheduleRequest {
-    content: serde_json::Value,
-    send_at: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ItemResponse {
-    scheduled_message: ScheduledMessageView,
-}
-
-async fn schedule_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(conversation_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<ScheduleRequest>,
-) -> Result<(StatusCode, Json<ItemResponse>), AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let scheduled_message = schedule(
-        &state,
-        &browser_actor(&principal),
-        conversation_id,
-        request.content,
-        &request.send_at,
-        false,
-    )
-    .await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(ItemResponse { scheduled_message }),
-    ))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct UpdateRequest {
-    content: Option<serde_json::Value>,
-    send_at: Option<String>,
-}
-
-async fn update_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<UpdateRequest>,
-) -> Result<Json<ItemResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let scheduled_message = update(
-        &state,
-        &browser_actor(&principal),
-        id,
-        request.content,
-        request.send_at.as_deref(),
-        false,
-    )
-    .await?;
-    Ok(Json(ItemResponse { scheduled_message }))
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct EmptyRequest {}
-
-async fn send_now_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(id): ApiPath<Uuid>,
-    ApiJson(_request): ApiJson<EmptyRequest>,
-) -> Result<Json<ItemResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let scheduled_message = send_now(&state, principal.actor_id, id).await?;
-    Ok(Json(ItemResponse { scheduled_message }))
-}
-
-async fn cancel_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(id): ApiPath<Uuid>,
-) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    cancel(&state.pool, principal.actor_id, id).await?;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]

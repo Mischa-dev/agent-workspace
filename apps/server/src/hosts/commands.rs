@@ -42,6 +42,13 @@ pub const LIFETIME_HOURS: i64 = 24;
 const MAX_LIST: i64 = 100;
 /// The biggest acknowledgement kept (an action's reply).
 const MAX_ACK_BYTES: usize = 65_536;
+/// The biggest answer the built-in host gives to an action (a model
+/// account's catalog of up to `model_catalog::MAX_CATALOG_MODELS` models
+/// with their descriptions). It is read once and the row deleted.
+const MAX_BUILTIN_ACTION_ACK_BYTES: usize = 1024 * 1024;
+/// The biggest acknowledgement request taken over HTTP: the largest answer
+/// with room for its envelope.
+pub const MAX_ACK_BODY_BYTES: usize = MAX_BUILTIN_ACTION_ACK_BYTES + 64 * 1024;
 /// How often a waiting long-poll or stream looks again.
 const POLL_EVERY: Duration = Duration::from_secs(1);
 
@@ -171,6 +178,98 @@ pub async fn issue(
     push_later(transaction, &row).await?;
     Ok(row)
 }
+
+/// A command the process that wrote it carries out itself (the server
+/// asking its own built-in host, in process): taken at once, so no host
+/// loop lists it too.
+pub async fn take_here(
+    transaction: &mut Transaction<'_, Postgres>,
+    command_id: Uuid,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE host_commands
+           SET state = 'fetched', attempts = 1,
+               ack_due_at = now() + make_interval(secs => $2::double precision),
+               updated_at = now()
+         WHERE id = $1 AND state = 'pending'
+        "#,
+    )
+    .bind(command_id)
+    .bind(ACK_SECONDS as f64)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+/// The host's acknowledgement of an action, once it has one.
+pub async fn answer_of(pool: &PgPool, command_id: Uuid) -> Result<Option<Ack>, AppError> {
+    let ack = sqlx::query_scalar::<_, Option<Value>>(
+        "SELECT ack FROM host_commands WHERE id = $1 AND state IN ('acked', 'refused')",
+    )
+    .bind(command_id)
+    .fetch_optional(crate::db::scoped(pool))
+    .await?
+    .flatten();
+    Ok(ack.and_then(|ack| serde_json::from_value(ack).ok()))
+}
+
+/// An action no host has taken up in time is closed: a host that comes to
+/// it later finds it gone. One a host has fetched is left to finish.
+/// Returns whether it was closed.
+pub async fn close_if_not_taken(pool: &PgPool, command_id: Uuid) -> Result<bool, AppError> {
+    let closed = sqlx::query(
+        "UPDATE host_commands SET state = 'expired', ack_due_at = NULL, updated_at = now() \
+         WHERE id = $1 AND state = 'pending'",
+    )
+    .bind(command_id)
+    .execute(crate::db::scoped(pool))
+    .await?;
+    Ok(closed.rows_affected() > 0)
+}
+
+/// Once its asker has read the answer, a built-in host's account question
+/// is gone: no row keeps what the account said, and usage polls don't pile
+/// up. (A question still in flight stays until its host answers it.)
+pub async fn forget_answered(pool: &PgPool, command_id: Uuid) -> Result<(), AppError> {
+    sqlx::query(
+        "DELETE FROM host_commands WHERE id = $1 AND kind = 'action' \
+           AND state IN ('acked', 'refused', 'expired') \
+           AND host_id IN (SELECT id FROM hosts WHERE builtin)",
+    )
+    .bind(command_id)
+    .execute(crate::db::scoped(pool))
+    .await?;
+    Ok(())
+}
+
+/// An account or repository question whose asker stopped waiting before
+/// the host answered (or that its asker never came back to read) is forgotten once
+/// it is older than any asker waits, so a late answer doesn't stay in its
+/// row.
+async fn forget_late_answers(
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<usize, AppError> {
+    Ok(sqlx::query(
+        "DELETE FROM host_commands WHERE kind = 'action' \
+           AND state IN ('acked', 'refused', 'expired') \
+           AND body->>'action' = ANY($1) \
+           AND updated_at < now() - make_interval(secs => $2) \
+           AND host_id IN (SELECT id FROM hosts WHERE builtin)",
+    )
+    .bind([
+        agent_workspace_host_protocol::account::ACCOUNT_ACTION,
+        agent_workspace_host_protocol::repository::REPOSITORY_ACTION,
+    ])
+    .bind(LATE_ANSWER.as_secs_f64())
+    .execute(&mut **transaction)
+    .await?
+    .rows_affected() as usize)
+}
+
+/// Longer than any account or repository question's asker waits for its
+/// answer.
+const LATE_ANSWER: Duration = Duration::from_secs(60 * 60);
 
 /// For a push host, a job that sends the host this command's thin event;
 /// for an A2A host, the job that makes the call.
@@ -452,6 +551,26 @@ pub async fn fetch(state: &AppState, host: &HostRow, command_id: Uuid) -> Result
     if let Some(start_key) = &row.start_key {
         command.insert("startKey".into(), json!(start_key));
     }
+    if row.kind == "action" && host.builtin {
+        // An API key to sign in with is handed over now and kept in no
+        // command (A1.17).
+        crate::hosts::builtin::accounts::attach_secret(
+            state,
+            &mut transaction,
+            &row.body,
+            &mut command,
+        )
+        .await?;
+        // So is a git token for repository work.
+        crate::hosts::builtin::repositories::attach_secret(
+            state,
+            &mut transaction,
+            row.id,
+            &row.body,
+            &mut command,
+        )
+        .await?;
+    }
     command.insert("issuedAt".into(), json!(timestamp(row.created_at)));
     command.insert("expiresAt".into(), json!(timestamp(row.expires_at)));
     let runnable = row.kind == "start"
@@ -546,6 +665,14 @@ async fn uncertain(
     Ok(Some(run))
 }
 
+fn too_large(builtin_action: bool) -> HostError {
+    let limit = if builtin_action { "1 MiB" } else { "64 KiB" };
+    HostError::Invalid {
+        field: "result",
+        message: format!("Keep an acknowledgement under {limit}."),
+    }
+}
+
 fn text(value: Option<&str>, fallback: &str) -> String {
     let value = value.map(str::trim).filter(|value| !value.is_empty());
     crate::run_log::redact(value.unwrap_or(fallback))
@@ -567,11 +694,9 @@ pub async fn ack(
         message: "Give outcome: accepted, refused, uncertain or done.".to_owned(),
     })?;
     let stored = redact_value(serde_json::to_value(&ack).unwrap_or(Value::Null));
-    if serde_json::to_vec(&stored).map_or(true, |bytes| bytes.len() > MAX_ACK_BYTES) {
-        return Err(HostError::Invalid {
-            field: "result",
-            message: "Keep an acknowledgement under 64 KiB.".to_owned(),
-        });
+    let size = serde_json::to_vec(&stored).map_or(usize::MAX, |bytes| bytes.len());
+    if size > MAX_BUILTIN_ACTION_ACK_BYTES || (size > MAX_ACK_BYTES && !host.builtin) {
+        return Err(too_large(host.builtin));
     }
     let mut transaction = crate::db::scoped_tx(pool).await?;
     let row = sqlx::query_as::<_, CommandRow>(&format!(
@@ -583,6 +708,9 @@ pub async fn ack(
     .await?
     .ok_or(HostError::CommandUnknown)?;
     let kind = row.kind();
+    if size > MAX_ACK_BYTES && kind != CommandKind::Action {
+        return Err(too_large(false));
+    }
     let fits = match outcome {
         AckOutcome::Accepted | AckOutcome::Refused => true,
         AckOutcome::Uncertain => kind == CommandKind::Start,
@@ -717,6 +845,11 @@ async fn reply(
 /// intervals go offline (their runs then read `not_responding`). Returns
 /// how many things changed.
 pub async fn sweep(pool: &PgPool) -> Result<usize, AppError> {
+    // Server-wide: every host's commands and liveness.
+    crate::tenancy::system("runs.host", Box::pin(sweep_here(pool))).await
+}
+
+async fn sweep_here(pool: &PgPool) -> Result<usize, AppError> {
     let mut changed = 0;
     let mut transaction = crate::db::scoped_tx(pool).await?;
     let overdue = sqlx::query_as::<_, CommandRow>(&format!(
@@ -756,6 +889,7 @@ pub async fn sweep(pool: &PgPool) -> Result<usize, AppError> {
     .execute(&mut *transaction)
     .await?
     .rows_affected() as usize;
+    changed += forget_late_answers(&mut transaction).await?;
     changed += sqlx::query(
         r#"
         UPDATE hosts SET status = 'offline', updated_at = now()

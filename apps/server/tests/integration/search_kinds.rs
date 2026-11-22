@@ -93,7 +93,7 @@ async fn board_and_sheet_words_are_found_only_by_those_who_can_open_them() {
         .expect("board")
         .to_owned();
     let sheet = call(
-        "sheet_write",
+        "sheet_create",
         json!({
             "projectId": "WORK",
             "name": "Budget",
@@ -112,14 +112,18 @@ async fn board_and_sheet_words_are_found_only_by_those_who_can_open_them() {
     // A workspace board lives in the workspace's own space (K4.10).
     assert!(hit["projectId"].is_string(), "{hit}");
     assert_ne!(hit["projectId"], work, "{hit}");
-    assert_eq!(hit["path"], format!("/whiteboards/{board}"), "{hit}");
+    assert_eq!(
+        hit["path"],
+        format!("/w/{}/whiteboards/{board}", setup.organization_id),
+        "{hit}"
+    );
     assert_eq!(hit["workspaceId"], setup.organization_id.to_string());
     let owner = hits(&setup, &setup.browser, "wombat").await;
     assert!(found(&owner, "sheet", &sheet), "{owner:?}");
     let hit = owner.iter().find(|hit| hit["id"] == sheet).expect("sheet");
     assert_eq!(hit["projectId"], work, "{hit}");
     let by_tool = call(
-        "search",
+        "workspace_search",
         json!({"query": "quokka", "kinds": ["whiteboards"]}),
     )
     .await;
@@ -132,7 +136,11 @@ async fn board_and_sheet_words_are_found_only_by_those_who_can_open_them() {
             .any(|hit| hit["kind"] == "whiteboard" && hit["id"] == board),
         "{by_tool}"
     );
-    let by_tool = call("search", json!({"query": "wombat", "kinds": ["sheets"]})).await;
+    let by_tool = call(
+        "workspace_search",
+        json!({"query": "wombat", "kinds": ["sheets"]}),
+    )
+    .await;
     assert!(
         by_tool["value"]["results"]
             .as_array()
@@ -169,7 +177,7 @@ async fn board_and_sheet_words_are_found_only_by_those_who_can_open_them() {
         app,
         &confined.token,
         &confined_session,
-        "search",
+        "workspace_search",
         json!({"query": "quokka", "kinds": ["whiteboards"]}),
     )
     .await;
@@ -179,7 +187,7 @@ async fn board_and_sheet_words_are_found_only_by_those_who_can_open_them() {
         app,
         &confined.token,
         &confined_session,
-        "search",
+        "workspace_search",
         json!({"query": "wombat", "kinds": ["sheets"]}),
     )
     .await;
@@ -219,7 +227,7 @@ async fn board_and_sheet_words_are_found_only_by_those_who_can_open_them() {
         ),
         "the sheet is found with Sheets off"
     );
-    let by_tool = call("search", json!({"query": "wombat"})).await;
+    let by_tool = call("workspace_search", json!({"query": "wombat"})).await;
     assert_eq!(by_tool["value"]["results"], json!([]), "{by_tool}");
     assert!(found(
         &hits(&setup, &setup.browser, "quokka").await,

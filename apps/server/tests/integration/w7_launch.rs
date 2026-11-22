@@ -9,7 +9,7 @@ use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
-    git_runtime::expected_repository_mirror_path,
+    hosts::builtin::git::expected_repository_mirror_path,
     launch,
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use crate::{
     m3_scheduler_http::{create_test_mirror, integration_pool, schema_pool, uuid_field},
-    w2_harness_platform::{MEMBER_LOGIN, insert_member, login, send, send_get},
+    w2_harness_platform::{MEMBER_LOGIN, insert_member, login, send, send_get, send_op},
 };
 
 const OWNER_LOGIN: &str = "w7-launch-owner";
@@ -160,28 +160,26 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
     assert_eq!(limited.0, StatusCode::OK, "{}", limited.1);
 
     // The first environment becomes the default, and launching preselects it.
-    let environment = send(
+    let environment = send_op(
         &application,
         owner,
-        "POST",
-        &format!("{project}/environments"),
+        "environment_create",
         "environment",
-        json!({"name": "Demo here", "harness": "demo", "setupNotes": "Nothing to set up."}),
+        json!({"projectId": seed.project_id, "name": "Demo here", "harness": "demo", "setupNotes": "Nothing to set up."}),
     )
     .await;
     assert!(environment.0.is_success(), "environment: {}", environment.1);
-    assert_eq!(environment.2["isDefault"], true);
-    let environment_id = uuid_field(&environment.2, "id");
+    assert_eq!(environment.2["environment"]["isDefault"], true);
+    let environment_id = uuid_field(&environment.2["environment"], "id");
     let members_view = send_get(&application, member, &format!("{project}/environments")).await;
     assert_eq!(members_view.0, StatusCode::OK, "{}", members_view.1);
     assert_eq!(members_view.2["canManage"], false);
-    let refused = send(
+    let refused = send_op(
         &application,
         member,
-        "POST",
-        &format!("{project}/environments"),
+        "environment_create",
         "member-environment",
-        json!({"name": "Mine", "harness": "demo"}),
+        json!({"projectId": seed.project_id, "name": "Mine", "harness": "demo"}),
     )
     .await;
     assert!(
@@ -244,12 +242,13 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
     let template = send(
         &application,
         owner,
-        "PUT",
-        "/api/v1/settings/values/launch.template",
+        "POST",
+        "/api/v2/ops/setting_update",
         "template",
         json!({
+            "key": "launch.template",
             "scope": "project",
-            "projectId": seed.project_id,
+            "spaceId": seed.project_id,
             "value": "Do {{task.key}} on {{harness}}.\n{{#harness codex_cloud}}\nOpen a pull request.\n{{/harness}}"
         }),
     )
@@ -304,7 +303,7 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
     let (run_prompt, harness, linked) = sqlx::query_as::<_, (String, Option<String>, bool)>(
         r#"
         SELECT run.prompt, run.config ->> 'harness',
-               EXISTS (SELECT 1 FROM work_item_conversation_links link
+               EXISTS (SELECT 1 FROM task_threads link
                        WHERE link.work_item_id = launch.work_item_id
                          AND link.conversation_id = run.conversation_id)
         FROM launches launch JOIN agent_runs run ON run.id = launch.run_id
@@ -396,7 +395,7 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
     let runs_for_member_task = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT count(*) FROM agent_runs run
-        JOIN work_item_conversation_links link ON link.conversation_id = run.conversation_id
+        JOIN task_threads link ON link.conversation_id = run.conversation_id
         WHERE link.work_item_id = $1
         "#,
     )
@@ -436,12 +435,12 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
         &application,
         owner,
         "POST",
-        &format!("/api/v1/organizations/{}/roles", seed.organization_id),
+        &format!("/api/v2/w/{}/ops/role_create", seed.organization_id),
         "blind-launchers",
         json!({"name": "Blind launchers", "baseRole": "member", "permissions": ["runs.launch"]}),
     )
     .await;
-    assert_eq!(role.0, StatusCode::CREATED, "{}", role.1);
+    assert_eq!(role.0, StatusCode::OK, "{}", role.1);
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -453,10 +452,10 @@ async fn launches_use_the_defaults_queue_in_order_and_recheck_access() {
     let changed = send(
         &application,
         owner,
-        "PATCH",
-        &format!("{project}/members/{member_id}"),
+        "POST",
+        "/api/v2/ops/space_member_update",
         "member-blind-launcher",
-        json!({"roleId": role.2["id"], "expectedVersion": version}),
+        json!({"spaceId": seed.project_id, "account": member_id, "role": role.2["value"]["id"], "expectedVersion": version}),
     )
     .await;
     assert_eq!(changed.0, StatusCode::OK, "{}", changed.1);

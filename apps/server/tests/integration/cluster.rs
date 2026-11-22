@@ -50,23 +50,27 @@ async fn write_on_one_read_on_the_other() {
     let (status, project) = a
         .send(browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", cluster.organization_id),
             Some("cluster-project"),
-            json!({"organizationId": cluster.organization_id, "key": "WORK", "name": "Work"}),
+            json!({"key": "WORK", "name": "Work"}),
         ))
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{project}");
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project = project["value"].clone();
     let project = project["id"].as_str().expect("project").to_owned();
     let (status, task) = a
         .send(browser.request(
             "POST",
-            &format!("/api/v1/projects/{project}/work-items"),
+            "/api/v2/ops/task_create",
             Some("cluster-task"),
-            json!({"title": "Written on A"}),
+            json!({"projectId": project, "title": "Written on A"}),
         ))
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{task}");
-    let task = task["id"].as_str().expect("task").to_owned();
+    assert_eq!(status, StatusCode::OK, "{task}");
+    let task = task["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
     let (status, read) = b
         .send(browser.request(
             "GET",
@@ -296,12 +300,13 @@ async fn log_project(cluster: &crate::cluster_support::Cluster) -> Uuid {
     let (status, project) = a
         .send(browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", cluster.organization_id),
             Some("cluster-log"),
-            json!({"organizationId": cluster.organization_id, "key": "LOG", "name": "Log"}),
+            json!({"key": "LOG", "name": "Log"}),
         ))
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{project}");
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project = project["value"].clone();
     project["id"]
         .as_str()
         .expect("project")
@@ -634,6 +639,10 @@ async fn frame_of(
             Frame::Json(frame) if frame["type"] == kind || frame["kind"] == kind => {
                 return Some(frame);
             }
+            // A durable event, inside protocol 2's `event` frame.
+            Frame::Json(frame) if frame["type"] == "event" && frame["event"]["type"] == kind => {
+                return Some(frame["event"].clone());
+            }
             Frame::Json(_) => {}
             Frame::Closed | Frame::Nothing => return None,
         }
@@ -649,12 +658,13 @@ async fn work_channel(
     let (status, project) = a
         .send(browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", cluster.organization_id),
             Some("k5-5-project"),
-            json!({"organizationId": cluster.organization_id, "key": "WORK", "name": "Work"}),
+            json!({"key": "WORK", "name": "Work"}),
         ))
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{project}");
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project = project["value"].clone();
     let project: Uuid = project["id"]
         .as_str()
         .expect("project")
@@ -818,8 +828,8 @@ async fn private_conversation_events_stay_private_on_both() {
         let mut heard_public = false;
         while let Frame::Json(frame) = next_frame(socket, Duration::from_secs(2)).await {
             assert!(!frame.to_string().contains(&group), "Rook heard {frame}");
-            if frame["type"] == "conversation.message.created"
-                && frame["conversationId"] == channel.to_string()
+            if frame["event"]["type"] == "conversation.message.created"
+                && frame["event"]["conversationId"] == channel.to_string()
             {
                 heard_public = true;
                 break;
@@ -878,15 +888,11 @@ async fn streamed_text_crosses_instances() {
         },
     )
     .await;
-    let frame = frame_of(&mut on_b, "message.delta", Duration::from_secs(2))
+    let frame = frame_of(&mut on_b, "stream.delta", Duration::from_secs(2))
         .await
         .expect("the delta reached B's socket");
-    assert_eq!(
-        frame["payload"]["message_id"],
-        message.to_string(),
-        "{frame}"
-    );
-    assert_eq!(frame["payload"]["delta"], "Hel", "{frame}");
+    assert_eq!(frame["messageId"], message.to_string(), "{frame}");
+    assert_eq!(frame["delta"], "Hel", "{frame}");
     cluster.finish().await;
 }
 
@@ -911,10 +917,10 @@ async fn module_switch_is_seen_everywhere() {
     let (status, body) = cluster
         .instance(0)
         .send(browser.request(
-            "PUT",
-            &format!("/api/v1/organizations/{}/modules", cluster.organization_id),
-            None,
-            json!({"switches": {"tasks": false}}),
+            "POST",
+            &format!("/api/v2/w/{}/ops/workspace_update", cluster.organization_id),
+            Some("tasks-off"),
+            json!({"projectId": "workspace", "modules": {"tasks": false}}),
         ))
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -1307,12 +1313,13 @@ async fn side_channel(
     let (status, project) = a
         .send(browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", cluster.organization_id),
             Some("k5-8-side"),
-            json!({"organizationId": cluster.organization_id, "key": "SIDE", "name": "Side"}),
+            json!({"key": "SIDE", "name": "Side"}),
         ))
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{project}");
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project = project["value"].clone();
     let project: Uuid = project["id"]
         .as_str()
         .expect("project")
@@ -1395,10 +1402,10 @@ async fn removed_member_stops_hearing_at_once() {
     let (status, body) = cluster
         .instance(0)
         .send(owner.request(
-            "PATCH",
-            &format!("/api/v1/projects/{project}/members/{mara}"),
+            "POST",
+            "/api/v2/ops/space_member_remove",
             Some("k5-8-disable"),
-            json!({"expectedVersion": version, "enabled": false}),
+            json!({"spaceId": project, "account": mara, "expectedVersion": version}),
         ))
         .await;
     assert!(status.is_success(), "{status} {body}");
@@ -1408,7 +1415,7 @@ async fn removed_member_stops_hearing_at_once() {
     assert!(
         !heard
             .iter()
-            .any(|frame| frame["conversationId"] == channel.to_string()),
+            .any(|frame| frame["event"]["conversationId"] == channel.to_string()),
         "Mara heard the project she left: {heard:?}"
     );
     cluster.finish().await;
@@ -1454,8 +1461,8 @@ async fn added_to_private_conversation_starts_hearing() {
     let heard = heard_until(&mut mara_on_b, channel).await;
     assert!(
         heard.iter().any(|frame| {
-            frame["type"] == "conversation.message.created"
-                && frame["conversationId"] == group.to_string()
+            frame["event"]["type"] == "conversation.message.created"
+                && frame["event"]["conversationId"] == group.to_string()
         }),
         "Mara never heard the group she was added to: {heard:?}"
     );
@@ -1541,6 +1548,8 @@ async fn resume_replays_what_was_missed() {
         );
     }
 
+    // Missed means in the log: a message still being sequenced comes live.
+    cluster.sequenced().await;
     let mut back = cluster.instance(0).socket_v2(&rook, Some(stopped)).await;
     let (replayed, ready) = ready_of(&mut back).await;
     assert_eq!(ready["resumed"], true, "{ready}");
@@ -1739,9 +1748,12 @@ async fn presence_follows_connections_across_instances() {
         let pool = cluster.instance(instance).state().pool.clone();
         let workspace = cluster.organization_id;
         async move {
-            agent_workspace_server::realtime::presence::online_in(&pool, workspace)
-                .await
-                .expect("online")
+            crate::support::as_job(
+                workspace,
+                agent_workspace_server::realtime::presence::online_in(&pool, workspace),
+            )
+            .await
+            .expect("online")
         }
     };
     let mut watcher = cluster.instance(1).socket_v2(&mara_browser, None).await;
@@ -1875,10 +1887,10 @@ async fn document_update_reaches_watchers_only() {
     let (status, body) = cluster
         .instance(0)
         .send(owner.request(
-            "PATCH",
-            &format!("/api/v1/projects/{project}/members/{mara_id}"),
+            "POST",
+            "/api/v2/ops/space_member_remove",
             Some("k5-10-leave"),
-            json!({"expectedVersion": version, "enabled": false}),
+            json!({"spaceId": project, "account": mara_id, "expectedVersion": version}),
         ))
         .await;
     assert!(status.is_success(), "{status} {body}");
@@ -1933,12 +1945,13 @@ async fn follow_catches_up_then_goes_live_without_gaps() {
     let (status, other) = a
         .send(browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", cluster.organization_id),
             Some("cluster-else"),
-            json!({"organizationId": cluster.organization_id, "key": "ELSE", "name": "Elsewhere"}),
+            json!({"key": "ELSE", "name": "Elsewhere"}),
         ))
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{other}");
+    assert_eq!(status, StatusCode::OK, "{other}");
+    let other = other["value"].clone();
     let elsewhere: Uuid = other["id"].as_str().expect("project").parse().expect("id");
     sqlx::query("UPDATE project_memberships SET enabled = false WHERE project_id = $1")
         .bind(elsewhere)
@@ -2172,10 +2185,10 @@ async fn one_stream_walks_several_workspaces_and_the_direct_scope() {
 /// start is refused, and a cancel there ends it for both.
 #[tokio::test]
 async fn provider_sign_in_started_on_one_instance_completes_on_the_other() {
-    use agent_workspace_server::provider::{
-        LoginCeremonyError, LoginReservation,
-        adapter::{LoginKind, LoginStart},
-        ceremonies,
+    use agent_workspace_host_protocol::account::LoginStarted as LoginStart;
+    use agent_workspace_server::{
+        harness::manifest::LoginKind,
+        sign_ins::{self as ceremonies, LoginCeremonyError, LoginReservation},
     };
 
     let Some(cluster) = cluster("k5_14_sign_in", 2).await else {
@@ -2207,7 +2220,11 @@ async fn provider_sign_in_started_on_one_instance_completes_on_the_other() {
     );
     let session = Uuid::now_v7();
     let reserve = |pool: sqlx::PgPool, session: Uuid, key: &'static str| async move {
-        ceremonies::reserve_login(&pool, account, owner, session, key, LoginKind::DeviceCode).await
+        crate::support::as_member(
+            owner,
+            ceremonies::reserve_login(&pool, account, owner, session, key, LoginKind::DeviceCode),
+        )
+        .await
     };
     let Ok(LoginReservation::Reserved(ceremony)) = reserve(a.clone(), session, "start").await
     else {
@@ -2218,23 +2235,29 @@ async fn provider_sign_in_started_on_one_instance_completes_on_the_other() {
         reserve(b.clone(), session, "start").await,
         Err(LoginCeremonyError::Active)
     ));
-    ceremonies::complete_login(
-        &a,
-        account,
-        ceremony,
-        LoginStart::DeviceCode {
-            login_id: "login-1".to_owned(),
-            verification_url: "https://example.com/device".to_owned(),
-            user_code: "ABCD-EFGH".to_owned(),
-        },
+    crate::support::as_member(
+        owner,
+        ceremonies::complete_login(
+            &a,
+            account,
+            ceremony,
+            LoginStart::DeviceCode {
+                login_id: "login-1".to_owned(),
+                verification_url: "https://example.com/device".to_owned(),
+                user_code: "ABCD-EFGH".to_owned(),
+            },
+        ),
     )
     .await
     .unwrap_or_else(|_| panic!("complete"));
     // The page's poll lands on B and sees the code.
-    let seen = ceremonies::login_ceremony(&b, account, owner, session)
-        .await
-        .expect("read")
-        .expect("open on B");
+    let seen = crate::support::as_member(
+        owner,
+        ceremonies::login_ceremony(&b, account, owner, session),
+    )
+    .await
+    .expect("read")
+    .expect("open on B");
     assert_eq!(seen.ceremony_id, ceremony);
     assert!(matches!(
         seen.response,
@@ -2242,10 +2265,13 @@ async fn provider_sign_in_started_on_one_instance_completes_on_the_other() {
     ));
     // Another session doesn't see it; a retried start on B replays it.
     assert!(
-        ceremonies::login_ceremony(&b, account, owner, Uuid::now_v7())
-            .await
-            .expect("read")
-            .is_none()
+        crate::support::as_member(
+            owner,
+            ceremonies::login_ceremony(&b, account, owner, Uuid::now_v7())
+        )
+        .await
+        .expect("read")
+        .is_none()
     );
     assert!(matches!(
         reserve(b.clone(), session, "start").await,
@@ -2256,14 +2282,17 @@ async fn provider_sign_in_started_on_one_instance_completes_on_the_other() {
         Err(LoginCeremonyError::Active)
     ));
     // Cancelled on B, it is gone on A, and a new start may begin.
-    ceremonies::clear_login(&b, account, Some(ceremony))
+    crate::support::as_member(owner, ceremonies::clear_login(&b, account, Some(ceremony)))
         .await
         .expect("cancel");
     assert!(
-        ceremonies::login_ceremony(&a, account, owner, session)
-            .await
-            .expect("read")
-            .is_none()
+        crate::support::as_member(
+            owner,
+            ceremonies::login_ceremony(&a, account, owner, session)
+        )
+        .await
+        .expect("read")
+        .is_none()
     );
     assert!(matches!(
         reserve(a.clone(), session, "again").await,
@@ -2302,18 +2331,18 @@ async fn ticks_drive_work_with_the_loop_off() {
     let (status, scheduled) = a
         .send(browser.request(
             "POST",
-            &format!("/api/v1/conversations/{channel}/scheduled-messages"),
+            "/api/v2/ops/message_schedule",
             Some("k5-18-scheduled"),
             json!({
+                "conversationId": channel,
                 "content": {"version": 1, "nodes": [{"type": "text", "text": "Ticked"}]},
                 "sendAt": send_at,
             }),
         ))
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{scheduled}");
-    let scheduled: Uuid = scheduled["scheduledMessage"]["id"]
+    assert_eq!(status, StatusCode::OK, "{scheduled}");
+    let scheduled: Uuid = scheduled["value"]["scheduled"]["id"]
         .as_str()
-        .or_else(|| scheduled["id"].as_str())
         .expect("scheduled id")
         .parse()
         .expect("id");

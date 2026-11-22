@@ -49,6 +49,27 @@ pub async fn builtin_scope(
     .await?)
 }
 
+/// A built-in run's harness and model, or `None` for a run on another host.
+pub async fn builtin_scope_of(
+    executor: impl PgExecutor<'_>,
+    run_id: Uuid,
+) -> Result<Option<BuiltinScope>, AppError> {
+    Ok(sqlx::query_as::<_, BuiltinScope>(
+        r#"
+        SELECT project.organization_id AS workspace_id, account.adapter_kind,
+               run.config ->> 'model' AS model, run.created_at
+        FROM agent_runs run
+        JOIN projects project ON project.id = run.project_id
+        JOIN execution_profiles profile ON profile.id = run.execution_profile_id
+        JOIN provider_accounts account ON account.id = profile.provider_account_id
+        WHERE run.id = $1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(executor)
+    .await?)
+}
+
 /// Tokens a built-in run used on one turn, priced by the catalog where it
 /// can be.
 #[derive(Clone, Debug)]
@@ -144,10 +165,10 @@ pub async fn add_reported(
         INSERT INTO run_usage (
             run_id, model, attribution, workspace_id, space_id, account_id, host_id,
             backend, usage_date, input_tokens, output_tokens, cached_input_tokens,
-            reported_cost, reported_currency, confidence
+            reported_cost, reported_currency, estimated_cost, currency, confidence
         )
         VALUES ($1, $2, 'reported', $3, $4, $5, $6, $7, (now() AT TIME ZONE 'UTC')::date,
-                $8, $9, $10, $11, $12, 'exact')
+                $8, $9, $10, $11, $12, $13, $14, 'exact')
         ON CONFLICT (run_id, model, attribution) DO UPDATE SET
             input_tokens = run_usage.input_tokens + EXCLUDED.input_tokens,
             output_tokens = run_usage.output_tokens + EXCLUDED.output_tokens,
@@ -156,6 +177,10 @@ pub async fn add_reported(
                 WHEN EXCLUDED.reported_cost IS NULL THEN run_usage.reported_cost
                 ELSE COALESCE(run_usage.reported_cost, 0) + EXCLUDED.reported_cost END,
             reported_currency = COALESCE(run_usage.reported_currency, EXCLUDED.reported_currency),
+            estimated_cost = CASE
+                WHEN EXCLUDED.estimated_cost IS NULL THEN run_usage.estimated_cost
+                ELSE COALESCE(run_usage.estimated_cost, 0) + EXCLUDED.estimated_cost END,
+            currency = COALESCE(run_usage.currency, EXCLUDED.currency),
             updated_at = now()
         "#,
     )
@@ -171,6 +196,13 @@ pub async fn add_reported(
     .bind(input.cached_input_tokens)
     .bind(input.cost)
     .bind(currency)
+    .bind(input.estimate.as_ref().map(|(cost, _)| *cost))
+    .bind(
+        input
+            .estimate
+            .as_ref()
+            .map(|(_, currency)| currency.as_str()),
+    )
     .execute(&mut **transaction)
     .await?;
     Ok(())
@@ -255,6 +287,11 @@ pub fn split(total: i64, weights: &[f64]) -> Vec<i64> {
 /// on later passes (a run reported late may still claim it). Returns how
 /// many reports were split.
 pub async fn attribute_window_usage(pool: &PgPool) -> Result<u64, AppError> {
+    // Splits reported usage across runs in every workspace.
+    crate::tenancy::system("runs.host", Box::pin(attribute_window_usage_here(pool))).await
+}
+
+async fn attribute_window_usage_here(pool: &PgPool) -> Result<u64, AppError> {
     let mut transaction = crate::db::scoped_tx(pool).await?;
     let reports = sqlx::query_as::<_, WindowReport>(
         r#"

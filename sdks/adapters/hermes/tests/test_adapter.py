@@ -274,7 +274,7 @@ class PluginTest(unittest.IsolatedAsyncioTestCase):
         sends = self.workspace.named("reply_send")
         self.assertEqual([(s["text"], s["final"]) for s in sends], [("Looking now.", False), ("Two tasks are left.", True)])
         self.assertTrue(all(s["requestId"] == "r1" and s["generation"] == 2 for s in sends))
-        self.assertEqual(self.workspace.named("reply_progress")[0]["requestId"], "r1")
+        self.assertEqual(self.workspace.named("reply_progress_report")[0]["requestId"], "r1")
         self.assertEqual(self.workspace.named("reply_release"), [])
 
         # With nothing held, a send is an ordinary message.

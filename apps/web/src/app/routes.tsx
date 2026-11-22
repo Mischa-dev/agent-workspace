@@ -127,17 +127,19 @@ const redirect = (path: string, space: RouteHandle['space'] = 'workspace'): AppR
 })
 
 /**
- * The old root address of each workspace page, and `/`: the same page in
- * the current workspace (a space's in its own workspace). Any old space
- * address, and old workspace and space settings links, too. W1.14d deletes
- * them once the server's links have moved.
+ * Old root addresses that still open their page in the current workspace
+ * (a space's in its own workspace). Since K4.19 the server writes every link
+ * as a workspace address, so W1.14d kept only what can still arrive in the
+ * old shape: `/`, any space address and the DM pages (hrefs stored in old
+ * messages and quotes), and the share target the installed app posts to.
  */
+const KEPT_OLD_ADDRESSES = ['/projects', '/messages', '/dm', '/share']
+const keptOld = (path: string) => KEPT_OLD_ADDRESSES.some((kept) => path === kept || path.startsWith(`${kept}/`))
+
 const workspaceRedirects: AppRoute[] = [
   redirect('/'),
   redirect('/projects/:projectId/*', 'project'),
-  redirect('/settings/workspace/*', 'settings'),
-  redirect('/settings/projects/*', 'settings'),
-  ...sessionRoutes.filter(inWorkspace).map((route) => ({
+  ...sessionRoutes.filter((route) => inWorkspace(route) && keptOld(route.path ?? '')).map((route) => ({
     path: route.path,
     element: <WorkspaceRedirect />,
     handle: { space: route.handle?.space ?? 'workspace', layout: 'redirect' as const },

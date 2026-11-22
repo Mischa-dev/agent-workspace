@@ -96,7 +96,7 @@ describe('modules that are off', () => {
 
   it('with Projects off, Home has no projects and the rail no project tiles', async () => {
     withModulesOff(['projects', 'channels', 'tasks', 'pages', 'whiteboards', 'code', 'runs', 'automations'])
-    window.history.replaceState({}, '', '/home')
+    window.history.replaceState({}, '', '/w/-/home')
     render(<App />)
     expect(await screen.findByRole('heading', { name: /^(Welcome|Good (morning|afternoon|evening)), / })).toBeVisible()
     expect(await screen.findByRole('link', { name: 'Messages' })).toBeVisible()
@@ -109,7 +109,7 @@ describe('modules that are off', () => {
     const tile = `[data-rail-project="${projectAId}"]`
     // Projects off at Home but on in Agent Workspace (another workspace, say).
     withModulesOff(['projects'], [], [])
-    window.history.replaceState({}, '', '/home')
+    window.history.replaceState({}, '', '/w/-/home')
     const first = render(<App />)
     await waitFor(() => expect(first.container.querySelector(tile)).toBeTruthy())
     first.unmount()
@@ -140,10 +140,11 @@ describe('modules that are off', () => {
     vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input)
       if (path.endsWith('/layout')) return jsonResponse({ effective: effectiveWith(off ? ['projects'] : []) })
-      if (path.endsWith(`/organizations/${organization.id}/modules`)) {
-        if (init?.method === 'PUT') off = true
-        return jsonResponse(modules())
+      if (path.endsWith(`/w/${organization.id}/ops/workspace_update`)) {
+        off = true
+        return jsonResponse({ outcome: 'ok', value: { switched: { projects: false } } })
       }
+      if (path.endsWith(`/organizations/${organization.id}/modules`)) return jsonResponse(modules())
       if (path.startsWith('/api/v1/projects?')) {
         return jsonResponse({ projects: [projectA, projectB].map((project) => ({ ...project, modulesOff: off ? ['projects'] : [] })) })
       }
@@ -181,12 +182,15 @@ describe('modules that are off', () => {
     vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input)
       if (path.endsWith('/layout')) return jsonResponse({ effective: effectiveWith([]) })
-      if (path.endsWith(`/organizations/${organization.id}/roles`)) {
-        return jsonResponse({ roles: [role()], modules: [], permissions: [], startingPoints: [], canManage: true, yourPermissions: [] })
+      if (path.endsWith(`/w/${organization.id}/ops/role_list`)) {
+        return jsonResponse({
+          outcome: 'ok',
+          value: { roles: [role()], modules: [], permissions: [], startingPoints: [], canManage: true, yourPermissions: [] },
+        })
       }
-      if (path.includes(`/organizations/${organization.id}/roles/`) && init?.method === 'PATCH') {
+      if (path.endsWith(`/w/${organization.id}/ops/role_update`)) {
         off = true
-        return jsonResponse(role())
+        return jsonResponse({ outcome: 'ok', value: role() })
       }
       // You hold Member in Agent Workspace: with Projects off for it, so is
       // that project for you.
@@ -233,12 +237,15 @@ describe('modules that are off', () => {
       // You hold Member in Agent Workspace, so its layout carries the role's modules.
       if (path.endsWith(`/projects/${projectAId}/layout`)) return jsonResponse({ effective: effectiveWith(off ? ['pages'] : []) })
       if (path.endsWith('/layout')) return jsonResponse({ effective: effectiveWith([]) })
-      if (path.endsWith(`/organizations/${organization.id}/roles`)) {
-        return jsonResponse({ roles: [role()], modules: [], permissions: [], startingPoints: [], canManage: true, yourPermissions: [] })
+      if (path.endsWith(`/w/${organization.id}/ops/role_list`)) {
+        return jsonResponse({
+          outcome: 'ok',
+          value: { roles: [role()], modules: [], permissions: [], startingPoints: [], canManage: true, yourPermissions: [] },
+        })
       }
-      if (path.includes(`/organizations/${organization.id}/roles/`) && init?.method === 'PATCH') {
+      if (path.endsWith(`/w/${organization.id}/ops/role_update`)) {
         off = true
-        return jsonResponse(role())
+        return jsonResponse({ outcome: 'ok', value: role() })
       }
       return standard(input, init)
     })
@@ -294,7 +301,7 @@ describe('modules that are off', () => {
   it('switching to a project where Projects is off keeps its tile out of the rail', async () => {
     // Projects on at Home, off in Beta.
     withModulesOff([], [], [projectBId])
-    window.history.replaceState({}, '', '/home')
+    window.history.replaceState({}, '', '/w/-/home')
     const { container } = render(<App />)
     // Home's recent projects row for Beta, once the list has loaded.
     const beta = await waitFor(() => {
@@ -417,7 +424,7 @@ describe('modules that are off', () => {
 
   it('a project’s whiteboard follows that project’s modules, not Home’s', async () => {
     withBoard({ projectId: projectAId, organizationId: organization.id }, `/projects/${projectAId}`)
-    window.history.replaceState({}, '', `/whiteboards/${boardId}`)
+    window.history.replaceState({}, '', `/w/-/whiteboards/${boardId}`)
     render(<App />)
     expect(await screen.findByRole('heading', { name: 'Whiteboards is turned off' })).toBeVisible()
     expect(window.location.pathname).toBe(`/w/mischa/whiteboards/${boardId}`)
@@ -426,7 +433,7 @@ describe('modules that are off', () => {
   it('a whiteboard across another workspace follows that workspace’s modules', async () => {
     const other = '019fb600-0000-7000-8000-0000000000b1'
     withBoard({ projectId: null, organizationId: other }, `/organizations/${other}`)
-    window.history.replaceState({}, '', `/whiteboards/${boardId}`)
+    window.history.replaceState({}, '', `/w/-/whiteboards/${boardId}`)
     render(<App />)
     expect(await screen.findByRole('heading', { name: 'Whiteboards is turned off' })).toBeVisible()
   })

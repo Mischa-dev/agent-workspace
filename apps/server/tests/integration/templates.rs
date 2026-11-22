@@ -110,7 +110,7 @@ async fn pages_and_boards_start_from_templates() {
         app,
         &rook.token,
         &rook.session,
-        "page_write",
+        "page_create",
         json!({
             "projectId": work,
             "fromTemplateId": "meeting-notes",

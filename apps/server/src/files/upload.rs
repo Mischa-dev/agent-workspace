@@ -73,10 +73,7 @@ pub(crate) async fn destination(
             )
             .await?;
             require_active_conversation(&conversation)?;
-            Destination::Conversation {
-                project_id: conversation.place(),
-                conversation_id: conversation.id,
-            }
+            Destination::conversation(&conversation)
         }
         Place::Task { id, for_comment } => {
             let project_id =
@@ -88,8 +85,13 @@ pub(crate) async fn destination(
             let membership = lock_membership(transaction, command_actor.actor_id, project_id)
                 .await?
                 .ok_or(AppError::NotFound("work_item"))?;
-            if authorize_mutation(command_actor, &membership, Action::WorkItemEdit, Some(id))?
-                != Decision::Allow
+            // A file for a comment needs only what the comment does.
+            let action = if for_comment {
+                Action::WorkItemComment
+            } else {
+                Action::WorkItemEdit
+            };
+            if authorize_mutation(command_actor, &membership, action, Some(id))? != Decision::Allow
             {
                 return Err(AppError::NotFound("work_item"));
             }
@@ -168,8 +170,28 @@ pub(crate) async fn start(
     }
     let project_id = destination.project_id();
     let organization_id = organization_of(&mut **transaction, project_id).await?;
-    let store = FileStore::for_uploads(state, transaction, organization_id).await?;
-    hold_room(state, transaction, organization_id, declared.size, 0).await?;
+    let store =
+        FileStore::for_uploads(state, transaction, organization_id, destination.readers()).await?;
+    // Unfinished uploads hold their declared size until they finish or are
+    // swept, so starts can't outrun the quota by never finishing. Read
+    // under the quota lock `hold_room` takes (taken here first; it stacks).
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("files-quota:{organization_id}"))
+        .execute(&mut **transaction)
+        .await
+        .map_err(AppError::from)?;
+    let reserved = sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(sum(byte_size), 0)::bigint FROM file_uploads \
+         WHERE workspace_id = $1 AND finished_at IS NULL AND file_id IS NULL",
+    )
+    .bind(organization_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(AppError::from)?;
+    let reserving = declared
+        .size
+        .saturating_add(u64::try_from(reserved).unwrap_or(0));
+    hold_room(state, transaction, organization_id, reserving, 0).await?;
     let content_type = file_content_type(&name, declared.content_type.as_deref(), &[]);
     let id = Uuid::now_v7();
     let storage_key = upload_key(organization_id, id);
@@ -401,7 +423,7 @@ async fn finish_picture(
     };
     // The stripped picture goes into the store before the transaction that
     // records it opens.
-    let staged = stage_prepared(state, destination.project_id(), prepared).await?;
+    let staged = stage_prepared(state, destination, prepared).await?;
     let claimed = async {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let claimed = claim(&mut transaction, upload.id).await?;
@@ -478,12 +500,20 @@ async fn abandon(state: &AppState, store: &FileStore, upload: &UploadRow) {
     }
 }
 
-/// Deletes uploads nobody finished within a day, and their bytes. One whose
-/// bytes can't be deleted stays for the next run.
+/// Deletes uploads nobody finished within a day, and their bytes. Each one
+/// is claimed first: its row goes and its bytes are noted as pending in one
+/// statement, which waits for a finish holding the row and claims nothing
+/// once that finish has recorded its file. Bytes that can't be deleted now
+/// stay pending for the next run.
 pub(crate) async fn sweep(state: &AppState) -> Result<u64, AppError> {
-    let due = sqlx::query_as::<_, (Uuid, String, String)>(
+    // Removes abandoned uploads in every workspace.
+    crate::tenancy::system("files.sweep", Box::pin(sweep_here(state))).await
+}
+
+async fn sweep_here(state: &AppState) -> Result<u64, AppError> {
+    let due = sqlx::query_scalar::<_, Uuid>(
         r#"
-        SELECT id, storage_key, store_id FROM file_uploads
+        SELECT id FROM file_uploads
         WHERE finished_at IS NULL AND created_at < now() - make_interval(hours => $1)
         ORDER BY created_at
         LIMIT $2
@@ -494,18 +524,30 @@ pub(crate) async fn sweep(state: &AppState) -> Result<u64, AppError> {
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let mut swept = 0;
-    for (id, key, store_id) in due {
-        let Ok(store) = FileStore::resolve(state, &store_id).await else {
+    for id in due {
+        let claimed = sqlx::query_as::<_, (String, String)>(
+            r#"
+            WITH claimed AS (
+                DELETE FROM file_uploads
+                WHERE id = $1 AND finished_at IS NULL AND file_id IS NULL
+                RETURNING storage_key, workspace_id, store_id
+            )
+            INSERT INTO file_objects_pending (storage_key, workspace_id, store_id)
+            SELECT storage_key, workspace_id, store_id FROM claimed
+            ON CONFLICT (storage_key) DO UPDATE SET storage_key = EXCLUDED.storage_key
+            RETURNING storage_key, store_id
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await?;
+        let Some((key, store_id)) = claimed else {
             continue;
         };
-        if store.delete(&key).await.is_err() {
-            continue;
-        }
-        sqlx::query("DELETE FROM file_uploads WHERE id = $1 AND finished_at IS NULL")
-            .bind(id)
-            .execute(crate::db::scoped(&state.pool))
-            .await?;
         swept += 1;
+        if let Ok(store) = FileStore::resolve(state, &store_id).await {
+            super::drop_objects(state, &store, &[key.as_str()]).await;
+        }
     }
     Ok(swept)
 }

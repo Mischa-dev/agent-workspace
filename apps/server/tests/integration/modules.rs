@@ -38,12 +38,35 @@ fn module<'a>(listed: &'a Value, id: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("{id} in {listed}"))
 }
 
+/// Switches modules as the settings page does, through `workspace_update`
+/// in the workspace's own space (or, with `space`, in that space only), and
+/// answers with the modules as the switcher then reads them.
 pub(super) async fn switch(setup: &Setup, browser: &Browser, body: Value) -> (StatusCode, Value) {
-    send(
+    let mut input = json!({"projectId": "workspace"});
+    if let Some(preset) = body.get("preset") {
+        input["preset"] = preset.clone();
+    }
+    if let Some(switches) = body.get("switches") {
+        input["modules"] = switches.clone();
+    }
+    if let Some(space) = body.get("space").filter(|space| !space.is_null()) {
+        input["projectId"] = space.clone();
+        input["inProjectOnly"] = json!(true);
+    }
+    let (status, answer) = send(
         &setup.app,
-        browser.request("PUT", &modules_path(setup), None, body),
+        browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/workspace_update", setup.organization_id),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        ),
     )
-    .await
+    .await;
+    if status != StatusCode::OK {
+        return (status, answer);
+    }
+    (status, modules(setup, browser).await)
 }
 
 async fn layout(setup: &Setup, browser: &Browser, project: &str) -> Value {
@@ -101,14 +124,13 @@ async fn a_module_switched_off_is_hidden_for_people_and_agents_and_comes_back_wh
     let app = &setup.app;
     let work = create_project(&setup, "WORK", "Work").await;
     let (_bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
-    let (status, made) = send(
+    let (status, made) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("awd75-lantern"),
-            json!({"title": "Lantern repair"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("awd75-lantern"),
+        json!({"title": "Lantern repair"}),
     )
     .await;
     assert!(status.is_success(), "{status}: {made}");
@@ -287,40 +309,37 @@ async fn roles_narrow_modules_and_never_widen_them() {
     let owner = role_of("owner");
 
     // Only modules that can be switched off, and never for owners.
-    let (status, body) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &roles_path,
-            None,
+    let (status, body) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_create",
             json!({"name": "Odd", "baseRole": "member", "permissions": member["permissions"], "modulesOff": ["workspace"]}),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_client_error(), "{status}: {body}");
-    let (status, body) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("{roles_path}/{}", owner["id"].as_str().expect("id")),
-            None,
-            json!({"modulesOff": ["runs"]}),
-        ),
-    )
-    .await;
+    let (status, body) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_update",
+            json!({"role": owner["id"], "modulesOff": ["runs"], "expectedVersion": owner["version"]}),
+        )
+        .await;
     assert!(status.is_client_error(), "{status}: {body}");
 
     // A role without Runs.
-    let (status, made) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &roles_path,
-            None,
+    let (status, made) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_create",
             json!({"name": "No runs", "baseRole": "member", "permissions": member["permissions"], "modulesOff": ["runs"]}),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_success(), "{status}: {made}");
     assert_eq!(strings(&made["modulesOff"]), ["runs"], "{made}");
     let version = sqlx::query_scalar::<_, i64>(
@@ -331,19 +350,7 @@ async fn roles_narrow_modules_and_never_widen_them() {
     .fetch_one(&setup.pool)
     .await
     .expect("membership version");
-    let (status, body) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/role",
-                setup.organization_id
-            ),
-            None,
-            json!({"roleId": made["id"], "applyToProjects": true, "expectedVersion": version}),
-        ),
-    )
-    .await;
+    let (status, body) = setup.browser.op_in(app, setup.organization_id, "role_assign", json!({"account": bea, "role": made["id"], "applyToProjects": true, "expectedVersion": version})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
     // Bea doesn't get Runs; the owner still does, and so does the workspace.
@@ -395,16 +402,15 @@ async fn roles_narrow_modules_and_never_widen_them() {
         .expect("signals")
     };
     let before = signals().await;
-    let (status, body) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("{roles_path}/{}", made["id"].as_str().expect("id")),
-            None,
-            json!({"modulesOff": ["runs", "pages"], "expectedVersion": made["version"]}),
-        ),
-    )
-    .await;
+    let (status, body) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_update",
+            json!({"role": made["id"], "modulesOff": ["runs", "pages"], "expectedVersion": made["version"]}),
+        )
+        .await;
     assert!(status.is_success(), "{status}: {body}");
     assert!(
         signals().await > before,
@@ -412,17 +418,13 @@ async fn roles_narrow_modules_and_never_widen_them() {
     );
 
     // A role can't turn on what the workspace has off.
-    let (status, _) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &modules_path(&setup),
-            None,
-            json!({"switches": {"pages": false}}),
-        ),
+    let (status, body) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"pages": false}}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "{body}");
     let bea_layout = layout(&setup, &bea_browser, &work).await;
     let off = strings(&bea_layout["modulesOff"]);
     assert!(
@@ -485,14 +487,13 @@ async fn file_search_follows_the_module_each_file_came_from() {
     let in_dm = upload_to(&setup, owner, &dm, "ledger-dm.txt").await;
     let (status, sent) = send_with(&setup, owner, &dm, "ledger-dm", "", &[&in_dm]).await;
     assert_eq!(status, StatusCode::CREATED, "{sent}");
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         &setup.app,
-        owner.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("awd75-ledger-task"),
-            json!({"title": "Close the books"}),
-        ),
+        owner,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("awd75-ledger-task"),
+        json!({"title": "Close the books"}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");
@@ -678,7 +679,7 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
     // It links where DM threads open, not to the Channels page.
     assert_eq!(
         shown["value"]["thing"]["href"],
-        format!("/messages/{dm}?thread={dm_thread}"),
+        format!("/w/-/dm/{dm}?thread={dm_thread}"),
         "{shown}"
     );
     // And the thread tools stay listed for DMs; creating a channel doesn't.
@@ -713,7 +714,7 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
         .to_owned();
     let in_group = say(&setup, &setup.browser, &group, "awd75-g1", text("Plans?")).await;
     let group_thread = start_thread(&setup, &group, &in_group, "awd75-gt").await;
-    let group_href = format!("/messages/{group}?thread={group_thread}");
+    let group_href = format!("/w/-/dm/{group}?thread={group_thread}");
     let opened = call("thing_open", json!({"kind": "thread", "id": group_thread})).await;
     assert_eq!(opened["value"]["thing"]["href"], group_href, "{opened}");
     let created = call(
@@ -728,12 +729,13 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
         .to_owned();
     sqlx::query(
         r#"
-        INSERT INTO work_item_links (work_item_id, project_id, target_kind, target_id, created_by_actor_id)
-        SELECT item.id, item.project_id, 'conversation', $2::uuid, membership.actor_id
-        FROM task_rows item
+        INSERT INTO links
+            (workspace_id, from_thing_id, to_thing_id, kind, origin, created_by_account_id)
+        SELECT task.workspace_id, task.id, $2::uuid, 'about', 'explicit', membership.actor_id
+        FROM things task
         JOIN organization_memberships membership
           ON membership.organization_id = $3 AND membership.role = 'owner'
-        WHERE item.id = $1::uuid
+        WHERE task.id = $1::uuid
         "#,
     )
     .bind(&task)
@@ -782,7 +784,7 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
     // module lists them: editing a message in the channel needs Channels,
     // and starting a thread in the DM needs only Messages.
     let edited = call(
-        "message_edit",
+        "message_update",
         json!({"messageId": in_channel, "text": "Release notes, edited", "clientRequestId": "awd75-off-3"}),
     )
     .await;
@@ -873,14 +875,13 @@ async fn task_lists_leave_out_projects_where_tasks_is_off() {
         (&work, "Lantern repair", "awd75-t1"),
         (&other, "Harbour survey", "awd75-t2"),
     ] {
-        let (status, made) = send(
+        let (status, made) = crate::support::tasks::send(
             app,
-            setup.browser.request(
-                "POST",
-                &format!("/api/v1/projects/{project}/work-items"),
-                Some(key),
-                json!({"title": title}),
-            ),
+            &setup.browser,
+            "POST",
+            &format!("/api/v1/projects/{project}/work-items"),
+            Some(key),
+            json!({"title": title}),
         )
         .await;
         assert!(status.is_success(), "{status}: {made}");
@@ -920,16 +921,15 @@ async fn task_lists_leave_out_projects_where_tasks_is_off() {
         .find(|role| role["key"] == "member")
         .cloned()
         .expect("member");
-    let (status, made) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &roles_path,
-            None,
+    let (status, made) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_create",
             json!({"name": "No tasks module", "baseRole": "member", "permissions": member["permissions"], "modulesOff": ["tasks"]}),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_success(), "{status}: {made}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
@@ -939,15 +939,7 @@ async fn task_lists_leave_out_projects_where_tasks_is_off() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{other}/members/{bea}"),
-            Some("awd75-bea-other"),
-            json!({"expectedVersion": version, "roleId": made["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": other, "account": bea, "expectedVersion": version, "role": made["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
 
@@ -1003,16 +995,15 @@ pub(super) async fn narrow_in_project(
         .find(|role| role["key"] == "member")
         .cloned()
         .expect("member");
-    let (status, made) = send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &roles_path,
-            None,
+    let (status, made) = setup
+        .browser
+        .op_in(
+            &setup.app,
+            setup.organization_id,
+            "role_create",
             json!({"name": format!("Narrowed {key}"), "baseRole": "member", "permissions": member["permissions"], "modulesOff": modules_off}),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_success(), "{status}: {made}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
@@ -1022,15 +1013,7 @@ pub(super) async fn narrow_in_project(
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        &setup.app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{project}/members/{actor}"),
-            Some(key),
-            json!({"expectedVersion": version, "roleId": made["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(&setup.app, "space_member_update", json!({"spaceId": project, "account": actor, "expectedVersion": version, "role": made["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
 }
@@ -1098,14 +1081,13 @@ async fn notifications_follow_the_recipient_s_role_modules() {
     let app = &setup.app;
     let work = create_project(&setup, "WORK", "Work").await;
     let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("awd75-notified-task"),
-            json!({"title": "Ledger review"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("awd75-notified-task"),
+        json!({"title": "Ledger review"}),
     )
     .await;
     assert!(status.is_success(), "{status}: {task}");
@@ -1195,13 +1177,14 @@ async fn task_lists_count_and_page_only_workspaces_with_tasks_on() {
         app,
         setup.browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", second),
             Some("create-BBB"),
-            json!({"organizationId": second, "key": "BBB", "name": "B work"}),
+            json!({"key": "BBB", "name": "B work"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{made}");
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let made = made["value"].clone();
     let second_project = made["id"].as_str().expect("project").to_owned();
     let mut first_tasks = Vec::new();
     for (project, title) in [
@@ -1212,14 +1195,13 @@ async fn task_lists_count_and_page_only_workspaces_with_tasks_on() {
         (&second_project, "B three"),
     ] {
         let key = format!("awd75-{title}").replace(' ', "-");
-        let (status, made) = send(
+        let (status, made) = crate::support::tasks::send(
             app,
-            setup.browser.request(
-                "POST",
-                &format!("/api/v1/projects/{project}/work-items"),
-                Some(key.as_str()),
-                json!({"title": title}),
-            ),
+            &setup.browser,
+            "POST",
+            &format!("/api/v1/projects/{project}/work-items"),
+            Some(key.as_str()),
+            json!({"title": title}),
         )
         .await;
         assert!(status.is_success(), "{status}: {made}");
@@ -1329,14 +1311,13 @@ async fn a_project_role_s_modules_reach_boards_links_and_module_list() {
     let work = create_project(&setup, "WORK", "Work").await;
     let other = create_project(&setup, "OTHER", "Other").await;
     let (bea, bea_browser) = add_person(&setup, &[&work, &other], "bea").await;
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{other}/work-items"),
-            Some("awd75-reach-task"),
-            json!({"title": "Harbour survey"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{other}/work-items"),
+        Some("awd75-reach-task"),
+        json!({"title": "Harbour survey"}),
     )
     .await;
     assert!(status.is_success(), "{status}: {task}");
@@ -1594,6 +1575,8 @@ async fn an_off_module_s_routes_answer_turned_off_until_it_comes_back() {
     };
     let app = &setup.app;
     let work = create_project(&setup, "GATE", "Gate").await;
+    // Made now: with Projects off, nobody makes a project.
+    let elsewhere = create_project(&setup, "GATX", "Elsewhere").await;
     let tasks = format!("/api/v1/projects/{work}/work-items");
     let get = |path: &str| setup.browser.request("GET", path, None, Value::Null);
     let (status, body) = send(app, get(&tasks)).await;
@@ -1612,17 +1595,16 @@ async fn an_off_module_s_routes_answer_turned_off_until_it_comes_back() {
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["error"]["code"], "module_off", "{body}");
     assert_eq!(body["error"]["details"]["module"], "tasks", "{body}");
-    let (status, body) = send(
+    let (status, body) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &tasks,
-            Some("awd97-refused"),
-            json!({"title": "Never made"}),
-        ),
+        &setup.browser,
+        "POST",
+        &tasks,
+        Some("awd97-refused"),
+        json!({"title": "Never made"}),
     )
     .await;
-    assert_eq!(body["error"]["code"], "module_off", "{status}: {body}");
+    assert_eq!(body["code"], "module_off", "{status}: {body}");
     let (status, body) = send(app, get(&modules_path(&setup))).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     // Turning Projects off turns what needs it off too, Tasks included.
@@ -1650,7 +1632,6 @@ async fn an_off_module_s_routes_answer_turned_off_until_it_comes_back() {
     };
     let (status, body) = send(app, signed_out.request("GET", &tasks, None, Value::Null)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
-    let elsewhere = create_project(&setup, "GATX", "Elsewhere").await;
     let (_, outsider) = add_person(&setup, &[elsewhere.as_str()], "awd97-outsider").await;
     let (status, body) = send(app, outsider.request("GET", &tasks, None, Value::Null)).await;
     assert_ne!(body["error"]["code"], "module_off", "{status}: {body}");
@@ -1701,16 +1682,14 @@ async fn the_gate_covers_pages_and_boards_named_by_id() {
     .await;
     assert!(status.is_success(), "{page}");
     let page = page["id"].as_str().expect("page").to_owned();
-    let (status, board) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            "/api/v1/whiteboards",
-            None,
+    let (status, board) = setup
+        .browser
+        .op(
+            app,
+            "whiteboard_create",
             json!({"title": "Sketch", "projectId": work}),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{board}");
     let board = board["whiteboard"]["id"]
         .as_str()
@@ -1936,16 +1915,14 @@ async fn a_space_narrows_its_own_modules_only() {
     let (_, bea_browser) = add_person(&setup, &[&work, &other], "bea").await;
     let mut boards = Vec::new();
     for project in [&work, &other] {
-        let (status, board) = send(
-            app,
-            setup.browser.request(
-                "POST",
-                "/api/v1/whiteboards",
-                None,
+        let (status, board) = setup
+            .browser
+            .op(
+                app,
+                "whiteboard_create",
                 json!({"title": "Sketch", "projectId": project}),
-            ),
-        )
-        .await;
+            )
+            .await;
         assert_eq!(status, StatusCode::OK, "{board}");
         boards.push(
             board["whiteboard"]["id"]
@@ -2040,7 +2017,7 @@ async fn a_space_narrows_its_own_modules_only() {
         json!({"preset": "everything", "space": work}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     let (status, body) = switch(
         &setup,
         &setup.browser,
@@ -2078,7 +2055,7 @@ async fn a_space_narrows_its_own_modules_only() {
         json!({"switches": {"whiteboards": true}, "space": work}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     let refused = tool(
         app,
         &token,

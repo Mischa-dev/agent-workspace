@@ -17,9 +17,9 @@ use crate::{
     notifications::{self, Category, ListFilter, NotificationView, Selection, UpdateAction, View},
 };
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct NotificationListArguments {
+pub(crate) struct NotificationListArguments {
     /// inbox (default: not archived or snoozed), unread, snoozed or archived.
     pub view: Option<String>,
     /// all (default), mentions, tasks, runs or pull_requests.
@@ -54,7 +54,7 @@ pub(crate) struct NotificationLine {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snoozed_until: Option<String>,
     /// Snoozed until something new happens on it.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub until_activity: bool,
     pub at: String,
     pub url: String,
@@ -62,16 +62,16 @@ pub(crate) struct NotificationLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct NotificationListValue {
+pub(crate) struct NotificationListValue {
     pub notifications: Vec<NotificationLine>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
     pub unread_count: i64,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct NotificationUpdateArguments {
+pub(crate) struct NotificationUpdateArguments {
     /// read, unread, archive, restore, snooze, snooze_until_activity or
     /// unsnooze.
     pub action: String,
@@ -87,7 +87,7 @@ pub(super) struct NotificationUpdateArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct NotificationUpdateValue {
+pub(crate) struct NotificationUpdateValue {
     /// IDs that changed. Ones already that way, or not yours, are skipped.
     pub updated: Vec<String>,
     pub unread_count: i64,
@@ -155,7 +155,7 @@ pub(super) async fn unread_lines(
         .collect())
 }
 
-pub(super) async fn notification_list(
+pub(crate) async fn notification_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: NotificationListArguments,
@@ -213,7 +213,7 @@ pub(super) async fn notification_list(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "notification_list"))
 }
 
-pub(super) async fn notification_update(
+pub(crate) async fn notification_update(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: NotificationUpdateArguments,

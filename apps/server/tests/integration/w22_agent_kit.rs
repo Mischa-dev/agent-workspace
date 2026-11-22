@@ -45,7 +45,7 @@ async fn skills_are_offered_only_where_the_agent_works_and_only_while_they_are_s
     let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");
 
     let written = call(
-        "page_write",
+        "page_create",
         json!({
             "projectId": "WORK",
             "title": "Deploying the web app",
@@ -61,7 +61,7 @@ async fn skills_are_offered_only_where_the_agent_works_and_only_while_they_are_s
         "Use when deploying the web app."
     );
     call(
-        "page_write",
+        "page_create",
         json!({"projectId": "WORK", "title": "Theming", "body": "Colors."}),
     )
     .await;
@@ -73,7 +73,7 @@ async fn skills_are_offered_only_where_the_agent_works_and_only_while_they_are_s
     assert_eq!(skills[0]["name"], "deploying-the-web-app");
     assert_eq!(skills[0]["description"], "Use when deploying the web app.");
 
-    let opened = call("project_open", json!({"projectId": "WORK"})).await;
+    let opened = call("project_get", json!({"projectId": "WORK"})).await;
     assert_eq!(
         opened["value"]["skills"][0]["name"],
         "deploying-the-web-app"
@@ -123,7 +123,7 @@ async fn skills_are_offered_only_where_the_agent_works_and_only_while_they_are_s
 
     // Switched off, it's a plain page again; archived, it's gone.
     let off = call(
-        "page_write",
+        "page_update",
         json!({"pageId": page, "skillDescription": "", "expectedVersion": 1}),
     )
     .await;
@@ -132,7 +132,7 @@ async fn skills_are_offered_only_where_the_agent_works_and_only_while_they_are_s
     let missing = call("skill_get", json!({"pageId": page})).await;
     assert_eq!(missing["outcome"], "not_found", "{missing}");
     call(
-        "page_write",
+        "page_update",
         json!({"pageId": page, "skillDescription": "Use when deploying.", "archived": true}),
     )
     .await;
@@ -218,7 +218,7 @@ async fn a_handoff_note_reaches_whoever_claims_the_task_next() {
         app,
         &rook_token,
         &rook_session,
-        "task_open",
+        "task_get",
         json!({"taskId": "WORK-1"}),
     )
     .await;
@@ -254,7 +254,7 @@ async fn a_handoff_note_reaches_whoever_claims_the_task_next() {
         app,
         &codex,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": "WORK-1"}),
     )
     .await;
@@ -358,20 +358,27 @@ async fn a_test_wakeup_is_signed_like_a_real_one_and_reports_the_answer() {
             .unwrap_or_default()
             .to_owned()
     };
-    assert_eq!(header_value("x-workspace-event"), "ping");
-    assert_eq!(header_value("x-workspace-delivery"), answer["deliveryId"]);
-    let timestamp = header_value("x-workspace-timestamp");
     assert_eq!(
-        header_value("x-workspace-signature"),
+        header_value("webhook-id"),
         format!(
-            "sha256={}",
-            agent_workspace_server::delivery::sign::legacy(&secret, &timestamp, &body)
-                .expect("sign")
-        ),
-        "signed with the webhook's own secret, like every wakeup"
+            "evt_{}",
+            answer["deliveryId"].as_str().expect("delivery id")
+        )
+    );
+    let timestamp = header_value("webhook-timestamp");
+    assert_eq!(
+        header_value("webhook-signature"),
+        agent_workspace_server::delivery::sign::standard(
+            &secret,
+            &header_value("webhook-id"),
+            &timestamp,
+            &body
+        )
+        .expect("sign"),
+        "signed with the webhook's own secret, like every push"
     );
     let ping: Value = serde_json::from_str(&body).expect("JSON");
-    assert_eq!(ping["event"], "ping");
+    assert_eq!(ping["type"], "ping");
     assert!(ping.get("replyRequestId").is_none(), "names no request");
 
     send(

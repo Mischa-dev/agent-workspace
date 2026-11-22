@@ -49,6 +49,14 @@ pub const EVENT_TYPES: &[(&str, &str)] = &[
     ("pull_request.merged", "A linked pull request was merged"),
     ("pull_request.closed", "A linked pull request was closed"),
     ("message.created", "A message was posted"),
+    (
+        "comment.created",
+        "Someone commented on a task, page, sheet, whiteboard or record",
+    ),
+    (
+        "proposal.created",
+        "Someone proposed a change to a page, sheet or whiteboard",
+    ),
     ("record.created", "A record was added to a collection"),
     ("record.updated", "A record in a collection changed"),
     ("page.updated", "A page was saved as a new version"),
@@ -56,6 +64,10 @@ pub const EVENT_TYPES: &[(&str, &str)] = &[
     (
         "whiteboard.updated",
         "A whiteboard was saved as a new version",
+    ),
+    (
+        "module.event",
+        "A connected module sent an event it declares",
     ),
     (
         "incoming_hook.received",
@@ -163,9 +175,33 @@ fn thing_of(event_type: &str, subject: &Subject) -> Option<ThingRef> {
         Some("page") => thing("page", subject.page_id),
         Some("sheet") => thing("sheet", subject.sheet_id),
         Some("whiteboard") => thing("whiteboard", subject.whiteboard_id),
+        // A comment or a proposal is about the thing it's on (C1.28).
+        Some("comment" | "proposal") => [
+            ("task", subject.work_item_id),
+            ("page", subject.page_id),
+            ("sheet", subject.sheet_id),
+            ("whiteboard", subject.whiteboard_id),
+            ("record", subject.record_id),
+        ]
+        .into_iter()
+        .find_map(|(kind, id)| thing(kind, id)),
         Some("incoming_hook") => thing("incoming_hook", subject.hook_id),
         _ => None,
     }
+}
+
+/// A subject naming one task, page, sheet, board or record by kind.
+fn subject_on(kind: Option<&str>, id: Uuid) -> Subject {
+    let mut subject = Subject::default();
+    match kind {
+        Some("task") => subject.work_item_id = Some(id),
+        Some("page") => subject.page_id = Some(id),
+        Some("sheet") => subject.sheet_id = Some(id),
+        Some("whiteboard") => subject.whiteboard_id = Some(id),
+        Some("record") => subject.record_id = Some(id),
+        _ => {}
+    }
+    subject
 }
 
 /// One logged event's routing job: the events webhooks and rules hear for
@@ -229,6 +265,24 @@ async fn heard(
                 ..Subject::default()
             },
         )],
+        // A comment on a thing, or a proposal for one (C1.28): one per
+        // comment, and one per proposal made.
+        "comment.created" => vec![event(
+            event_type,
+            format!("comment:{}", id_in("messageId").unwrap_or(logged.id)),
+            logged.actor_account_id,
+            Subject {
+                conversation_id: id_in("conversationId"),
+                message_id: id_in("messageId"),
+                ..subject_on(logged.thing_kind.as_deref(), thing)
+            },
+        )],
+        "proposal.created" => vec![event(
+            event_type,
+            format!("proposal:{}", id_in("proposalId").unwrap_or(logged.id)),
+            logged.actor_account_id,
+            subject_on(logged.thing_kind.as_deref(), thing),
+        )],
         // A page, sheet or board kept as a new version (K3.5): one per
         // version, so a redelivered event never fires twice.
         "page.updated" | "sheet.updated" | "whiteboard.updated" => {
@@ -245,6 +299,24 @@ async fn heard(
                 logged.actor_account_id,
                 subject,
             )]
+        }
+        // A connected module's event (M1.13): rules match its declared
+        // type, carried as the subject's state, about its own thing.
+        "module.event" => {
+            let mut heard = event(
+                event_type,
+                format!("module.event:{}", logged.id),
+                logged.actor_account_id,
+                Subject {
+                    state: text_in("type"),
+                    ..Subject::default()
+                },
+            );
+            heard.thing = logged
+                .thing_kind
+                .clone()
+                .map(|kind| ThingRef { kind, id: thing });
+            vec![heard]
         }
         // One per accepted delivery: the delivery's id is the key.
         "incoming_hook.received" => {

@@ -175,7 +175,8 @@ function ModelList({ harness, organizationId }: { harness: Harness; organization
 }
 
 function RefreshFailure({ error, harness }: { error: unknown; harness: Harness }) {
-  if (isApiError(error) && error.code === 'execution_profile_required') {
+  const reason = isApiError(error) ? (error.details as { reason?: unknown } | undefined)?.reason : undefined
+  if (reason === 'execution_profile_required') {
     return (
       <Banner tone="warning">
         The list comes through your own {harness.displayName} account. Sign in to one in{' '}
