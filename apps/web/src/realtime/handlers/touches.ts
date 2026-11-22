@@ -98,6 +98,17 @@ export const opAnswers = (op: string): Touch => ({
   filters: { predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === op },
 })
 
+/**
+ * An operation's answers from one workspace: those asked of it by name, and
+ * those asked without one (the server picked, so it may have been this one).
+ */
+export const opAnswersIn = (op: string, workspaceId: string): Touch => ({
+  id: `op:${op}:${workspaceId}`,
+  filters: {
+    predicate: (query) => query.queryKey[0] === 'op' && query.queryKey[2] === op && (query.queryKey[1] === workspaceId || query.queryKey[1] == null),
+  },
+})
+
 /** Your sidebar sections (C2.9): they show unread and mentions for the conversations in them, wherever they live. */
 export const sidebarSections: Touch = opAnswers('sidebar_list')
 
