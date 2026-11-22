@@ -433,25 +433,27 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
     .execute(&pool)
     .await
     .expect("the member joins it");
-    let elsewhere_space = Uuid::now_v7();
-    sqlx::query(
-        "INSERT INTO projects (id, organization_id, project_key, name) VALUES ($1, $2, 'ELS', 'Elsewhere')",
+    let mut transaction = pool.begin().await.expect("begin");
+    let elsewhere_space = agent_workspace_server::spaces::manage::create(
+        &mut transaction,
+        agent_workspace_server::spaces::manage::NewSpace {
+            workspace_id: elsewhere,
+            kind: agent_workspace_server::spaces::SpaceKind::Project,
+            key: "ELS",
+            name: "Elsewhere",
+            description: "",
+            visibility: agent_workspace_server::spaces::SpaceVisibility::Members,
+            icon: None,
+            owner: agent_workspace_server::spaces::manage::Owner {
+                account_id: member_actor,
+                display_name: "Member",
+                login_name: MEMBER_LOGIN,
+            },
+        },
     )
-    .bind(elsewhere_space)
-    .bind(elsewhere)
-    .execute(&pool)
     .await
-    .expect("a space elsewhere");
-    sqlx::query(
-        "INSERT INTO project_memberships (id, project_id, actor_id, role, display_name, handle) \
-         VALUES ($1, $2, $3, 'member', 'Member', 'member')",
-    )
-    .bind(Uuid::now_v7())
-    .bind(elsewhere_space)
-    .bind(member_actor)
-    .execute(&pool)
-    .await
-    .expect("the member is in it");
+    .expect("a space elsewhere, with the member in it");
+    transaction.commit().await.expect("commit the space");
     let elsewhere_run = Uuid::now_v7();
     sqlx::query(
         r#"
