@@ -183,14 +183,16 @@ impl RecoveryHost for Recovery<'_> {
         state: &'static str,
         dirty: bool,
     ) -> Result<(), AppError> {
-        // Inspection took a while: write only while the host is ours.
+        // Inspection took a while: write only while the host is ours. A
+        // worktree retention removed meanwhile (a sweep the last holder
+        // finished as this one took over) stays removed.
         let mut transaction = fenced_tx(&self.state.pool, self.fence).await?;
         sqlx::query(
             r#"
             UPDATE git_worktrees
             SET state = $2, dirty = $3,
                 last_inspected_at = now(), updated_at = now()
-            WHERE id = $1
+            WHERE id = $1 AND state <> 'removed'
             "#,
         )
         .bind(worktree_id)
