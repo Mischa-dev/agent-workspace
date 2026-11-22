@@ -29,7 +29,7 @@
   "memory/api.ts": 11,
   "memory/discussion/api.ts": 5,
   "memory/embeds/EmbedPicker.tsx": 1,
-  "memory/embeds/ModuleEmbed.tsx": 1,
+  "pieces/embeds/ThingEmbedView.tsx": 1,
   "memory/live/documentApi.ts": 3,
   "memory/SearchPage.tsx": 1,
   "modules/ModuleGate.tsx": 1,

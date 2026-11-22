@@ -127,8 +127,8 @@ export type CaptureRegistration = {
 /** What an embed's path says: named values read from it, such as a sheet's id. */
 export type EmbedParams = Readonly<Record<string, string | null>>
 
-/** What an embed's view is given: what its path says, and the label the page keeps. */
-export type EmbedViewProps = { params: EmbedParams; label: string }
+/** What an embed's view is given: what its path says, the address and the label the page keeps. */
+export type EmbedViewProps = { params: EmbedParams; label: string; href: string }
 
 /** What a picker that makes an embed is given (the page editor's toolbar). */
 export type EmbedPickerProps = {
@@ -152,6 +152,8 @@ export type EmbedRegistration = {
   view: () => Promise<{ default: ComponentType<EmbedViewProps> }>
   /** What it is while it loads, such as "the collection". */
   loading: string
+  /** What a pasted address of one is called when the path names no single thing, such as "Tasks". */
+  label?: string
   /** The toolbar's way to make one, where the layout shows `part`. */
   picker?: {
     label: string

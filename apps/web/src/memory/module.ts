@@ -35,4 +35,26 @@ export default {
     { kind: 'page', label: 'Page', icon: 'list' },
     { kind: 'decision', label: 'Decision', icon: 'circle-check' },
   ],
+  embeds: [
+    {
+      // One page: /projects/{projectId}/pages/{id}.
+      id: 'page',
+      match: (path) => {
+        const found = /^\/projects\/[^/]+\/pages\/([^/]+)\/?$/.exec(path)
+        return found ? { kind: 'page', id: decodeURIComponent(found[1]) } : null
+      },
+      view: () => import('../pieces/embeds/ThingEmbedView'),
+      loading: 'the page',
+    },
+    {
+      // A file of the page (C1.33), such as a pasted picture: /files/{fileId}.
+      id: 'file',
+      match: (path) => {
+        const found = /^\/files\/([0-9a-f-]{36})\/?$/i.exec(path)
+        return found ? { fileId: found[1].toLowerCase() } : null
+      },
+      view: () => import('../files/FileEmbedView'),
+      loading: 'the file',
+    },
+  ],
 } satisfies WebModule

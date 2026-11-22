@@ -25,4 +25,16 @@ export default {
     },
   ],
   things: [{ kind: 'whiteboard', label: 'Whiteboard', icon: 'whiteboard' }],
+  embeds: [
+    {
+      // One whiteboard: /whiteboards/{id}.
+      id: 'whiteboard',
+      match: (path) => {
+        const found = /^\/whiteboards\/([^/]+)\/?$/.exec(path)
+        return found ? { kind: 'whiteboard', id: decodeURIComponent(found[1]) } : null
+      },
+      view: () => import('../pieces/embeds/ThingEmbedView'),
+      loading: 'the whiteboard',
+    },
+  ],
 } satisfies WebModule

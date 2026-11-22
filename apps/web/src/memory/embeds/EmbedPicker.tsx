@@ -3,12 +3,13 @@ import { useState, type FormEvent } from 'react'
 import { requestJson } from '../../api/client'
 import { isApiError } from '../../api/errors'
 import { Button, TextField } from '../../ui'
-import { embedPath, moduleEmbedTarget } from './moduleEmbed'
+import { registeredEmbed } from '../../modules/embeds'
+import { embedPath } from './embedModel'
 
 /**
  * Embeds something of the app in a page (AWD-53), from the page editor's
- * toolbar: a pasted address of a task, page, whiteboard, thread or task list
- * becomes the piece its module declares. `others` are the modules' own
+ * toolbar: a pasted address of anything a module registers an embed for (a
+ * task, page, whiteboard, thread or task list) becomes that module's embed. `others` are the modules' own
  * pickers (M1.5), such as a collection's view or a sheet's range.
  */
 export default function EmbedPicker({
@@ -27,21 +28,22 @@ export default function EmbedPicker({
   const submit = (event: FormEvent) => {
     event.preventDefault()
     const href = embedPath(address)
-    const target = href ? moduleEmbedTarget(href) : null
-    if (!href || !target) {
+    const found = href ? registeredEmbed(href) : null
+    if (!href || !found) {
       setError('Paste the address of a task, page, whiteboard, thread or task list here.')
       return
     }
-    if (target.kind === 'tasks') {
-      onPick({ href, label: target.decl.many })
+    const { kind, id } = found.params
+    if (!kind || !id) {
+      onPick({ href, label: found.registration.label ?? '' })
       return
     }
     // The embed keeps the thing's name, so the page reads well as Markdown.
     setBusy(true)
-    void requestJson<{ thing: { title: string } }>(`/api/v1/things/${encodeURIComponent(target.thing)}/${encodeURIComponent(target.id)}`)
+    void requestJson<{ thing: { title: string } }>(`/api/v1/things/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`)
       .then((body) => onPick({ href, label: body.thing.title }))
       .catch((failure: unknown) =>
-        setError(isApiError(failure) && failure.status === 404 ? `That ${target.decl.one.toLowerCase()} isn’t here, or you can’t see it.` : 'That didn’t load. Try again.'),
+        setError(isApiError(failure) && failure.status === 404 ? `That ${kind} isn’t here, or you can’t see it.` : 'That didn’t load. Try again.'),
       )
       .finally(() => setBusy(false))
   }

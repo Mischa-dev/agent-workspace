@@ -118,6 +118,29 @@ export default {
     { action: 'go-board', key: 'b', label: 'Board', path: '/work-items?view=board', inProject: true, rank: 70 },
   ],
   things: [{ kind: 'task', label: 'Task', icon: 'checklist' }],
+  embeds: [
+    {
+      // One task: /projects/{projectId}/work-items/{id}, drawn with the card the manifest declares.
+      id: 'task',
+      match: (path) => {
+        const found = /^\/projects\/[^/]+\/work-items\/([^/]+)\/?$/.exec(path)
+        return found ? { kind: 'task', id: decodeURIComponent(found[1]) } : null
+      },
+      view: () => import('../pieces/embeds/ThingEmbedView'),
+      loading: 'the task',
+    },
+    {
+      // A space's tasks: the task list's address with its filters, sort and ?view=board.
+      id: 'task-list',
+      match: (path, search) => {
+        const found = /^\/projects\/([^/]+)\/work-items\/?$/.exec(path)
+        return found ? { projectId: decodeURIComponent(found[1]), query: search.toString() } : null
+      },
+      view: () => import('./TasksEmbedView'),
+      loading: 'the tasks',
+      label: 'Tasks',
+    },
+  ],
   capture: [{ id: 'task', label: 'New task', icon: 'checklist', path: '/new-task' }],
   phone: { id: 'my-work', space: 'home', rank: 30, part: 'workspace.my_work', icon: 'checklist', label: 'My work', path: '/my-work' },
 } satisfies WebModule
