@@ -64,4 +64,9 @@ describe('an inbox change across workspaces', () => {
     client.setQueryData(inboxKeys.project('space-a'), { notifications: [{ id: 'n-alpha', projectId: 'space-a' }] })
     expect(noteWorkspaces(client).get('n-alpha')).toBe('alpha')
   })
+  it('counts a notification changed through several workspaces once', async () => {
+    vi.mocked(callOp).mockResolvedValue({ updated: ['n-dm'], unreadCount: 0 } as never)
+    const result = await postUpdate({ action: 'snooze_until_activity', ids: ['n-dm'] }, ['alpha', 'beta'])
+    expect(result.updated).toEqual(['n-dm'])
+  })
 })
