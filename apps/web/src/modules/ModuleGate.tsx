@@ -16,7 +16,7 @@ import { moduleOfPath } from './pageOwners'
 const TurnedOffPage = lazy(() => import('./TurnedOffPage').then((module) => ({ default: module.TurnedOffPage })))
 
 /** Where a board or run is. */
-type Owner = { projectId: string | null; organizationId: string }
+type Owner = { projectId?: string | null; organizationId: string }
 
 /**
  * Renders `children`, or the turned-off page when the page's module is off for
