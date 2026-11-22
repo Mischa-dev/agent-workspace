@@ -5,7 +5,7 @@
 //! became `collection_get`, `collection_write` became `collection_create` and
 //! `collection_update`, `record_query` became `record_list` and
 //! `record_write` became `record_create_many` and `record_update_many`; the
-//! old names stay as aliases (`ops::aliases`).
+//! old names are retired (`ops::retired`).
 
 use crate::{
     mcp::collection_tools,

@@ -98,12 +98,12 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
         for (key, value) in extra.as_object().expect("extra") {
             arguments[key] = value.clone();
         }
-        let written = owner("field_write", arguments).await;
+        let written = owner("field_create", arguments).await;
         assert_eq!(written["outcome"], "ok", "{written}");
         assert_eq!(written["value"]["created"], true, "{written}");
     }
     let refused = agent(
-        "field_write",
+        "field_create",
         json!({"projectId": "WORK", "name": "Mine", "type": "text"}),
     )
     .await;
@@ -173,7 +173,7 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
     )
     .await;
     assert_eq!(created["outcome"], "ok", "{created}");
-    let opened = agent("task_open", json!({"taskId": "WORK-2"})).await;
+    let opened = agent("task_get", json!({"taskId": "WORK-2"})).await;
     assert_eq!(opened["outcome"], "ok", "{opened}");
     assert_eq!(
         field_values(&opened["value"]["fields"]),
@@ -245,7 +245,7 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
         "{updated}"
     );
     let history = agent(
-        "task_open",
+        "task_get",
         json!({"taskId": "WORK-2", "include": ["history"]}),
     )
     .await;
@@ -582,7 +582,7 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
     assert_eq!(status, StatusCode::OK, "{sorted}");
     assert_eq!(sorted["items"][0]["key"], "WORK-2", "{sorted}");
     let side_field = owner(
-        "field_write",
+        "field_create",
         json!({"projectId": "SIDE", "name": "Size", "type": "number"}),
     )
     .await;
@@ -613,12 +613,12 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
 
     // Archiving hides a field and keeps its values; restoring brings them back.
     let archived = owner(
-        "field_write",
+        "field_update",
         json!({"projectId": "WORK", "field": "Risk", "archived": true}),
     )
     .await;
     assert_eq!(archived["outcome"], "ok", "{archived}");
-    let opened = agent("task_open", json!({"taskId": "WORK-2"})).await;
+    let opened = agent("task_get", json!({"taskId": "WORK-2"})).await;
     assert!(
         !field_values(&opened["value"]["fields"])
             .iter()
@@ -635,12 +635,12 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
     .await;
     assert_eq!(refused["outcome"], "invalid_request", "{refused}");
     let restored = owner(
-        "field_write",
+        "field_update",
         json!({"projectId": "WORK", "field": "Risk", "archived": false}),
     )
     .await;
     assert_eq!(restored["outcome"], "ok", "{restored}");
-    let opened = agent("task_open", json!({"taskId": "WORK-2"})).await;
+    let opened = agent("task_get", json!({"taskId": "WORK-2"})).await;
     assert!(
         field_values(&opened["value"]["fields"]).contains(&("Risk".to_owned(), json!("Low"))),
         "{opened}"
@@ -762,7 +762,7 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
         app,
         &alex_app,
         &session,
-        "field_write",
+        "field_create",
         json!({"projectId": "WORK", "name": "Through the app", "type": "text"}),
     )
     .await;
@@ -1184,7 +1184,7 @@ async fn bulk_tools_set_fields_on_every_task_or_none() {
         for (key, value) in extra.as_object().expect("extra") {
             arguments[key] = value.clone();
         }
-        let written = owner("field_write", arguments).await;
+        let written = owner("field_create", arguments).await;
         assert_eq!(written["outcome"], "ok", "{written}");
     }
     let field = |name: &'static str| {
@@ -1487,7 +1487,7 @@ async fn fields_are_renamed_and_reordered() {
         app,
         &codex,
         &session,
-        "field_write",
+        "field_update",
         json!({"projectId": "WORK", "field": "Beta", "name": "Second", "position": 1}),
     )
     .await;
@@ -1573,7 +1573,7 @@ async fn bulk_field_changes_hold_task_by_task() {
         for (key, value) in extra.as_object().expect("extra") {
             arguments[key] = value.clone();
         }
-        let written = owner("field_write", arguments).await;
+        let written = owner("field_create", arguments).await;
         assert_eq!(written["outcome"], "ok", "{written}");
     }
     let made = owner(
@@ -1599,7 +1599,7 @@ async fn bulk_field_changes_hold_task_by_task() {
     .expect("areas");
     // X is archived: WORK-1 keeps it, nobody can newly choose it.
     let archived = owner(
-        "field_write",
+        "field_update",
         json!({"projectId": "WORK", "field": "Areas", "options": [{"id": y, "name": "Y"}]}),
     )
     .await;
@@ -1835,7 +1835,7 @@ async fn field_tools_and_bulk_arguments_refuse_without_the_role() {
             app,
             &codex,
             &session,
-            "field_write",
+            "field_create",
             json!({"projectId": "WORK", "name": name, "type": "text"}),
         )
         .await;
@@ -1892,7 +1892,7 @@ async fn field_tools_and_bulk_arguments_refuse_without_the_role() {
             app,
             &mara_token,
             &mara_session,
-            "field_write",
+            "field_update",
             arguments.clone(),
         )
         .await;
@@ -1953,7 +1953,7 @@ async fn every_field_type_normalises_filters_sorts_and_groups() {
         async move { tool(app, &codex, &session, name, arguments).await }
     };
     let created = call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": "WORK",
             "name": "Contacts",
@@ -1983,7 +1983,7 @@ async fn every_field_type_normalises_filters_sorts_and_groups() {
     assert_eq!(created["outcome"], "ok", "{created}");
     // A status field made without options starts with three, by category.
     let described = call(
-        "collection_describe",
+        "collection_get",
         json!({"projectId": "WORK", "collection": "Contacts"}),
     )
     .await;
@@ -2011,7 +2011,7 @@ async fn every_field_type_normalises_filters_sorts_and_groups() {
 
     let write = |records: Value, key: &'static str| {
         call(
-            "record_write",
+            "record_create_many",
             json!({"projectId": "WORK", "collection": "Contacts", "records": records, "clientRequestId": key}),
         )
     };
@@ -2034,7 +2034,7 @@ async fn every_field_type_normalises_filters_sorts_and_groups() {
     // Values come back as stored: the email lowercased, the phone as
     // written, and the system fields from the record itself.
     let all = call(
-        "record_query",
+        "record_list",
         json!({"projectId": "WORK", "collection": "Contacts", "sort": [{"field": "Ref", "direction": "asc"}]}),
     )
     .await;
@@ -2120,7 +2120,7 @@ async fn every_field_type_normalises_filters_sorts_and_groups() {
         ),
     ] {
         let page = call(
-            "record_query",
+            "record_list",
             json!({"projectId": "WORK", "collection": "Contacts", "filters": [filter],
                    "sort": [{"field": "Ref", "direction": "asc"}]}),
         )
@@ -2150,7 +2150,7 @@ async fn every_field_type_normalises_filters_sorts_and_groups() {
         ),
     ] {
         let page = call(
-            "record_query",
+            "record_list",
             json!({"projectId": "WORK", "collection": "Contacts", "sort": [sort]}),
         )
         .await;
@@ -2187,7 +2187,7 @@ async fn every_field_type_normalises_filters_sorts_and_groups() {
         if let Some(bucket) = bucket {
             arguments["groupBucket"] = json!(bucket);
         }
-        let page = call("record_query", arguments).await;
+        let page = call("record_list", arguments).await;
         assert_eq!(page["outcome"], "ok", "{group}: {page}");
         assert_eq!(page["value"]["groups"], expected, "{group}: {page}");
         assert_eq!(page["value"]["total"], 4, "{group}: {page}");
@@ -2220,7 +2220,7 @@ async fn every_field_type_normalises_filters_sorts_and_groups() {
     .map(|(group, title)| (group.to_owned(), title.to_owned()))
     .to_vec();
     let by_tags = call(
-        "record_query",
+        "record_list",
         json!({"projectId": "WORK", "collection": "Contacts", "groupBy": "Tags"}),
     )
     .await;
@@ -2262,7 +2262,7 @@ async fn every_field_type_normalises_filters_sorts_and_groups() {
         "{listed}"
     );
     let by_maker = call(
-        "record_query",
+        "record_list",
         json!({"projectId": "WORK", "collection": "Contacts", "groupBy": "Maker"}),
     )
     .await;

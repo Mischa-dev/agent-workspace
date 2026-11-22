@@ -94,21 +94,21 @@ async fn friends_shows_only_chat_and_changing_shape_loses_nothing() {
     assert_eq!(sent["outcome"], "ok", "{sent}");
     let page = tool(
         &world,
-        "page_write",
+        "page_create",
         json!({"projectId": "WORK", "title": "Packing list", "body": "Socks."}),
     )
     .await;
     assert_eq!(page["outcome"], "ok", "{page}");
     let collection = tool(
         &world,
-        "collection_write",
+        "collection_create",
         json!({"projectId": "WORK", "name": "Places", "fields": [{"name": "Why", "type": "text"}]}),
     )
     .await;
     assert_eq!(collection["outcome"], "ok", "{collection}");
     let records = tool(
         &world,
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Places",
                "records": [{"title": "Lisbon", "fields": {"Why": "the light"}}],
                "clientRequestId": "places"}),
@@ -173,7 +173,7 @@ async fn friends_shows_only_chat_and_changing_shape_loses_nothing() {
         .as_str()
         .expect("space")
         .to_owned();
-    let settings = tool(&world, "settings_get", json!({"projectId": space})).await;
+    let settings = tool(&world, "setting_list", json!({"spaceId": space})).await;
     if settings["outcome"] == "ok" {
         for setting in settings["value"]["settings"].as_array().expect("settings") {
             let key = setting["key"].as_str().expect("key");

@@ -3866,13 +3866,13 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         HttpCase {
             route: "POST /api/public/v1/{tool}",
             own: Own::Run(public(
-                "task_comment",
+                "task_comment_create",
                 json!({"taskId": a.task, "text": "Net public comment", "clientRequestId": "net-public-own"}),
             )),
             foreign: vec![
                 (
                     public(
-                        "task_comment",
+                        "task_comment_create",
                         json!({"taskId": b.task, "text": "Net public comment", "clientRequestId": "net-public-b"}),
                     ),
                     Expect::Refused,

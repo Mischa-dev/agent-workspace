@@ -1842,7 +1842,7 @@ struct ExportTask {
     updated_at: DateTime<Utc>,
     #[serde(skip)]
     field_values: Value,
-    /// Custom field values by field name, as task_open reads them.
+    /// Custom field values by field name, as task_get reads them.
     #[sqlx(skip)]
     #[serde(skip_serializing_if = "serde_json::Map::is_empty")]
     fields: serde_json::Map<String, Value>,

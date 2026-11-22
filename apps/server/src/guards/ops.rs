@@ -412,13 +412,18 @@ impl Operation for GuardList {
     }
 }
 
-/// Operation names with each old name (an alias) replaced by the operations
-/// it runs, in order and without repeats, so a guard matches what runs.
+/// Operation names with each retired old name replaced by the operations
+/// that took it over, in order and without repeats, so a guard matches what
+/// runs.
 fn canonical_names(names: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(names.len());
     for name in names {
-        let expanded = match crate::ops::aliases::active(&name) {
-            Some(alias) => alias.runs.iter().map(|run| (*run).to_owned()).collect(),
+        let expanded = match crate::ops::retired::find(&name) {
+            Some(old) => old
+                .use_instead
+                .iter()
+                .map(|run| (*run).to_owned())
+                .collect(),
             None => vec![name],
         };
         for name in expanded {

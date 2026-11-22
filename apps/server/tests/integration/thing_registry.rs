@@ -166,7 +166,7 @@ async fn every_kind_keeps_its_row_in_step_and_converts_once() {
     );
     let page = id_of(
         &call(
-            "page_write",
+            "page_create",
             json!({"projectId": "WORK", "title": "Gate notes", "body": "Hinges."}),
         )
         .await,
@@ -182,13 +182,13 @@ async fn every_kind_keeps_its_row_in_step_and_converts_once() {
         .await,
     );
     let sheet = id_of(
-        &call("sheet_write", json!({"projectId": "WORK", "name": "Gate costs", "cells": [{"cell": "A1", "input": "Paint"}], "clientRequestId": "k3-10-sheet"})).await,
+        &call("sheet_create", json!({"projectId": "WORK", "name": "Gate costs", "cells": [{"cell": "A1", "input": "Paint"}], "clientRequestId": "k3-10-sheet"})).await,
     );
     let collection = id_of(
-        &call("collection_write", json!({"projectId": "WORK", "name": "Suppliers", "fields": [{"name": "Notes", "type": "text"}]})).await,
+        &call("collection_create", json!({"projectId": "WORK", "name": "Suppliers", "fields": [{"name": "Notes", "type": "text"}]})).await,
     );
     let record = id_of(
-        &call("record_write", json!({"projectId": "WORK", "collection": "Suppliers", "records": [{"title": "Hinge Co"}], "clientRequestId": "k3-10-record"})).await,
+        &call("record_create_many", json!({"projectId": "WORK", "collection": "Suppliers", "records": [{"title": "Hinge Co"}], "clientRequestId": "k3-10-record"})).await,
     );
     let channel = id_of(
         &call(
@@ -277,7 +277,7 @@ async fn every_kind_keeps_its_row_in_step_and_converts_once() {
     assert_eq!(row(pool, &work).await.title.as_deref(), Some("Gates"));
     let sheet_version = row(pool, &sheet).await.version;
     call(
-        "sheet_write",
+        "sheet_update",
         json!({"projectId": "WORK", "sheet": sheet, "cells": [{"cell": "A2", "input": "Oil"}], "clientRequestId": "k3-10-sheet-2"}),
     )
     .await;
@@ -476,7 +476,7 @@ async fn messages_and_milestones_are_things_and_a_removed_message_is_a_tombstone
     assert_eq!(leaked, 0, "no message text in things");
 
     let milestone = call(
-        "milestone_write",
+        "milestone_create",
         json!({"projectId": "WORK", "name": "Spring"}),
     )
     .await;

@@ -252,7 +252,7 @@ pub(super) struct WhiteboardReadArguments {
 pub(super) struct WhiteboardValue {
     pub whiteboard: WhiteboardLine,
     pub can_edit: bool,
-    /// Pass it to whiteboard_edit as expectedSceneSeq.
+    /// Pass it to whiteboard_update_elements as expectedSceneSeq.
     pub scene_seq: i64,
     /// Every live element, in stacking order (back to front).
     pub elements: Vec<ElementSummary>,
@@ -539,7 +539,7 @@ pub(super) struct WhiteboardCreateArguments {
     /// (retrospective, user-journey, flowchart, two-by-two). Its drawing is
     /// copied in before any operations.
     pub from_template_id: Option<String>,
-    /// Draw something straight away: the same operations as whiteboard_edit.
+    /// Draw something straight away: the same operations as whiteboard_update_elements.
     pub operations: Option<Vec<Operation>>,
     /// Makes creating safe to retry: send the same one again and you get
     /// the board the first call made, not a second one.

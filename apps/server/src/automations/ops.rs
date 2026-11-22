@@ -3,7 +3,7 @@
 //! rule functions the web routes call (`automations::create` and the
 //! rest), as the caller the dispatcher checked; those keep the rule's own
 //! checks (who may edit whose rule) and write their own audit rows. The
-//! old `automation_write` and `automation_runs` tools are aliases.
+//! old `automation_write` and `automation_runs` tools are retired.
 
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};

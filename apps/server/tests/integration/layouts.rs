@@ -385,7 +385,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &app_token,
         &session,
-        "project_layout_set",
+        "layout_update",
         json!({"projectId": work, "preset": "Simple to-do list"}),
     )
     .await;
@@ -395,7 +395,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &app_token,
         &session,
-        "project_layout_set",
+        "layout_update",
         json!({"projectId": work, "preset": "Spaceship"}),
     )
     .await;
@@ -404,7 +404,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &app_token,
         &session,
-        "project_open",
+        "project_get",
         json!({"projectId": work}),
     )
     .await;
@@ -425,7 +425,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &agent_token,
         &agent_session,
-        "project_layout_set",
+        "layout_update",
         json!({"projectId": work, "preset": "Minimal"}),
     )
     .await;
@@ -440,7 +440,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &rook_token,
         &rook_session,
-        "project_layout_set",
+        "layout_update",
         json!({"projectId": work, "preset": "Minimal"}),
     )
     .await;
@@ -457,7 +457,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &rook_token,
         &rook_session,
-        "project_layout_set",
+        "layout_update",
         json!({"projectId": work, "preset": "Minimal"}),
     )
     .await;
@@ -470,8 +470,8 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &rook_token,
         &rook_session,
-        "project_layout_set",
-        json!({"projectId": work, "preset": "Minimal", "workspace": true}),
+        "layout_update",
+        json!({"projectId": work, "preset": "Minimal", "wholeWorkspace": true}),
     )
     .await;
     assert_eq!(
@@ -482,8 +482,8 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &app_token,
         &session,
-        "project_layout_set",
-        json!({"projectId": work, "preset": "Software team", "workspace": true}),
+        "layout_update",
+        json!({"projectId": work, "preset": "Software team", "wholeWorkspace": true}),
     )
     .await;
     assert_eq!(workspace_default["outcome"], "ok", "{workspace_default}");
@@ -493,7 +493,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &app_token,
         &session,
-        "project_layout_set",
+        "layout_update",
         json!({"projectId": work, "rules": [
             {"role": "member", "preset": "Simple to-do list"},
             {"person": rook.to_string(), "preset": "Minimal"},
@@ -506,7 +506,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &app_token,
         &session,
-        "project_layout_set",
+        "layout_update",
         json!({"projectId": work, "preset": "Minimal", "rules": []}),
     )
     .await;
@@ -515,7 +515,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &app_token,
         &session,
-        "project_layout_set",
+        "layout_update",
         json!({"projectId": work, "rules": [{"role": "member", "person": rook.to_string(), "preset": "Minimal"}]}),
     )
     .await;
@@ -524,7 +524,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &agent_token,
         &agent_session,
-        "project_layout_set",
+        "layout_update",
         json!({"projectId": work, "rules": []}),
     )
     .await;
@@ -533,7 +533,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &app_token,
         &session,
-        "project_layout_set",
+        "layout_update",
         json!({"projectId": work, "rules": [{"role": "viewer", "preset": "Minimal"}]}),
     )
     .await;
@@ -553,7 +553,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &app_token,
         &session,
-        "layout_preset_write",
+        "layout_preset_create",
         json!({"projectId": work, "name": "Desk crew", "base": "Software team",
             "show": {"area.runs": false},
             "words": {"task": {"one": "chore", "many": "chores"}}}),
@@ -567,7 +567,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &app_token,
         &session,
-        "project_layout_set",
+        "layout_update",
         json!({"projectId": work, "preset": "Desk crew"}),
     )
     .await;
@@ -576,7 +576,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &app_token,
         &session,
-        "layout_preset_write",
+        "layout_preset_create",
         json!({"projectId": work, "name": "desk crew", "base": "Minimal"}),
     )
     .await;
@@ -585,7 +585,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &app_token,
         &session,
-        "layout_preset_write",
+        "layout_preset_update",
         json!({"projectId": work, "preset": "Minimal", "name": "Mine"}),
     )
     .await;
@@ -594,7 +594,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &app_token,
         &session,
-        "layout_preset_write",
+        "layout_preset_update",
         json!({"projectId": work, "preset": "Desk crew", "show": {"area.nothing": true}}),
     )
     .await;
@@ -603,7 +603,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &app_token,
         &session,
-        "layout_preset_write",
+        "layout_preset_update",
         json!({"projectId": work, "preset": preset_id, "name": "Desk team",
             "words": {"page": {"one": "note", "many": "notes"}},
             "expectedVersion": saved["value"]["preset"]["version"]}),
@@ -617,7 +617,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &app_token,
         &session,
-        "layout_preset_write",
+        "layout_preset_update",
         json!({"projectId": work, "preset": "Desk team", "description": "Old",
             "expectedVersion": saved["value"]["preset"]["version"]}),
     )
@@ -627,7 +627,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &agent_token,
         &agent_session,
-        "layout_preset_write",
+        "layout_preset_create",
         json!({"projectId": work, "name": "Bots", "base": "Minimal"}),
     )
     .await;
@@ -639,7 +639,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &app_token,
         &session,
-        "layout_preset_write",
+        "layout_preset_update",
         json!({"projectId": work, "preset": "Desk team", "remove": true}),
     )
     .await;
@@ -649,7 +649,7 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         app,
         &app_token,
         &session,
-        "layout_preset_write",
+        "layout_preset_update",
         json!({"projectId": work, "preset": preset_id, "remove": true}),
     )
     .await;

@@ -184,7 +184,7 @@ async fn only_owners_change_projects_and_archived_ones_come_back() {
     .await;
     assert_eq!(archived["outcome"], "ok", "{archived}");
     assert_eq!(archived["value"]["archived"], true);
-    let listed = tool(app, &codex, &session, "projects_list", json!({})).await;
+    let listed = tool(app, &codex, &session, "project_list", json!({})).await;
     assert!(
         !listed["value"]["projects"]
             .as_array()
@@ -197,7 +197,7 @@ async fn only_owners_change_projects_and_archived_ones_come_back() {
         app,
         &codex,
         &session,
-        "projects_list",
+        "project_list",
         json!({"includeArchived": true}),
     )
     .await;
@@ -229,7 +229,7 @@ async fn only_owners_change_projects_and_archived_ones_come_back() {
     .await;
     assert_eq!(restored["outcome"], "ok", "{restored}");
     assert_eq!(restored["value"]["archived"], false);
-    let listed = tool(app, &codex, &session, "projects_list", json!({})).await;
+    let listed = tool(app, &codex, &session, "project_list", json!({})).await;
     assert!(
         listed["value"]["projects"]
             .as_array()
@@ -646,12 +646,12 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
         app,
         &codex,
         &session,
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": "OLD-1", "text": "Repro: the clone needs a token.", "clientRequestId": "c1"}),
     )
     .await;
     assert_eq!(
-        commented["outcome"], "applied",
+        commented["outcome"], "ok",
         "keys work in task_comment: {commented}"
     );
     let started = tool(
@@ -708,7 +708,7 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
         app,
         &codex,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": "OLD-1"}),
     )
     .await;
@@ -778,7 +778,7 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
         app,
         &mara_token,
         &mara_session,
-        "task_open",
+        "task_get",
         json!({"taskId": "OLD-1"}),
     )
     .await;
@@ -788,7 +788,7 @@ async fn moved_tasks_carry_over_and_old_keys_follow_them() {
         app,
         &mara_token,
         &mara_session,
-        "task_open",
+        "task_get",
         json!({"taskId": new_task}),
     )
     .await;
@@ -824,21 +824,21 @@ async fn dependencies_refuse_cycles_and_milestones_track_progress() {
 
     // Ship waits on Build, Build on Design.
     let shipped = call(
-        "task_depend",
+        "task_link",
         json!({"taskId": "PLAN-3", "blockedBy": ["PLAN-2"]}),
     )
     .await;
     assert_eq!(shipped["outcome"], "ok", "{shipped}");
     assert_eq!(shipped["value"]["ready"], false);
     let built = call(
-        "task_depend",
+        "task_link",
         json!({"taskId": "PLAN-2", "blockedBy": ["PLAN-1"]}),
     )
     .await;
     assert_eq!(built["value"]["blocks"][0]["key"], "PLAN-3", "{built}");
     // Design waiting on Ship would close a cycle.
     let cycle = call(
-        "task_depend",
+        "task_link",
         json!({"taskId": "PLAN-1", "blockedBy": ["PLAN-3"]}),
     )
     .await;
@@ -851,7 +851,7 @@ async fn dependencies_refuse_cycles_and_milestones_track_progress() {
     );
     // A blocker may be in another project of the same workspace.
     let elsewhere = call(
-        "task_depend",
+        "task_link",
         json!({"taskId": "PLAN-1", "blocks": ["ELSE-1"]}),
     )
     .await;
@@ -864,13 +864,13 @@ async fn dependencies_refuse_cycles_and_milestones_track_progress() {
         app,
         &reader,
         &reader_session,
-        "task_depend",
+        "task_link",
         json!({"taskId": "PLAN-1", "blocks": ["PLAN-3"]}),
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
     let removed = call(
-        "task_depend",
+        "task_link",
         json!({"taskId": "PLAN-3", "blockedBy": ["PLAN-2"], "remove": true}),
     )
     .await;
@@ -878,23 +878,23 @@ async fn dependencies_refuse_cycles_and_milestones_track_progress() {
 
     // A milestone with a target date holds the tasks and counts progress.
     let milestone = call(
-        "milestone_write",
+        "milestone_create",
         json!({"projectId": "PLAN", "name": "v1", "targetDate": "2020-01-01", "addTasks": ["PLAN-1", "PLAN-2", "PLAN-3"]}),
     )
     .await;
     assert_eq!(milestone["outcome"], "ok", "{milestone}");
     assert_eq!(milestone["value"]["total"], 3);
     assert_eq!(milestone["value"]["overdue"], true);
-    let again = call("milestone_write", json!({"projectId": work, "name": "V1"})).await;
+    let again = call("milestone_create", json!({"projectId": work, "name": "V1"})).await;
     assert_eq!(again["value"]["id"], milestone["value"]["id"], "{again}");
     let wrong = call(
-        "milestone_write",
+        "milestone_create",
         json!({"projectId": work, "name": "v2", "addTasks": ["ELSE-1"]}),
     )
     .await;
     assert_eq!(wrong["outcome"], "invalid_request", "{wrong}");
     let trimmed = call(
-        "milestone_write",
+        "milestone_update",
         json!({"projectId": work, "milestoneId": milestone["value"]["id"], "removeTasks": ["PLAN-3"], "targetDate": ""}),
     )
     .await;
@@ -1282,7 +1282,7 @@ async fn dependency_cycles_longer_than_two_hundred_tasks_are_refused() {
         &setup.app,
         &token,
         &session,
-        "task_depend",
+        "task_link",
         json!({"taskId": tasks[200], "blocks": [tasks[0]]}),
     )
     .await;

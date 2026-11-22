@@ -228,7 +228,7 @@ class RunnerTests(unittest.TestCase):
         names = [name for name, _ in fake.calls]
         self.assertEqual(names.count("reply_claim"), 2)
         self.assertIn(("session_bind", {"conversationId": "thread-1", "externalRef": "session-9", "harness": "custom"}), fake.calls)
-        self.assertIn(("reply_progress", {"requestId": "r1", "generation": 3, "status": "Working"}), fake.calls)
+        self.assertIn(("reply_progress_report", {"requestId": "r1", "generation": 3, "status": "Working"}), fake.calls)
         self.assertIn(("reply_pass", {"requestId": "r2", "generation": 3}), fake.calls)
         self.assertNotIn("reply_release", names)
 
@@ -399,9 +399,9 @@ class ChannelTests(unittest.TestCase):
         answers = {
             "reply_send": {"outcome": "ok", "value": {"messageId": "m1"}},
             "message_send": {"outcome": "ok", "value": {"messageId": "m2"}},
-            "message_edit": {"outcome": "ok", "value": {}},
+            "message_update": {"outcome": "ok", "value": {}},
             "message_react": {"outcome": "ok", "value": {}},
-            "reply_progress": {"outcome": "ok", "value": {}},
+            "reply_progress_report": {"outcome": "ok", "value": {}},
             "file_link_get": {
                 "outcome": "ok",
                 "value": {"url": "https://aw.example/files/f1", "name": "note.txt", "contentType": "text/plain"},
@@ -425,9 +425,9 @@ class ChannelTests(unittest.TestCase):
             [
                 ("reply_send", {"requestId": "r1", "generation": 2, "text": "done", "clientRequestId": "mine-1", "attachmentIds": ["f9"]}),
                 ("message_send", {"conversationId": "c", "text": "hello", "clientRequestId": "mine-2"}),
-                ("message_edit", {"messageId": "m2", "text": "hello again"}),
+                ("message_update", {"messageId": "m2", "text": "hello again"}),
                 ("message_react", {"messageId": "m2", "emoji": "👀", "reacted": True}),
-                ("reply_progress", {"requestId": "r1", "generation": 2, "status": "Reading"}),
+                ("reply_progress_report", {"requestId": "r1", "generation": 2, "status": "Reading"}),
                 ("file_link_get", {"fileId": "f1"}),
             ],
         )

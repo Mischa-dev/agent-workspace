@@ -58,7 +58,7 @@ impl Operation for ConversationsMarkRead {
     const TITLE: &'static str = "Mark all read";
     const DESCRIPTION: &'static str = "Mark every conversation you can read as read (channels, \
         threads, DMs and groups), or only those in one space with spaceId. Their notifications \
-        are read too. To read one conversation, use mark_read.";
+        are read too. To read one conversation, use conversation_mark_read.";
     const EMITS: &'static [&'static str] = &["conversation.read_state.updated"];
 
     type Input = ConversationsMarkReadInput;

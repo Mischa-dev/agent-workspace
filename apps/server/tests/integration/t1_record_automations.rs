@@ -59,7 +59,7 @@ async fn a_record_becoming_high_makes_one_task_and_a_maker_without_edit_rights_s
         .call(
             app,
             tool(
-                "collection_write",
+                "collection_create",
                 json!({
                     "projectId": "WORK",
                     "name": "Playtest",
@@ -86,8 +86,8 @@ async fn a_record_becoming_high_makes_one_task_and_a_maker_without_edit_rights_s
             .call(
                 app,
                 tool(
-                    "automation_write",
-                    json!({"projectId": "WORK", "operation": "create", "name": "Bad",
+                    "automation_create",
+                    json!({"projectId": "WORK", "name": "Bad",
                            "trigger": trigger,
                            "actions": [{"kind": "notify", "recipients": "owner", "message": "x"}]}),
                 ),
@@ -101,10 +101,9 @@ async fn a_record_becoming_high_makes_one_task_and_a_maker_without_edit_rights_s
         .call(
             app,
             tool(
-                "automation_write",
+                "automation_create",
                 json!({
                     "projectId": "WORK",
-                    "operation": "create",
                     "name": "High severity makes a task",
                     "trigger": {"kind": "field_changed", "collectionId": collection,
                                 "field": "Severity", "to": ["High"]},
@@ -122,10 +121,9 @@ async fn a_record_becoming_high_makes_one_task_and_a_maker_without_edit_rights_s
         .call(
             app,
             tool(
-                "automation_write",
+                "automation_create",
                 json!({
                     "projectId": "WORK",
-                    "operation": "create",
                     "name": "High records",
                     "trigger": {"kind": "record_matches", "collectionId": collection,
                                 "filters": [{"field": "Severity", "op": "is", "values": ["High"]}]},
@@ -154,6 +152,11 @@ async fn a_record_becoming_high_makes_one_task_and_a_maker_without_edit_rights_s
     };
     let write = |fields: Value, version: Option<i64>, record: Option<String>, key: &'static str| {
         let mut entry = json!({"fields": fields});
+        let name = if record.is_some() {
+            "record_update_many"
+        } else {
+            "record_create_many"
+        };
         match record {
             Some(id) => {
                 entry["record"] = json!(id);
@@ -162,7 +165,7 @@ async fn a_record_becoming_high_makes_one_task_and_a_maker_without_edit_rights_s
             None => entry["title"] = json!("Boss fight"),
         }
         tool(
-            "record_write",
+            name,
             json!({"projectId": "WORK", "collection": "Playtest", "records": [entry],
                    "clientRequestId": key}),
         )

@@ -356,7 +356,6 @@ async fn run_task(context: JobContext) -> Result<(), JobError> {
                 ),
                 unkeyed: Unkeyed::RunOnce,
                 preview: false,
-                renamed_from: None,
                 defer_long: false,
             };
             dispatch(state, request, &claimed.op, claimed.input).await

@@ -361,7 +361,7 @@ fn update_rejected<T>(
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct TaskCreateManyArguments {
-    /// The project: ID, link, or key such as "AWD" (see projects_list).
+    /// The project: ID, link, or key such as "AWD" (see project_list).
     /// Required for apps connected for a whole account; agents and
     /// single-project connections default to their own project.
     pub project_id: Option<String>,
@@ -493,7 +493,7 @@ async fn create_many(
             "That project wasn't found, or you can't see it.",
         ));
     }
-    const PROJECT_MESSAGE: &str = "Say which project with projectId (see projects_list).";
+    const PROJECT_MESSAGE: &str = "Say which project with projectId (see project_list).";
     if !project_is_chosen(principal) {
         return Ok(BatchResult::invalid("projectId", PROJECT_MESSAGE));
     }
@@ -979,7 +979,7 @@ pub(crate) struct TaskUpdateManyArguments {
     #[serde(rename = "type")]
     pub task_type: Option<String>,
     /// Labels to put on them, by name or ID (at most 20). They must exist;
-    /// create one with label_write.
+    /// create one with label_create.
     pub add_labels: Option<Vec<String>>,
     /// Labels to take off them, by name or ID (at most 20).
     pub remove_labels: Option<Vec<String>>,
@@ -1291,7 +1291,7 @@ async fn update_many(
         return Ok(BatchResult::invalid(
             "expectedVersions",
             format!(
-                "The version for {} must be the one you last read, from 1 up (see task_open or task_list).",
+                "The version for {} must be the one you last read, from 1 up (see task_get or task_list).",
                 echo(written)
             ),
         ));

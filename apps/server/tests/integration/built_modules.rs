@@ -124,7 +124,7 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     let written = tool(
         &world,
         "builder",
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Playtests",
                "records": [{"title": "Zeppelin level", "fields": {"Notes": "resets"}}],
                "clientRequestId": "zeppelin"}),
@@ -172,7 +172,7 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     let page = tool(
         &world,
         "builder",
-        "page_write",
+        "page_create",
         json!({"projectId": "WORK", "title": "Playtest notes", "body": "Zeppelin tips."}),
     )
     .await;
@@ -200,12 +200,12 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     assert_eq!(off["outcome"], "ok", "{off}");
     assert_eq!(off["value"]["on"], false);
     let query = json!({"projectId": "WORK", "collection": "Playtests"});
-    let hidden = tool(&world, "builder", "record_query", query.clone()).await;
+    let hidden = tool(&world, "builder", "record_list", query.clone()).await;
     assert_ne!(hidden["outcome"], "ok", "{hidden}");
     let searched = tool(
         &world,
         "builder",
-        "search",
+        "workspace_search",
         json!({"query": "zeppelin", "kinds": ["records"]}),
     )
     .await;
@@ -230,7 +230,7 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     let found = tool(
         &world,
         "builder",
-        "search",
+        "workspace_search",
         json!({"query": "zeppelin tips", "kinds": ["pages"]}),
     )
     .await;
@@ -238,7 +238,7 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     let written = tool(
         &world,
         "builder",
-        "page_write",
+        "page_update",
         json!({"pageId": page_id, "body": "Changed while off."}),
     )
     .await;
@@ -271,7 +271,7 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     )
     .await;
     assert_eq!(on["outcome"], "ok", "{on}");
-    let back = tool(&world, "builder", "record_query", query.clone()).await;
+    let back = tool(&world, "builder", "record_list", query.clone()).await;
     assert_eq!(back["value"]["total"], 1, "{back}");
     assert_eq!(form(token).await.0, StatusCode::OK);
     let read = tool(&world, "builder", "page_get", json!({"pageId": page_id})).await;
@@ -322,7 +322,7 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     .await;
     assert_eq!(archived["outcome"], "ok", "{archived}");
     assert_eq!(archived["value"]["archived"], true);
-    let plain = tool(&world, "builder", "record_query", query).await;
+    let plain = tool(&world, "builder", "record_list", query).await;
     assert_eq!(plain["value"]["total"], 1, "{plain}");
     let owned = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM module_parts WHERE module_id = $1::uuid AND part_kind = 'collection'",

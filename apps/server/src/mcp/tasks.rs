@@ -128,7 +128,7 @@ pub(crate) struct TaskListArguments {
     /// 2026-09-30T14:00:00Z, or a span such as 24h or 7d.
     pub updated_since: Option<String>,
     /// true: only blocked tasks, whether marked blocked or waiting on an
-    /// unfinished task (task_depend). false: leave them out.
+    /// unfinished task (task_link). false: leave them out.
     pub blocked: Option<bool>,
     /// true: only tasks ready to start (not finished, not blocked, nothing
     /// unfinished blocking them). false: the rest.
@@ -177,7 +177,7 @@ pub(crate) struct TaskListArguments {
     /// fields.
     pub field_filters: Option<Vec<field_tools::FieldFilterArgument>>,
     /// Only the tasks of one collection that acts like a task, such as
-    /// "Bugs", by name or ID (project_open lists them); "Tasks" for plain
+    /// "Bugs", by name or ID (project_get lists them); "Tasks" for plain
     /// tasks. Needs projectId.
     pub collection: Option<String>,
 }
@@ -233,7 +233,7 @@ pub(crate) struct TaskSummary {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
     /// Its custom field values by field name (only those it has), as
-    /// task_open reads them.
+    /// task_get reads them.
     #[sqlx(skip)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fields: Option<serde_json::Map<String, serde_json::Value>>,
@@ -1294,7 +1294,7 @@ async fn filter_milestones(
     .await?;
     Ok(Err(if names.is_empty() {
         format!(
-            "{place} has no milestone called \"{}\", and no milestones yet. Create one with milestone_write.",
+            "{place} has no milestone called \"{}\", and no milestones yet. Create one with milestone_create.",
             echo(value)
         )
     } else {
@@ -1502,7 +1502,7 @@ async fn filter_labels(
                 echo(unknown)
             ),
             (None, Some(archived)) => format!(
-                "\"{}\" is archived. Restore it with label_write (archived: false) to filter by it.",
+                "\"{}\" is archived. Restore it with label_update (archived: false) to filter by it.",
                 echo(archived)
             ),
             (None, None) => "Name the labels to filter by.".to_owned(),
@@ -1729,7 +1729,7 @@ pub(crate) struct TaskOpenArguments {
     pub history_before: Option<String>,
 }
 
-/// What task_open's include asks for, checked before anything is read.
+/// What task_get's include asks for, checked before anything is read.
 struct HistoryRequest {
     limit: u16,
     before: Option<String>,
@@ -1802,7 +1802,7 @@ pub(crate) struct TaskDetail {
     /// and file_upload (taskId) adds one. Comments list their own.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<super::file_tools::FileSummary>,
-    /// Where to read how this project works: project_open or page_get.
+    /// Where to read how this project works: project_get or page_get.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guide_page_id: Option<String>,
     /// With include: ["history"], what happened to the task.
@@ -1831,7 +1831,7 @@ pub(crate) struct TaskDetail {
     /// What estimates count in this project: points or hours.
     #[serde(default)]
     pub estimate_unit: String,
-    /// Why it's marked blocked (task_mark_blocked), if it is.
+    /// Why it's marked blocked (task_update), if it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocked_reason: Option<String>,
     /// Tasks that must finish first, each with its status. Tasks in projects
@@ -1845,10 +1845,10 @@ pub(crate) struct TaskDetail {
     /// (counting blockers you can't see).
     #[serde(default)]
     pub ready: bool,
-    /// Related and duplicate tasks (task_relate).
+    /// Related and duplicate tasks (task_link).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub relations: Vec<planning::RelationRef>,
-    /// Who hears about its changes (task_watch).
+    /// Who hears about its changes (task_watch_set).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub watchers: Vec<planning::WatcherRef>,
     /// The project's custom fields with this task's values (null when it
@@ -1867,7 +1867,7 @@ pub(crate) struct MilestoneRef {
     pub target_date: Option<String>,
 }
 
-/// A task's planning fields, as task_open reads them.
+/// A task's planning fields, as task_get reads them.
 #[derive(Debug, FromRow)]
 struct PlanningRow {
     milestone_id: Option<Uuid>,
@@ -2211,7 +2211,7 @@ pub(crate) struct TaskCreateArguments {
     #[serde(rename = "type")]
     pub item_type: Option<String>,
     /// Labels by name or ID, at most 20. They must exist already; create one
-    /// with label_write.
+    /// with label_create.
     pub labels: Option<Vec<String>>,
     /// What done looks like, one criterion per entry, in order (at most 50).
     pub acceptance_criteria: Option<Vec<String>>,
@@ -2241,7 +2241,7 @@ pub(crate) struct TaskCreateArguments {
     /// that acts like a task, its own fields (see collection_get).
     pub fields: Option<serde_json::Map<String, serde_json::Value>>,
     /// Make it in a collection that acts like a task, such as "Bugs", by
-    /// name or ID (project_open lists them). Left out, it's a plain task.
+    /// name or ID (project_get lists them). Left out, it's a plain task.
     pub collection: Option<String>,
     /// Made from this message; the task links back to it.
     pub from_message_id: Option<String>,
@@ -2292,7 +2292,7 @@ pub(crate) async fn task_create(
             Err(_) => return writes::WriteResult::unavailable(),
         };
         if !project_is_chosen(principal) || in_messages_space || workspace_wide {
-            const PROJECT_MESSAGE: &str = "Say which project with projectId (see projects_list).";
+            const PROJECT_MESSAGE: &str = "Say which project with projectId (see project_list).";
             return writes::WriteResult::InvalidRequest {
                 field: "projectId".to_owned(),
                 retry_category: PROJECT_MESSAGE.to_owned(),
@@ -2378,7 +2378,7 @@ pub(crate) struct TaskUpdateArguments {
     // act in the task's own project.
     #[serde(rename = "taskId", alias = "workItemId")]
     pub task_id: String,
-    /// The version you last read (from task_open or task_list).
+    /// The version you last read (from task_get or task_list).
     pub expected_version: i64,
     pub title: Option<String>,
     pub description: Option<String>,
@@ -3244,7 +3244,7 @@ pub(crate) async fn task_link(
     {
         return ToolResult::invalid(
             "expectedVersion",
-            "Pass the version you last read (from task_open or task_list), or leave it out.",
+            "Pass the version you last read (from task_get or task_list), or leave it out.",
         );
     }
     if target.is_empty() {

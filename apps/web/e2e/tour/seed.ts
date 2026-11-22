@@ -281,7 +281,7 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
       content: { version: 1, nodes: [{ type: 'text', text }] },
     })
   }
-  await bots.get('Scout')!.call('task_comment', {
+  await bots.get('Scout')!.call('task_comment_create', {
     taskId: featuredId,
     text: 'Two older tasks asked for the same panel; I linked them here. Support has 14 open conversations that mention cell imbalance this month.',
     clientRequestId: randomUUID(),
@@ -399,7 +399,7 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   for (const [index, page] of otherPages.entries()) {
     const writer = index === 0 ? null : team[[4, 5, 7, 2][index]]
     if (writer) await writer.write('POST', `/api/v1/projects/${projectId}/pages`, page)
-    else await bots.get('Muse')!.call('page_write', { projectId, title: page.title, body: page.body })
+    else await bots.get('Muse')!.call('page_create', { projectId, title: page.title, body: page.body })
   }
   await team[0].write('POST', '/api/v2/ops/decision_record', {
     spaceId: projectId,

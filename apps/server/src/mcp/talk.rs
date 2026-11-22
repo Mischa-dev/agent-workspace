@@ -303,7 +303,7 @@ pub(super) struct MessageItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
     /// Present once the message was edited: pass it as expectedRevision to
-    /// message_edit. A message never edited is revision 1.
+    /// message_update. A message never edited is revision 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1444,7 +1444,7 @@ fn thread_hint(conversation: &ConversationAccessRow, highest: i64) -> Option<Str
         ))
     } else if conversation.kind != "thread" && highest >= 200 {
         Some(
-            "This conversation is long. Start a thread (thread_start with fromMessageId) when a topic will run on, and search to find older discussions.".to_owned(),
+            "This conversation is long. Start a thread (thread_start with fromMessageId) when a topic will run on, and workspace_search to find older discussions.".to_owned(),
         )
     } else {
         None
@@ -1513,7 +1513,7 @@ pub(super) async fn mark_read(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "mark_read"))
 }
 
-/// mark_read with unread: true, through the web's `mark_unread_from`.
+/// conversation_mark_read with unread: true, through the web's `mark_unread_from`.
 async fn mark_unread(
     state: &AppState,
     principal: &McpPrincipal,

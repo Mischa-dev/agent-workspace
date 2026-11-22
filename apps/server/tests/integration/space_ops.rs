@@ -380,7 +380,7 @@ async fn personal_space_is_private() {
         &world.app,
         &rook.token,
         &rook.session,
-        "page_write",
+        "page_create",
         json!({"projectId": "me", "title": "Scratch", "body": "The wombatword plan."}),
     )
     .await;
@@ -439,7 +439,7 @@ async fn personal_space_is_private() {
         &world.app,
         &rook.token,
         &rook.session,
-        "search",
+        "workspace_search",
         json!({"query": "wombatword"}),
     )
     .await;
@@ -477,7 +477,7 @@ async fn personal_space_is_private() {
             &world.app,
             &scout.token,
             &scout.session,
-            "search",
+            "workspace_search",
             json!({"query": word}),
         )
         .await;

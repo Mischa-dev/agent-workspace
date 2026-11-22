@@ -526,7 +526,7 @@ async fn every_edge_runs_the_same_operation() {
         &session,
         json!({
             "jsonrpc": "2.0", "id": 7, "method": "tools/call",
-            "params": { "name": "project_open", "arguments": { "projectId": "EDG" } }
+            "params": { "name": "project_get", "arguments": { "projectId": "EDG" } }
         }),
     )
     .await;
@@ -542,7 +542,7 @@ async fn every_edge_runs_the_same_operation() {
         &session,
         json!({
             "jsonrpc": "2.0", "id": 7, "method": "tools/call",
-            "params": { "name": "project_open", "arguments": { "projectId": "EDG" } }
+            "params": { "name": "project_get", "arguments": { "projectId": "EDG" } }
         }),
     )
     .await;
@@ -651,35 +651,23 @@ async fn every_edge_runs_the_same_operation() {
     assert!(!listed.contains(&"echo_create".to_owned()), "{listed:?}");
 }
 
-/// K2.6: an old tool name runs its operation with its old arguments,
-/// answers in its old shape byte for byte, says what to use instead, and is
-/// counted once per call.
+/// K2.23: a retired old tool name runs nothing and says what to use instead,
+/// on MCP and on the public API's v1 route, and isn't listed.
 #[tokio::test]
-async fn an_old_name_answers_in_its_old_shape_and_is_counted() {
-    use agent_workspace_server::ops::aliases::{Alias, register_alias_for_tests};
-
-    let Some(setup) = setup("k2_ops_alias").await else {
+async fn a_retired_name_says_what_to_use_instead() {
+    let Some(setup) = setup("k2_ops_retired").await else {
         return;
     };
-    register_for_tests(add_echo);
-    register_alias_for_tests(Alias {
-        name: "echo_make",
-        canonical: |_| "echo_create",
-        runs: &["echo_create"],
-        adapt_in: |mut arguments| {
-            if let Some(words) = arguments.remove("words") {
-                arguments.insert("text".into(), words);
-            }
-            arguments
-        },
-        adapt_out: |_, value, _| json!({ "echo": { "words": value["text"] } }),
-        sunset: Some("2027-06-01"),
-    });
-    scratch_table(&setup.pool).await;
     let app = &setup.app;
-    let space = create_project(&setup, "ALI", "Aliases").await;
+    let space = create_project(&setup, "RET", "Retired").await;
     let token = connect_app(app, &setup.browser, "Old client", "full").await;
     let session = initialize(app, &token).await.expect("MCP session");
+    let pages = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM project_pages WHERE title = 'Kept'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("pages")
+    };
 
     let (status, reply) = rpc(
         app,
@@ -689,8 +677,8 @@ async fn an_old_name_answers_in_its_old_shape_and_is_counted() {
         json!({
             "jsonrpc": "2.0", "id": 9, "method": "tools/call",
             "params": {
-                "name": "echo_make",
-                "arguments": { "space": space, "words": "kept", "clientRequestId": "old-1" }
+                "name": "page_write",
+                "arguments": { "projectId": space, "title": "Kept", "body": "Old" }
             }
         }),
     )
@@ -700,74 +688,54 @@ async fn an_old_name_answers_in_its_old_shape_and_is_counted() {
         .pointer("/result/structuredContent")
         .cloned()
         .unwrap_or_else(|| panic!("no structured content: {reply}"));
+    assert_eq!(answered["outcome"], "not_found", "{answered}");
     assert_eq!(
-        serde_json::to_string(&answered).expect("JSON"),
-        r#"{"echo":{"words":"kept"}}"#
+        answered["message"],
+        "`page_write` was renamed: use `page_create` or `page_update` (see tools/list)."
     );
     assert_eq!(
-        reply.pointer("/result/_meta/deprecated"),
-        Some(&json!(
-            "use echo_create; echo_make stops working after 2027-06-01"
-        )),
-        "{reply}"
+        answered["useInstead"],
+        json!(["page_create", "page_update"])
     );
-    // The old name isn't listed; the canonical one is.
+    assert_eq!(pages().await, 0, "an old name runs nothing");
     let names = tool_names(app, &token).await;
-    assert!(names.iter().any(|name| name == "echo_create"), "{names:?}");
-    assert!(!names.iter().any(|name| name == "echo_make"), "{names:?}");
+    assert!(names.iter().any(|name| name == "page_create"), "{names:?}");
+    assert!(!names.iter().any(|name| name == "page_write"), "{names:?}");
 
-    // The public API's v1 route: the old shape, with Deprecation and Sunset.
+    // The public API's v1 route answers the same, as not found.
     let response = app
         .clone()
         .oneshot(bearer(
             &token,
             "POST",
-            "/api/public/v1/echo_make",
+            "/api/public/v1/page_write",
             None,
-            &json!({ "space": space, "words": "again", "clientRequestId": "old-2" }),
+            &json!({ "projectId": space, "title": "Kept", "body": "Old" }),
         ))
         .await
         .expect("response");
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response
-            .headers()
-            .get("deprecation")
-            .and_then(|value| value.to_str().ok()),
-        Some("true")
-    );
-    assert_eq!(
-        response
-            .headers()
-            .get("sunset")
-            .and_then(|value| value.to_str().ok()),
-        Some("Tue, 01 Jun 2027 00:00:00 GMT")
-    );
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let bytes = to_bytes(response.into_body(), 1_000_000)
         .await
         .expect("body");
+    let body: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON");
     assert_eq!(
-        std::str::from_utf8(&bytes).expect("utf-8"),
-        r#"{"echo":{"words":"again"}}"#
+        body["useInstead"],
+        json!(["page_create", "page_update"]),
+        "{body}"
     );
+    assert_eq!(pages().await, 0);
 
-    // Each call ran the operation once and was counted once.
-    let rows: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM ops_kernel_echo WHERE text IN ('kept', 'again')")
+    // A refused call changes nothing on the way: "me" doesn't make the
+    // caller's personal space.
+    let spaces = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM projects")
             .fetch_one(&setup.pool)
             .await
-            .expect("rows");
-    assert_eq!(rows, 2);
-    let calls: i64 = sqlx::query_scalar(
-        "SELECT calls FROM operation_alias_usage WHERE workspace_id = $1 AND alias = 'echo_make'",
-    )
-    .bind(setup.organization_id)
-    .fetch_one(&setup.pool)
-    .await
-    .expect("usage");
-    assert_eq!(calls, 2);
-    // A retry with the same request id replays without counting again.
-    let (_, again) = rpc(
+            .expect("spaces")
+    };
+    let before = spaces().await;
+    let (status, reply) = rpc(
         app,
         &token,
         "/api/v1/mcp",
@@ -775,20 +743,29 @@ async fn an_old_name_answers_in_its_old_shape_and_is_counted() {
         json!({
             "jsonrpc": "2.0", "id": 10, "method": "tools/call",
             "params": {
-                "name": "echo_make",
-                "arguments": { "space": space, "words": "kept", "clientRequestId": "old-1" }
+                "name": "page_write",
+                "arguments": { "projectId": "me", "title": "Kept", "body": "Old" }
             }
         }),
     )
     .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
     assert_eq!(
-        again.pointer("/result/structuredContent"),
-        Some(&json!({ "echo": { "words": "kept" } })),
-        "{again}"
+        reply.pointer("/result/structuredContent/outcome"),
+        Some(&json!("not_found")),
+        "{reply}"
     );
-    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM ops_kernel_echo WHERE text = 'kept'")
-        .fetch_one(&setup.pool)
+    let response = app
+        .clone()
+        .oneshot(bearer(
+            &token,
+            "POST",
+            "/api/public/v1/page_write",
+            None,
+            &json!({ "spaceId": "me", "title": "Kept", "body": "Old" }),
+        ))
         .await
-        .expect("rows");
-    assert_eq!(rows, 1);
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(spaces().await, before, "no personal space was made");
 }

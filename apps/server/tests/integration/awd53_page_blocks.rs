@@ -40,7 +40,7 @@ async fn block_edits_change_only_what_was_read_and_only_for_page_editors() {
     };
 
     let written = call(
-        "page_write",
+        "page_create",
         json!({"projectId": "WORK", "title": "Plan", "body": BODY}),
     )
     .await;
@@ -48,7 +48,7 @@ async fn block_edits_change_only_what_was_read_and_only_for_page_editors() {
     let page = written["value"]["id"].as_str().expect("page").to_owned();
 
     // The outline and blocks of version 1, with previews only.
-    let read = call("page_blocks", json!({"pageId": page})).await;
+    let read = call("page_blocks_get", json!({"pageId": page})).await;
     assert_eq!(read["outcome"], "ok", "{read}");
     assert_eq!(read["value"]["version"], 1);
     let kinds: Vec<&str> = read["value"]["blocks"]
@@ -74,7 +74,7 @@ async fn block_edits_change_only_what_was_read_and_only_for_page_editors() {
 
     // A section, exactly as stored; positions need the version they came from.
     let section = call(
-        "page_blocks",
+        "page_blocks_get",
         json!({"pageId": page, "version": 1, "section": 2}),
     )
     .await;
@@ -82,12 +82,12 @@ async fn block_edits_change_only_what_was_read_and_only_for_page_editors() {
         section["value"]["markdown"],
         "## Risks\n\n- slow CI\n- flaky test"
     );
-    let unversioned = call("page_blocks", json!({"pageId": page, "section": 2})).await;
+    let unversioned = call("page_blocks_get", json!({"pageId": page, "section": 2})).await;
     assert_eq!(unversioned["outcome"], "invalid_request", "{unversioned}");
 
     // Replace the list and append a block; the rest stays byte for byte.
     let edited = call(
-        "page_edit",
+        "page_update_blocks",
         json!({
             "pageId": page,
             "expectedVersion": 1,
@@ -111,7 +111,7 @@ async fn block_edits_change_only_what_was_read_and_only_for_page_editors() {
     // Someone saved since: an edit built on version 1 is refused, and so is
     // one whose hash names text that's no longer there.
     let stale = call(
-        "page_edit",
+        "page_update_blocks",
         json!({"pageId": page, "expectedVersion": 1, "edits": [
             {"op": "delete", "position": 1, "hash": hash_at(&read, 1)}
         ]}),
@@ -119,7 +119,7 @@ async fn block_edits_change_only_what_was_read_and_only_for_page_editors() {
     .await;
     assert_eq!(stale["outcome"], "conflict", "{stale}");
     let moved = call(
-        "page_edit",
+        "page_update_blocks",
         json!({"pageId": page, "expectedVersion": 2, "edits": [
             {"op": "delete", "position": 3, "hash": hash_at(&read, 3)}
         ]}),
@@ -139,7 +139,7 @@ async fn block_edits_change_only_what_was_read_and_only_for_page_editors() {
         app,
         &vic_token,
         &vic_session,
-        "page_blocks",
+        "page_blocks_get",
         json!({"pageId": page}),
     )
     .await;
@@ -148,7 +148,7 @@ async fn block_edits_change_only_what_was_read_and_only_for_page_editors() {
         app,
         &vic_token,
         &vic_session,
-        "page_edit",
+        "page_update_blocks",
         json!({"pageId": page, "expectedVersion": 2, "edits": [{"op": "append", "markdown": "Vic was here"}]}),
     )
     .await;
@@ -160,7 +160,7 @@ async fn block_edits_change_only_what_was_read_and_only_for_page_editors() {
         app,
         &out_token,
         &out_session,
-        "page_blocks",
+        "page_blocks_get",
         json!({"pageId": page}),
     )
     .await;
@@ -258,13 +258,13 @@ async fn a_page_made_from_messages_or_moved_blocks() {
 
     // Blocks moved out of a page leave a link to the new one.
     let written = call(
-        "page_write",
+        "page_create",
         json!({"projectId": "WORK", "title": "Plan", "body": BODY}),
     )
     .await;
     assert_eq!(written["outcome"], "ok", "{written}");
     let plan = written["value"]["id"].as_str().expect("plan").to_owned();
-    let blocks = call("page_blocks", json!({"pageId": plan})).await;
+    let blocks = call("page_blocks_get", json!({"pageId": plan})).await;
     let id_at = |position: usize| {
         blocks["value"]["blocks"][position]["id"]
             .as_str()
@@ -358,14 +358,15 @@ async fn a_page_made_from_messages_or_moved_blocks() {
     // account belongs to, though the page goes in WORK.
     let other_space = create_project(&setup, "ELSE", "Elsewhere").await;
     let elsewhere = call(
-        "page_write",
+        "page_create",
         json!({"projectId": "ELSE", "title": "Secret plan", "body": BODY}),
     )
     .await;
     assert_eq!(elsewhere["outcome"], "ok", "{elsewhere}");
     let elsewhere = elsewhere["value"]["id"].as_str().expect("page").to_owned();
     let first_block =
-        call("page_blocks", json!({"pageId": elsewhere})).await["value"]["blocks"][0]["id"].clone();
+        call("page_blocks_get", json!({"pageId": elsewhere})).await["value"]["blocks"][0]["id"]
+            .clone();
     let owner = sqlx::query_scalar::<_, uuid::Uuid>(
         "SELECT actor_id FROM organization_memberships WHERE organization_id = $1 AND role = 'owner' LIMIT 1",
     )

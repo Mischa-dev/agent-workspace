@@ -65,18 +65,16 @@ mcp_servers:
         - external_event_poll
         - message_send
         - people_search
-        - project_open
+        - project_get
         - pull_request_get
         - repository_get
         - request_get
         - request_respond
         - run_request
-        - task_comment
+        - task_comment_create
         - task_create
+        - task_get
         - task_list
-        - task_mark_blocked
-        - task_mark_ready_for_review
-        - task_open
         - task_update
       resources: false
       prompts: false
@@ -88,9 +86,8 @@ mcp_servers:
 
 Hermes registers these as `mcp__agent_workspace__<tool>`. The allowlist is
 also committed as `tools/hermes-connector/fixtures/tool-allowlist.txt` and CI
-checks every entry against the Rust MCP implementation. The server advertises
-`task_link_pull_request` to first-party human clients, but it is omitted
-from this external profile because M9 does not delegate GitHub publication or
+checks every entry against the Rust MCP implementation. Linking pull requests to tasks (`task_link` with a
+pull request) is omitted from this external profile because M9 does not delegate GitHub publication or
 integration management.
 
 Port 13101 is an operator-selected client-side SSH-forward port in the isolated

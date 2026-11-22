@@ -767,7 +767,14 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
     );
     // Without "see tasks", search and overviews leave tasks out.
     let search = json!({"query": "Allowed", "kinds": ["tasks"], "projectId": work});
-    let found = tool(app, &mara_token, &mara_session, "search", search.clone()).await;
+    let found = tool(
+        app,
+        &mara_token,
+        &mara_session,
+        "workspace_search",
+        search.clone(),
+    )
+    .await;
     assert_eq!(
         found["value"]["results"].as_array().map(Vec::len),
         Some(1),
@@ -784,13 +791,13 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         .execute(&setup.pool)
         .await
         .expect("Readers see nothing");
-    let found = tool(app, &mara_token, &mara_session, "search", search).await;
+    let found = tool(app, &mara_token, &mara_session, "workspace_search", search).await;
     assert_eq!(found["value"]["results"], json!([]), "{found}");
     let opened = tool(
         app,
         &mara_token,
         &mara_session,
-        "project_open",
+        "project_get",
         json!({"projectId": work}),
     )
     .await;
@@ -1389,7 +1396,14 @@ async fn file_search_leaves_out_task_files_where_tasks_are_hidden() {
     // Bea's app finds both until her agent limit leaves out "see tasks".
     let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
     let bea_session = initialize(app, &bea_app).await.expect("Bea's app");
-    let found = tool(app, &bea_app, &bea_session, "search", search.clone()).await;
+    let found = tool(
+        app,
+        &bea_app,
+        &bea_session,
+        "workspace_search",
+        search.clone(),
+    )
+    .await;
     assert_eq!(
         names(&found),
         ["budget-channel.txt", "budget-task.txt"],
@@ -1405,7 +1419,14 @@ async fn file_search_leaves_out_task_files_where_tasks_are_hidden() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
-    let found = tool(app, &bea_app, &bea_session, "search", search.clone()).await;
+    let found = tool(
+        app,
+        &bea_app,
+        &bea_session,
+        "workspace_search",
+        search.clone(),
+    )
+    .await;
     assert_eq!(names(&found), ["budget-channel.txt"], "{found}");
     assert!(!found.to_string().contains("Quarterly plan"), "{found}");
 
@@ -1428,7 +1449,7 @@ async fn file_search_leaves_out_task_files_where_tasks_are_hidden() {
     let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": work, "account": tom, "expectedVersion": version, "role": posters["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
-    let found = tool(app, &tom_token, &session, "search", search).await;
+    let found = tool(app, &tom_token, &session, "workspace_search", search).await;
     assert_eq!(names(&found), ["budget-channel.txt"], "{found}");
     assert!(!found.to_string().contains("Quarterly plan"), "{found}");
 }
@@ -1751,7 +1772,7 @@ async fn reads_naming_tasks_or_repositories_follow_the_role_and_limit() {
         app,
         &bea_app,
         &session,
-        "project_open",
+        "project_get",
         json!({"projectId": work}),
     )
     .await;
@@ -1853,7 +1874,7 @@ async fn reads_naming_tasks_or_repositories_follow_the_role_and_limit() {
         app,
         &bea_app,
         &session,
-        "project_open",
+        "project_get",
         json!({"projectId": work}),
     )
     .await;
@@ -1958,13 +1979,13 @@ async fn an_app_moderates_only_within_its_agent_limit() {
         app,
         &owner_app,
         &owner_session,
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": task, "text": "The owner's note", "clientRequestId": "owner-note"}),
     )
     .await;
-    assert_eq!(commented["outcome"], "applied", "{commented}");
+    assert_eq!(commented["outcome"], "ok", "{commented}");
     // The comment's ID is the write's activityId; resultId is its audit record.
-    let comment = commented["activityId"]
+    let comment = commented["value"]["activityId"]
         .as_str()
         .unwrap_or_else(|| panic!("comment id: {commented}"))
         .parse::<Uuid>()
@@ -2193,14 +2214,7 @@ async fn a_tasks_linked_code_needs_see_code() {
     assert_eq!(count(&item["linkedRepositories"]), 1, "{item}");
     let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
     let session = initialize(app, &bea_app).await.expect("Bea's app");
-    let opened = tool(
-        app,
-        &bea_app,
-        &session,
-        "task_open",
-        json!({"taskId": task}),
-    )
-    .await;
+    let opened = tool(app, &bea_app, &session, "task_get", json!({"taskId": task})).await;
     assert_eq!(opened["outcome"], "ok", "{opened}");
     assert_eq!(
         count(&opened["value"]["task"]["linkedRepositories"]),
@@ -2219,14 +2233,7 @@ async fn a_tasks_linked_code_needs_see_code() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
-    let opened = tool(
-        app,
-        &bea_app,
-        &session,
-        "task_open",
-        json!({"taskId": task}),
-    )
-    .await;
+    let opened = tool(app, &bea_app, &session, "task_get", json!({"taskId": task})).await;
     assert_eq!(opened["outcome"], "ok", "{opened}");
     assert_eq!(
         opened["value"]["task"]["title"], "Linked to code",
@@ -2896,7 +2903,7 @@ async fn linked_tasks_in_another_project_follow_see_tasks_there() {
     let (status, item) = send(app, detail(&bea_browser)).await;
     assert_eq!(status, StatusCode::OK, "{item}");
     assert!(item.to_string().contains("Hidden blocker"), "{item}");
-    let opened = tool(app, &bea_app, &session, "task_open", open.clone()).await;
+    let opened = tool(app, &bea_app, &session, "task_get", open.clone()).await;
     assert_eq!(opened["outcome"], "ok", "{opened}");
     assert!(opened.to_string().contains("Hidden blocker"), "{opened}");
 
@@ -2920,7 +2927,7 @@ async fn linked_tasks_in_another_project_follow_see_tasks_there() {
     let (status, item) = send(app, detail(&bea_browser)).await;
     assert_eq!(status, StatusCode::OK, "{item}");
     assert!(!item.to_string().contains("Hidden blocker"), "{item}");
-    let opened = tool(app, &bea_app, &session, "task_open", open).await;
+    let opened = tool(app, &bea_app, &session, "task_get", open).await;
     assert_eq!(opened["outcome"], "ok", "{opened}");
     assert!(!opened.to_string().contains("Hidden blocker"), "{opened}");
 }
@@ -3043,7 +3050,7 @@ async fn a_write_token_follows_any_write_permission() {
     let (status, page) = public_call(
         app,
         &token,
-        "page_write",
+        "page_create",
         json!({"projectId": work, "title": "Written by the token", "body": "Hello"}),
     )
     .await;
@@ -3062,7 +3069,7 @@ async fn a_write_token_follows_any_write_permission() {
         json!({"taskId": task, "title": "Renamed by the token", "expectedVersion": 1}),
     )
     .await;
-    assert_ne!(refused["outcome"], "applied", "{refused}");
+    assert_ne!(refused["outcome"], "ok", "{refused}");
     let renamed = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM task_rows WHERE title = 'Renamed by the token'",
     )
@@ -3303,8 +3310,8 @@ async fn a_browser_rule_run_through_an_app_keeps_to_the_apps_limit() {
         app,
         &bea_app,
         &session,
-        "automation_write",
-        json!({"projectId": work, "operation": "run", "ruleId": rule_id, "taskId": task}),
+        "automation_run_start",
+        json!({"projectId": work, "ruleId": rule_id, "taskId": task}),
     )
     .await;
     assert_eq!(ran["outcome"], "ok", "{ran}");
@@ -5380,11 +5387,11 @@ async fn link_changes_name_the_task_only_where_tasks_are_seen() {
     let owner_session = initialize(app, &owner_app).await.expect("owner app");
     for (name, arguments) in [
         (
-            "task_relate",
+            "task_link",
             json!({"taskId": task.to_string(), "otherTaskId": third.to_string()}),
         ),
         (
-            "task_depend",
+            "task_link",
             json!({"taskId": task.to_string(), "blockedBy": [third.to_string()]}),
         ),
     ] {
@@ -5395,17 +5402,18 @@ async fn link_changes_name_the_task_only_where_tasks_are_seen() {
     let session = initialize(app, &bea_app).await.expect("Bea's app");
     let calls = [
         (
-            "task_relate",
+            "task_link",
             json!({"taskId": task.to_string(), "otherTaskId": other.to_string(), "remove": true}),
         ),
         (
-            "task_depend",
+            "task_link",
             json!({"taskId": task.to_string(), "blockedBy": [other.to_string()], "remove": true}),
         ),
     ];
 
     // As a plain Member, Bea sees the task.
     for (name, arguments) in calls.clone() {
+        let depends = arguments.get("blockedBy").is_some();
         let seen = tool(app, &bea_app, &session, name, arguments).await;
         assert_eq!(seen["outcome"], "ok", "{name}: {seen}");
         let changed = &seen["value"]["task"];
@@ -5413,7 +5421,8 @@ async fn link_changes_name_the_task_only_where_tasks_are_seen() {
         assert!(changed["status"].is_string(), "{name}: {seen}");
         assert!(changed["statusGroup"].is_string(), "{name}: {seen}");
         assert_eq!(changed["finished"], false, "{name}: {seen}");
-        if name == "task_depend" {
+        // A dependency change answers whether the task is ready now.
+        if depends {
             assert!(seen["value"]["ready"].is_boolean(), "{name}: {seen}");
         }
         assert!(
@@ -5490,11 +5499,11 @@ async fn link_changes_list_linked_tasks_only_where_the_app_sees_them() {
     let owner_session = initialize(app, &owner_app).await.expect("owner app");
     for (name, arguments) in [
         (
-            "task_relate",
+            "task_link",
             json!({"taskId": task.to_string(), "otherTaskId": elsewhere.to_string()}),
         ),
         (
-            "task_depend",
+            "task_link",
             json!({"taskId": task.to_string(), "blockedBy": [elsewhere.to_string()]}),
         ),
     ] {
@@ -5505,11 +5514,11 @@ async fn link_changes_list_linked_tasks_only_where_the_app_sees_them() {
     let session = initialize(app, &bea_app).await.expect("Bea's app");
     let calls = [
         (
-            "task_relate",
+            "task_link",
             json!({"taskId": task.to_string(), "otherTaskId": spare.to_string(), "remove": true}),
         ),
         (
-            "task_depend",
+            "task_link",
             json!({"taskId": task.to_string(), "blocks": [spare.to_string()], "remove": true}),
         ),
     ];
@@ -6109,7 +6118,7 @@ async fn suggesting_is_a_role_not_an_account_kind() {
                 app,
                 &token,
                 &session,
-                "page_edit",
+                "page_update_blocks",
                 json!({"pageId": page, "edits": [{"op": "append", "markdown": text}]}),
             )
             .await
@@ -6389,12 +6398,12 @@ async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
         app,
         &mara_token,
         &mara_session,
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": task, "text": "On it", "clientRequestId": "k116-mara"}),
     )
     .await;
-    assert_eq!(commented["outcome"], "applied", "{commented}");
-    let mara_comment = commented["activityId"]
+    assert_eq!(commented["outcome"], "ok", "{commented}");
+    let mara_comment = commented["value"]["activityId"]
         .as_str()
         .expect("comment id")
         .to_owned();

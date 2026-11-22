@@ -251,7 +251,7 @@ async fn task_list_filters_count_and_stay_inside_reachable_projects() {
         async move { tool(app, &mara_token, &mara_session, name, arguments).await }
     };
     for (project, name) in [("ALPHA", "mobile"), ("BETA", "Mobile"), ("ALPHA", "Old")] {
-        let label = call("label_write", json!({"projectId": project, "name": name})).await;
+        let label = call("label_create", json!({"projectId": project, "name": name})).await;
         assert_eq!(label["outcome"], "ok", "{label}");
     }
     let mut created = Vec::new();
@@ -272,17 +272,17 @@ async fn task_list_filters_count_and_stay_inside_reachable_projects() {
     .await;
     assert_eq!(by_mara["value"]["key"], "ALPHA-4", "{by_mara}");
     let archived_label = call(
-        "label_write",
+        "label_update",
         json!({"projectId": "ALPHA", "label": "Old", "archived": true}),
     )
     .await;
     assert_eq!(archived_label["outcome"], "ok", "{archived_label}");
     let blocked = call(
-        "task_mark_blocked",
-        json!({"taskId": "ALPHA-2", "expectedVersion": 1, "reason": "Waiting on design", "clientRequestId": "block-2"}),
+        "task_update",
+        json!({"taskId": "ALPHA-2", "expectedVersion": 1, "blockedReason": "Waiting on design", "clientRequestId": "block-2"}),
     )
     .await;
-    assert_eq!(blocked["outcome"], "applied", "{blocked}");
+    assert_eq!(blocked["outcome"], "ok", "{blocked}");
     let claimed = as_mara("task_claim", json!({"taskId": "ALPHA-4"})).await;
     assert_eq!(claimed["outcome"], "ok", "{claimed}");
     let (status, archived) = crate::support::tasks::send(
@@ -531,7 +531,7 @@ async fn task_list_filters_count_and_stay_inside_reachable_projects() {
     // Names are lowercased by the database on both sides of the match. Rust
     // lowercases a final capital sigma to ς, the database to σ, so a name
     // lowercased in Rust would match no task.
-    let road = call("label_write", json!({"projectId": "BETA", "name": "ΟΔΟΣ"})).await;
+    let road = call("label_create", json!({"projectId": "BETA", "name": "ΟΔΟΣ"})).await;
     assert_eq!(road["outcome"], "ok", "{road}");
     let tagged = call(
         "task_update",
@@ -558,7 +558,7 @@ async fn task_list_takes_several_values_and_reads_views_as_the_list_does() {
         async move { tool(app, &codex, &session, name, arguments).await }
     };
     for name in ["api", "web"] {
-        let label = call("label_write", json!({"projectId": "VIEWS", "name": name})).await;
+        let label = call("label_create", json!({"projectId": "VIEWS", "name": name})).await;
         assert_eq!(label["outcome"], "ok", "{label}");
     }
     for arguments in [
@@ -1152,7 +1152,7 @@ async fn task_link_repositories_pull_requests_and_threads() {
     assert_eq!(value["version"], 2);
     assert_eq!(value["key"], "REPO-1");
     assert_eq!(id(&value["targetId"]), r1);
-    let opened = call("task_open", json!({"taskId": "REPO-1"})).await;
+    let opened = call("task_get", json!({"taskId": "REPO-1"})).await;
     let repositories = &opened["value"]["task"]["linkedRepositories"];
     assert_eq!(repositories[0]["role"], "primary", "{opened}");
     assert_eq!(id(&repositories[0]["repository"]["id"]), r1);
@@ -1284,25 +1284,12 @@ async fn task_link_repositories_pull_requests_and_threads() {
             .contains("REPO-1 moves to Verification when this pull request is merged"),
         "{pr}"
     );
-    let opened = call("task_open", json!({"taskId": "REPO-1"})).await;
+    let opened = call("task_get", json!({"taskId": "REPO-1"})).await;
     assert_eq!(
         id(&opened["value"]["task"]["linkedPullRequests"][0]["id"]),
         p1,
         "{opened}"
     );
-    // The older tool sees the same link and keeps its contract.
-    let alias_arguments = json!({
-        "taskId": "REPO-1",
-        "expectedVersion": 6,
-        "pullRequestId": p1,
-        "clientRequestId": "pr-1"
-    });
-    let alias = call("task_link_pull_request", alias_arguments.clone()).await;
-    assert_eq!(alias["outcome"], "applied", "{alias}");
-    assert_eq!(alias["changedFields"], json!([]));
-    assert_eq!(alias["version"], 6);
-    let replay = call("task_link_pull_request", alias_arguments).await;
-    assert_eq!(replay["idempotentReplay"], true, "{replay}");
     let unlinked = link(json!({"pullRequestId": p1, "remove": true})).await;
     assert_eq!(unlinked["value"]["changed"], true, "{unlinked}");
     let pr_links = || {
@@ -1325,7 +1312,7 @@ async fn task_link_repositories_pull_requests_and_threads() {
 
     // Pages: a stale version is refused only when something would change.
     let page = call(
-        "page_write",
+        "page_create",
         json!({"projectId": "REPO", "title": "Offline notes", "body": "Plan."}),
     )
     .await;
@@ -1629,7 +1616,7 @@ async fn a_project_scoped_credential_never_learns_ids_beyond_its_project() {
         json!({"taskIds": ["HOME-1"], "beforeTaskId": "SECRET-1"}),
     )
     .await;
-    let opened = call("task_open", json!({"taskId": "SECRET-1"})).await;
+    let opened = call("task_get", json!({"taskId": "SECRET-1"})).await;
     for refused in [&listed, &reordered, &opened] {
         assert_eq!(refused["outcome"], "not_found", "{refused}");
         let text = refused.to_string();
@@ -1843,7 +1830,7 @@ async fn a_project_scoped_credential_copies_templates_only_from_its_project() {
             app,
             &codex,
             &session,
-            "page_write",
+            "page_create",
             json!({
                 "projectId": project,
                 "title": format!("{project} template"),
@@ -1874,7 +1861,7 @@ async fn a_project_scoped_credential_copies_templates_only_from_its_project() {
         app,
         &scoped,
         &scoped_session,
-        "page_write",
+        "page_create",
         json!({
             "projectId": "HOME",
             "fromTemplateId": templates[0],
@@ -1888,7 +1875,7 @@ async fn a_project_scoped_credential_copies_templates_only_from_its_project() {
         app,
         &scoped,
         &scoped_session,
-        "page_write",
+        "page_create",
         json!({
             "projectId": "HOME",
             "fromTemplateId": templates[1],

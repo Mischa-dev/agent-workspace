@@ -1123,7 +1123,7 @@ async fn private_channel() {
         &world.app,
         &mara.token,
         &mara.session,
-        "conversation_members",
+        "conversation_members_update",
         json!({"conversationId": channel, "remove": [mara.actor.to_string()]}),
     )
     .await;

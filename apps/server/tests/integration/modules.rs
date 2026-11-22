@@ -784,7 +784,7 @@ async fn conversation_tools_follow_the_module_where_the_conversation_lives() {
     // module lists them: editing a message in the channel needs Channels,
     // and starting a thread in the DM needs only Messages.
     let edited = call(
-        "message_edit",
+        "message_update",
         json!({"messageId": in_channel, "text": "Release notes, edited", "clientRequestId": "awd75-off-3"}),
     )
     .await;

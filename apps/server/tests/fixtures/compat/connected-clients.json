@@ -12,12 +12,12 @@
     "always-on-runtime": {
       "wake": "standard-webhooks",
       "tools": {
-        "briefing": [],
+        "briefing_get": [],
         "inbox_list": [],
         "conversation_open": ["conversationId"],
         "message_send": ["conversationId", "text"],
         "reply_claim": ["requestId"],
-        "reply_progress": ["requestId", "generation", "status"],
+        "reply_progress_report": ["requestId", "generation", "status"],
         "reply_send": ["requestId", "generation", "text", "final"],
         "reply_pass": ["requestId", "generation"],
         "reply_release": ["requestId", "generation", "reason"],
@@ -32,19 +32,17 @@
         "external_event_poll": [],
         "message_send": ["conversationId", "text"],
         "people_search": [],
-        "project_open": [],
+        "project_get": [],
         "pull_request_get": [],
         "repository_get": [],
         "request_get": ["requestId"],
         "request_respond": ["requestId"],
         "run_request": [],
-        "task_comment": ["taskId"],
+        "task_comment_create": ["taskId"],
         "task_create": ["title"],
         "task_list": [],
-        "task_mark_blocked": ["taskId"],
-        "task_mark_ready_for_review": ["taskId"],
-        "task_open": ["taskId"],
-        "task_update": ["taskId", "expectedVersion"]
+        "task_get": ["taskId"],
+        "task_update": ["taskId", "expectedVersion", "blockedReason", "readyForReview"]
       }
     }
   },

@@ -118,7 +118,7 @@ async fn an_owner_takes_down_a_pasted_token_through_a_connected_app() {
         "You can only remove your own messages. Project owners and admins can remove anyone's."
     );
     let refused = mara(
-        "message_edit",
+        "message_update",
         json!({"messageId": pasted_id, "text": "deploy with the usual token"}),
     )
     .await;
@@ -209,15 +209,22 @@ async fn an_owner_takes_down_a_pasted_token_through_a_connected_app() {
             ("conversation_open", json!({"conversationId": general})),
             ("conversation_read", json!({"conversationId": thread_id})),
             ("conversation_list", json!({"projectId": work})),
-            ("search", json!({"query": token})),
-            ("briefing", json!({})),
+            ("workspace_search", json!({"query": token})),
+            ("briefing_get", json!({})),
             ("message_history", json!({"messageId": pasted_id})),
         ] {
             let seen = tool(app, token_, session_, name, arguments).await;
             assert_eq!(seen["outcome"], "ok", "{name}: {seen}");
             assert!(!seen.to_string().contains(&token), "{name}: {seen}");
         }
-        let found = tool(app, token_, session_, "search", json!({"query": token})).await;
+        let found = tool(
+            app,
+            token_,
+            session_,
+            "workspace_search",
+            json!({"query": token}),
+        )
+        .await;
         assert_eq!(found["value"]["results"], json!([]), "{found}");
     }
     let inbox = mara("inbox_list", json!({})).await;

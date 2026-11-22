@@ -34,7 +34,7 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
     // A secret in a title is removed before it is stored, on open and on
     // update, as it is in status lines and activities.
     let titled = call(
-        "run_open",
+        "run_create",
         json!({"projectId": "WORK", "title": "Deploy API_KEY=abcdef1234567890",
                "cause": {"kind": "manual"}}),
     )
@@ -74,7 +74,7 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
         "cause": {"kind": "schedule", "ref": "weekday 09:00"},
         "reportIntervalSeconds": 600
     });
-    let opened = call("run_open", open.clone()).await;
+    let opened = call("run_create", open.clone()).await;
     assert_eq!(opened["outcome"], "ok", "{opened}");
     assert_eq!(opened["value"]["created"], true);
     assert_eq!(opened["value"]["run"]["state"], "working");
@@ -82,7 +82,7 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
         .as_str()
         .expect("run")
         .to_owned();
-    let again = call("run_open", open).await;
+    let again = call("run_create", open).await;
     assert_eq!(again["value"]["created"], false, "{again}");
     assert_eq!(again["value"]["run"]["runId"], run_id.as_str());
 
@@ -96,11 +96,11 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
                      "output": "export API_KEY=abcdef1234567890abcdef done"}},
         {"id": "a3", "kind": "text_message", "payload": {"text": "Grouped by theme."}}
     ]});
-    let reported = call("run_activity", batch.clone()).await;
+    let reported = call("run_activity_report", batch.clone()).await;
     assert_eq!(reported["outcome"], "ok", "{reported}");
     assert_eq!(reported["value"]["accepted"], 3);
     assert_eq!(reported["value"]["duplicates"], 0);
-    let repeated = call("run_activity", batch).await;
+    let repeated = call("run_activity_report", batch).await;
     assert_eq!(repeated["value"]["accepted"], 0, "{repeated}");
     assert_eq!(repeated["value"]["duplicates"], 3);
     let run = run_id.parse::<Uuid>().expect("run UUID");
@@ -128,13 +128,13 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
     // see it exists.
     for (name, arguments) in [
         (
-            "run_activity",
+            "run_activity_report",
             json!({"runId": run_id, "activities": [
                 {"id": "x", "kind": "text_message", "payload": {"text": "mine now"}}]}),
         ),
         ("run_update", json!({"runId": run_id, "state": "done"})),
         (
-            "run_result",
+            "run_result_report",
             json!({"runId": run_id, "results": [{"kind": "link", "url": "https://example.com/x"}]}),
         ),
         (
@@ -152,7 +152,7 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
 
     // An interrupt makes it wait; its answer puts it back to work.
     let asked = call(
-        "run_activity",
+        "run_activity_report",
         json!({"runId": run_id, "activities": [{"id": "q1", "kind": "interrupt",
             "payload": {"request": {"kind": "question", "title": "One task or three?"}}}]}),
     )
@@ -199,7 +199,7 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
     };
     assert_eq!(liveness(setup.pool.clone()).await, "not_responding");
     let answered = call(
-        "run_activity",
+        "run_activity_report",
         json!({"runId": run_id, "activities": [{"id": "q1-answer",
             "kind": "interrupt_resolved", "payload": {"requestId": "q1"}}]}),
     )
@@ -225,9 +225,9 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
     assert_eq!(tokens, 1200);
     let result = json!({"runId": run_id, "results": [
         {"kind": "pull_request", "url": "https://code.example/acme/app/pull/12", "number": 12}]});
-    let added = call("run_result", result.clone()).await;
+    let added = call("run_result_report", result.clone()).await;
     assert_eq!(added["value"]["added"], 1, "{added}");
-    let added = call("run_result", result).await;
+    let added = call("run_result_report", result).await;
     assert_eq!(added["value"]["added"], 0, "{added}");
 
     // A1.17: the run's changes are what it last reported; the server reads
@@ -317,7 +317,7 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
 
     // run_finished finishes it, and a finished run stays finished.
     let finished = call(
-        "run_activity",
+        "run_activity_report",
         json!({"runId": run_id, "activities": [{"id": "end", "kind": "run_finished",
             "payload": {"outcome": "done"}}]}),
     )
@@ -328,7 +328,7 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
     // An interrupt after the end is kept as a step, but opens no request
     // that would stay open on a finished run.
     let late = call(
-        "run_activity",
+        "run_activity_report",
         json!({"runId": run_id, "activities": [{"id": "late-q", "kind": "interrupt",
             "payload": {"request": {"kind": "question", "title": "Anything else?"}}}]}),
     )
@@ -351,7 +351,7 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
     // labels of three-byte characters) is stored, not rolled back.
     // Settings carry a password under its name: it is not stored.
     let asking = call(
-        "run_open",
+        "run_create",
         json!({"projectId": "WORK", "title": "Big ask", "cause": {"kind": "manual"},
                "settings": {"password": "correct-horse-battery-staple",
                             "endpoints": [{"apiKey": "plain-words-key"}]}}),
@@ -367,7 +367,7 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
         .map(|index| json!({"id": format!("{index}{}", "i".repeat(39)), "label": "漢".repeat(200)}))
         .collect::<Vec<_>>();
     let asked = call(
-        "run_activity",
+        "run_activity_report",
         json!({"runId": asking["value"]["run"]["runId"],
                "activities": [{"id": "ask", "kind": "interrupt",
                    "payload": {"request": {"kind": "approval", "title": "Which way?",
@@ -379,7 +379,7 @@ async fn an_agent_reports_its_own_run_and_nobody_else_can() {
 
     // So does a step's payload, at any depth.
     let step = call(
-        "run_activity",
+        "run_activity_report",
         json!({"runId": asking_run.to_string(), "activities": [{"id": "login", "kind": "tool_call",
             "payload": {"toolCallRef": "t9", "input": {"user": "dana",
                         "password": "correct-horse-battery-staple",
@@ -430,7 +430,7 @@ async fn a_person_stops_an_agents_run_and_the_agent_hears_it() {
         app,
         &fixer_token,
         &fixer,
-        "run_open",
+        "run_create",
         json!({"projectId": "WORK", "title": "Long job", "cause": {"kind": "manual"}}),
     )
     .await;
@@ -479,7 +479,7 @@ async fn a_person_stops_an_agents_run_and_the_agent_hears_it() {
         app,
         &fixer_token,
         &fixer,
-        "run_activity",
+        "run_activity_report",
         json!({"runId": run_id, "activities": [{"id": "stopped", "kind": "run_finished",
             "payload": {"outcome": "cancelled"}}]}),
     )
@@ -518,7 +518,7 @@ async fn a_retried_open_never_answers_with_a_run_from_elsewhere() {
         json!({"projectId": project, "clientRunId": "nightly",
                "title": "Quiet merger talks", "cause": {"kind": "manual"}})
     };
-    let opened = tool(app, &fixer_token, &fixer, "run_open", open("WORK")).await;
+    let opened = tool(app, &fixer_token, &fixer, "run_create", open("WORK")).await;
     assert_eq!(opened["outcome"], "ok", "{opened}");
     let run_id = opened["value"]["run"]["runId"]
         .as_str()
@@ -527,7 +527,7 @@ async fn a_retried_open_never_answers_with_a_run_from_elsewhere() {
 
     // The same clientRunId from the other project: refused, and nothing
     // about the first run comes back.
-    let elsewhere = tool(app, &fixer_token, &fixer, "run_open", open("HOME")).await;
+    let elsewhere = tool(app, &fixer_token, &fixer, "run_create", open("HOME")).await;
     assert_ne!(elsewhere["outcome"], "ok", "{elsewhere}");
     let said = elsewhere.to_string();
     assert!(
@@ -605,7 +605,7 @@ async fn a_replay_rechecks_the_conversation_its_run_is_in() {
         async move { tool(app, &token, &session, name, arguments).await }
     };
     let opened = call(
-        "run_open",
+        "run_create",
         json!({"projectId": "WORK", "title": "Deal notes", "cause": {"kind": "thread", "conversationId": channel_id}}),
     )
     .await;
@@ -633,7 +633,7 @@ async fn a_replay_rechecks_the_conversation_its_run_is_in() {
     assert_eq!(replayed["outcome"], "not_found", "{replayed}");
     assert!(!replayed.to_string().contains("merger"), "{replayed}");
     let step = call(
-        "run_activity",
+        "run_activity_report",
         json!({"runId": run_id, "activities": [{"id": "s1", "kind": "step_started",
             "payload": {"title": "More"}}]}),
     )
@@ -657,7 +657,7 @@ async fn usage_reported_for_a_window_is_split_across_the_runs_going_then() {
             app,
             &token,
             &session,
-            "run_open",
+            "run_create",
             json!({"projectId": "WORK", "title": title, "cause": {"kind": "manual"}}),
         )
         .await;
@@ -851,7 +851,7 @@ async fn a_pull_request_a_run_reports_follows_its_task_and_shows_its_checks() {
     .await
     .expect("task");
     let opened = call(
-        "run_open",
+        "run_create",
         json!({"projectId": "WORK", "title": "Offline mode",
                "cause": {"kind": "task", "taskId": task.to_string()}}),
     )
@@ -866,7 +866,7 @@ async fn a_pull_request_a_run_reports_follows_its_task_and_shows_its_checks() {
     // a pull request the built-in host opened is (address case aside).
     let unknown_url = "https://github.com/acme/widgets/pull/8";
     let reported = call(
-        "run_result",
+        "run_result_report",
         json!({"runId": run, "results": [
             {"kind": "pull_request", "url": known_url.replace("acme", "ACME"), "title": "Offline mode"},
             {"kind": "pull_request", "url": unknown_url}]}),

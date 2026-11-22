@@ -59,14 +59,14 @@ async fn the_journey() {
         "title": "Survey the open issues",
         "cause": {"kind": "manual"}
     });
-    let opened = call("run_open", open.clone()).await;
+    let opened = call("run_create", open.clone()).await;
     assert_eq!(opened["outcome"], "ok", "{opened}");
     assert_eq!(opened["value"]["run"]["state"], "working");
     let run_id = opened["value"]["run"]["runId"]
         .as_str()
         .expect("run")
         .to_owned();
-    let again = call("run_open", open).await;
+    let again = call("run_create", open).await;
     assert_eq!(
         again["value"]["run"]["runId"],
         run_id.as_str(),
@@ -77,9 +77,9 @@ async fn the_journey() {
         {"id": "s1", "kind": "step_started", "payload": {"title": "Read the issues"}},
         {"id": "s2", "kind": "text_message", "payload": {"text": "Three need a decision."}}
     ]});
-    let reported = call("run_activity", steps.clone()).await;
+    let reported = call("run_activity_report", steps.clone()).await;
     assert_eq!(reported["value"]["accepted"], 2, "{reported}");
-    let retried = call("run_activity", steps).await;
+    let retried = call("run_activity_report", steps).await;
     assert_eq!(
         retried["value"]["duplicates"], 2,
         "a retried batch is stored once: {retried}"
@@ -91,13 +91,13 @@ async fn the_journey() {
     .await;
     assert_eq!(status["outcome"], "ok", "{status}");
     let produced = call(
-        "run_result",
+        "run_result_report",
         json!({"runId": run_id, "results": [{"kind": "link", "url": "https://example.com/summary", "title": "Summary"}]}),
     )
     .await;
     assert_eq!(produced["outcome"], "ok", "{produced}");
     let finished = call(
-        "run_activity",
+        "run_activity_report",
         json!({"runId": run_id, "activities": [
             {"id": "done", "kind": "run_finished", "payload": {"outcome": "done"}}]}),
     )

@@ -674,7 +674,7 @@ async fn open_with(
     Ok(Opened { run, created: true })
 }
 
-/// A retried `run_open` answers with the run it opened, but only where the
+/// A retried `run_create` answers with the run it opened, but only where the
 /// caller could open it now: in the same project, which it still belongs
 /// to, and in a conversation it still sees. A `clientRunId` already used in
 /// another project is refused without saying anything about that run.

@@ -370,6 +370,8 @@ export async function postUpdate(
       refused ??= error
     }
   }
+  // A DM is changed through every workspace you're in: count each id once.
+  result.updated = [...new Set(result.updated)]
   if (refused === undefined) return result
   if (!landed) throw refused
   return { ...result, refused }

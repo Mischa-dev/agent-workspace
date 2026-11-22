@@ -212,7 +212,7 @@ async fn pages_go_out_as_pdf_with_what_the_reader_may_see() {
             app,
             &codex,
             &session,
-            "sheet_write",
+            "sheet_create",
             json!({
                 "projectId": project,
                 "name": name,

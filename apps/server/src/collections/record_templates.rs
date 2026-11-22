@@ -177,7 +177,7 @@ async fn template_collection(
         return Err(OpError::Invalid {
             field: "collection".into(),
             message: format!(
-                "Records in \"{}\" are tasks: use a task template (template_write).",
+                "Records in \"{}\" are tasks: use a task template (template_create).",
                 collection.name
             )
             .into(),
@@ -1207,7 +1207,6 @@ async fn make_occurrence(context: &JobContext) -> Result<(), JobError> {
         request_id: Some(occurrence_key(row.id, payload.occurrence)),
         unkeyed: crate::ops::Unkeyed::Refuse("clientRequestId"),
         preview: false,
-        renamed_from: None,
         defer_long: false,
     };
     let answer = crate::ops::dispatch(

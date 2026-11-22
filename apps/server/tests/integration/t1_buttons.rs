@@ -58,7 +58,7 @@ async fn buttons_run_as_the_presser_and_refuse_whole() {
         .call(
             &world.app,
             tool(
-                "collection_write",
+                "collection_create",
                 json!({
                     "projectId": "WORK",
                     "name": "Orders",
@@ -93,7 +93,7 @@ async fn buttons_run_as_the_presser_and_refuse_whole() {
         .call(
             &world.app,
             tool(
-                "collection_describe",
+                "collection_get",
                 json!({"projectId": "WORK", "collection": "Orders"}),
             ),
         )
@@ -115,7 +115,7 @@ async fn buttons_run_as_the_presser_and_refuse_whole() {
         .call(
             &world.app,
             tool(
-                "record_write",
+                "record_create_many",
                 json!({"projectId": "WORK", "collection": "Orders", "records": [
                     {"title": "Apples", "fields": {"Stage": "Open"}},
                 ]}),
@@ -129,7 +129,7 @@ async fn buttons_run_as_the_presser_and_refuse_whole() {
         .call(
             &world.app,
             tool(
-                "record_write",
+                "record_update_many",
                 json!({"projectId": "WORK", "collection": "Orders", "records": [
                     {"record": "#1", "fields": {"Decide": "x"}},
                 ]}),
@@ -224,7 +224,7 @@ async fn buttons_run_as_the_presser_and_refuse_whole() {
         .call(
             &world.app,
             tool(
-                "collection_write",
+                "collection_update",
                 json!({"projectId": "WORK", "collection": "Orders", "fields": [{"field": "Stage", "name": "Phase"}]}),
             ),
         )
@@ -234,7 +234,7 @@ async fn buttons_run_as_the_presser_and_refuse_whole() {
         .call(
             &world.app,
             tool(
-                "collection_describe",
+                "collection_get",
                 json!({"projectId": "WORK", "collection": "Orders"}),
             ),
         )
@@ -275,7 +275,7 @@ async fn buttons_run_as_the_presser_and_refuse_whole() {
             .call(
                 &world.app,
                 tool(
-                    "collection_write",
+                    "collection_update",
                     json!({"projectId": "WORK", "collection": "Orders", "fields": [{"name": "Bad", "type": "button", "button": button}]}),
                 ),
             )

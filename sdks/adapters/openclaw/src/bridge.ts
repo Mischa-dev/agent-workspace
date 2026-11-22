@@ -254,13 +254,13 @@ export class WorkspaceBridge {
 
   private async progress(held: Held, status: string): Promise<void> {
     try {
-      await this.call('reply_progress', {
+      await this.call('reply_progress_report', {
         requestId: held.requestId,
         generation: held.generation,
         status: status.slice(0, 200),
       })
     } catch (error) {
-      this.options.log?.info?.(`agent-workspace: reply_progress failed: ${String(error)}`)
+      this.options.log?.info?.(`agent-workspace: reply_progress_report failed: ${String(error)}`)
     }
   }
 

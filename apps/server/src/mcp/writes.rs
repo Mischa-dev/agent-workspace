@@ -45,7 +45,7 @@ const MAX_REQUEST_ID_BYTES: usize = 128;
 
 const TASK_ID_MESSAGE: &str = "Pass the task's ID, link, or key such as AWD-12.";
 const EXPECTED_VERSION_MESSAGE: &str =
-    "Pass the version you last read (from task_open or task_list) as expectedVersion.";
+    "Pass the version you last read (from task_get or task_list) as expectedVersion.";
 pub(super) const REQUEST_ID_MESSAGE: &str = "Use a clientRequestId of 1 to 128 letters, digits, dashes, dots or underscores, and send the same one when you retry.";
 pub(super) const TITLE_MESSAGE: &str = "Give it a title of 1 to 240 characters, on one line.";
 pub(super) const DESCRIPTION_MESSAGE: &str = "The description can be at most 100,000 characters, with no control characters except line breaks and tabs.";
@@ -96,7 +96,7 @@ pub struct PostUpdateArguments {
     /// and forComment: true on this task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachment_ids: Option<Vec<String>>,
-    /// To answer one comment on this task, its id (task_open lists them): it
+    /// To answer one comment on this task, its id (task_get lists them): it
     /// shows quoted above yours, and its author is told.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to_comment_id: Option<String>,
@@ -1387,7 +1387,7 @@ async fn post_update_inner(
         ));
     };
     const REPLY_MESSAGE: &str =
-        "Pass the id of a comment on this task that isn't deleted (task_open lists them).";
+        "Pass the id of a comment on this task that isn't deleted (task_get lists them).";
     let reply_to = match arguments.reply_to_comment_id.as_deref() {
         None => None,
         Some(raw) => match parse_id(raw) {

@@ -151,7 +151,7 @@ pub struct FormSummary {
     pub version: i64,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub archived: bool,
-    /// A public form's link (manage it with bug_report_link_write).
+    /// A public form's link (manage it with bug_report_link_create and bug_report_link_update).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<String>")]
     pub link_id: Option<Uuid>,
@@ -484,7 +484,7 @@ impl Operation for FormCreate {
         written as them. It may ask for people and relations, split its questions into \
         sections, show a question only after some answer to an earlier one, and set fields \
         on every record. A public form, filled in by anyone with its link, is made with \
-        bug_report_link_write.";
+        bug_report_link_create.";
 
     type Input = FormCreateInput;
     type Output = FormView;
@@ -500,7 +500,7 @@ impl Operation for FormCreate {
             return Err(OpError::Invalid {
                 field: "collection".into(),
                 message: format!(
-                    "\"{}\" makes tasks: give it a public form (bug_report_link_write) or a task template instead.",
+                    "\"{}\" makes tasks: give it a public form (bug_report_link_create) or a task template instead.",
                     collection.name
                 )
                 .into(),
@@ -625,7 +625,7 @@ impl Operation for FormUpdate {
         if input.archived.is_some() && audience == Audience::Public {
             return Err(OpError::invalid(
                 "archived",
-                "A public form stops when its link is deleted (bug_report_link_write).",
+                "A public form stops when its link is deleted (bug_report_link_update).",
             ));
         }
         let definition = match input.definition {

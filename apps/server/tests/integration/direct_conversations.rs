@@ -1701,9 +1701,9 @@ async fn handles_tokens_and_pins_hold_across_workspaces() {
 
     // Search finds the personal DM, never the second workspace's kept one.
     let found = |answer: &Value| answer["value"]["results"].as_array().map_or(0, Vec::len);
-    let personal_hits = call("search", json!({"query": personal_word})).await;
+    let personal_hits = call("workspace_search", json!({"query": personal_word})).await;
     assert_eq!(found(&personal_hits), 1, "{personal_hits}");
-    let kept_hits = call("search", json!({"query": kept_word})).await;
+    let kept_hits = call("workspace_search", json!({"query": kept_word})).await;
     assert_eq!(
         found(&kept_hits),
         0,
@@ -1841,7 +1841,7 @@ async fn handles_tokens_and_pins_hold_across_workspaces() {
     assert_eq!(later["outcome"], "ok", "{later}");
 
     // Nor does the briefing bring the kept DM's mention.
-    let briefing = call("briefing", json!({})).await;
+    let briefing = call("briefing_get", json!({})).await;
     assert_eq!(briefing["outcome"], "ok", "{briefing}");
     assert!(
         !briefing.to_string().contains(&kept),

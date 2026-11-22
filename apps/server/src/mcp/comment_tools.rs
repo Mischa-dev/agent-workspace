@@ -22,7 +22,7 @@ use crate::{
 
 const TASK_ID_MESSAGE: &str = "Pass the task's ID, key (such as AWD-12) or link.";
 const COMMENT_ID_MESSAGE: &str =
-    "Pass the comment's ID; task_open lists a task's comments with theirs.";
+    "Pass the comment's ID; task_get lists a task's comments with theirs.";
 const TEXT_MESSAGE: &str =
     "Write the comment as text, 1 to 20,000 characters. Line breaks and Markdown are kept.";
 const DELETED_NOTE: &str = "Deleted for everyone, with every earlier version of its text. If it held a secret, rotate the secret: anyone who already read it may have a copy.";
@@ -32,7 +32,7 @@ const DELETED_NOTE: &str = "Deleted for everyone, with every earlier version of 
 pub(super) struct TaskCommentEditArguments {
     /// The task's ID, key (such as AWD-12) or link.
     pub task_id: String,
-    /// The comment's ID. task_open lists the task's recent comments with
+    /// The comment's ID. task_get lists the task's recent comments with
     /// their IDs.
     pub comment_id: String,
     /// The new text, 1 to 20,000 characters. Line breaks and Markdown are
@@ -52,7 +52,7 @@ pub(super) struct TaskCommentEditArguments {
 pub(super) struct TaskCommentDeleteArguments {
     /// The task's ID, key (such as AWD-12) or link.
     pub task_id: String,
-    /// The comment's ID. task_open lists the task's recent comments with
+    /// The comment's ID. task_get lists the task's recent comments with
     /// their IDs.
     pub comment_id: String,
 }
@@ -112,7 +112,7 @@ fn refusal_result<T>(refusal: CommentRefusal) -> ToolResult<T> {
         ),
         CommentRefusal::Removed => ToolResult::conflict("That comment was deleted."),
         CommentRefusal::RevisionMoved(current) => ToolResult::conflict(format!(
-            "The comment changed since you read it; it's at revision {current} now. Read it again with task_open, then retry with expectedRevision {current}."
+            "The comment changed since you read it; it's at revision {current} now. Read it again with task_get, then retry with expectedRevision {current}."
         )),
         CommentRefusal::TooManyEdits => ToolResult::conflict(
             "That comment has been edited too many times. Add a new comment instead.",

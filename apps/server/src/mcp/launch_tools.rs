@@ -137,7 +137,7 @@ pub(crate) struct EnvironmentValue {
     pub is_default: bool,
     pub last_check_ok: Option<bool>,
     pub last_check_message: Option<String>,
-    /// Pass as expectedVersion to change it (environment_write).
+    /// Pass as expectedVersion to change it (environment_update).
     pub version: i64,
 }
 

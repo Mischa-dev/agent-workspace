@@ -408,7 +408,7 @@ async fn a_world_has_every_kind_of_caller() {
         .await;
     assert_eq!(status, StatusCode::OK, "{by_http}");
     let read = || Call::Tool {
-        name: "project_open",
+        name: "project_get",
         arguments: json!({"projectId": "WORK"}),
     };
     let (_, by_app) = world.apps["codex"].call(app, read()).await;
@@ -423,7 +423,7 @@ async fn a_world_has_every_kind_of_caller() {
         .call(
             app,
             Call::PublicApi {
-                tool: "project_open",
+                tool: "project_get",
                 arguments: json!({"projectId": "WORK"}),
             },
         )

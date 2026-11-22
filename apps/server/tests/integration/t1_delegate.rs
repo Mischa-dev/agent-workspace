@@ -79,7 +79,7 @@ async fn people_and_agents_hold_either_role_and_launches_hand_tasks_over() {
     assert_eq!(mine["outcome"], "ok", "{mine}");
     current = version(&mine);
     assert_eq!(delegate_of(task).await, Some(rook.actor));
-    let opened = as_rook("task_open", json!({"taskId": key})).await;
+    let opened = as_rook("task_get", json!({"taskId": key})).await;
     assert_eq!(
         opened["value"]["task"]["delegate"]["actorId"],
         json!(rook.actor.to_string()),

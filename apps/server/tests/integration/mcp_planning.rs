@@ -95,7 +95,7 @@ async fn creating_a_milestone_again_creates_it_once() {
         &setup.pool,
         &token,
         &session,
-        "milestone_write",
+        "milestone_create",
         json!({"projectId": work, "name": "Beta", "clientRequestId": "milestone-retry-1"}),
         json!({"projectId": work, "name": "Launch", "clientRequestId": "milestone-retry-1"}),
         "SELECT count(*) FROM project_milestones",
@@ -180,15 +180,11 @@ async fn dependencies_cross_projects_but_never_workspaces_or_private_projects() 
         ("WORK-3", "WORK-2"),
         ("SIDE-1", "WORK-3"),
     ] {
-        let added = call(
-            "task_depend",
-            json!({"taskId": task, "blockedBy": [blocker]}),
-        )
-        .await;
+        let added = call("task_link", json!({"taskId": task, "blockedBy": [blocker]})).await;
         assert_eq!(added["outcome"], "ok", "{added}");
     }
     let cycle = call(
-        "task_depend",
+        "task_link",
         json!({"taskId": "WORK-1", "blockedBy": ["SIDE-1"]}),
     )
     .await;
@@ -199,13 +195,13 @@ async fn dependencies_cross_projects_but_never_workspaces_or_private_projects() 
             .is_some_and(|text| text.contains("WORK-1 blocks WORK-2 blocks WORK-3 blocks SIDE-1")),
         "{cycle}"
     );
-    let docs = call("task_open", json!({"taskId": "SIDE-1"})).await;
+    let docs = call("task_get", json!({"taskId": "SIDE-1"})).await;
     assert_eq!(keys(&docs["value"]["blockedBy"]), ["WORK-3"], "{docs}");
     assert_eq!(docs["value"]["ready"], false);
 
     // The other workspace's task is reachable on its own, but never as a
     // link: it reads as not found, and nothing is written.
-    let theirs = call("task_open", json!({"taskId": "OTHER-1"})).await;
+    let theirs = call("task_get", json!({"taskId": "OTHER-1"})).await;
     assert_eq!(theirs["outcome"], "ok", "{theirs}");
     let their_id = theirs["value"]["task"]["id"]
         .as_str()
@@ -213,13 +209,13 @@ async fn dependencies_cross_projects_but_never_workspaces_or_private_projects() 
         .to_owned();
     for reference in ["OTHER-1", their_id.as_str()] {
         let refused = call(
-            "task_depend",
+            "task_link",
             json!({"taskId": "WORK-1", "blocks": [reference]}),
         )
         .await;
         assert_eq!(refused["outcome"], "not_found", "{refused}");
         let related = call(
-            "task_relate",
+            "task_link",
             json!({"taskId": "WORK-1", "otherTaskId": reference}),
         )
         .await;
@@ -237,7 +233,7 @@ async fn dependencies_cross_projects_but_never_workspaces_or_private_projects() 
     // A private project's task blocks WORK-3. Mara, who isn't in SECRET,
     // sees that something unfinished blocks it, never what.
     let hidden = call(
-        "task_depend",
+        "task_link",
         json!({"taskId": "WORK-3", "blockedBy": ["SECRET-1"]}),
     )
     .await;
@@ -251,7 +247,7 @@ async fn dependencies_cross_projects_but_never_workspaces_or_private_projects() 
         .expect("secret id")
         .to_owned();
     let seen = as_mara(
-        "task_open",
+        "task_get",
         json!({"taskId": "WORK-3", "include": ["history"]}),
     )
     .await;
@@ -271,12 +267,12 @@ async fn dependencies_cross_projects_but_never_workspaces_or_private_projects() 
     );
     for reference in ["SECRET-1", secret_id.as_str()] {
         let refused = as_mara(
-            "task_depend",
+            "task_link",
             json!({"taskId": "WORK-1", "blocks": [reference]}),
         )
         .await;
         assert_eq!(refused["outcome"], "not_found", "{refused}");
-        let opened = as_mara("task_open", json!({"taskId": reference})).await;
+        let opened = as_mara("task_get", json!({"taskId": reference})).await;
         assert_ne!(opened["outcome"], "ok", "{opened}");
         assert!(!opened.to_string().contains("Private plan"), "{opened}");
     }
@@ -294,7 +290,7 @@ async fn dependencies_cross_projects_but_never_workspaces_or_private_projects() 
     assert_eq!(keys(&ready["value"]["tasks"]), ["WORK-1"], "{ready}");
 
     // Mara watches WORK-3; a duplicate closes and stops blocking.
-    let watched = as_mara("task_watch", json!({"taskId": "WORK-3"})).await;
+    let watched = as_mara("task_watch_set", json!({"taskId": "WORK-3"})).await;
     assert_eq!(watched["outcome"], "ok", "{watched}");
     assert!(
         watched["value"]["watchers"]
@@ -315,25 +311,29 @@ async fn dependencies_cross_projects_but_never_workspaces_or_private_projects() 
         .execute(&setup.pool)
     };
     set_role("viewer").await.expect("make Mara a viewer");
-    let unwatched = as_mara("task_watch", json!({"taskId": "WORK-3", "watching": false})).await;
+    let unwatched = as_mara(
+        "task_watch_set",
+        json!({"taskId": "WORK-3", "watching": false}),
+    )
+    .await;
     assert_eq!(unwatched["outcome"], "ok", "{unwatched}");
-    let rewatched = as_mara("task_watch", json!({"taskId": "WORK-3"})).await;
+    let rewatched = as_mara("task_watch_set", json!({"taskId": "WORK-3"})).await;
     assert_eq!(rewatched["value"]["watching"], true, "{rewatched}");
     set_role("member").await.expect("make Mara a member again");
     let duplicate = call(
-        "task_relate",
+        "task_link",
         json!({"taskId": "WORK-2", "otherTaskId": "WORK-1", "kind": "duplicates", "close": true}),
     )
     .await;
     assert_eq!(duplicate["outcome"], "ok", "{duplicate}");
     assert_eq!(duplicate["value"]["relations"][0]["kind"], "duplicates");
     assert_eq!(duplicate["value"]["task"]["statusGroup"], "canceled");
-    let original = as_mara("task_open", json!({"taskId": "WORK-1"})).await;
+    let original = as_mara("task_get", json!({"taskId": "WORK-1"})).await;
     assert_eq!(
         original["value"]["relations"][0]["kind"], "duplicated_by",
         "{original}"
     );
-    let after = as_mara("task_open", json!({"taskId": "WORK-3"})).await;
+    let after = as_mara("task_get", json!({"taskId": "WORK-3"})).await;
     assert_eq!(after["value"]["watchers"][0]["handle"], "mara", "{after}");
     assert_eq!(after["value"]["ready"], false, "SECRET-1 still blocks it");
 
@@ -348,13 +348,13 @@ async fn dependencies_cross_projects_but_never_workspaces_or_private_projects() 
     .expect("archive WORK-3");
     // Nor can another task link to it, or a milestone take it in.
     let linked = call(
-        "task_depend",
+        "task_link",
         json!({"taskId": "WORK-1", "blockedBy": ["WORK-3"]}),
     )
     .await;
     assert_eq!(linked["outcome"], "conflict", "{linked}");
     let gathered = call(
-        "milestone_write",
+        "milestone_create",
         json!({"projectId": "WORK", "name": "Later", "addTasks": ["WORK-3"]}),
     )
     .await;
@@ -367,11 +367,11 @@ async fn dependencies_cross_projects_but_never_workspaces_or_private_projects() 
     );
     for (tool, arguments) in [
         (
-            "task_depend",
+            "task_link",
             json!({"taskId": "WORK-3", "blocks": ["WORK-1"]}),
         ),
         (
-            "task_relate",
+            "task_link",
             json!({"taskId": "WORK-3", "otherTaskId": "WORK-1", "kind": "relates_to"}),
         ),
     ] {
@@ -458,7 +458,7 @@ async fn workflow_update_is_for_admins_and_retired_statuses_move_their_tasks() {
         app,
         &mara,
         &mara_session,
-        "task_watch",
+        "task_watch_set",
         json!({"taskId": "FLOW-1"}),
     )
     .await;
@@ -501,7 +501,7 @@ async fn workflow_update_is_for_admins_and_retired_statuses_move_their_tasks() {
         app,
         &codex,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": "FLOW-1", "include": ["history"]}),
     )
     .await;
@@ -545,7 +545,7 @@ async fn task_fields_filter_move_and_read_as_before_and_after() {
         async move { tool(app, &codex, &session, name, arguments).await }
     };
     let milestone = call(
-        "milestone_write",
+        "milestone_create",
         json!({"projectId": "PLAN", "name": "v1", "targetDate": "2026-12-01"}),
     )
     .await;
@@ -583,7 +583,7 @@ async fn task_fields_filter_move_and_read_as_before_and_after() {
     .await;
     assert_eq!(unknown["field"], "milestone", "{unknown}");
 
-    let opened = call("task_open", json!({"taskId": "PLAN-1"})).await;
+    let opened = call("task_get", json!({"taskId": "PLAN-1"})).await;
     let value = &opened["value"];
     assert_eq!(value["milestone"]["name"], "v1", "{opened}");
     assert_eq!(value["startDate"], "2019-12-01");
@@ -656,7 +656,7 @@ async fn task_fields_filter_move_and_read_as_before_and_after() {
     assert_eq!(bulk["outcome"], "ok", "{bulk}");
     assert_eq!(bulk["value"]["changedCount"], 2, "{bulk}");
     let history = call(
-        "task_open",
+        "task_get",
         json!({"taskId": "PLAN-1", "include": ["history"]}),
     )
     .await;
@@ -667,7 +667,7 @@ async fn task_fields_filter_move_and_read_as_before_and_after() {
         "{texts:?}"
     );
     let polish = call(
-        "task_open",
+        "task_get",
         json!({"taskId": "PLAN-2", "include": ["history"]}),
     )
     .await;
@@ -679,14 +679,14 @@ async fn task_fields_filter_move_and_read_as_before_and_after() {
 
     // milestone_write moves write history too.
     let out = call(
-        "milestone_write",
+        "milestone_update",
         json!({"projectId": "PLAN", "milestoneId": milestone["value"]["id"], "removeTasks": ["PLAN-3"]}),
     )
     .await;
     assert_eq!(out["value"]["total"], 2, "{out}");
     // Archiving and adding at once is refused, and nothing is archived.
     let refused = call(
-        "milestone_write",
+        "milestone_update",
         json!({"projectId": "PLAN", "milestoneId": milestone["value"]["id"],
                "archived": true, "addTasks": ["PLAN-3"]}),
     )
@@ -698,7 +698,7 @@ async fn task_fields_filter_move_and_read_as_before_and_after() {
         "{listed}"
     );
     let someday = call(
-        "task_open",
+        "task_get",
         json!({"taskId": "PLAN-3", "include": ["history"]}),
     )
     .await;
@@ -717,7 +717,7 @@ async fn task_fields_filter_move_and_read_as_before_and_after() {
     .execute(&setup.pool)
     .await
     .expect("estimate unit");
-    let current = call("task_open", json!({"taskId": "PLAN-1"})).await;
+    let current = call("task_get", json!({"taskId": "PLAN-1"})).await;
     let sized = call(
         "task_update",
         json!({"taskId": "PLAN-1", "expectedVersion": current["value"]["task"]["version"], "estimate": 8}),
@@ -730,7 +730,7 @@ async fn task_fields_filter_move_and_read_as_before_and_after() {
     )
     .await;
     assert_eq!(moved["outcome"], "ok", "{moved}");
-    let carried = call("task_open", json!({"taskId": "NEXT-1"})).await;
+    let carried = call("task_get", json!({"taskId": "NEXT-1"})).await;
     assert_eq!(carried["value"]["dueDate"], "2026-10-20", "{carried}");
     assert_eq!(carried["value"]["startDate"], "2019-12-01");
     assert_eq!(carried["value"]["estimate"], Value::Null, "{carried}");

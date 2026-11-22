@@ -132,7 +132,7 @@ async fn criteria_change_all_together_and_retry_safely() {
         ]
     });
     let before = side_effects(&setup).await;
-    let added = call("task_criteria", first.clone()).await;
+    let added = call("task_criteria_update", first.clone()).await;
     assert_eq!(added["outcome"], "ok", "{added}");
     let value = &added["value"];
     assert_eq!(value["version"], 2);
@@ -173,7 +173,7 @@ async fn criteria_change_all_together_and_retry_safely() {
     );
 
     // A retry answers the same, and nothing is applied twice.
-    let replay = call("task_criteria", first).await;
+    let replay = call("task_criteria_update", first).await;
     assert_eq!(replay["value"]["idempotentReplay"], true, "{replay}");
     assert_eq!(replay["value"]["version"], 2);
     assert_eq!(side_effects(&setup).await, after);
@@ -187,7 +187,7 @@ async fn criteria_change_all_together_and_retry_safely() {
         3
     );
     let reused = call(
-        "task_criteria",
+        "task_criteria_update",
         json!({
             "taskId": "WORK-1", "expectedVersion": 2, "clientRequestId": "c1",
             "operations": [{"op": "check", "criterion": "1"}]
@@ -199,7 +199,7 @@ async fn criteria_change_all_together_and_retry_safely() {
     // All or nothing: a bad operation leaves the good ones unwritten, and
     // the clientRequestId stays free for the corrected call.
     let half = call(
-        "task_criteria",
+        "task_criteria_update",
         json!({
             "taskId": "WORK-1", "expectedVersion": 2, "clientRequestId": "c5",
             "operations": [
@@ -217,7 +217,7 @@ async fn criteria_change_all_together_and_retry_safely() {
     assert_eq!(side_effects(&setup).await, after);
     assert_refused(
         &call(
-            "task_criteria",
+            "task_criteria_update",
             json!({
                 "taskId": "WORK-1", "expectedVersion": 2,
                 "operations": [
@@ -232,7 +232,7 @@ async fn criteria_change_all_together_and_retry_safely() {
     );
     assert_refused(
         &call(
-            "task_criteria",
+            "task_criteria_update",
             json!({
                 "taskId": "WORK-1", "expectedVersion": 2,
                 "operations": [{"op": "move", "criterion": "1", "position": 9}]
@@ -243,7 +243,7 @@ async fn criteria_change_all_together_and_retry_safely() {
         "Use 1 to 3",
     );
     let stale = call(
-        "task_criteria",
+        "task_criteria_update",
         json!({
             "taskId": "WORK-1", "expectedVersion": 1,
             "operations": [{"op": "check", "criterion": "1"}]
@@ -257,7 +257,7 @@ async fn criteria_change_all_together_and_retry_safely() {
     // as it was read; checking a checked criterion changes nothing.
     let before = side_effects(&setup).await;
     let changed = call(
-        "task_criteria",
+        "task_criteria_update",
         json!({
             "taskId": task, "expectedVersion": 2, "clientRequestId": "c5",
             "operations": [
@@ -369,7 +369,7 @@ async fn criteria_change_all_together_and_retry_safely() {
     .await;
     assert_eq!(status, StatusCode::OK, "{patched}");
     assert_eq!(patched["value"]["version"], 4, "{patched}");
-    let opened = call("task_open", json!({"taskId": "WORK-1"})).await;
+    let opened = call("task_get", json!({"taskId": "WORK-1"})).await;
     let criteria = &opened["value"]["task"]["acceptanceCriteria"];
     assert_eq!(criteria[1]["text"], "Tests pass", "{opened}");
     assert_eq!(criteria[1]["completed"], false, "{opened}");
@@ -377,7 +377,7 @@ async fn criteria_change_all_together_and_retry_safely() {
     // Nothing to do changes nothing: no version, no activity.
     let before = side_effects(&setup).await;
     let unchanged = call(
-        "task_criteria",
+        "task_criteria_update",
         json!({
             "taskId": "WORK-1", "expectedVersion": 4,
             "operations": [{"op": "uncheck", "criterion": "2"}]
@@ -451,7 +451,7 @@ async fn criteria_follow_roles_tasks_and_archives() {
         app,
         &reader,
         &reader_session,
-        "task_criteria",
+        "task_criteria_update",
         check(json!("WORK-1"), 1),
     )
     .await;
@@ -460,7 +460,7 @@ async fn criteria_follow_roles_tasks_and_archives() {
         app,
         &vee_token,
         &vee_session,
-        "task_criteria",
+        "task_criteria_update",
         check(json!("WORK-1"), 1),
     )
     .await;
@@ -473,7 +473,7 @@ async fn criteria_follow_roles_tasks_and_archives() {
         app,
         &mara_token,
         &mara_session,
-        "task_criteria",
+        "task_criteria_update",
         check(json!("WORK-1"), 1),
     )
     .await;
@@ -482,7 +482,7 @@ async fn criteria_follow_roles_tasks_and_archives() {
         app,
         &mara_token,
         &mara_session,
-        "task_criteria",
+        "task_criteria_update",
         check(json!(task), 1),
     )
     .await;
@@ -501,7 +501,7 @@ async fn criteria_follow_roles_tasks_and_archives() {
         app,
         &kai_token,
         &kai_session,
-        "task_criteria",
+        "task_criteria_update",
         json!({
             "taskId": "WORK-1", "expectedVersion": 1,
             "operations": [{"op": "check", "criterion": foreign}]
@@ -523,7 +523,7 @@ async fn criteria_follow_roles_tasks_and_archives() {
         app,
         &kai_token,
         &kai_session,
-        "task_criteria",
+        "task_criteria_update",
         check(json!("WORK-1"), 1),
     )
     .await;
@@ -555,7 +555,7 @@ async fn criteria_follow_roles_tasks_and_archives() {
             app,
             &codex,
             &codex_session,
-            "task_criteria",
+            "task_criteria_update",
             json!({
                 "taskId": task, "expectedVersion": version,
                 "operations": [{"op": "uncheck", "criterion": "1"}]
@@ -623,15 +623,15 @@ async fn history_shows_who_did_what_and_hides_private_threads() {
     .await;
     assert_eq!(status, StatusCode::OK, "{moved}");
     let commented = call(
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": "WORK-1", "text": "Repro attached", "clientRequestId": "history-comment"}),
     )
     .await;
-    assert_eq!(commented["outcome"], "applied", "{commented}");
+    assert_eq!(commented["outcome"], "ok", "{commented}");
     // A criterion added in a call can't be named in that call (its ID isn't
     // known yet), so checking it takes a second call.
     let added = call(
-        "task_criteria",
+        "task_criteria_update",
         json!({
             "taskId": "WORK-1", "expectedVersion": 4,
             "operations": [{"op": "add", "text": "Mirrors prepare"}]
@@ -640,7 +640,7 @@ async fn history_shows_who_did_what_and_hides_private_threads() {
     .await;
     assert_eq!(added["value"]["version"], 5, "{added}");
     let checked = call(
-        "task_criteria",
+        "task_criteria_update",
         json!({
             "taskId": "WORK-1", "expectedVersion": 5,
             "operations": [{"op": "check", "criterion": "1"}]
@@ -650,7 +650,7 @@ async fn history_shows_who_did_what_and_hides_private_threads() {
     assert_eq!(checked["value"]["version"], 6, "{checked}");
 
     let opened = call(
-        "task_open",
+        "task_get",
         json!({"taskId": "WORK-1", "include": ["history"]}),
     )
     .await;
@@ -710,7 +710,7 @@ async fn history_shows_who_did_what_and_hides_private_threads() {
 
     // Pages go back from the newest, each oldest first.
     let page = call(
-        "task_open",
+        "task_get",
         json!({"taskId": "WORK-1", "include": ["history"], "historyLimit": 2}),
     )
     .await;
@@ -722,7 +722,7 @@ async fn history_shows_who_did_what_and_hides_private_threads() {
     assert_eq!(history["total"], 7);
     let cursor = history["olderCursor"].as_str().expect("cursor").to_owned();
     let earlier = call(
-        "task_open",
+        "task_get",
         json!({
             "taskId": "WORK-1", "include": ["history"], "historyLimit": 2,
             "historyBefore": cursor
@@ -740,13 +740,13 @@ async fn history_shows_who_did_what_and_hides_private_threads() {
     )
     .await;
     let commented = call(
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": second["value"]["workItemId"], "text": "Noted", "clientRequestId": "history-other"}),
     )
     .await;
-    assert_eq!(commented["outcome"], "applied", "{commented}");
+    assert_eq!(commented["outcome"], "ok", "{commented}");
     let other_page = call(
-        "task_open",
+        "task_get",
         json!({"taskId": "WORK-2", "include": ["history"], "historyLimit": 1}),
     )
     .await;
@@ -757,7 +757,7 @@ async fn history_shows_who_did_what_and_hides_private_threads() {
     for cursor in [other_cursor.as_str(), "not-a-cursor"] {
         assert_refused(
             &call(
-                "task_open",
+                "task_get",
                 json!({"taskId": "WORK-1", "include": ["history"], "historyBefore": cursor}),
             )
             .await,
@@ -827,11 +827,11 @@ async fn history_shows_who_did_what_and_hides_private_threads() {
     .await
     .expect("the owner stays in the channel");
     let latest = json!({"taskId": "WORK-1", "include": ["history"], "historyLimit": 1});
-    let owners = call("task_open", latest.clone()).await;
+    let owners = call("task_get", latest.clone()).await;
     let entry = &owners["value"]["history"]["entries"][0];
     assert_eq!(entry["kind"], "thread_linked", "{owners}");
     assert_eq!(entry["text"], format!("Linked thread #{thread_name}"));
-    let maras = tool(app, &mara_token, &mara_session, "task_open", latest).await;
+    let maras = tool(app, &mara_token, &mara_session, "task_get", latest).await;
     assert_eq!(maras["outcome"], "ok", "{maras}");
     let entry = &maras["value"]["history"]["entries"][0];
     assert_eq!(entry["kind"], "thread_linked", "{maras}");
@@ -841,17 +841,13 @@ async fn history_shows_who_did_what_and_hides_private_threads() {
 
     // include takes only history, and the history arguments need it.
     assert_refused(
-        &call(
-            "task_open",
-            json!({"taskId": "WORK-1", "include": ["nope"]}),
-        )
-        .await,
+        &call("task_get", json!({"taskId": "WORK-1", "include": ["nope"]})).await,
         "include",
         "Use include: [\"history\"]",
     );
     assert_refused(
         &call(
-            "task_open",
+            "task_get",
             json!({"taskId": "WORK-1", "historyBefore": cursor}),
         )
         .await,
@@ -860,14 +856,14 @@ async fn history_shows_who_did_what_and_hides_private_threads() {
     );
     assert_refused(
         &call(
-            "task_open",
+            "task_get",
             json!({"taskId": "WORK-1", "include": ["history"], "historyLimit": 0}),
         )
         .await,
         "historyLimit",
         "from 1 to 100",
     );
-    let plain = call("task_open", json!({"taskId": "WORK-1"})).await;
+    let plain = call("task_get", json!({"taskId": "WORK-1"})).await;
     assert_eq!(plain["outcome"], "ok", "{plain}");
     assert!(plain["value"].get("history").is_none(), "{plain}");
 }
@@ -916,7 +912,7 @@ async fn history_of_a_moved_task_points_back_only_where_the_reader_reaches() {
                 app,
                 &token,
                 &session,
-                "task_open",
+                "task_get",
                 json!({"taskId": task, "include": ["history"]}),
             )
             .await;

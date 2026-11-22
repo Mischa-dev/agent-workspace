@@ -695,7 +695,7 @@ async fn apps_connected_by_a_person_see_their_notifications() {
 
     let token = connect_app(&setup.app, &mara_browser, "Mara's app", "full").await;
     let session = initialize(&setup.app, &token).await.expect("MCP session");
-    let briefing = tool(&setup.app, &token, &session, "briefing", json!({})).await;
+    let briefing = tool(&setup.app, &token, &session, "briefing_get", json!({})).await;
     assert_eq!(briefing["outcome"], "ok", "{briefing}");
     assert_eq!(
         briefing["value"]["notifications"][0]["kind"], "mention",
@@ -852,7 +852,7 @@ async fn reading_through_a_connected_app_reads_the_mentions() {
         &setup.app,
         &token,
         &session,
-        "mark_read",
+        "conversation_mark_read",
         json!({"conversationId": general}),
     )
     .await;

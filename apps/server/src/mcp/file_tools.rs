@@ -441,7 +441,7 @@ pub(crate) struct FileUploadArguments {
     /// Or keep the file on this task (ID, key or link), shown at once.
     pub task_id: Option<String>,
     /// With taskId: hold the file for a comment instead, attached when you
-    /// pass its fileId in task_comment's attachmentIds.
+    /// pass its fileId in task_comment_create's attachmentIds.
     pub for_comment: Option<bool>,
     /// Or keep the file on a collection record you can edit:
     /// {"kind": "record", "id": "<record ID>"}, then name its fileId in one

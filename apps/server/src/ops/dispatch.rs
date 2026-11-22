@@ -36,8 +36,6 @@ pub struct DispatchRequest {
     pub unkeyed: Unkeyed,
     /// Run and roll back (operations with `PREVIEW`).
     pub preview: bool,
-    /// The old name the caller used (`aliases`), counted once the call is done.
-    pub renamed_from: Option<&'static str>,
     /// A long call (`Operation::runs_long`) is answered `started` and run by
     /// a job (`long`): the MCP edge, whose clients can follow it.
     pub defer_long: bool,
@@ -615,7 +613,6 @@ async fn pipeline<O: Operation>(
         if O::PREVIEW {
             let checked = DispatchRequest {
                 preview: true,
-                renamed_from: None,
                 defer_long: false,
                 ..request.clone()
             };
@@ -885,14 +882,6 @@ async fn pipeline<O: Operation>(
     if request.preview {
         // Dropping the transaction rolls it back.
         return Ok(answer);
-    }
-    // A spanning read has no one workspace to count its alias use in.
-    if let Some(alias) = request.renamed_from.filter(|_| !spans) {
-        let workspace_id = ctx.workspace_id;
-        let tx = call.tx().await?;
-        super::aliases::count(tx, workspace_id, alias)
-            .await
-            .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
     }
     if writes {
         let audit = call.audit.take();

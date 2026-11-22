@@ -608,10 +608,9 @@ async fn webhooks_and_automations_walk() {
         &application,
         Some(&token),
         "POST",
-        "/api/public/v1/automation_write",
+        "/api/public/v1/automation_create",
         json!({
             "projectId": seed.project_id,
-            "operation": "create",
             "name": "Fix failing checks",
             "trigger": {"kind": "pull_request_checks_failed"},
             "actions": [{"kind": "launch"}],
@@ -659,7 +658,7 @@ async fn webhooks_and_automations_walk() {
         &application,
         Some(&token),
         "POST",
-        "/api/public/v1/automation_runs",
+        "/api/public/v1/automation_history",
         json!({"projectId": seed.project_id, "ruleId": rule_id}),
     )
     .await;
@@ -703,10 +702,9 @@ async fn webhooks_and_automations_walk() {
         &application,
         Some(&token),
         "POST",
-        "/api/public/v1/automation_write",
+        "/api/public/v1/automation_create",
         json!({
             "projectId": seed.project_id,
-            "operation": "create",
             "name": "Raise everything",
             "trigger": {"kind": "task_created"},
             "actions": [{"kind": "set_field", "field": "priority", "value": "urgent"}],
@@ -872,10 +870,9 @@ async fn webhooks_and_automations_walk() {
         &application,
         Some(&token),
         "POST",
-        "/api/public/v1/automation_write",
+        "/api/public/v1/automation_create",
         json!({
             "projectId": seed.project_id,
-            "operation": "create",
             "name": "Launch new tasks",
             "trigger": {"kind": "task_created"},
             "actions": [{"kind": "launch"}],
@@ -1139,10 +1136,9 @@ async fn webhooks_and_automations_walk() {
         &application,
         Some(&token),
         "POST",
-        "/api/public/v1/automation_write",
+        "/api/public/v1/automation_create",
         json!({
             "projectId": seed.project_id,
-            "operation": "create",
             "name": "Announce new tasks",
             "trigger": {"kind": "task_created"},
             "actions": [{"kind": "post_message", "conversationId": seed.channel_id, "text": "New: {{task.title}}"}],

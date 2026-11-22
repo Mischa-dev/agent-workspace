@@ -33,7 +33,7 @@ async fn an_exported_space_carries_its_setup_and_nothing_private() {
     };
 
     let collection = call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": "PKG",
             "name": "Feedback",
@@ -53,7 +53,7 @@ async fn an_exported_space_carries_its_setup_and_nothing_private() {
     .await
     .expect("collection");
     let form = call(
-        "bug_report_link_write",
+        "bug_report_link_create",
         json!({
             "projectId": "PKG",
             "name": "Feedback form",
@@ -66,10 +66,9 @@ async fn an_exported_space_carries_its_setup_and_nothing_private() {
     let form_url = form["value"]["formUrl"].as_str().expect("form link");
     let form_token = form_url.rsplit('/').next().expect("token").to_owned();
     let rule = call(
-        "automation_write",
+        "automation_create",
         json!({
             "projectId": "PKG",
-            "operation": "create",
             "name": "Triage",
             "trigger": {"kind": "record_created", "collectionId": collection_id},
             "actions": [{"kind": "notify", "recipients": "owner", "message": "New: {{record.title}}"}],
@@ -106,7 +105,7 @@ async fn an_exported_space_carries_its_setup_and_nothing_private() {
     .await;
     assert_eq!(role["outcome"], "ok", "{role}");
     let skill = call(
-        "page_write",
+        "page_create",
         json!({
             "projectId": "PKG",
             "title": "Running a playtest",

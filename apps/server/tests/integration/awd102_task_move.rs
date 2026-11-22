@@ -198,14 +198,14 @@ async fn world(setup: &Setup, codex: &str, session: &str) -> World {
         for (key, value) in extra.as_object().expect("extra") {
             arguments[key] = value.clone();
         }
-        let written = tool(app, codex, session, "field_write", arguments).await;
+        let written = tool(app, codex, session, "field_create", arguments).await;
         assert_eq!(written["outcome"], "ok", "{written}");
     }
     let page = tool(
         app,
         codex,
         session,
-        "page_write",
+        "page_create",
         json!({"projectId": "SRC", "title": SECRET_PAGE, "body": "Private plan"}),
     )
     .await;
@@ -536,7 +536,7 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
         app,
         &codex,
         &session,
-        "field_write",
+        "field_update",
         json!({"projectId": "DST", "field": "Risk", "options": [
             {"id": option_id(&setup, &w.dst, "Risk", "Low").await, "name": "Low"},
             {"id": option_id(&setup, &w.dst, "Risk", "Medium").await, "name": "Medium"},
@@ -567,7 +567,7 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
             app,
             &codex,
             &session,
-            "milestone_write",
+            "milestone_create",
             json!({"projectId": project, "name": "M1", "addTasks": tasks}),
         )
         .await;
@@ -578,7 +578,7 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
         app,
         &codex,
         &session,
-        "milestone_write",
+        "milestone_create",
         json!({"projectId": "DST", "name": "M1"}),
     )
     .await;
@@ -587,7 +587,7 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
         app,
         &codex,
         &session,
-        "milestone_write",
+        "milestone_update",
         json!({"projectId": "DST", "milestoneId": old_id, "archived": true}),
     )
     .await;
@@ -596,7 +596,7 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
         app,
         &codex,
         &session,
-        "milestone_write",
+        "milestone_create",
         json!({"projectId": "DST", "name": "M1"}),
     )
     .await;
@@ -775,11 +775,11 @@ async fn a_comment_naming_a_task_that_stays_moves_with_its_task() {
         app,
         &codex,
         &session,
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": "SRC-1", "text": "Waits on SRC-3", "clientRequestId": "move-ref"}),
     )
     .await;
-    assert_eq!(commented["outcome"], "applied", "{commented}");
+    assert_eq!(commented["outcome"], "ok", "{commented}");
     let stays = task_id(&setup, &w.src, 3).await;
     let moved = tool(
         app,

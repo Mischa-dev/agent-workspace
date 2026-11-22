@@ -1095,7 +1095,7 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
         app,
         &token,
         &session,
-        "run_activity",
+        "run_activity_report",
         json!({"runId": run, "activities": [
             {"id": "s1", "kind": "run_started"},
             {"id": "m1", "kind": "text_message", "payload": {"text": "On it."}}]}),
@@ -1138,14 +1138,14 @@ async fn a_host_runs_each_start_once_however_often_it_is_offered() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{added}");
-    let listed = tool(app, &token, &session, "projects_list", json!({})).await;
+    let listed = tool(app, &token, &session, "project_list", json!({})).await;
     assert!(!listed.to_string().contains(&elsewhere), "{listed}");
     assert!(listed.to_string().contains(&work), "{listed}");
     let opened = tool(
         app,
         &token,
         &session,
-        "project_open",
+        "project_get",
         json!({"projectId": elsewhere}),
     )
     .await;

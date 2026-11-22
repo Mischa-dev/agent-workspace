@@ -1,9 +1,9 @@
 //! Tasks' core writes as operations (K2.13): create, update (with blocked
-//! and ready for review, which `task_mark_blocked` and
-//! `task_mark_ready_for_review` now alias), archive, restore, comments and
+//! and ready for review, which replaced `task_mark_blocked` and
+//! `task_mark_ready_for_review`), archive, restore, comments and
 //! acceptance criteria. Agents call them as tools of the same names
-//! (`task_comment`, `task_comment_edit`, `task_criteria` and the two mark
-//! tools stay as aliases), scripts through the v2 route, and rules as
+//! (the old `task_comment`, `task_comment_edit`, `task_criteria` and
+//! mark tools are retired), scripts through the v2 route, and rules as
 //! actions. Each runs the command the hand-written tool ran
 //! (`mcp::task_commands`, over `work_item_commands`), which keeps its own
 //! idempotency scope, its own checks and its own audit row.
@@ -114,7 +114,7 @@ pub struct TaskCreateInput {
     #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
     pub item_type: Option<String>,
     /// Labels by name or ID, at most 20. They must exist already; create one
-    /// with label_write.
+    /// with label_create.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub labels: Option<Vec<String>>,
     /// What done looks like, one criterion per entry, in order (at most 50).
@@ -155,7 +155,7 @@ pub struct TaskCreateInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fields: Option<serde_json::Map<String, serde_json::Value>>,
     /// Make it in a collection that acts like a task, such as "Bugs", by
-    /// name or ID (project_open lists them). Left out, it's a plain task.
+    /// name or ID (project_get lists them). Left out, it's a plain task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collection: Option<String>,
     /// Made from this message, one in the same space you can read: the task
@@ -214,7 +214,7 @@ impl Operation for TaskCreate {
             (Some(_), _) | (None, Some(_)) => None,
             (None, None) => Some(call.ctx.caller.confined_space.ok_or(OpError::invalid(
                 "projectId",
-                "Say which space with projectId (see projects_list).",
+                "Say which space with projectId (see project_list).",
             ))?),
         };
         let written = task_commands::create(call.state, call.ctx, space, &input).await?;
@@ -224,7 +224,7 @@ impl Operation for TaskCreate {
 }
 
 // ---------------------------------------------------------------------------
-// task_update (aliases task_mark_blocked, task_mark_ready_for_review)
+// task_update
 
 pub struct TaskUpdate;
 
@@ -234,7 +234,7 @@ pub struct TaskUpdateInput {
     /// The task: its ID, link, or key such as AWD-12.
     #[serde(alias = "workItemId")]
     pub task_id: IdRef,
-    /// The version you last read (from task_open or task_list).
+    /// The version you last read (from task_get or task_list).
     pub expected_version: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -662,7 +662,7 @@ pub struct TaskVersionInput {
     /// The task: its ID, link, or key such as AWD-12.
     #[serde(alias = "workItemId")]
     pub task_id: IdRef,
-    /// The version you last read (from task_open or task_list).
+    /// The version you last read (from task_get or task_list).
     pub expected_version: i64,
 }
 
@@ -734,7 +734,7 @@ impl Operation for TaskRestore {
 }
 
 // ---------------------------------------------------------------------------
-// task_comment_create (alias task_comment)
+// task_comment_create
 
 pub struct TaskCommentCreate;
 
@@ -755,7 +755,7 @@ pub struct TaskCommentCreateInput {
     /// and forComment: true on this task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachment_ids: Option<Vec<String>>,
-    /// To answer one comment on this task, its id (task_open lists them): it
+    /// To answer one comment on this task, its id (task_get lists them): it
     /// shows quoted above yours, and its author is told.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to_comment_id: Option<String>,
@@ -805,7 +805,7 @@ impl Operation for TaskCommentCreate {
 }
 
 // ---------------------------------------------------------------------------
-// task_comment_update (alias task_comment_edit), task_comment_delete
+// task_comment_update, task_comment_delete
 
 pub struct TaskCommentUpdate;
 
@@ -814,7 +814,7 @@ pub struct TaskCommentUpdate;
 pub struct TaskCommentUpdateInput {
     /// The task: its ID, link, or key such as AWD-12.
     pub task_id: IdRef,
-    /// The comment's ID. task_open lists the task's recent comments with
+    /// The comment's ID. task_get lists the task's recent comments with
     /// their IDs.
     pub comment_id: IdRef,
     /// The new text, 1 to 20,000 characters. Line breaks and Markdown are
@@ -882,7 +882,7 @@ pub struct TaskCommentDelete;
 pub struct TaskCommentDeleteInput {
     /// The task: its ID, link, or key such as AWD-12.
     pub task_id: IdRef,
-    /// The comment's ID. task_open lists the task's recent comments with
+    /// The comment's ID. task_get lists the task's recent comments with
     /// their IDs.
     pub comment_id: IdRef,
 }
@@ -929,7 +929,7 @@ impl Operation for TaskCommentDelete {
 }
 
 // ---------------------------------------------------------------------------
-// task_criteria_update (alias task_criteria)
+// task_criteria_update
 
 pub struct TaskCriteriaUpdate;
 
@@ -939,7 +939,7 @@ pub struct TaskCriteriaUpdateInput {
     /// The task: its ID, link, or key such as AWD-12.
     #[serde(alias = "workItemId")]
     pub task_id: IdRef,
-    /// The task's version you last read (from task_open or task_list).
+    /// The task's version you last read (from task_get or task_list).
     pub expected_version: i64,
     /// 1 to 50 operations, applied in order. Either all apply or none do.
     pub operations: Vec<CriterionOperationArgument>,
@@ -1584,7 +1584,7 @@ impl Operation for InitiativeList {
     const DESCRIPTION: &'static str = "The workspace's initiatives: work that spans spaces, \
         each a record of the workspace's Initiatives collection (change one with record_update_many \
         there) with its milestones in the spaces you can see and their task counts. Put a \
-        milestone in one with milestone_write's initiative; make one with initiative_create.";
+        milestone in one with milestone_create's initiative; make one with initiative_create.";
 
     type Input = InitiativeListInput;
     type Output = super::initiatives::Initiatives;
@@ -1648,7 +1648,7 @@ impl Operation for InitiativeCreate {
     const DESCRIPTION: &'static str = "Start an initiative: work that spans spaces, followed \
         through its milestones. It is a record of the workspace's Initiatives collection \
         (made with Owner, Status, Target date and Health fields the first time), so it is \
-        changed with record_update_many there. Add milestones with milestone_write's initiative.";
+        changed with record_update_many there. Add milestones with milestone_create's initiative.";
 
     type Input = InitiativeCreateInput;
     type Output = InitiativeCreateOutput;

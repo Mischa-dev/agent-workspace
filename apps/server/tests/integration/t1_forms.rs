@@ -44,7 +44,7 @@ async fn an_internal_form_asks_by_condition_and_sets_its_values() {
         .call(
             app,
             tool(
-                "collection_write",
+                "collection_create",
                 json!({"projectId": "WORK", "name": "Teams"}),
             ),
         )
@@ -58,7 +58,7 @@ async fn an_internal_form_asks_by_condition_and_sets_its_values() {
         .call(
             app,
             tool(
-                "collection_write",
+                "collection_create",
                 json!({
                     "projectId": "WORK",
                     "name": "Requests",
@@ -149,7 +149,7 @@ async fn an_internal_form_asks_by_condition_and_sets_its_values() {
         .call(
             app,
             tool(
-                "record_query",
+                "record_list",
                 json!({"projectId": "WORK", "collection": collection}),
             ),
         )

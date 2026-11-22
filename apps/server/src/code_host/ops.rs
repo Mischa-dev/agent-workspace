@@ -5,7 +5,7 @@
 //! its own checks inside: who may manage code, `pull_request_visible_to` on
 //! every pull request, and the GitHub App's own reach. Those that change
 //! something write their own audit rows. The old `repository_write` and
-//! `github_integration_write` tools are aliases.
+//! `github_integration_write` tools are retired.
 
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};

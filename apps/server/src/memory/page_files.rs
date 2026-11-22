@@ -55,7 +55,7 @@ pub struct PageFileUploaded {
     pub name: String,
     pub content_type: String,
     pub size: i64,
-    /// The block that shows it, for page_write or page_edit.
+    /// The block that shows it, for page_update or page_update_blocks.
     pub embed: String,
 }
 
@@ -68,7 +68,7 @@ impl Operation for PageFileUpload {
     const MAX_BODY_BYTES: usize = 6 * 1024 * 1024;
     const TITLE: &'static str = "Keep a file on a page";
     const DESCRIPTION: &'static str = "Keep a file on a page (text, or base64 up to 4 MiB). It \
-        answers the block that shows it in the page; add that with page_write or page_edit.";
+        answers the block that shows it in the page; add that with page_update or page_update_blocks.";
     /// Staged by the files table's trigger as the row goes in.
     const EMITS: &'static [&'static str] = &["file.attached"];
 

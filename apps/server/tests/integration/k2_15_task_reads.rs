@@ -86,12 +86,12 @@ async fn the_web_and_agents_list_the_same_tasks_for_the_same_filter() {
     }
 
     // The old names answer as they did.
-    let opened = tool(&world, "desk", "task_open", json!({"taskId": "WORK-1"})).await;
+    let opened = tool(&world, "desk", "task_get", json!({"taskId": "WORK-1"})).await;
     assert_eq!(opened["outcome"], "ok", "{opened}");
     assert_eq!(opened["value"]["task"]["key"], "WORK-1", "{opened}");
-    let spaces = tool(&world, "desk", "projects_list", json!({})).await;
+    let spaces = tool(&world, "desk", "project_list", json!({})).await;
     assert_eq!(spaces["outcome"], "ok", "{spaces}");
-    let briefed = tool(&world, "desk", "briefing", json!({})).await;
+    let briefed = tool(&world, "desk", "briefing_get", json!({})).await;
     assert_eq!(briefed["outcome"], "ok", "{briefed}");
     world.finish().await;
 }

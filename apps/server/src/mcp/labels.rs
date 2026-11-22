@@ -29,7 +29,7 @@ use crate::{
 };
 
 const MESSAGES_SPACE_MESSAGE: &str =
-    "The Messages space has no tasks, so it has no labels. Pick a project with projects_list.";
+    "The Messages space has no tasks, so it has no labels. Pick a project with project_list.";
 const NAME_MESSAGE: &str =
     "Give the label a name of 1 to 50 characters on one line, that isn't an ID.";
 const COLOR_MESSAGE: &str = "Use a color like #3b82f6, or one of: red, orange, yellow, green, teal, blue, purple, pink, gray.";
@@ -47,7 +47,7 @@ const DENIED_MESSAGE: &str =
 pub(crate) struct LabelListArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
-    /// Also list archived labels, which label_write can restore.
+    /// Also list archived labels, which label_update can restore.
     pub include_archived: Option<bool>,
 }
 
@@ -65,7 +65,7 @@ pub(crate) struct LabelLine {
     /// Tasks that carry it (not counting archived tasks). For an archived
     /// label, the tasks restoring it brings it back on.
     pub task_count: i64,
-    /// Pass as expectedVersion to label_write.
+    /// Pass as expectedVersion to label_update.
     pub version: i64,
 }
 
@@ -370,7 +370,7 @@ pub(crate) async fn label_write(
                 },
                 CreateLabelOutcome::ArchivedNameTaken(row) => {
                     return Ok(ToolResult::conflict(format!(
-                        "An archived label called \"{}\" exists in {key}. Restore it with label_write {{label: \"{}\", archived: false}}, or pick another name.",
+                        "An archived label called \"{}\" exists in {key}. Restore it with label_update {{label: \"{}\", archived: false}}, or pick another name.",
                         row.name, row.id
                     )));
                 }
@@ -463,7 +463,7 @@ pub(crate) async fn label_write(
                     None
                 } else if label.archived {
                     Some(format!(
-                        "Hidden from {} until it's restored (label_write with archived: false).",
+                        "Hidden from {} until it's restored (label_update with archived: false).",
                         tasks_phrase(label.task_count)
                     ))
                 } else {

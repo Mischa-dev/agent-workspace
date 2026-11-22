@@ -397,7 +397,7 @@ async fn a_suggested_pull_request_is_confirmed_or_dismissed_on_the_task() {
     );
 
     // An agent reading the task sees the suggestion, marked as one.
-    let opened = tool(app, &owner, &session, "task_open", json!({"taskId": key})).await;
+    let opened = tool(app, &owner, &session, "task_get", json!({"taskId": key})).await;
     let listed = opened.to_string();
     assert!(listed.contains("\"suggested\":true"), "{opened}");
 
