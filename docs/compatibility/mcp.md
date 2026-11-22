@@ -130,8 +130,10 @@ Tools that became operations kept their old names as aliases until the
 next deploy. From that deploy an old name is refused: the call answers
 `not_found`, says what to use instead, and lists the new names in
 `useInstead`; nothing runs, and the old name isn't in `tools/list`. A
-guard or allowlist written with an old name still matches the operations
-it ran. The old names, and what replaced them:
+tool guard saved in the workspace with an old name still matches the
+operations it ran, but a client's own tool list (such as the Hermes
+profile in [hermes-agent.md](hermes-agent.md)) needs the new names. The
+old names, and what replaced them:
 
 | Old name | Use instead |
 | --- | --- |
@@ -150,14 +152,21 @@ it ran. The old names, and what replaced them:
 | `sheet_read` | `sheet_get` |
 | `sheet_write` | `sheet_create`, `sheet_update` |
 | `collection_describe` | `collection_get` |
+| `collection_write` | `collection_create`, `collection_update` |
 | `record_query` | `record_list` |
+| `record_write` | `record_create_many`, `record_update_many` |
 | `view_write` | `view_create`, `view_update` |
 | `label_write` | `label_create`, `label_update` |
 | `field_write` | `field_create`, `field_update` |
 | `milestone_write` | `milestone_create`, `milestone_update` |
 | `template_write` | `template_create`, `template_update` |
 | `recurring_write` | `recurring_create`, `recurring_update` |
+| `automation_write` | `automation_create`, `automation_update`, `automation_delete`, `automation_run_start` |
 | `automation_runs` | `automation_history` |
+| `repository_write` | `repository_create`, `repository_prepare`, `repository_archive` |
+| `github_integration_write` | `github_installation_link`, `github_automation_update` |
+| `environment_write` | `environment_create`, `environment_update`, `environment_archive`, `environment_check` |
+| `bug_report_link_write` | `bug_report_link_create`, `bug_report_link_update` |
 | `whiteboard_edit` | `whiteboard_update_elements` |
 | `message_edit` | `message_update` |
 | `task_comment_edit` | `task_comment_update` |
@@ -176,6 +185,9 @@ it ran. The old names, and what replaced them:
 | `settings_get` | `setting_list` |
 | `settings_set` | `setting_update` |
 | `project_layout_set` | `layout_update` |
+| `invitation_write` | `invitation_create`, `invitation_update` |
+| `project_template_write` | `project_template_create`, `project_template_update` |
+| `layout_preset_write` | `layout_preset_create`, `layout_preset_update` |
 | `run_open` | `run_create` |
 | `run_activity` | `run_activity_report` |
 | `run_result` | `run_result_report` |

@@ -725,4 +725,47 @@ async fn a_retired_name_says_what_to_use_instead() {
         "{body}"
     );
     assert_eq!(pages().await, 0);
+
+    // A refused call changes nothing on the way: "me" doesn't make the
+    // caller's personal space.
+    let spaces = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM projects")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("spaces")
+    };
+    let before = spaces().await;
+    let (status, reply) = rpc(
+        app,
+        &token,
+        "/api/v1/mcp",
+        &session,
+        json!({
+            "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+            "params": {
+                "name": "page_write",
+                "arguments": { "projectId": "me", "title": "Kept", "body": "Old" }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(
+        reply.pointer("/result/structuredContent/outcome"),
+        Some(&json!("not_found")),
+        "{reply}"
+    );
+    let response = app
+        .clone()
+        .oneshot(bearer(
+            &token,
+            "POST",
+            "/api/public/v1/page_write",
+            None,
+            &json!({ "spaceId": "me", "title": "Kept", "body": "Old" }),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(spaces().await, before, "no personal space was made");
 }

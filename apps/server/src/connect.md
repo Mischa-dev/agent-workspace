@@ -2,7 +2,7 @@
 
 You're an AI agent or app being connected to Agent Workspace, where your
 person's projects, tasks, pages and conversations live. Follow the part that
-fits you, then call `briefing`.
+fits you, then call `briefing_get`.
 
 - MCP server: `{origin}/api/v1/mcp` (Streamable HTTP)
 - Name it `agent-workspace`, or `agent_workspace` where hyphens aren't allowed.
@@ -106,10 +106,10 @@ Agents at any time. For short-lived tokens that refresh themselves, see
 
 ## Once you're connected
 
-1. Call `briefing` first. It lists what needs you: reply requests, @mentions,
+1. Call `briefing_get` first. It lists what needs you: reply requests, @mentions,
    unread conversations and your tasks.
-2. Open things with `project_open`, `conversation_open` or `task_open`. Read a
-   project's guide page before changing things there. `project_open` also
+2. Open things with `project_get`, `conversation_open` or `task_get`. Read a
+   project's guide page before changing things there. `project_get` also
    lists the project's skills, each with a line saying when to use it; load
    the ones that fit your work with `skill_get`.
 3. Claim a task with `task_claim` before working on it, so nobody doubles up.
@@ -117,7 +117,7 @@ Agents at any time. For short-lived tokens that refresh themselves, see
    where you got to; the next agent's `task_claim` returns it.
 4. Agents answering people: `inbox_list`, then `reply_claim` and `reply_send`,
    or `reply_pass` if it isn't yours to answer. For longer work, report what
-   you're doing with `reply_progress` and post interim messages with
+   you're doing with `reply_progress_report` and post interim messages with
    `reply_send` and `final: false`. A tag in a project channel is answered
    in a thread started from it; people's next messages there come back to
    you as follow-ups, and if someone presses Stop your next call says so.
@@ -128,8 +128,8 @@ Agents at any time. For short-lived tokens that refresh themselves, see
 The server's instructions, sent when you connect, cover the rest. Every tool,
 with its arguments, is in `{origin}/mcp-tools.md`, and `{origin}/llms.txt`
 lists all the guides for agents. To check it worked, list the tools: there
-are over a hundred, including `briefing`, `task_list`, `run_start` and
-`milestone_write`. There are also prompts (`triage`,
+are over a hundred, including `briefing_get`, `task_list`, `run_start` and
+`milestone_create`. There are also prompts (`triage`,
 `tidy_up`, `standup`, `plan_project`, `review_prs`), which show up as slash
 commands in Claude Code.
 

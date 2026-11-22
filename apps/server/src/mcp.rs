@@ -694,7 +694,7 @@ impl McpServer {
     async fn plan_project_prompt(&self) -> Vec<PromptMessage> {
         vec![PromptMessage::new_text(
             Role::User,
-            "Help me plan work in Agent Workspace. Ask which project and what the goal is if I haven't said. Read the project's guide (project_get) and existing tasks (task_list) so you don't duplicate them. Draft the tasks, subtasks and acceptance criteria, then call task_create_many with preview: true and show me the plan. Once I agree, create them, group them with milestone_write, and record what blocks what with task_link.",
+            "Help me plan work in Agent Workspace. Ask which project and what the goal is if I haven't said. Read the project's guide (project_get) and existing tasks (task_list) so you don't duplicate them. Draft the tasks, subtasks and acceptance criteria, then call task_create_many with preview: true and show me the plan. Once I agree, create them, group them with milestone_create (addTasks), and record what blocks what with task_link.",
         )]
     }
 
@@ -3524,6 +3524,11 @@ async fn keys_to_ids(
     tool: &str,
     arguments: &mut serde_json::Value,
 ) -> Result<bool, AppError> {
+    // A retired name is refused as it stands: resolving "me" could make the
+    // caller's personal space for a call that never runs (K2.23).
+    if crate::ops::retired::find(tool).is_some() {
+        return Ok(false);
+    }
     let mut changed = false;
     // AWD-96: "workspace" names the workspace's own pages.
     if let Some(name) = unresolved(arguments, "projectId")
@@ -3568,7 +3573,7 @@ async fn keys_to_ids(
             }
         }
     }
-    let task_fields: &[&str] = if tool == "task_open" {
+    let task_fields: &[&str] = if tool == "task_get" {
         &[
             "taskId",
             "workItemId",
