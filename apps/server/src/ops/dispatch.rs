@@ -688,39 +688,42 @@ async fn pipeline<O: Operation>(
         ))
         .await?;
     }
-    let mut reservation = None;
-    if let Some(key) = key.as_ref()
-        && O::IDEMPOTENCY == Idempotency::Dispatcher
-    {
-        let scope = format!("op.{}.{}", O::NAME, target.scope_id(&located).simple());
-        let hash = RequestHash::for_value(&canonical).map_err(|_| OpError::Unavailable)?;
-        let tx = call.tx().await?;
-        match idempotency::reserve(tx, ctx.caller.account_id, &scope, key, hash).await? {
-            IdempotencyOutcome::Reserved(reserved) => reservation = Some(reserved),
-            IdempotencyOutcome::Replay(replay) => {
-                if let Some(tx) = call.tx.take() {
-                    tx.commit()
-                        .await
-                        .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
-                }
-                let mut body = replay.response_body().clone();
-                body["replayed"] = true.into();
-                return Ok(Answer {
-                    status: replay.status(),
-                    body,
-                });
-            }
+    let keyed = key
+        .as_ref()
+        .filter(|_| O::IDEMPOTENCY == Idempotency::Dispatcher)
+        .map(|key| {
+            let scope = format!("op.{}.{}", O::NAME, target.scope_id(&located).simple());
+            RequestHash::for_value(&canonical)
+                .map(|hash| (key, scope, hash))
+                .map_err(|_| OpError::Unavailable)
+        })
+        .transpose()?;
+    let replay = |replay: idempotency::IdempotencyReplay| {
+        let mut body = replay.response_body().clone();
+        body["replayed"] = true.into();
+        Answer {
+            status: replay.status(),
+            body,
         }
-    }
+    };
 
     // A2.27: the workspace's guards see every change before it runs: one
     // may stop it, or hold it for review (answered ok, saying so, with the
-    // request that asks the reviewers). After a retry of a finished call has
-    // had its answer above, so a lost answer doesn't ask the reviewers again;
-    // a held or stopped call gives its reservation back (its transaction
-    // rolls back).
+    // request that asks the reviewers). A retry of a finished call has its
+    // answer first, so a lost answer doesn't ask the reviewers again. The
+    // check runs before the call's transaction opens: it takes a connection
+    // of its own, and none is held while it waits for one.
     let mut guard_hold = None;
     if writes && !request.preview {
+        if let Some((key, scope, hash)) = keyed.as_ref() {
+            let finished = crate::db::scoped_one(&state.pool, async |connection| {
+                idempotency::finished(connection, ctx.caller.account_id, scope, key, *hash).await
+            })
+            .await?;
+            if let Some(finished) = finished {
+                return Ok(replay(finished));
+            }
+        }
         // Boxed: every operation's dispatch would otherwise carry the
         // check's whole state on its stack.
         match Box::pin(crate::guards::check(
@@ -764,6 +767,24 @@ async fn pipeline<O: Operation>(
             }
         }
     }
+
+    let mut reservation = None;
+    if let Some((key, scope, hash)) = keyed.as_ref() {
+        let (key, hash) = (*key, *hash);
+        let tx = call.tx().await?;
+        match idempotency::reserve(tx, ctx.caller.account_id, scope, key, hash).await? {
+            IdempotencyOutcome::Reserved(reserved) => reservation = Some(reserved),
+            IdempotencyOutcome::Replay(replayed) => {
+                if let Some(tx) = call.tx.take() {
+                    tx.commit()
+                        .await
+                        .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
+                }
+                return Ok(replay(replayed));
+            }
+        }
+    }
+
     if let Some(hold) = guard_hold {
         let tx = call.tx().await?;
         crate::guards::use_hold(tx, hold, ctx.request_id.as_deref()).await?;

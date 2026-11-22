@@ -175,6 +175,8 @@ export type RunView = RunLine & {
   usageByModel: ModelUsageLine[]
   /** What it changed, as its host last reported it; null before a report (or without "see code"). */
   files: ChangedFile[] | null
+  /** The host couldn't report all of its changes, so `files` may be missing some. */
+  changesTruncated: boolean
 }
 
 export type StepFile = { path: string; change?: string }

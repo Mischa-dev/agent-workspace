@@ -446,6 +446,10 @@ pub struct RunView {
     /// them (`run_changes_report`), for a viewer who sees code; null before
     /// the first report. The diff is read on its own.
     pub files: Option<Vec<super::changes::ChangedFile>>,
+    /// The host couldn't report all of it (too many files, a diff too big
+    /// to keep, or changes it couldn't list), so `files` may be missing
+    /// some. False with no report.
+    pub changes_truncated: bool,
 }
 
 pub(crate) async fn visible_line(
@@ -585,12 +589,14 @@ pub async fn view(
     let mut lines = vec![named(&harnesses, line)];
     redact_on(&mut *connection, viewer, &mut lines).await?;
     let run = lines.remove(0);
-    let files = if sees_code(&mut *connection, viewer, run.project_id).await? {
+    let (files, changes_truncated) = if sees_code(&mut *connection, viewer, run.project_id).await? {
         super::changes::get(&mut *connection, run_id)
             .await?
-            .map(|changes| changes.files)
+            .map_or((None, false), |changes| {
+                (Some(changes.files), changes.truncated)
+            })
     } else {
-        None
+        (None, false)
     };
     Ok(Some(RunView {
         hidden_activities: (total - i64::try_from(activities.len()).unwrap_or(0)).max(0),
@@ -602,6 +608,7 @@ pub async fn view(
         pull_requests,
         usage_by_model,
         files,
+        changes_truncated,
     }))
 }
 

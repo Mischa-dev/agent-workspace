@@ -116,10 +116,11 @@ pub async fn start_run(
     // still hold its harness slot until its session winds down, so a full
     // harness is waited on briefly rather than failing the run.
     let mut waited = Duration::ZERO;
+    let handle = account.handle(state).await?;
     let provider = loop {
         match state
             .supervisors
-            .acquire_run(&account.adapter_kind, account.handle())
+            .acquire_run(&account.adapter_kind, handle.clone())
             .await
         {
             Err(HarnessError::HostCapacity | HarnessError::AccountCapacity)
@@ -421,9 +422,12 @@ pub(crate) async fn follow_recovered_run(
         return Ok(false);
     }
     let config = run_config(state, run_id).await?;
+    let Ok(handle) = account.handle(state).await else {
+        return Ok(false);
+    };
     let Ok(mut provider) = state
         .supervisors
-        .acquire_run(&account.adapter_kind, account.handle())
+        .acquire_run(&account.adapter_kind, handle)
         .await
     else {
         return Ok(false);
@@ -527,10 +531,15 @@ pub(crate) async fn inspect_provider_for_recovery(
     };
 
     // Reading history never takes a run slot.
-    let provider = state
-        .supervisors
-        .acquire_control(&account.adapter_kind, account.handle())
-        .await;
+    let provider = match account.handle(state).await {
+        Ok(handle) => {
+            state
+                .supervisors
+                .acquire_control(&account.adapter_kind, handle)
+                .await
+        }
+        Err(_) => Err(HarnessError::MissingResult("the account's home")),
+    };
     let Ok(mut provider) = provider else {
         return ProviderRecovery::Unavailable;
     };

@@ -217,7 +217,14 @@ export function ReportedRun({
         <Section id="run-files" title="Files changed">
           <RunDiff
             live={live}
-            run={{ agentName: run.agentName ?? 'the agent', baseCommit: null, files: run.files, id: run.id, publishedCommit: null }}
+            run={{
+              agentName: run.agentName ?? 'the agent',
+              baseCommit: null,
+              changesTruncated: run.changesTruncated,
+              files: run.files,
+              id: run.id,
+              publishedCommit: null,
+            }}
           />
         </Section>
       ) : null}

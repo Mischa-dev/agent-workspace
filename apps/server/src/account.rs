@@ -31,7 +31,6 @@ use crate::{
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     model_catalog::run_catalog,
     policy::{Action, MembershipRole, RoleGrant},
-    profile_runtime::prepare_private_profile_directory,
     sign_ins::{self as ceremonies, LoginCeremonyError, LoginCeremonySnapshot, LoginReservation},
 };
 use agent_workspace_host_protocol::account::{
@@ -480,14 +479,14 @@ pub(crate) async fn insert_account(
         ));
     }
     let account_id = Uuid::now_v7();
+    // The home is the host's: it makes it (private) the first time it
+    // reaches the account, under its own root, by this key.
     let home_key = format!("acct-{}", account_id.simple());
-    let data_root = state.config.data_root.clone();
-    let home_root = state.config.codex_home_root.clone();
-    let home = tokio::task::spawn_blocking(move || {
-        prepare_private_profile_directory(&data_root, &home_root, &home_key)
-    })
-    .await
-    .map_err(|_| AppError::Internal("prepare provider account home task"))??;
+    let home = crate::profile_runtime::resolve_path_within_data_root(
+        &state.config.data_root,
+        &state.config.codex_home_root,
+    )?
+    .join(home_key);
     let home = home
         .to_str()
         .ok_or(AppError::Internal("provider account home path encoding"))?;
@@ -699,7 +698,7 @@ async fn delete_account(
             .await?;
     }
     transaction.commit().await?;
-    let home = std::path::PathBuf::from(&access.home_path);
+    let (organization_id, forget) = (access.organization_id, access.ask(AccountQuestion::Forget));
     if let Err(error) = logout(&state, access).await {
         // A harness that's gone has nothing left to revoke; removing the
         // home below still drops the sign-in kept here.
@@ -733,15 +732,16 @@ async fn delete_account(
     )
     .await?;
     transaction.commit().await?;
-    let data_root = state.config.data_root.clone();
-    let home_root = state.config.codex_home_root.clone();
-    let removed = tokio::task::spawn_blocking(move || {
-        crate::profile_runtime::remove_private_profile_directory(&data_root, &home_root, &home)
-    })
-    .await
-    .map_err(|_| AppError::Internal("remove provider account home task"))?;
-    if let Err(error) = removed {
-        tracing::warn!(%account_id, error = %error, "removing a deleted account's home failed");
+    // Its home goes from the host's disk; a host that can't be reached now
+    // leaves it there (it holds nothing anyone can sign in with any more).
+    match host_accounts::ask(&state, organization_id, forget).await {
+        Ok(Asked::Answered(_)) => {}
+        Ok(other) => {
+            tracing::warn!(%account_id, outcome = other.category(), "removing a deleted account's home failed");
+        }
+        Err(error) => {
+            tracing::warn!(%account_id, error = %error, "removing a deleted account's home failed");
+        }
     }
     Ok(Json(RemovedAccount { outcome }))
 }

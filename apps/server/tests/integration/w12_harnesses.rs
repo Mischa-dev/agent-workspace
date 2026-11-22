@@ -810,6 +810,21 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
             .fetch_one(&pool)
             .await
             .expect("spare home");
+    // Its home is the host's, made when the host first reaches it.
+    let signed_out = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{accounts}/{spare_id}/logout"),
+        "spare-logout",
+        json!({}),
+    )
+    .await;
+    assert!(
+        signed_out.0.is_success(),
+        "sign the spare out: {}",
+        signed_out.1
+    );
     assert!(std::path::Path::new(&spare_home).exists());
     let refused = send(
         &application,

@@ -54,6 +54,10 @@ pub enum AccountQuestion {
     CancelLogin { login_id: String },
     /// Sign the account out of its harness.
     Logout,
+    /// The account is gone: end its harness sessions and remove its home
+    /// from the host's disk (answered `Done`; a home already gone is fine).
+    /// Sign it out first with `Logout`.
+    Forget,
     /// Read the account's usage and report its windows the way any host
     /// does (`POST /api/v1/host/windows`); answered `Done`.
     Usage,
