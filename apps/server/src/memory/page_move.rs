@@ -115,6 +115,9 @@ impl Operation for PageMove {
             ));
         }
 
+        // Both trees change: take them before the page (see lock_page_trees).
+        let trees = authorized.map_or_else(|| vec![to], |from| vec![from, to]);
+        super::lock_page_trees(tx, &trees).await?;
         let (from, version, title, archived, is_guide) =
             sqlx::query_as::<_, (Uuid, i64, String, bool, bool)>(
                 "SELECT project_id, version, title, archived_at IS NOT NULL, is_guide \

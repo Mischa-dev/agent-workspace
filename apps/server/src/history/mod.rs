@@ -362,7 +362,7 @@ pub async fn list(
 /// One version as it was, or None when there is no such version. Kinds
 /// that can't show a version are refused before this is called.
 pub async fn show(
-    store: &crate::files::FileStore,
+    stores: &crate::files::store::Stores<'_>,
     connection: &mut PgConnection,
     kind: &str,
     id: Uuid,
@@ -380,7 +380,7 @@ pub async fn show(
         "whiteboard" => {
             let revision = i32::try_from(version).unwrap_or(-1);
             let Some(elements) =
-                crate::whiteboards::store::revision_elements(store, connection, id, revision)
+                crate::whiteboards::store::revision_elements(stores, connection, id, revision)
                     .await?
             else {
                 return Ok(None);
@@ -398,7 +398,7 @@ pub async fn show(
             })
         }
         // A removed message's versions are gone with its text.
-        "sheet" => crate::sheets::history::state_at(store, connection, id, version)
+        "sheet" => crate::sheets::history::state_at(stores, connection, id, version)
             .await?
             .map(|state| state.to_json(version)),
         "message" => sqlx::query_as::<_, (Option<String>, Option<Value>)>(
@@ -417,15 +417,97 @@ pub async fn show(
     })
 }
 
+/// The largest moved payload read back, compressed.
+const MAX_MOVED_PAYLOAD_BYTES: u64 = 64 * 1024 * 1024;
+
+/// A board version's elements or a sheet snapshot's state that the
+/// compaction jobs moved to the file store (C1.34): compressed JSON under
+/// `key` in the store `store_id` names.
+pub(crate) async fn read_moved_payload(
+    stores: &crate::files::store::Stores<'_>,
+    store_id: Option<&str>,
+    key: &str,
+) -> Result<Value, AppError> {
+    if let Some(warmed) = stores.warmed_payloads() {
+        // Moved after the payloads were read: no network call in here.
+        return warmed.get(key).cloned().ok_or(AppError::Conflict(
+            "version",
+            "That version was put away a moment ago. Try again.",
+        ));
+    }
+    let store = stores
+        .open(store_id.unwrap_or(crate::files::store::LOCAL))
+        .await?;
+    let bytes = store.read_all(key, MAX_MOVED_PAYLOAD_BYTES).await?;
+    let mut json = Vec::new();
+    std::io::Read::read_to_end(
+        &mut flate2::read::GzDecoder::new(bytes.as_slice()),
+        &mut json,
+    )
+    .map_err(|_| AppError::Internal("a moved version couldn't be read"))?;
+    serde_json::from_slice(&json)
+        .map_err(|_| AppError::Internal("a moved version couldn't be read"))
+}
+
+/// The stores to show or restore `version` of `id` from, inside a
+/// transaction: the moved payload it reads (a board version's elements, the
+/// sheet snapshot it builds on) is read here first, before any transaction
+/// opens, as `cold::warm_page` does for pages. A payload moved after this
+/// is refused under the transaction rather than read there.
+pub async fn warm_moved<'a>(
+    state: &'a crate::AppState,
+    kind: &str,
+    id: Uuid,
+    version: i64,
+) -> Result<crate::files::store::Stores<'a>, AppError> {
+    let query = match kind {
+        "whiteboard" => {
+            "SELECT payload_key, payload_store_id FROM whiteboard_revisions \
+             WHERE whiteboard_id = $1 AND revision = $2::int AND payload_key IS NOT NULL"
+        }
+        "sheet" => {
+            "SELECT payload_key, payload_store_id FROM ( \
+                 SELECT payload_key, payload_store_id FROM sheet_snapshots \
+                 WHERE sheet_id = $1 AND revision <= $2 ORDER BY revision DESC LIMIT 1 \
+             ) latest WHERE payload_key IS NOT NULL"
+        }
+        _ => {
+            return Ok(crate::files::store::Stores::warmed(
+                state,
+                Default::default(),
+            ));
+        }
+    };
+    let moved = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, (String, Option<String>)>(query)
+            .bind(id)
+            .bind(version)
+            .fetch_optional(&mut *connection)
+            .await
+    })
+    .await?;
+    let mut payloads = std::collections::HashMap::new();
+    if let Some((key, store_id)) = moved {
+        let payload = read_moved_payload(
+            &crate::files::store::Stores::of(state),
+            store_id.as_deref(),
+            &key,
+        )
+        .await?;
+        payloads.insert(key, payload);
+    }
+    Ok(crate::files::store::Stores::warmed(state, payloads))
+}
+
 /// Who restores, as each kind's own write path wants it.
-pub struct Restorer {
+pub struct Restorer<'a> {
     pub page: crate::memory::Writer,
     pub board: crate::whiteboards::Caller,
     pub space_id: Option<Uuid>,
     pub workspace_id: Uuid,
     pub actor_id: Uuid,
-    /// Where a board version's moved elements are read from.
-    pub files: crate::files::FileStore,
+    /// Where moved board versions and sheet snapshots are read from.
+    pub files: crate::files::store::Stores<'a>,
 }
 
 /// Put back `version` as a new version; the thing's version after. Refuses
@@ -433,7 +515,7 @@ pub struct Restorer {
 /// a board's scene sequence). Kinds that can't restore are refused before.
 pub async fn restore(
     transaction: &mut Transaction<'_, Postgres>,
-    restorer: &Restorer,
+    restorer: &Restorer<'_>,
     kind: &str,
     id: Uuid,
     version: i64,

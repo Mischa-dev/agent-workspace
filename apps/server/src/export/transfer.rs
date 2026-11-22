@@ -377,6 +377,109 @@ async fn cold_missing(
     Ok(kept.iter().any(|key| !cold.contains_key(key)))
 }
 
+/// Board versions and sheet snapshots the compaction jobs moved to the
+/// file store (C1.34), read back: an export carries them whole, as it
+/// carries page versions in cold storage, since the archive takes no
+/// history payloads of its own.
+#[derive(Default)]
+struct Moved {
+    /// (whiteboard, revision) to its elements.
+    boards: HashMap<(Uuid, i64), Value>,
+    /// (sheet, revision) to its state.
+    sheets: HashMap<(Uuid, i64), Value>,
+}
+
+async fn moved_payloads(state: &AppState, workspace: Uuid) -> Result<Moved, AppError> {
+    let (boards, sheets) = crate::db::scoped_one(&state.pool, async |connection| {
+        let boards = sqlx::query_as::<_, (Uuid, i64, String, Option<String>)>(
+            "SELECT revision.whiteboard_id, revision.revision::bigint, revision.payload_key, \
+                    revision.payload_store_id \
+             FROM whiteboard_revisions revision \
+             JOIN whiteboards board ON board.id = revision.whiteboard_id \
+             WHERE board.organization_id = $1 AND revision.payload_key IS NOT NULL",
+        )
+        .bind(workspace)
+        .fetch_all(&mut *connection)
+        .await?;
+        let sheets = sqlx::query_as::<_, (Uuid, i64, String, Option<String>)>(
+            "SELECT sheet_id, revision, payload_key, payload_store_id FROM sheet_snapshots \
+             WHERE workspace_id = $1 AND payload_key IS NOT NULL",
+        )
+        .bind(workspace)
+        .fetch_all(&mut *connection)
+        .await?;
+        Ok::<_, AppError>((boards, sheets))
+    })
+    .await?;
+    let stores = crate::files::store::Stores::of(state);
+    let mut moved = Moved::default();
+    for (board, revision, key, store_id) in boards {
+        let elements =
+            crate::history::read_moved_payload(&stores, store_id.as_deref(), &key).await?;
+        moved.boards.insert((board, revision), elements);
+    }
+    for (sheet, revision, key, store_id) in sheets {
+        let state = crate::history::read_moved_payload(&stores, store_id.as_deref(), &key).await?;
+        moved.sheets.insert((sheet, revision), state);
+    }
+    Ok(moved)
+}
+
+/// Whether the snapshot holds a moved board version or sheet snapshot that
+/// `moved` lacks (the job moved it after they were read).
+async fn moved_missing(
+    snapshot: &mut sqlx::PgConnection,
+    workspace: Uuid,
+    moved: &Moved,
+) -> Result<bool, AppError> {
+    let boards = sqlx::query_as::<_, (Uuid, i64)>(
+        "SELECT revision.whiteboard_id, revision.revision::bigint \
+         FROM whiteboard_revisions revision \
+         JOIN whiteboards board ON board.id = revision.whiteboard_id \
+         WHERE board.organization_id = $1 AND revision.payload_key IS NOT NULL",
+    )
+    .bind(workspace)
+    .fetch_all(&mut *snapshot)
+    .await?;
+    let sheets = sqlx::query_as::<_, (Uuid, i64)>(
+        "SELECT sheet_id, revision FROM sheet_snapshots \
+         WHERE workspace_id = $1 AND payload_key IS NOT NULL",
+    )
+    .bind(workspace)
+    .fetch_all(&mut *snapshot)
+    .await?;
+    Ok(boards.iter().any(|key| !moved.boards.contains_key(key))
+        || sheets.iter().any(|key| !moved.sheets.contains_key(key)))
+}
+
+/// A moved row as it leaves: its payload back in place and no key, so the
+/// importing server needs nothing from this one's store.
+fn hydrate_moved(table: &str, data: &mut Value, moved: &Moved) -> Result<(), AppError> {
+    let (field, kept, owner) = match table {
+        "whiteboard_revisions" => ("elements", &moved.boards, "whiteboard_id"),
+        "sheet_snapshots" => ("state", &moved.sheets, "sheet_id"),
+        _ => return Ok(()),
+    };
+    if data["payload_key"].is_null() {
+        return Ok(());
+    }
+    let key = (
+        data[owner]
+            .as_str()
+            .and_then(|id| id.parse().ok())
+            .unwrap_or_default(),
+        data["revision"].as_i64().unwrap_or_default(),
+    );
+    // `write_archive` checked the snapshot has every moved payload.
+    let payload = kept
+        .get(&key)
+        .ok_or(AppError::Internal("a moved version has no payload"))?;
+    data[field] = payload.clone();
+    data["payload_key"] = Value::Null;
+    data["payload_store_id"] = Value::Null;
+    Ok(())
+}
+
 /// Writes the whole archive to `path`.
 async fn write_archive(
     state: &AppState,
@@ -387,20 +490,24 @@ async fn write_archive(
     // (K3.25), so every version leaves whole. A version archived after they
     // were read and before the snapshot would leave without its body: the
     // snapshot checks it has every one, and they are read again if not.
-    let (cold, mut snapshot) = {
+    // Board versions and sheet snapshots moved to the file store the same.
+    let (cold, moved, mut snapshot) = {
         let mut tries = 0;
         loop {
             let cold = crate::history::cold::cold_page_bodies(state, workspace).await?;
+            let moved = moved_payloads(state, workspace).await?;
             let mut snapshot = crate::db::scoped_snapshot(&state.pool).await?;
-            if !cold_missing(&mut snapshot, workspace, &cold).await? {
-                break (cold, snapshot);
+            if !cold_missing(&mut snapshot, workspace, &cold).await?
+                && !moved_missing(&mut snapshot, workspace, &moved).await?
+            {
+                break (cold, moved, snapshot);
             }
             snapshot.rollback().await?;
             tries += 1;
             if tries == 3 {
                 return Err(AppError::Conflict(
                     "export",
-                    "page history kept moving to cold storage; try again",
+                    "history kept moving to cold storage; try again",
                 ));
             }
         }
@@ -438,6 +545,7 @@ async fn write_archive(
                     &hidden,
                     &left_out,
                     &cold,
+                    &moved,
                 )
                 .await?;
                 if written > 0 {
@@ -895,6 +1003,7 @@ struct Kind<'a> {
 /// One kind's rows as lines in `things/<module>/<kind>.jsonl`, oldest
 /// first, so a row comes after the rows of its own kind it points at (a
 /// reply after its parent). Returns how many.
+#[allow(clippy::too_many_arguments)]
 async fn write_kind(
     connection: &mut PgConnection,
     zip: &mut ZipWriter<std::fs::File>,
@@ -907,6 +1016,7 @@ async fn write_kind(
     not_spaces: &[Uuid],
     left_out: &LeftOut,
     cold: &HashMap<(Uuid, i64), String>,
+    moved: &Moved,
 ) -> Result<usize, AppError> {
     let table = identifier(kind.table);
     let column = identifier(column);
@@ -958,6 +1068,7 @@ async fn write_kind(
                 .ok_or(AppError::Internal("a cold page version has no body"))?;
             data["body"] = Value::String(body.clone());
         }
+        hydrate_moved(kind.table, &mut data, moved)?;
         if !started {
             zip.start_file(&name, options(true)).map_err(zip_error)?;
             started = true;

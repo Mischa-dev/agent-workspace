@@ -67,6 +67,55 @@ pub struct StoredBytes {
     pub length: u64,
 }
 
+/// Opens the store a row names by its id (a history payload's), for code
+/// that reads rows kept in several stores: the configured store for new
+/// writes, any other by id.
+#[derive(Clone)]
+pub struct Stores<'a> {
+    pool: &'a sqlx::PgPool,
+    config: &'a AppConfig,
+    /// Moved payloads read before a transaction opened, by key. When set,
+    /// nothing else is read from a store (`history::read_moved_payload`).
+    warmed: Option<std::collections::HashMap<String, serde_json::Value>>,
+}
+
+impl<'a> Stores<'a> {
+    pub fn of(state: &'a crate::AppState) -> Self {
+        Self {
+            pool: &state.pool,
+            config: &state.config,
+            warmed: None,
+        }
+    }
+
+    /// Only these payloads, already read: for use inside a transaction.
+    pub fn warmed(
+        state: &'a crate::AppState,
+        payloads: std::collections::HashMap<String, serde_json::Value>,
+    ) -> Self {
+        Self {
+            warmed: Some(payloads),
+            ..Self::of(state)
+        }
+    }
+
+    pub(crate) fn warmed_payloads(
+        &self,
+    ) -> Option<&std::collections::HashMap<String, serde_json::Value>> {
+        self.warmed.as_ref()
+    }
+
+    /// Where new payloads go.
+    pub fn configured(&self) -> FileStore {
+        FileStore::from_config(self.config)
+    }
+
+    /// The store `id` names.
+    pub async fn open(&self, id: &str) -> Result<FileStore, AppError> {
+        FileStore::resolve_with(self.pool, self.config, id).await
+    }
+}
+
 impl FileStore {
     /// Where new uploads go.
     pub fn from_config(config: &AppConfig) -> Self {

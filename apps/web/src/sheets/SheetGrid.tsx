@@ -330,6 +330,14 @@ export function SheetGrid({
     target.addEventListener('pointerup', onUp)
   }
 
+  // What's highlighted is what Delete and Cut clear: in a view's order of
+  // rows, the rows between as shown, not by number.
+  const highlighted = order || hidden ? selected() : null
+  const highlightedRows = highlighted ? new Set(highlighted.rows) : null
+  const highlightedColumns = highlighted ? new Set(highlighted.columns) : null
+  const isSelected = (row: number, column: number) =>
+    highlightedRows && highlightedColumns ? highlightedRows.has(row) && highlightedColumns.has(column) : contains(selection, row, column)
+
   const renderRow = (row: number) => (
     <tr key={row} style={{ height: ROW_HEIGHT }}>
       <th className="aw-grid__rowhead" scope="row">
@@ -339,7 +347,7 @@ export function SheetGrid({
         const key = cellKey(row, column)
         const cell = cells.get(key)
         const waiting = pending.get(key)
-        const selected = contains(selection, row, column)
+        const selected = isSelected(row, column)
         const focused = focus.row === row && focus.column === column
         const isEditing = editing && editing.position.row === row && editing.position.column === column
         const control = rules.control(row, column)

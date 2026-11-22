@@ -40,17 +40,20 @@ export function SheetValidationDialog({
   const save = async () => {
     setBusy(true)
     const saved = await onSave(
-      rules.map((rule, index) =>
-        rule.allow === 'list'
-          ? {
-              ...rule,
-              choices: (choices[index] ?? '')
-                .split(',')
-                .map((choice) => choice.trim())
-                .filter(Boolean),
-            }
-          : rule,
-      ),
+      rules.map((rule, index) => {
+        if (rule.allow !== 'list') return rule
+        const text = choices[index] ?? ''
+        // A list whose text wasn't touched keeps its choices as they are:
+        // one may hold a comma ("New York, NY") that splitting would break.
+        if (rule.choices && text === rule.choices.join(', ')) return rule
+        return {
+          ...rule,
+          choices: text
+            .split(',')
+            .map((choice) => choice.trim())
+            .filter(Boolean),
+        }
+      }),
     )
     setBusy(false)
     if (saved) onClose()

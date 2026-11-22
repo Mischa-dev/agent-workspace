@@ -201,6 +201,7 @@ export function normalizeWorkItem(value: unknown): WorkItem {
     capabilities: {
       view: boolean(capabilities.view),
       edit: boolean(capabilities.edit),
+      suggest: boolean(capabilities.suggest),
       archive: boolean(capabilities.archive),
       mergePullRequests: boolean(capabilities.mergePullRequests),
     },

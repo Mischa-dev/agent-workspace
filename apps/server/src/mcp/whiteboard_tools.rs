@@ -654,6 +654,7 @@ pub(super) async fn whiteboard_create(
             Err(error) => return refused(error, "whiteboard_create"),
         }
     }
+    let mut stages = Vec::new();
     let result = async {
         // An image's bytes go to the file store before the transaction
         // opens; the board, made inside it, then keeps them.
@@ -670,6 +671,10 @@ pub(super) async fn whiteboard_create(
             }
             _ => None,
         };
+        stages = staged
+            .as_ref()
+            .map(StagedImages::stages)
+            .unwrap_or_default();
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let reservation = match reserve_create(
             &mut transaction,
@@ -722,6 +727,11 @@ pub(super) async fn whiteboard_create(
         Ok::<_, EditError>((id, edit, false))
     }
     .await;
+    // Staged bytes the board didn't come to hold (a refused or replayed
+    // create) go now; a kept image's pin is already gone.
+    for staged in &stages {
+        crate::files::abandon_content(state, staged).await;
+    }
     match result {
         Ok((id, edit, idempotent_replay)) => match whiteboards::summary(&state.pool, id).await {
             Ok(summary) => ToolResult::ok(WhiteboardChangeValue {
@@ -814,6 +824,14 @@ pub(crate) async fn stage_images(
 }
 
 impl StagedImages {
+    /// What was staged, to take back what no row came to hold.
+    pub(crate) fn stages(&self) -> Vec<crate::files::StagedContent> {
+        self.images
+            .iter()
+            .map(|(_, _, _, staged)| staged.clone())
+            .collect()
+    }
+
     /// Keeps the staged images on the board, as the web keeps an image
     /// dropped on it, in the edit's transaction; an image named by fileId
     /// must already be there. The operations to apply.
@@ -913,18 +931,17 @@ pub(super) async fn whiteboard_update(
         Err(error) => return refused(error, "whiteboard_update"),
     }
     let result = async {
+        let stores = match arguments.restore_revision {
+            Some(revision) => {
+                crate::history::warm_moved(state, "whiteboard", id, i64::from(revision)).await?
+            }
+            None => crate::files::store::Stores::of(state),
+        };
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         whiteboards::change(&mut transaction, &caller, id, &change).await?;
         if let Some(revision) = arguments.restore_revision {
             let board = whiteboards::access(&mut transaction, &caller, id, true).await?;
-            store::restore_revision(
-                &crate::files::FileStore::from_config(&state.config),
-                &mut transaction,
-                &caller,
-                id,
-                revision,
-            )
-            .await?;
+            store::restore_revision(&stores, &mut transaction, &caller, id, revision).await?;
             whiteboards::audit(
                 &mut transaction,
                 &caller,

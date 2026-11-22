@@ -484,6 +484,26 @@ pub async fn get_page(
 /// How deep pages nest inside pages.
 pub const MAX_PAGE_DEPTH: i32 = 10;
 
+/// Where pages sit in a space changes one write at a time: a move takes
+/// this before it locks any page, so two moves can't each pass the check
+/// against the other's old tree and close a loop between them. Spaces are
+/// taken in one order, so a move between two spaces can't deadlock.
+pub(crate) async fn lock_page_trees(
+    transaction: &mut Transaction<'_, Postgres>,
+    spaces: &[Uuid],
+) -> Result<(), AppError> {
+    let mut spaces = spaces.to_vec();
+    spaces.sort_unstable();
+    spaces.dedup();
+    for space in spaces {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('page-tree:' || $1::text, 0))")
+            .bind(space)
+            .execute(&mut **transaction)
+            .await?;
+    }
+    Ok(())
+}
+
 /// Checks that `parent` can hold `page` (None for a page being made): an
 /// active page of the same space that isn't the page itself or inside it,
 /// and not so deep the page would pass the nesting limit.
@@ -867,6 +887,9 @@ pub async fn update_page(
             field: "fromTemplateId",
             message: "Templates start new pages; leave pageId out to make one.",
         });
+    }
+    if input.parent_page_id.is_some() {
+        lock_page_trees(transaction, &[in_space]).await?;
     }
     #[allow(clippy::type_complexity)]
     let (

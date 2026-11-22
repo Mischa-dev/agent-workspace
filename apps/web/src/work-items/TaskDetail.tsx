@@ -191,8 +191,12 @@ function TaskDetailBody({
   projectArchived: boolean
   workflow: WorkItemWorkflow
 }) {
-  const save = useTaskSave(item)
-  const disabled = projectArchived || Boolean(item.archivedAt) || !item.capabilities.edit
+  const changeable = !projectArchived && !item.archivedAt
+  // A role that only suggests changes the task's own fields as proposals (T1.41); everything else stays read-only.
+  const suggesting = changeable && !item.capabilities.edit && Boolean(item.capabilities.suggest)
+  const save = useTaskSave(item, { suggest: suggesting })
+  const disabled = !changeable || !item.capabilities.edit
+  const fieldsLocked = disabled && !suggesting
   const root = useRef<HTMLDivElement>(null)
   const wide = useWide(root, layout === 'page')
   const editDescription = useRef<(() => void) | null>(null)
@@ -224,7 +228,7 @@ function TaskDetailBody({
   const [boardDialog, setBoardDialog] = useState<'new' | 'link' | null>(null)
   const [managingLabels, setManagingLabels] = useState(false)
   const [dropping, setDropping] = useState(false)
-  useEditShortcut(!disabled, editDescription, layout)
+  useEditShortcut(!fieldsLocked, editDescription, layout)
 
   // The layout decides which sections a task shows; hidden ones stay as they are, just out of sight.
   const experience = useProjectExperience(item.projectId)
@@ -362,6 +366,11 @@ function TaskDetailBody({
           It’s hidden from lists and can’t change until it’s restored.
         </TaskNotice>
       ) : null}
+      {suggesting ? (
+        <TaskNotice icon="pencil" title="Your changes here are suggestions." tone="muted">
+          Someone who edits this task accepts or rejects each one.
+        </TaskNotice>
+      ) : null}
       {saveStopped ? (
         <Suspense fallback={null}>
           <TaskSaveNotices item={item} save={save} />
@@ -443,11 +452,12 @@ function TaskDetailBody({
 
   const properties = (
     <TaskProperties
-      disabled={disabled}
+      disabled={fieldsLocked}
       item={item}
       onManageLabels={() => setManagingLabels(true)}
       onRaisePriority={(priority) => setRaised({ taskId: item.id, priority })}
       save={save}
+      suggesting={suggesting}
       variant={wide ? 'rail' : 'pills'}
       workflow={workflow}
     />
@@ -499,12 +509,12 @@ function TaskDetailBody({
               {keys ? `${item.key}: ${item.title}` : item.title}
             </h1>
             {item.parent ? <ParentLine keys={keys} onOpenTask={onOpenTask} parent={item.parent} /> : null}
-            <TitleField disabled={disabled} item={item} save={save} />
+            <TitleField disabled={fieldsLocked} item={item} save={save} />
             {wide ? null : properties}
           </div>
           {notices}
           <div className="aw-task__text">
-            <TaskDescription disabled={disabled} editRef={editDescription} item={item} save={save} />
+            <TaskDescription disabled={fieldsLocked} editRef={editDescription} item={item} save={save} />
             {addRow}
           </div>
           <TaskSubtasks

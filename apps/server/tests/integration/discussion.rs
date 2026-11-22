@@ -1069,7 +1069,7 @@ async fn asking_about_a_selection_wakes_the_agent_with_a_picture() {
     assert_eq!(requests, 1);
 
     // A retry after a lost answer gets the same question and picture back,
-    // and keeps no second picture.
+    // and keeps no second picture, even when the elements moved meanwhile.
     let keyed = || {
         send(
             app,
@@ -1083,6 +1083,15 @@ async fn asking_about_a_selection_wakes_the_agent_with_a_picture() {
     };
     let (_, first) = keyed().await;
     assert_eq!(first["outcome"], "ok", "{first}");
+    sqlx::query(
+        "UPDATE whiteboard_elements \
+         SET data = jsonb_set(data, '{x}', to_jsonb(COALESCE((data->>'x')::float8, 0) + 500)) \
+         WHERE whiteboard_id::text = $1",
+    )
+    .bind(&board)
+    .execute(pool)
+    .await
+    .expect("move the elements");
     let (_, again) = keyed().await;
     assert_eq!(again["outcome"], "ok", "{again}");
     assert_eq!(again["value"]["messageId"], first["value"]["messageId"]);
