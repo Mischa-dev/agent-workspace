@@ -33,6 +33,7 @@ import {
   groupBySubject,
   invalidateInbox,
   isExternalHref,
+  noteWorkspaces,
   postUpdate,
   needsYou,
   answerRequest,
@@ -220,7 +221,11 @@ export function InboxPage() {
     })
 
   const undo = useCallback(
-    (update: InboxUpdate) => postUpdate(update, workspaceIds).then(() => invalidateInbox(queryClient)),
+    (update: InboxUpdate) =>
+      postUpdate(update, workspaceIds, noteWorkspaces(queryClient)).then((result) => {
+        invalidateInbox(queryClient)
+        if (result.refused) throw result.refused
+      }),
     [queryClient, workspaceIds],
   )
 
@@ -230,6 +235,9 @@ export function InboxPage() {
         onSuccess: (result) => {
           const toast = options.success?.(result)
           if (toast) showToast(toast)
+          // Done in some workspaces, refused in another: what's done stays
+          // undoable, and the refusal still shows.
+          if (result.refused) toastError(options.failed, result.refused)
         },
         onError: (reason) => toastError(options.failed, reason),
       })
