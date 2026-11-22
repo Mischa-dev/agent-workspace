@@ -322,7 +322,7 @@ export type InlineFormField = { field: string; required?: boolean }
 
 export type InstallTarget = { newSpace?: NewSpace | null; spaceId?: string | null }
 
-export type InstallView = { id: string; installedAt: string; name: string; objects: number; packageId: string; spaceId?: string | null; state: string; summary: string[]; version: string }
+export type InstallView = { id: string; installedAt: string; name: string; newerVersion?: string | null; objects: number; packageId: string; spaceId?: string | null; state: string; summary: string[]; version: string }
 
 export type Installed = { changes: string[]; installId: string; objects: InstalledObject[]; packageId: string; skipped: string[]; spaceId?: string | null; version: string }
 
@@ -1770,7 +1770,7 @@ export type PackagePreviewOutput = { digest: string; items: PlanItem[]; leaves: 
 
 export type PackageRemoveInput = { installId: string; parts: RemoveParts }
 
-export type PackageRemoveOutput = { id: string; installedAt: string; name: string; objects: number; packageId: string; spaceId?: string | null; state: string; summary: string[]; version: string }
+export type PackageRemoveOutput = { id: string; installedAt: string; name: string; newerVersion?: string | null; objects: number; packageId: string; spaceId?: string | null; state: string; summary: string[]; version: string }
 
 export type PackageUpgradeInput = { choices?: Record<string, Choice>; entry?: string | null; fileId?: string | null; installId: string; package?: Record<string, unknown> | null; planHash: string }
 

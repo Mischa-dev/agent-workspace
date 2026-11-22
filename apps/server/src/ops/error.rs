@@ -306,6 +306,18 @@ impl From<AppError> for OpError {
             // its own transactions commits its reservation first): a retry
             // shortly gets its answer.
             AppError::Conflict("idempotency_key", "command in progress") => Self::Unavailable,
+            // It stopped midway, its write made or not: a retry with the
+            // same id never runs it again.
+            AppError::Conflict("idempotency_key", "outcome unknown") => Self::Conflict {
+                reason: ConflictReason::State {
+                    code: "request_outcome_unknown",
+                },
+                message: "The first call with this request id stopped before it answered, so \
+                    whether it took effect isn't known. Check, then send it again with a new \
+                    request id."
+                    .into(),
+                current: None,
+            },
             AppError::Conflict(code, message) => Self::Conflict {
                 reason: ConflictReason::State { code },
                 message: Cow::Borrowed(message),

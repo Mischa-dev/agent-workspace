@@ -799,8 +799,8 @@ impl Operation for PackageList {
     const TITLE: &'static str = "List installed packages";
     const DESCRIPTION: &'static str = "List the packages installed in the workspace (or one \
         space), newest first: each install's package id, version, name, space, state, what it \
-        did in plain words and how many objects it made or reused. package_remove takes the \
-        install's id.";
+        did in plain words, how many objects it made or reused, and newerVersion when the \
+        directory offers one. package_remove takes the install's id.";
 
     type Input = PackageListInput;
     type Output = PackageListOutput;
@@ -817,9 +817,30 @@ impl Operation for PackageList {
         let workspace = call.ctx.workspace_id;
         let reader = crate::modules::built::Reader::of(&call.ctx.caller);
         let tx = call.tx().await?;
-        Ok(PackageListOutput {
-            installs: install::list(tx, workspace, space, reader).await?,
-        })
+        let mut installs = install::list(tx, workspace, space, reader).await?;
+        // What the directory offers newer, for each installed package.
+        if installs.iter().any(|install| install.state == "installed") {
+            let offered = super::directory::list(tx, workspace, None).await?;
+            for install in installs
+                .iter_mut()
+                .filter(|install| install.state == "installed")
+            {
+                let Some(current) = super::format::version_order(&install.version) else {
+                    continue;
+                };
+                install.newer_version = offered
+                    .iter()
+                    .filter(|entry| entry.id == install.package_id && entry.error.is_none())
+                    .filter_map(|entry| {
+                        super::format::version_order(&entry.version)
+                            .filter(|version| *version > current)
+                            .map(|version| (version, entry.version.clone()))
+                    })
+                    .max()
+                    .map(|(_, version)| version);
+            }
+        }
+        Ok(PackageListOutput { installs })
     }
 }
 

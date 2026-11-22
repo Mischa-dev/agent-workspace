@@ -650,7 +650,10 @@ impl Operation for ScheduledMessageUpdate {
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "messages";
     const PERMISSION: Option<Perm> = Some(Perm::ChannelsPost);
-    const IDEMPOTENCY: Idempotency = Idempotency::Command;
+    // The change commits in its own transaction: the dispatcher keeps the
+    // request id apart from it, so a retry replays the first answer.
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const OWN_TRANSACTION: bool = true;
     const TITLE: &'static str = "Change scheduled message";
     const DESCRIPTION: &'static str = "Change a message you scheduled: its text or time \
         (sendAt), send it now (sendNow: true), or cancel it (cancel: true). A failed one is \
@@ -665,8 +668,6 @@ impl Operation for ScheduledMessageUpdate {
         input: ScheduledMessageUpdateInput,
     ) -> Result<ScheduledUpdateValue, OpError> {
         let id = input.id.id();
-        // The scheduled-message command keeps no request ids, so a retry
-        // after a later edit would write again: replaySafe stays false.
         let updated = messaging::scheduled_update(
             call.state,
             call.ctx,

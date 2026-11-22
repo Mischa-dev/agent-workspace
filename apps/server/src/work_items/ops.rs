@@ -841,7 +841,10 @@ impl Operation for TaskCommentUpdate {
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "tasks";
     const PERMISSION: Option<Perm> = Some(Perm::TasksComment);
-    const IDEMPOTENCY: Idempotency = Idempotency::Command;
+    // The edit commits in its own transaction: the dispatcher keeps the
+    // request id apart from it, so a retry replays the first answer.
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const OWN_TRANSACTION: bool = true;
     const TITLE: &'static str = "Edit task comment";
     const DESCRIPTION: &'static str = "Edit your own comment on a task. Earlier versions stay in \
         the comment's history for everyone who can see the task, and it shows (edited). To take \
@@ -868,8 +871,6 @@ impl Operation for TaskCommentUpdate {
             input.expected_revision,
         )
         .await?;
-        // The command keeps no request ids, so a retry after a later edit
-        // would write again: replaySafe stays false.
         call.audited_by_command();
         Ok(edited)
     }
