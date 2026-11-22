@@ -44,12 +44,24 @@ fn mention(actor: Uuid, text: &str) -> Value {
     })
 }
 
+/// Changes notifications through `notification_update`: its value when it
+/// works, its whole answer when it doesn't.
 async fn update(setup: &Setup, browser: &Browser, body: Value) -> (StatusCode, Value) {
-    send(
+    let (status, answer) = send(
         &setup.app,
-        browser.request("POST", "/api/v1/inbox/update", None, body),
+        browser.request(
+            "POST",
+            "/api/v2/ops/notification_update",
+            Some(&Uuid::now_v7().to_string()),
+            body,
+        ),
     )
-    .await
+    .await;
+    if answer["outcome"] == "ok" {
+        (status, answer["value"].clone())
+    } else {
+        (status, answer)
+    }
 }
 
 async fn attention(setup: &Setup, browser: &Browser, project: &str) -> i64 {
@@ -502,7 +514,7 @@ async fn people_read_archive_snooze_and_restore_their_own() {
         json!({"action": "snooze", "ids": [oldest], "snoozeUntil": "2020-01-01T00:00:00Z"}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 
     // When the snooze ends it comes back unread.
     sqlx::query("UPDATE notifications SET snoozed_until = now() - interval '1 minute' WHERE recipient_actor_id = $1")
@@ -615,7 +627,7 @@ async fn snoozed_until_activity_comes_back_with_the_next_occurrence() {
         json!({"action": "snooze_until_activity", "ids": [one], "snoozeUntil": tomorrow}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 
     // Something new on each: One comes back unread at once, Two waits.
     say(

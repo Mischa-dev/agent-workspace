@@ -509,7 +509,9 @@ tool_op!(TaskMove {
         values carry over into a field of the same name and type when they fit there; the rest \
         stay on the original. Call first with preview: true to see what carries over and what \
         needs a choice, then move with its snapshot and one resolution per issue (set it in a \
-        target field, or leave it). Moving it again returns where it went.",
+        target field, or leave it). Moving it again returns where it went. It needs seeing and \
+        archiving tasks where it is and creating tasks where it goes; an app or agent also \
+        needs leave to write in both.",
     emits: ["task.created", "task.updated"],
     input: task_move::TaskMoveArguments,
     output: task_move::TaskMoveValue,

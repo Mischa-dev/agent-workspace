@@ -1,5 +1,6 @@
 import type { RealtimeEnvelope } from '../realtimeModel'
 import { conversationHandlers } from './conversations'
+import { moduleHandlers } from './modules'
 import { outsideDataHandlers } from './outsideData'
 import { peopleHandlers } from './people'
 import { runHandlers } from './runs'
@@ -17,6 +18,7 @@ export const HANDLERS: Readonly<Record<string, Handler>> = {
   ...taskHandlers,
   ...peopleHandlers,
   ...outsideDataHandlers,
+  ...moduleHandlers,
 }
 
 /** The queries an event makes stale. An event type the client doesn't know touches nothing. */

@@ -193,6 +193,14 @@ describe('per-event handlers', () => {
     expect(membership).not.toContain('other sidebar')
   })
 
+  it('built and connected modules refetch the module lists', () => {
+    const ids = (type: string) => touchesFor(event(type, {}), cacheContext(new QueryClient())).map((touch) => touch.id)
+    for (const type of ['module.created', 'module.updated', 'module.switched', 'module.removed']) {
+      expect(ids(type)).toEqual(['op:module_list', 'op:module_open'])
+    }
+    expect(ids('module.connected')).toEqual(['op:module_list', 'op:connected_module_list'])
+  })
+
   it('documents and module switches are left to their own modules, and an unknown event touches nothing', async () => {
     for (const type of SELF_HANDLED) expect(await replay(event(type, {}))).toEqual([])
     expect(await replay(event('something.new', { conversationId: CHANNEL }, CHANNEL))).toEqual([])

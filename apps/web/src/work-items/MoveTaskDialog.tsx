@@ -298,6 +298,40 @@ function MoveRecovery({
       </Dialog>
     )
   }
+  if (state.kind === 'held' || (sending && state.held)) {
+    return (
+      <Dialog
+        footer={
+          <>
+            <Button disabled={sending} onClick={onClose} variant="ghost">
+              Close
+            </Button>
+            <Button busy={sending} onClick={() =>
+                void sendMove(actorId, projectId, task.id, undefined, (done) =>
+                  invalidate(projectId, (done.moved[0] && movedTo(done.moved[0])?.projectId) ?? move.targetProjectId),
+                )
+              } variant="primary">
+              Check again
+            </Button>
+          </>
+        }
+        onClose={() => {
+          if (!sending) onClose()
+        }}
+        open
+        returnFocus={opener}
+        title={`Moving ${task.key} to ${move.targetProjectKey} waits for a reviewer`}
+      >
+        <p className="aw-move__lede">
+          This team asks a reviewer to allow moves like this one, so nothing has moved yet. Once they have, Check again sends this
+          same move and it goes through. If they decline it, Check again says so and you can start over.
+        </p>
+        <p className="aw-move__lede">
+          Only this tab remembers it, and only while you stay signed in. Until it’s settled, nothing else can be sent for {task.key}.
+        </p>
+      </Dialog>
+    )
+  }
   if (sending && !state.retry) {
     return (
       <Dialog onClose={onClose} open returnFocus={opener} title={`Moving ${task.key} to ${move.targetProjectKey}…`}>

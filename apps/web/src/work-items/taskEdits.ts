@@ -7,7 +7,7 @@ import type { PickResult } from './FieldPicker'
 import { bulkUpdateWorkItems } from './planningApi'
 import { useInvalidateWorkItems } from './planningHooks'
 import type { BulkChanges, BulkProblem, WorkItem, WorkItemCard, WorkItemPatch } from './types'
-import { inOrder, remember, type Undoable } from '../views/saveQueue'
+import { forget, inOrder, remember, type Undoable } from '../views/saveQueue'
 import { undoableTaskChange } from './taskUndo'
 
 /** The PATCH fields for a picker result. */
@@ -119,17 +119,40 @@ export function useApplyPick() {
             }
           : null
       if (targets.length === 1 || result.field === 'type') {
-        for (const target of targets) {
-          await inOrder(`task:${target.id}`, () =>
-            updateWorkItem({
-              projectId: target.projectId,
-              workItemId: target.id,
-              idempotencyKey: crypto.randomUUID(),
-              patch: { expectedVersion: target.version, ...patch },
-            }),
-          )
+        const saves = (async () => {
+          for (const target of targets) {
+            await inOrder(`task:${target.id}`, () =>
+              updateWorkItem({
+                projectId: target.projectId,
+                workItemId: target.id,
+                idempotencyKey: crypto.randomUUID(),
+                patch: { expectedVersion: target.version, ...patch },
+              }),
+            )
+          }
+        })()
+        // Undo can take it back from the moment it's made: it waits for the
+        // save itself and does nothing if the save failed (another editor's
+        // value that happens to match is never undone), and a failed save
+        // forgets it.
+        const afterSave: Undoable | null = undo && {
+          label: undo.label,
+          undo: async (client) => {
+            try {
+              await saves
+            } catch {
+              throw new Error('That change didn’t save, so there was nothing to undo.')
+            }
+            await undo.undo(client)
+          },
         }
-        if (undo) remember(undo)
+        if (afterSave) remember(afterSave)
+        try {
+          await saves
+        } catch (error) {
+          if (afterSave) forget(afterSave)
+          throw error
+        }
         return
       }
       const changes = pickToBulk(result)

@@ -633,6 +633,7 @@ impl Operation for ModuleCreate {
             }
             super::add_nav(tx, &module, &entry.label, entry.icon.as_deref(), &target).await?;
         }
+        tell_readers(tx, crate::outbox::ModuleChange::Created, &module).await?;
         call.audit_target(
             "module",
             module_id,
@@ -780,6 +781,7 @@ impl Operation for ModuleUpdate {
             .await?;
         }
         super::touch(tx, module.id).await?;
+        tell_readers(tx, crate::outbox::ModuleChange::Updated, &module).await?;
         call.audit_target("module", module.id, json!({ "key": module.module_key }));
         view(call, module.id).await
     }
@@ -831,6 +833,7 @@ impl Operation for ModulePartLink {
             super::touch(tx, module.id).await?;
             // Joining a switched-off module hides it: its readers refetch.
             announce_part(tx, kind, input.part.id.id()).await?;
+            tell_readers(tx, crate::outbox::ModuleChange::Updated, &module).await?;
         }
         call.audit_target(
             "module",
@@ -864,6 +867,7 @@ impl Operation for ModulePartUnlink {
             super::touch(tx, module.id).await?;
             // Leaving a switched-off module shows it again: readers refetch.
             announce_part(tx, kind, input.part.id.id()).await?;
+            tell_readers(tx, crate::outbox::ModuleChange::Updated, &module).await?;
         }
         call.audit_target(
             "module",
@@ -900,6 +904,34 @@ async fn announce(
     for (space, collection) in super::collection_parts(tx, module_id).await? {
         crate::outbox::enqueue_collection_updated(tx, space, collection, &[]).await?;
     }
+    Ok(())
+}
+
+/// Tells the module's other readers (other tabs, agents, webhooks) that it
+/// changed, in the write's transaction; they read `module_list` again with
+/// their own access. A module in a space is news to that space's members,
+/// a workspace-wide one to the workspace (in its own space).
+async fn tell_readers(
+    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
+    change: crate::outbox::ModuleChange,
+    module: &super::ModuleRow,
+) -> Result<(), OpError> {
+    let space = match module.space_id {
+        Some(space) => space,
+        None => crate::spaces::workspace::ensure(tx, module.workspace_id).await?,
+    };
+    crate::outbox::enqueue_typed(
+        tx,
+        space,
+        crate::outbox::OutboxEventPayload::ModuleChanged(crate::outbox::ModuleChangedPayload {
+            workspace_id: module.workspace_id,
+            project_id: space,
+            module_id: module.id,
+            change,
+            whole_workspace: module.space_id.is_none(),
+        }),
+    )
+    .await?;
     Ok(())
 }
 
@@ -960,6 +992,7 @@ impl Operation for ModuleSet {
         if changed {
             super::touch(tx, module.id).await?;
             announce(tx, module.id).await?;
+            tell_readers(tx, crate::outbox::ModuleChange::Switched, &module).await?;
         }
         call.audit_target(
             "module",
@@ -1022,6 +1055,7 @@ impl Operation for ModuleArchive {
         // Readers of its collections hear of it before they go or stay.
         announce(tx, module.id).await?;
         super::archive(tx, &module, input.parts == ArchiveParts::Keep).await?;
+        tell_readers(tx, crate::outbox::ModuleChange::Removed, &module).await?;
         call.audit_target("module", module.id, json!({ "parts": input.parts }));
         view(call, module.id).await
     }
@@ -1049,6 +1083,7 @@ impl Operation for ModuleRestore {
         let tx = call.tx().await?;
         super::restore(tx, &module).await?;
         announce(tx, module.id).await?;
+        tell_readers(tx, crate::outbox::ModuleChange::Updated, &module).await?;
         call.audit_target("module", module.id, json!({}));
         view(call, module.id).await
     }

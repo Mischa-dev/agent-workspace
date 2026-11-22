@@ -1,8 +1,9 @@
 import { useInfiniteQuery, useMutation, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
-import { callOp } from '../api/ops'
+import { callOp, ranOrThrow } from '../api/ops'
 import { queryKeys } from '../api/queryKeys'
+import { useSignedInWorkspaceIds } from '../auth/session'
 import { whenChoices } from '../later/when'
 import { actorKind, type ActorKind } from '../ui/identityModel'
 import type { MenuEntry } from '../ui/overlays'
@@ -241,9 +242,10 @@ type InboxCache = InfiniteData<InboxPage, string | null>
 
 export function useUpdateInbox(view: InboxView, category: InboxCategory, spaces: readonly string[] = []) {
   const queryClient = useQueryClient()
+  const workspaceIds = useSignedInWorkspaceIds()
   const key = inboxKeys.list(view, category, spaces)
   return useMutation({
-    mutationFn: (update: InboxUpdate) => postUpdate(update),
+    mutationFn: (update: InboxUpdate) => postUpdate(update, workspaceIds),
     onMutate: async (update) => {
       await queryClient.cancelQueries({ queryKey: key })
       const previous = queryClient.getQueryData<InboxCache>(key)
@@ -281,14 +283,35 @@ function readResult(value: unknown): InboxUpdateResult {
 /** The server takes at most this many ids in one change. */
 const MAX_UPDATE_IDS = 200
 
-/** One change, split into requests the server accepts when it names many ids. */
-export async function postUpdate(update: InboxUpdate): Promise<InboxUpdateResult> {
+/**
+ * One change, sent to each workspace you're in (the inbox spans them, and a
+ * change is made in one workspace at a time: ids from another are skipped
+ * there), and split into requests the server accepts when it names many
+ * ids. With no workspaces known, one request lets the server pick yours.
+ * A change a review guard holds throws, so nothing reports it done.
+ */
+export async function postUpdate(update: InboxUpdate, workspaceIds: readonly string[] = []): Promise<InboxUpdateResult> {
+  const workspaces = [...new Set(workspaceIds)]
+  if (workspaces.length > 1) {
+    const result: InboxUpdateResult = { updated: [], unreadCount: 0 }
+    for (const workspaceId of workspaces) {
+      const part = await postUpdateIn(update, workspaceId)
+      result.updated.push(...part.updated)
+      // Each answer counts its workspace and your DMs: the largest is a floor.
+      result.unreadCount = Math.max(result.unreadCount, part.unreadCount)
+    }
+    return result
+  }
+  return postUpdateIn(update, workspaces[0])
+}
+
+async function postUpdateIn(update: InboxUpdate, workspaceId: string | undefined): Promise<InboxUpdateResult> {
   if (!('ids' in update) || update.ids.length <= MAX_UPDATE_IDS) {
-    return readResult(await requestJson<unknown>('/api/v1/inbox/update', { method: 'POST', json: update }))
+    return readResult(ranOrThrow(await callOp('notification_update', update, workspaceId ? { workspaceId } : {}), 'This change'))
   }
   const result: InboxUpdateResult = { updated: [], unreadCount: 0 }
   for (let start = 0; start < update.ids.length; start += MAX_UPDATE_IDS) {
-    const part = await postUpdate({ ...update, ids: update.ids.slice(start, start + MAX_UPDATE_IDS) })
+    const part = await postUpdateIn({ ...update, ids: update.ids.slice(start, start + MAX_UPDATE_IDS) }, workspaceId)
     result.updated.push(...part.updated)
     result.unreadCount = part.unreadCount
   }

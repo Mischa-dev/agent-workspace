@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
+import { useSignedInWorkspaceIds } from '../auth/session'
 import { useHomeExperience, type Experience } from '../experience/layout'
 import { atPhrase } from '../later/when'
 import { useShellPage } from '../shell/shellStore'
@@ -107,6 +108,7 @@ type ChangeOptions = {
 export function InboxPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const workspaceIds = useSignedInWorkspaceIds()
   const [params, setParams] = useSearchParams()
   const view: InboxView = isView(params.get('view')) ? (params.get('view') as InboxView) : 'inbox'
   const category: InboxCategory = isCategory(params.get('category'))
@@ -218,8 +220,8 @@ export function InboxPage() {
     })
 
   const undo = useCallback(
-    (update: InboxUpdate) => postUpdate(update).then(() => invalidateInbox(queryClient)),
-    [queryClient],
+    (update: InboxUpdate) => postUpdate(update, workspaceIds).then(() => invalidateInbox(queryClient)),
+    [queryClient, workspaceIds],
   )
 
   const change = useCallback(

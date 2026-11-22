@@ -332,6 +332,28 @@ async fn a_module_switched_off_hides_its_parts_and_loses_nothing() {
     .await
     .expect("parts");
     assert_eq!(owned, 0);
+
+    // Each change told the module's other readers (other tabs' sidebars and
+    // settings refetch `module_list`), in the write's own transaction, as a
+    // typed notice the live socket can carry (its legacy type set).
+    let told: Vec<String> = sqlx::query_scalar(
+        "SELECT type FROM (SELECT thing_id, type, legacy_type FROM event_staging \
+             UNION ALL SELECT thing_id, type, legacy_type FROM events) event \
+         WHERE event.thing_id = $1::text::uuid AND event.type LIKE 'module.%' \
+           AND event.legacy_type = event.type",
+    )
+    .bind(&module_id)
+    .fetch_all(&pool)
+    .await
+    .expect("module events");
+    for kind in [
+        "module.created",
+        "module.switched",
+        "module.updated",
+        "module.removed",
+    ] {
+        assert!(told.iter().any(|told| told == kind), "{kind} in {told:?}");
+    }
     world.finish().await;
 }
 

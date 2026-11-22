@@ -98,8 +98,10 @@ pub async fn dispatch(
         Err(error) => return Answer::error(&error),
     };
     // K1.25: every write the operation makes says which credential it came
-    // through, and for a run's token, the run and who asked for it.
-    let acting = crate::access::acting::Acting::of(&request.caller);
+    // through, and for a run's token, the run and who asked for it; and the
+    // request id, also in a wrapped command's own transaction.
+    let acting = crate::access::acting::Acting::of(&request.caller)
+        .for_request(request.request_id.as_deref());
     crate::access::acting::within(acting, call(state, request, input)).await
 }
 

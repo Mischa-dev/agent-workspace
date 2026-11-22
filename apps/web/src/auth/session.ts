@@ -2,6 +2,7 @@ import {
   createContext,
   createElement,
   useContext,
+  useMemo,
   type ReactNode,
 } from 'react'
 import {
@@ -287,6 +288,20 @@ export function AuthenticatedSessionProvider({
     AuthenticatedSessionContext.Provider,
     { value: session },
     children,
+  )
+}
+
+/** The open workspaces the signed-in person is in (none outside a signed-in route). */
+export function useSignedInWorkspaceIds(): string[] {
+  const session = useContext(AuthenticatedSessionContext)
+  return useMemo(
+    () =>
+      session
+        ? session.organizations
+            .filter((organization) => !organization.lifecycle || organization.lifecycle === 'active')
+            .map((organization) => organization.id)
+        : [],
+    [session],
   )
 }
 

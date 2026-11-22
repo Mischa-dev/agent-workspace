@@ -1097,15 +1097,21 @@ async fn announce(
     workspace_id: Uuid,
     module_id: Uuid,
 ) -> Result<(), AppError> {
-    let mut event = crate::events::NewEvent::thing(
-        &crate::events::catalog::MODULE_CONNECTED,
-        workspace_id,
-        "module",
-        module_id,
+    // In the workspace's own space, so open tabs hear of it (the live
+    // socket carries typed notices).
+    let space = crate::spaces::workspace::ensure(transaction, workspace_id).await?;
+    crate::outbox::enqueue_typed(
+        transaction,
+        space,
+        crate::outbox::OutboxEventPayload::ModuleChanged(crate::outbox::ModuleChangedPayload {
+            workspace_id,
+            project_id: space,
+            module_id,
+            change: crate::outbox::ModuleChange::Connected,
+            whole_workspace: true,
+        }),
     )
-    .audience(crate::events::Audience::Workspace);
-    event.space_id = None;
-    crate::events::emit(transaction, event.workspace(workspace_id)).await?;
+    .await?;
     Ok(())
 }
 

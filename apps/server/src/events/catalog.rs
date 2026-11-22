@@ -855,6 +855,32 @@ pub static MODULE_CONNECTED: EventType = signal(
     None,
     "A connected module was installed, re-read, approved or revoked",
 );
+// A built module (M1.6) was made, changed, switched or archived: the
+// sidebar's module entries and settings read `module_list` again.
+pub static MODULE_CREATED: EventType = signal(
+    "module.created",
+    "workspace",
+    None,
+    "A built module was made",
+);
+pub static MODULE_UPDATED: EventType = signal(
+    "module.updated",
+    "workspace",
+    None,
+    "A built module's name, parts or navigation changed, or it was restored",
+);
+pub static MODULE_SWITCHED: EventType = signal(
+    "module.switched",
+    "workspace",
+    None,
+    "A built module was switched on or off",
+);
+pub static MODULE_REMOVED: EventType = signal(
+    "module.removed",
+    "workspace",
+    None,
+    "A built module was archived",
+);
 pub static MODULE_EVENT: EventType = fact(
     "module.event",
     "workspace",
@@ -1078,6 +1104,10 @@ pub fn catalog() -> &'static [&'static EventType] {
         &MODULE_OPERATION_RAN,
         &MODULE_PANEL_PRESSED,
         &MODULE_CONNECTED,
+        &MODULE_CREATED,
+        &MODULE_UPDATED,
+        &MODULE_SWITCHED,
+        &MODULE_REMOVED,
         &MODULE_EVENT,
         &FILE_ATTACHED,
         &FILE_REMOVED,
