@@ -733,14 +733,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
         MessageSend
     ),
-    // A person changes only their own notifications; every row is also
-    // checked against what they can still see.
-    boundary_route!(
-        "notifications",
-        Post,
-        "/api/v1/inbox/update",
-        SessionAuthentication
-    ),
     // Notification settings, devices and usage are the caller's own: their
     // devices, their provider accounts (owner only), their preferences.
     boundary_route!(

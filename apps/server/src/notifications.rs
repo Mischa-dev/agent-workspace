@@ -24,12 +24,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::HeaderMap,
-    routing::{get, post},
-};
+use axum::{Json, Router, extract::State, routing::get};
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
@@ -38,9 +33,9 @@ use uuid::Uuid;
 use crate::{
     AppState,
     addresses::{Addresses, Place, Target, WorkspaceAddress},
-    auth::{AuthenticatedActor, require_authenticated_write},
+    auth::AuthenticatedActor,
     domain::RunState,
-    error::{ApiJson, ApiQuery, AppError},
+    error::{ApiQuery, AppError},
     outbox::{self, NotificationsUpdatedPayload, OutboxEventPayload},
 };
 
@@ -2633,7 +2628,6 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/inbox", get(list_http))
         .route("/api/v1/inbox/summary", get(summary_http))
-        .route("/api/v1/inbox/update", post(update_http))
 }
 
 #[derive(Debug, Deserialize)]
@@ -2685,48 +2679,6 @@ async fn summary_http(
     principal: AuthenticatedActor,
 ) -> Result<Json<Attentions>, AppError> {
     Ok(Json(attentions(&state.pool, principal.actor_id).await?))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct UpdateRequest {
-    action: UpdateAction,
-    ids: Option<Vec<Uuid>>,
-    /// Everything in the inbox instead of `ids` (read and archive only).
-    all: Option<bool>,
-    project_id: Option<Uuid>,
-    snooze_until: Option<String>,
-}
-
-async fn update_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiJson(request): ApiJson<UpdateRequest>,
-) -> Result<Json<UpdateResult>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let selection = match (request.ids, request.all) {
-        (Some(ids), None | Some(false)) => {
-            if request.project_id.is_some() {
-                return Err(AppError::Validation("projectId"));
-            }
-            Selection::Ids(ids)
-        }
-        (None, Some(true)) => Selection::AllInInbox {
-            project_id: request.project_id,
-        },
-        _ => return Err(AppError::Validation("ids")),
-    };
-    let result = update(
-        &state.pool,
-        principal.actor_id,
-        None,
-        &selection,
-        request.action,
-        request.snooze_until.as_deref(),
-    )
-    .await?;
-    Ok(Json(result))
 }
 
 #[cfg(test)]

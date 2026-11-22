@@ -284,7 +284,7 @@ const MAX_UPDATE_IDS = 200
 /** One change, split into requests the server accepts when it names many ids. */
 export async function postUpdate(update: InboxUpdate): Promise<InboxUpdateResult> {
   if (!('ids' in update) || update.ids.length <= MAX_UPDATE_IDS) {
-    return readResult(await requestJson<unknown>('/api/v1/inbox/update', { method: 'POST', json: update }))
+    return readResult(await callOp('notification_update', update))
   }
   const result: InboxUpdateResult = { updated: [], unreadCount: 0 }
   for (let start = 0; start < update.ids.length; start += MAX_UPDATE_IDS) {

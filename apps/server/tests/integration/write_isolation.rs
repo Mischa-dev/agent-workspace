@@ -118,7 +118,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/conversations/{id}/threads",
     "POST /api/v1/direct/dms",
     "POST /api/v1/direct/groups",
-    "POST /api/v1/inbox/update",
     "PUT /api/v1/notification-settings/channels",
     "PUT /api/v1/notification-settings/mutes",
     "POST /api/v1/organizations/{organization_id}/ai/test",
@@ -4169,18 +4168,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             ],
         ),
         // Inbox, later and scheduled messages
-        body_case(
-            "POST /api/v1/inbox/update",
-            &[],
-            json!({"action": "read", "ids": [ax.notification]}),
-            Vec::new(),
-        )
-        // Only ever the caller's own notifications: B's project and B's
-        // notification are filters that match none of them.
-        .no_effect(vec![
-            json!({"action": "read", "all": true, "projectId": b.project}),
-            json!({"action": "read", "ids": [bx.notification]}),
-        ]),
         // Notification settings
         body_case(
             "PUT /api/v1/notification-settings/channels",

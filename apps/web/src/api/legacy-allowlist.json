@@ -22,7 +22,7 @@
   "fields/recordPick.ts": 1,
   "files/api.ts": 3,
   "github/api.ts": 6,
-  "inbox/api.ts": 3,
+  "inbox/api.ts": 2,
   "invitations/api.ts": 3,
   "later/api.ts": 4,
   "launch/api.ts": 5,

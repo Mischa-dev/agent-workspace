@@ -542,7 +542,6 @@ mod tests {
             "/api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
             Tool("message_react"),
         ),
-        (Post, "/api/v1/inbox/update", Tool("notification_update")),
         (
             Put,
             "/api/v1/notification-settings/channels",
@@ -1021,7 +1020,7 @@ mod tests {
     /// Hand-written web writes whose tool is already an operation: each is a
     /// second edge for something the generated route does (K2.22). The
     /// number only goes down; when you delete one, lower it.
-    const HAND_WRITTEN_OPERATION_ROUTES: usize = 54;
+    const HAND_WRITTEN_OPERATION_ROUTES: usize = 53;
 
     #[test]
     fn hand_written_routes_for_operations_only_go_down() {
