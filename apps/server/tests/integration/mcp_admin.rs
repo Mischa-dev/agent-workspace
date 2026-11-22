@@ -314,13 +314,38 @@ async fn channels_threads_pins_and_decisions_can_be_shaped() {
     assert_eq!(first["outcome"], "ok", "{first}");
     assert_eq!(first["replayed"], false, "{first}");
     assert_eq!(first["replaySafe"], true, "{first}");
-    let again = tool(app, &codex, &session, "thread_start", keyed).await;
+    let again = tool(app, &codex, &session, "thread_start", keyed.clone()).await;
     assert_eq!(again["replayed"], true, "{again}");
     assert_eq!(again["value"]["id"], first["value"]["id"], "{again}");
     assert_eq!(
         again["value"]["message"]["messageId"], first["value"]["message"]["messageId"],
         "{again}"
     );
+    // Once the opening message is removed, a retry finds the thread and
+    // never posts the removed text again.
+    let removed = tool(
+        app,
+        &codex,
+        &session,
+        "message_delete",
+        json!({"messageId": first["value"]["message"]["messageId"]}),
+    )
+    .await;
+    assert_eq!(removed["outcome"], "ok", "{removed}");
+    let after = tool(app, &codex, &session, "thread_start", keyed).await;
+    assert_eq!(after["replayed"], true, "{after}");
+    assert_eq!(after["value"]["id"], first["value"]["id"], "{after}");
+    assert!(after["value"]["message"].is_null(), "{after}");
+    let read = tool(
+        app,
+        &codex,
+        &session,
+        "conversation_read",
+        json!({"conversationId": first["value"]["id"]}),
+    )
+    .await;
+    assert_eq!(read["outcome"], "ok", "{read}");
+    assert!(!read.to_string().contains("Starting here."), "{read}");
     let decided = tool(
         app,
         &codex,

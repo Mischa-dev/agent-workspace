@@ -2245,10 +2245,16 @@ async fn thread_start_once(
                         let kept: KeptThread = replay.decode()?;
                         transaction.commit().await?;
                         *replayed = true;
-                        // The opening message replays by its own key.
-                        let message =
-                            post_optional(state, principal, kept.id, arguments.text.as_deref())
-                                .await?;
+                        // The opening message replays by its own key; once
+                        // removed, its replay is refused and nothing is sent.
+                        let message = post_optional(
+                            state,
+                            principal,
+                            kept.id,
+                            arguments.text.as_deref(),
+                            true,
+                        )
+                        .await?;
                         return Ok(ToolResult::ok(ThreadValue {
                             id: kept.id.to_string(),
                             name: kept.name,
@@ -2312,8 +2318,14 @@ async fn thread_start_once(
             .await?;
         }
         transaction.commit().await?;
-        let message =
-            post_optional(state, principal, created.id, arguments.text.as_deref()).await?;
+        let message = post_optional(
+            state,
+            principal,
+            created.id,
+            arguments.text.as_deref(),
+            reservation.is_some(),
+        )
+        .await?;
         Ok::<_, AppError>(ToolResult::ok(ThreadValue {
             url,
             id: created.id.to_string(),
@@ -2334,18 +2346,28 @@ async fn post_optional(
     principal: &McpPrincipal,
     conversation_id: Uuid,
     text: Option<&str>,
+    keyed: bool,
 ) -> Result<Option<SentMessage>, AppError> {
     let Some(text) = text.map(str::trim).filter(|v| !v.is_empty()) else {
         return Ok(None);
     };
     // A retry finds the same thread (from the same message, or by the
-    // call's key), so the opening message gets a key from the thread and
-    // the text: retrying replays it instead of posting it twice.
-    let digest = <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes());
-    let key = Some(format!(
-        "thread-start.{conversation_id}.{}",
-        hex::encode(&digest[..16])
-    ));
+    // call's key), so the opening message gets a key from the thread:
+    // retrying replays it instead of posting it twice. A keyed call made
+    // the thread and names its one text, so the thread alone is the key,
+    // which survives the message's removal (its replay is then refused, so
+    // a retry can't post the removed text again). Without a call key the
+    // same thread can be found again with other words, so the key also
+    // holds the text's digest, renamed when the message is removed.
+    let key = if keyed {
+        Some(format!("thread-open.{conversation_id}"))
+    } else {
+        let digest = <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes());
+        Some(format!(
+            "thread-start.{conversation_id}.{}",
+            hex::encode(&digest[..16])
+        ))
+    };
     let content =
         content_from_text(state, principal.project_id, Some(conversation_id), text).await?;
     Ok(

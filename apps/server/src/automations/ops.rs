@@ -350,7 +350,15 @@ impl Operation for AutomationRunStart {
             None => None,
         };
         let (caller, space) = caller_and_space(call);
-        let request_key = call.ctx.request_id.clone();
+        let request_key = match call.ctx.request_id.as_deref() {
+            Some(id) => Some(crate::idempotency::IdempotencyKey::parse(id).map_err(|_| {
+                OpError::Invalid {
+                    field: "clientRequestId".into(),
+                    message: "Use letters, numbers, dashes or dots, up to 128 characters.".into(),
+                }
+            })?),
+            None => None,
+        };
         if request_key.is_some() {
             call.key_honoured();
         }

@@ -1809,7 +1809,7 @@ pub struct RunNow {
     /// call queued instead of firing the rule again.
     #[serde(skip)]
     #[schemars(skip)]
-    pub request_key: Option<String>,
+    pub request_key: Option<crate::idempotency::IdempotencyKey>,
 }
 
 /// Fires a rule now, for trying it out. It still acts as its maker, with
@@ -1846,26 +1846,37 @@ pub(crate) async fn run_now(
         ..Subject::default()
     };
     let person = caller.actor_kind == ActorKind::Human; // kind-check: mechanical (a person's app signs in as that person)
-    // A keyed try is queued once: the run and its queued firing commit
-    // together, and a retry finds that run (its job fires it if this call
-    // stops before it does).
-    let dedupe_key = match request.request_key.as_deref() {
-        // The task tried is part of it: the same key for another task is
-        // another try, not a replay of this one.
-        Some(key) => format!(
-            "manual:{}:{}:{key}",
-            caller.actor_id,
-            request
-                .work_item_id
-                .map_or_else(String::new, |id| id.simple().to_string())
-        ),
-        None => format!("manual:{}", Uuid::now_v7()),
-    };
+    // A keyed try is queued once: the key (bound to this rule and task in
+    // this space), the run and its queued firing commit together, and a
+    // retry finds that run (its job fires it if this call stops before it
+    // does). The same key for another rule or task is refused.
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let reservation = match request.request_key.as_ref() {
+        None => None,
+        Some(key) => {
+            let scope = crate::idempotency::resource_bound_scope(
+                "space",
+                project_id,
+                "automation_run_start",
+            )?;
+            let hash =
+                crate::idempotency::RequestHash::for_value(&(rule.id, request.work_item_id))?;
+            match crate::idempotency::reserve(&mut transaction, caller.actor_id, &scope, key, hash)
+                .await?
+            {
+                crate::idempotency::IdempotencyOutcome::Replay(replay) => {
+                    let earlier: Uuid = replay.decode()?;
+                    transaction.commit().await?;
+                    return Ok((run_view(&state.pool, earlier).await?, true));
+                }
+                crate::idempotency::IdempotencyOutcome::Reserved(reservation) => Some(reservation),
+            }
+        }
+    };
     let queued = queue_fire(
         &mut transaction,
         &rule,
-        &dedupe_key,
+        &format!("manual:{}", Uuid::now_v7()),
         "Run by hand",
         &subject,
         // Through the maker's app or script (MCP or the public API set its
@@ -1879,20 +1890,16 @@ pub(crate) async fn run_now(
             .is_some(),
     )
     .await?;
-    let Some(run_id) = queued else {
-        if request.request_key.is_none() {
-            return Err(AppError::Internal("manual automation run collided"));
-        }
-        let earlier = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM automation_runs WHERE rule_id = $1 AND dedupe_key = $2",
+    let run_id = queued.ok_or(AppError::Internal("manual automation run collided"))?;
+    if let Some(reservation) = reservation.as_ref() {
+        crate::idempotency::complete(
+            &mut transaction,
+            reservation,
+            axum::http::StatusCode::OK,
+            &run_id,
         )
-        .bind(rule.id)
-        .bind(dedupe_key.chars().take(300).collect::<String>())
-        .fetch_one(&mut *transaction)
         .await?;
-        transaction.commit().await?;
-        return Ok((run_view(&state.pool, earlier).await?, true));
-    };
+    }
     transaction.commit().await?;
     fire(state, run_id).await?;
     Ok((run_view(&state.pool, run_id).await?, false))

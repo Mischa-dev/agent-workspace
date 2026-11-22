@@ -92,8 +92,8 @@ function isCategory(value: string | null): value is InboxCategory {
  */
 function stayedArchived(skipped: number): string {
   return skipped === 1
-    ? 'One stayed archived: a newer notification about the same thing is already in your inbox.'
-    : `${countLabel(skipped, 'notification')} stayed archived: newer ones about the same things are already in your inbox.`
+    ? 'One stayed archived: a newer notification about the same thing is already in your inbox or snoozed.'
+    : `${countLabel(skipped, 'notification')} stayed archived: newer ones about the same things are already in your inbox or snoozed.`
 }
 
 function typingTarget(target: EventTarget | null) {
@@ -305,7 +305,7 @@ export function InboxPage() {
                 ? { tone: 'success', title: 'Moved back to the inbox', onUndo: () => undo({ action: 'archive', ids: result.updated }) }
                 : result.refused
                   ? null
-                  : { tone: 'info', title: 'Already in your inbox', description: 'A newer notification about the same thing is there, so this one stays archived.' },
+                  : { tone: 'info', title: 'Stayed archived', description: 'A newer notification about the same thing is already in your inbox or snoozed.' },
             failed: 'It wasn’t moved back to the inbox',
           },
         )
@@ -349,7 +349,7 @@ export function InboxPage() {
           // Skipped without a refusal: a newer one in the group is open.
           const skipped = restoring && !result.refused ? ids.length - result.updated.length : 0
           if (!result.updated.length) {
-            return skipped ? { tone: 'info', title: 'Already in your inbox', description: stayedArchived(skipped) } : null
+            return skipped ? { tone: 'info', title: 'Stayed archived', description: stayedArchived(skipped) } : null
           }
           return {
             tone: 'success',

@@ -25,9 +25,11 @@ function ProjectLayout({ project }: { project: Project }) {
   const experience = useProjectExperience(project.id)
   const queryClient = useQueryClient()
   const layout = useProjectLayout(project.id)
-  // The editor offers this space's built modules; your view is workspace-wide.
+  // The editor offers this space's built modules; your view is workspace-wide,
+  // with this space's own modules (which the workspace-wide list leaves out) too.
   const spaceModules = useModuleParts(project.organizationId, project.id)
   const workspaceModules = useModuleParts(project.organizationId)
+  const yourModules = [...workspaceModules, ...spaceModules.filter((part) => !workspaceModules.some((other) => other.id === part.id))]
   const save = useMutation({
     mutationFn: ({ next, version }: { next: Layout | null; version: number }) => saveProjectLayout(project.id, next, version),
     onSuccess: (response) => {
@@ -96,7 +98,7 @@ function ProjectLayout({ project }: { project: Project }) {
       ) : (
         <YourLayout effective={view.effective} previewName={project.name} />
       )}
-      <MyViewSection key={`${view.myView.hidden.join()}:${view.myView.showHidden}`} layoutHidden={view.effective.layoutHidden} modules={workspaceModules} myView={view.myView} organizationId={view.organizationId} />
+      <MyViewSection key={`${view.myView.hidden.join()}:${view.myView.showHidden}`} layoutHidden={view.effective.layoutHidden} modules={yourModules} myView={view.myView} organizationId={view.organizationId} />
     </>
   )
 }
