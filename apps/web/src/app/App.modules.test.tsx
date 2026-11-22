@@ -140,10 +140,11 @@ describe('modules that are off', () => {
     vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input)
       if (path.endsWith('/layout')) return jsonResponse({ effective: effectiveWith(off ? ['projects'] : []) })
-      if (path.endsWith(`/organizations/${organization.id}/modules`)) {
-        if (init?.method === 'PUT') off = true
-        return jsonResponse(modules())
+      if (path.endsWith(`/w/${organization.id}/ops/workspace_update`)) {
+        off = true
+        return jsonResponse({ outcome: 'ok', value: { switched: { projects: false } } })
       }
+      if (path.endsWith(`/organizations/${organization.id}/modules`)) return jsonResponse(modules())
       if (path.startsWith('/api/v1/projects?')) {
         return jsonResponse({ projects: [projectA, projectB].map((project) => ({ ...project, modulesOff: off ? ['projects'] : [] })) })
       }

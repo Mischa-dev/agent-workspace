@@ -38,12 +38,35 @@ fn module<'a>(listed: &'a Value, id: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("{id} in {listed}"))
 }
 
+/// Switches modules as the settings page does, through `workspace_update`
+/// in the workspace's own space (or, with `space`, in that space only), and
+/// answers with the modules as the switcher then reads them.
 pub(super) async fn switch(setup: &Setup, browser: &Browser, body: Value) -> (StatusCode, Value) {
-    send(
+    let mut input = json!({"projectId": "workspace"});
+    if let Some(preset) = body.get("preset") {
+        input["preset"] = preset.clone();
+    }
+    if let Some(switches) = body.get("switches") {
+        input["modules"] = switches.clone();
+    }
+    if let Some(space) = body.get("space").filter(|space| !space.is_null()) {
+        input["projectId"] = space.clone();
+        input["inProjectOnly"] = json!(true);
+    }
+    let (status, answer) = send(
         &setup.app,
-        browser.request("PUT", &modules_path(setup), None, body),
+        browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/workspace_update", setup.organization_id),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        ),
     )
-    .await
+    .await;
+    if status != StatusCode::OK {
+        return (status, answer);
+    }
+    (status, modules(setup, browser).await)
 }
 
 async fn layout(setup: &Setup, browser: &Browser, project: &str) -> Value {
@@ -396,17 +419,13 @@ async fn roles_narrow_modules_and_never_widen_them() {
     );
 
     // A role can't turn on what the workspace has off.
-    let (status, _) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &modules_path(&setup),
-            None,
-            json!({"switches": {"pages": false}}),
-        ),
+    let (status, body) = switch(
+        &setup,
+        &setup.browser,
+        json!({"switches": {"pages": false}}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "{body}");
     let bea_layout = layout(&setup, &bea_browser, &work).await;
     let off = strings(&bea_layout["modulesOff"]);
     assert!(
@@ -2005,7 +2024,7 @@ async fn a_space_narrows_its_own_modules_only() {
         json!({"preset": "everything", "space": work}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     let (status, body) = switch(
         &setup,
         &setup.browser,
@@ -2043,7 +2062,7 @@ async fn a_space_narrows_its_own_modules_only() {
         json!({"switches": {"whiteboards": true}, "space": work}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     let refused = tool(
         app,
         &token,

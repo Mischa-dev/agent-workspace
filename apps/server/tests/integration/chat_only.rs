@@ -66,10 +66,10 @@ async fn chat_only_workspace(name: &str, with_agent: bool) {
     let (status, switched) = send(
         &world.app,
         world.owner.browser.request(
-            "PUT",
-            &format!("/api/v1/organizations/{organization}/modules"),
-            None,
-            json!({ "switches": switches }),
+            "POST",
+            &format!("/api/v2/w/{organization}/ops/workspace_update"),
+            Some("chat-only-switches"),
+            json!({ "projectId": "workspace", "modules": switches }),
         ),
     )
     .await;

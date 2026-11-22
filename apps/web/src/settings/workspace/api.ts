@@ -1,5 +1,5 @@
 import { requestJson } from '../../api/client'
-import { callOp } from '../../api/ops'
+import { callOp, ranOrThrow } from '../../api/ops'
 import type { OrganizationRole } from '../../auth/session'
 
 export type Workspace = {
@@ -137,8 +137,17 @@ export const getServerVersion = () => requestJson<ServerVersion>('/health/versio
 
 export const getWorkspace = (organizationId: string) => requestJson<Workspace>(base(organizationId))
 
-export const renameWorkspace = (organizationId: string, name: string, expectedVersion: number) =>
-  requestJson<Workspace>(base(organizationId), { method: 'PATCH', json: { name, expectedVersion } })
+/**
+ * Renames the workspace through `workspace_update`, in the workspace's own
+ * space, and reads it back whole.
+ */
+export async function renameWorkspace(organizationId: string, name: string, expectedVersion: number) {
+  ranOrThrow(
+    await callOp('workspace_update', { projectId: 'workspace', name }, { workspaceId: organizationId, expectedVersion }),
+    'Renaming the workspace',
+  )
+  return getWorkspace(organizationId)
+}
 
 export const listWorkspaceMembers = (organizationId: string) =>
   requestJson<{ members: WorkspaceMember[] }>(`${base(organizationId)}/members`)
@@ -162,20 +171,34 @@ export const leaveWorkspace = (organizationId: string) =>
 export const listWorkspaceInvitations = (organizationId: string) =>
   requestJson<{ invitations: WorkspaceInvitation[] }>(`${base(organizationId)}/invitations`)
 
-export const createWorkspaceInvitation = (
+/** A new workspace invitation, through `invitation_create`: its join link is shown only now. */
+export async function createWorkspaceInvitation(
   organizationId: string,
   input: { role: 'admin' | 'member'; roleId?: string; expiresInHours: number; note?: string },
-) =>
-  requestJson<WorkspaceInvitation & { invitationUrl: string }>(`${base(organizationId)}/invitations`, {
-    method: 'POST',
-    json: input,
-  })
+) {
+  const issued = await callOp(
+    'invitation_create',
+    {
+      projectId: 'workspace',
+      wholeWorkspace: true,
+      role: input.roleId ?? input.role,
+      expiresInHours: input.expiresInHours,
+      note: input.note,
+    },
+    { workspaceId: organizationId },
+  )
+  const { invitation, joinUrl } = ranOrThrow(issued, 'Inviting them')
+  return { id: invitation.id, invitationUrl: joinUrl ?? '' }
+}
 
-export const revokeWorkspaceInvitation = (invitation: WorkspaceInvitation) =>
-  requestJson<WorkspaceInvitation>(`/api/v1/workspace-invitations/${encodeURIComponent(invitation.id)}/revoke`, {
-    method: 'POST',
-    json: { expectedVersion: invitation.version },
-  })
+export async function revokeWorkspaceInvitation(organizationId: string, invitation: WorkspaceInvitation) {
+  const answer = await callOp(
+    'invitation_update',
+    { projectId: 'workspace', wholeWorkspace: true, invitation: invitation.id, revoke: true },
+    { workspaceId: organizationId, expectedVersion: invitation.version },
+  )
+  return ranOrThrow(answer, 'Revoking the invitation')
+}
 
 export function listAuditEvents(organizationId: string, filters: AuditFilters, before: string | null, limit = 50) {
   const query = new URLSearchParams()

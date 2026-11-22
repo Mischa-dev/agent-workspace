@@ -101,17 +101,14 @@ async fn join_workspace(setup: &Setup, role: &str, login_name: &str) -> (Uuid, B
         &setup.app,
         setup.browser.request(
             "POST",
-            &format!(
-                "/api/v1/organizations/{}/invitations",
-                setup.organization_id
-            ),
-            None,
-            json!({ "role": role, "expiresInHours": 24 }),
+            &format!("/api/v2/w/{}/ops/invitation_create", setup.organization_id),
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"projectId": "workspace", "wholeWorkspace": true, "role": role, "expiresInHours": 24}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{issued}");
-    let url = issued["invitationUrl"].as_str().expect("invitation URL");
+    assert_eq!(status, StatusCode::OK, "{issued}");
+    let url = issued["value"]["joinUrl"].as_str().expect("invitation URL");
     let token = url.split("#token=").nth(1).expect("token in fragment");
     assert!(url.contains("/join#token=aw_wsi_"), "{url}");
     let accept = json!({
@@ -279,9 +276,9 @@ async fn workspace_roles_are_explicit_and_removal_takes_everything_away() {
         &setup.app,
         mira_browser.request(
             "POST",
-            &format!("/api/v1/organizations/{org}/invitations"),
-            None,
-            json!({ "role": "member", "expiresInHours": 24 }),
+            &format!("/api/v2/w/{org}/ops/invitation_create"),
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"projectId": "workspace", "wholeWorkspace": true, "role": "member", "expiresInHours": 24}),
         ),
     )
     .await;

@@ -914,10 +914,10 @@ async fn module_switch_is_seen_everywhere() {
     let (status, body) = cluster
         .instance(0)
         .send(browser.request(
-            "PUT",
-            &format!("/api/v1/organizations/{}/modules", cluster.organization_id),
-            None,
-            json!({"switches": {"tasks": false}}),
+            "POST",
+            &format!("/api/v2/w/{}/ops/workspace_update", cluster.organization_id),
+            Some("tasks-off"),
+            json!({"projectId": "workspace", "modules": {"tasks": false}}),
         ))
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");

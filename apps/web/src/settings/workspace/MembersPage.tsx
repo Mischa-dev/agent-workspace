@@ -441,7 +441,7 @@ function InviteSection({
     onSettled: refresh,
   })
   const revoke = useMutation({
-    mutationFn: revokeWorkspaceInvitation,
+    mutationFn: (invitation: WorkspaceInvitation) => revokeWorkspaceInvitation(organizationId, invitation),
     onSuccess: () => {
       setRevoking(null)
       showToast({ tone: 'success', title: 'Invitation revoked', description: 'Its link no longer works.' })

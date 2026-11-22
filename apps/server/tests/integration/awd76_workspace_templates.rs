@@ -416,10 +416,12 @@ async fn only_people_who_manage_the_workspace_use_or_save_templates() {
     let layout = send(
         app,
         setup.browser.request(
-            "PUT",
-            &format!("/api/v1/organizations/{}/layout", setup.organization_id),
-            None,
-            json!({"layout": custom}),
+            "POST",
+            &format!("/api/v2/w/{}/ops/layout_update", setup.organization_id),
+            Some("custom-layout"),
+            json!({"projectId": "workspace", "wholeWorkspace": true, "preset": "software_team",
+                "show": {"area.timeline": false},
+                "words": {"task": {"one": "ticket", "many": "tickets"}}}),
         ),
     )
     .await;

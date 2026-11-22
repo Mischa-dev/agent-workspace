@@ -623,6 +623,14 @@ pub(crate) struct ProjectLayoutSetArguments {
     /// that isn't found lists them all. Leave it out to follow the
     /// workspace's default again.
     pub preset: Option<String>,
+    /// With preset: parts to show (true) or hide (false) on top of it, by
+    /// part ID (such as "area.runs"), where they differ from the preset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show: Option<BTreeMap<String, bool>>,
+    /// With preset: nouns to rename on top of it, by noun ID, each with its
+    /// words for one and many: {"task": {"one": "to-do", "many": "to-dos"}}.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub words: Option<BTreeMap<String, super::layout_preset_tools::PresetWord>>,
     /// The layout version you last read. Leave it out to replace whatever
     /// is set.
     pub expected_version: Option<i64>,
@@ -680,12 +688,28 @@ pub(crate) async fn project_layout_set(
     }
     if arguments.rules.is_some()
         && (arguments.preset.is_some()
+            || arguments.show.is_some()
+            || arguments.words.is_some()
             || arguments.expected_version.is_some()
             || arguments.workspace.is_some())
     {
         return ToolResult::invalid(
             "rules",
-            "Set the rules on their own, without preset, expectedVersion or workspace.",
+            "Set the rules on their own, without preset, show, words, expectedVersion or workspace.",
+        );
+    }
+    let preset_named = arguments
+        .preset
+        .as_deref()
+        .is_some_and(|text| !text.trim().is_empty());
+    if !preset_named && (arguments.show.is_some() || arguments.words.is_some()) {
+        return ToolResult::invalid(
+            if arguments.show.is_some() {
+                "show"
+            } else {
+                "words"
+            },
+            "Show and words change a preset: give the preset too.",
         );
     }
     let project_id = principal.project_id;
@@ -751,7 +775,25 @@ pub(crate) async fn project_layout_set(
                         ),
                     ));
                 };
-                Some(Layout::preset(preset))
+                Some(Layout {
+                    preset,
+                    changes: arguments.show.clone().unwrap_or_default(),
+                    words: arguments
+                        .words
+                        .clone()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|(noun, word)| {
+                            (
+                                noun,
+                                layouts::Word {
+                                    one: word.one,
+                                    many: word.many,
+                                },
+                            )
+                        })
+                        .collect(),
+                })
             }
             None => None,
         };
@@ -814,7 +856,18 @@ pub(crate) async fn project_layout_set(
         }))
     }
     .await;
-    result.unwrap_or_else(|error| ToolResult::from_error(error, "project_layout_set"))
+    match result {
+        Ok(result) => result,
+        Err(AppError::Validation("layout part")) => ToolResult::invalid(
+            "show",
+            "Those parts aren't valid: use part IDs the app knows, such as \"area.runs\".",
+        ),
+        Err(AppError::Validation("layout word")) => ToolResult::invalid(
+            "words",
+            "Those words aren't valid: use noun IDs the app knows, such as \"task\", each with one and many.",
+        ),
+        Err(error) => ToolResult::from_error(error, "project_layout_set"),
+    }
 }
 
 /// Replaces the project's layout rules, by role or person and preset name,

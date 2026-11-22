@@ -4,9 +4,9 @@
 
 use std::collections::BTreeMap;
 
-use axum::{Json, Router, extract::State, http::HeaderMap, routing::get};
+use axum::{Json, Router, extract::State, routing::get};
 use rmcp::schemars;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -18,8 +18,8 @@ use super::{
 };
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
-    error::{ApiJson, ApiPath, AppError},
+    auth::AuthenticatedActor,
+    error::{ApiPath, AppError},
     settings,
     spaces::SpaceKind,
 };
@@ -28,7 +28,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/api/v1/organizations/{organization_id}/modules",
-            get(read_modules).put(change_modules),
+            get(read_modules),
         )
         .route("/api/v1/things/{id}", get(open_thing_by_id))
         .route("/api/v1/things/{kind}/{id}", get(open_thing))
@@ -154,58 +154,6 @@ async fn read_modules(
     Ok(Json(
         view(&mut connection, &principal, organization_id).await?,
     ))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ChangeRequest {
-    /// Start from a preset: its modules on, the rest off.
-    #[serde(default)]
-    preset: Option<String>,
-    /// Then switch these, by module id.
-    #[serde(default)]
-    switches: BTreeMap<String, bool>,
-    /// Switch them in this space only (M1.2): a space can turn a module off
-    /// there, or back on, but never on while the workspace has it off.
-    #[serde(default)]
-    space: Option<Uuid>,
-}
-
-/// `PUT /api/v1/organizations/{organization_id}/modules`: owners and admins.
-async fn change_modules(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(organization_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<ChangeRequest>,
-) -> Result<Json<ModulesResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let metadata = change_modules_in(
-        &mut transaction,
-        principal.actor_id,
-        organization_id,
-        request.preset.as_deref(),
-        &request.switches,
-        request.space,
-    )
-    .await?;
-    if let Some(metadata) = metadata {
-        settings::audit(
-            &mut transaction,
-            &headers,
-            &principal,
-            None,
-            "modules.changed",
-            "organization",
-            Some(organization_id),
-            metadata,
-        )
-        .await?;
-    }
-    let response = view(&mut transaction, &principal, organization_id).await?;
-    transaction.commit().await?;
-    Ok(Json(response))
 }
 
 /// Switch a workspace's modules, from a preset and then single switches

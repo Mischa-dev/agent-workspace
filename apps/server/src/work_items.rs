@@ -161,11 +161,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/projects/{project_id}/fields",
-            get(custom_fields::list_fields).post(custom_fields::create_field),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/fields/{field_id}",
-            axum::routing::patch(custom_fields::update_field),
+            get(custom_fields::list_fields),
         )
         .route(
             "/api/v1/projects/{project_id}/milestones",

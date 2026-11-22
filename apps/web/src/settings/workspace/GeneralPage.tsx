@@ -162,7 +162,7 @@ function RenameSection({ workspace }: { workspace: Workspace }) {
       void queryClient.invalidateQueries({ queryKey: queryKeys.session })
     },
     onError: async (reason) => {
-      if (isApiError(reason) && reason.code === 'version_conflict') {
+      if (isApiError(reason) && (reason.code === 'version_conflict' || reason.code === 'conflict')) {
         const latest = await queryClient.fetchQuery({ queryKey: workspaceKeys.workspace(workspace.id), queryFn: () => getWorkspace(workspace.id) })
         setName(latest.name)
         setError('Someone renamed the workspace while you were here. Its current name is shown; try again if you still want to change it.')

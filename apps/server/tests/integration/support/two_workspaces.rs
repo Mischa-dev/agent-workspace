@@ -1708,51 +1708,41 @@ async fn build_workspace(
 
     // Layouts: a saved preset, the workspace's default and the project's
     // layout, and rules for viewers and for Rook.
-    let (status, created) = send(
-        app,
-        browser.request(
-            "POST",
-            &format!("/api/v1/organizations/{organization}/layout/presets"),
-            None,
+    let (status, created) = browser
+        .op_in(
+            app,
+            organization,
+            "layout_preset_create",
             json!({
+                "projectId": "workspace",
                 "name": format!("Chores{m}"),
                 "description": format!("For the house{m}"),
-                "layout": {
-                    "preset": "household",
-                    "words": {"task": {"one": format!("chore{m}"), "many": format!("chores{m}")}},
-                },
+                "base": "household",
+                "words": {"task": {"one": format!("chore{m}"), "many": format!("chores{m}")}},
             }),
-        ),
-    )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::CREATED,
-        "{label} layout preset: {created}"
-    );
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{label} layout preset: {created}");
     let layout_preset = string_at(&created, "/id");
-    for (path, body) in [
-        (
-            format!("/api/v1/organizations/{organization}/layout"),
-            json!({"layout": {"preset": layout_preset}}),
-        ),
-        (
-            format!("/api/v1/projects/{project}/layout"),
-            json!({"layout": {
-                "preset": "personal_life",
-                "words": {"page": {"one": format!("note{m}"), "many": format!("notes{m}")}},
-            }}),
-        ),
-        (
-            format!("/api/v1/projects/{project}/layout/rules"),
-            json!({"rules": [
-                {"role": "viewer", "preset": layout_preset},
-                {"actorId": rook, "preset": "bug_reporting"},
-            ]}),
-        ),
+    for body in [
+        json!({"projectId": "workspace", "wholeWorkspace": true, "preset": layout_preset}),
+        json!({
+            "projectId": project,
+            "preset": "personal_life",
+            "words": {"page": {"one": format!("note{m}"), "many": format!("notes{m}")}},
+        }),
+        json!({"projectId": project, "rules": [
+            {"role": "viewer", "preset": layout_preset},
+            {"person": rook.to_string(), "preset": "bug_reporting"},
+        ]}),
     ] {
-        let (status, changed) = send(app, browser.request("PUT", &path, None, body)).await;
-        assert!(status.is_success(), "{label} {path}: {status} {changed}");
+        let (status, changed) = browser
+            .op_in(app, organization, "layout_update", body.clone())
+            .await;
+        assert!(
+            status.is_success(),
+            "{label} layout {body}: {status} {changed}"
+        );
     }
 
     // Whiteboards: one for the whole workspace, drawn on and with an image,

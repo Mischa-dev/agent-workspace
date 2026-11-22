@@ -9,11 +9,37 @@ use axum::http::StatusCode;
 use serde_json::{Value, json};
 
 use super::{
-    agent_interface::{connect_app, create_agent, initialize, send, tool},
+    agent_interface::{Browser, connect_app, create_agent, initialize, send, tool},
     mcp_admin::{create_project, setup},
     mcp_tasks::{add_member, space},
     message_edits::add_person,
 };
+
+/// A task field made as the settings page makes one, through
+/// `field_create`: the field itself when it's made, else the refusal.
+async fn create_field(
+    app: &axum::Router,
+    browser: &Browser,
+    work: &str,
+    input: Value,
+) -> (StatusCode, Value) {
+    let mut input = input;
+    input["projectId"] = json!(work);
+    let (status, body) = send(
+        app,
+        browser.request(
+            "POST",
+            "/api/v2/ops/field_create",
+            Some(&uuid::Uuid::now_v7().to_string()),
+            input,
+        ),
+    )
+    .await;
+    if status == StatusCode::OK {
+        return (status, body["value"]["field"].clone());
+    }
+    (status, body)
+}
 
 fn field_values(fields: &Value) -> Vec<(String, Value)> {
     fields
@@ -104,28 +130,22 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
         .expect("points")
         .to_owned();
     let (_, member_browser) = add_person(&setup, &[&work], "pat").await;
-    let (status, body) = send(
+    let (status, body) = create_field(
         app,
-        member_browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/fields"),
-            Some("member-field"),
-            json!({"name": "Mine", "type": "text"}),
-        ),
+        &member_browser,
+        &work,
+        json!({"name": "Mine", "type": "text"}),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    let (status, body) = send(
+    let (status, body) = create_field(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/fields"),
-            Some("owner-field"),
-            json!({"name": "Customer", "type": "text"}),
-        ),
+        &setup.browser,
+        &work,
+        json!({"name": "Customer", "type": "text"}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(status, StatusCode::OK, "{body}");
     let customer = body["id"].as_str().expect("customer").to_owned();
 
     // Values go in by field name, typed, as anyone in the project writes them.
@@ -670,17 +690,8 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
         .execute(&setup.pool)
         .await
         .expect("make Alex a project admin");
-    let (status, risk) = send(
-        app,
-        alex_browser.request(
-            "POST",
-            &fields_path,
-            Some("alex-risk"),
-            json!({"name": "Risk", "type": "single_choice", "options": [{"name": "Low"}, {"name": "High"}]}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{risk}");
+    let (status, risk) = create_field(app, &alex_browser, &work, json!({"name": "Risk", "type": "single_choice", "options": [{"name": "Low"}, {"name": "High"}]})).await;
+    assert_eq!(status, StatusCode::OK, "{risk}");
     let risk_id = risk["id"].as_str().expect("risk").to_owned();
 
     // Bea holds a narrowed role that sees tasks but doesn't edit them: she
@@ -714,14 +725,11 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
     assert_eq!(status, StatusCode::OK, "{listed}");
     assert_eq!(listed["canManage"], false);
     assert_eq!(listed["fields"][0]["name"], "Risk");
-    let (status, refused) = send(
+    let (status, refused) = create_field(
         app,
-        bea_browser.request(
-            "POST",
-            &fields_path,
-            Some("bea-field"),
-            json!({"name": "Mine", "type": "text"}),
-        ),
+        &bea_browser,
+        &work,
+        json!({"name": "Mine", "type": "text"}),
     )
     .await;
     assert!(status.is_client_error(), "{status}: {refused}");
@@ -816,17 +824,14 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
     .await;
     assert_eq!(status, StatusCode::OK, "{listed}");
     assert_eq!(listed["canManage"], true, "{listed}");
-    let (status, made) = send(
+    let (status, made) = create_field(
         app,
-        cam_browser.request(
-            "POST",
-            &fields_path,
-            Some("cam-field"),
-            json!({"name": "Area", "type": "text"}),
-        ),
+        &cam_browser,
+        &work,
+        json!({"name": "Area", "type": "text"}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{made}");
+    assert_eq!(status, StatusCode::OK, "{made}");
     let (status, refused) = send(
         app,
         cam_browser.request(
@@ -850,20 +855,16 @@ async fn tiny_numbers_changing_together_keep_history_under_its_limit() {
     };
     let app = &setup.app;
     let work = create_project(&setup, "WORK", "Work").await;
-    let fields_path = format!("/api/v1/projects/{work}/fields");
     let mut ids = Vec::new();
     for number in 0..20 {
-        let (status, field) = send(
+        let (status, field) = create_field(
             app,
-            setup.browser.request(
-                "POST",
-                &fields_path,
-                Some(&format!("tiny-field-{number}")),
-                json!({"name": format!("N{number}"), "type": "number"}),
-            ),
+            &setup.browser,
+            &work,
+            json!({"name": format!("N{number}"), "type": "number"}),
         )
         .await;
-        assert_eq!(status, StatusCode::CREATED, "{field}");
+        assert_eq!(status, StatusCode::OK, "{field}");
         ids.push(field["id"].as_str().expect("field").to_owned());
     }
     let (status, task) = send(
@@ -918,20 +919,16 @@ async fn number_filters_compare_by_value_and_text_filters_as_written() {
     };
     let app = &setup.app;
     let work = create_project(&setup, "WORK", "Work").await;
-    let fields_path = format!("/api/v1/projects/{work}/fields");
     let mut ids = Vec::new();
     for (name, kind) in [("Size", "number"), ("Code", "text")] {
-        let (status, field) = send(
+        let (status, field) = create_field(
             app,
-            setup.browser.request(
-                "POST",
-                &fields_path,
-                Some(&format!("numbers-field-{name}")),
-                json!({"name": name, "type": kind}),
-            ),
+            &setup.browser,
+            &work,
+            json!({"name": name, "type": kind}),
         )
         .await;
-        assert_eq!(status, StatusCode::CREATED, "{field}");
+        assert_eq!(status, StatusCode::OK, "{field}");
         ids.push(field["id"].as_str().expect("field").to_owned());
     }
     let (size, code) = (ids[0].clone(), ids[1].clone());
@@ -1022,17 +1019,14 @@ async fn the_largest_choice_field_saves() {
     let options = (0..100)
         .map(|index| json!({"name": format!("{index:02}{}", "𝄞".repeat(58))}))
         .collect::<Vec<_>>();
-    let (status, field) = send(
+    let (status, field) = create_field(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/fields"),
-            Some("large-config"),
-            json!({"name": "Areas", "type": "multiple_choice", "options": options}),
-        ),
+        &setup.browser,
+        &work,
+        json!({"name": "Areas", "type": "multiple_choice", "options": options}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{field}");
+    assert_eq!(status, StatusCode::OK, "{field}");
     assert_eq!(field["options"].as_array().map(Vec::len), Some(100));
     let stored = sqlx::query_scalar::<_, i32>(
         "SELECT octet_length(config::text) FROM field_definitions WHERE id = $1::uuid",
@@ -1055,7 +1049,6 @@ async fn values_too_large_as_stored_are_refused_not_failed() {
     };
     let app = &setup.app;
     let work = create_project(&setup, "WORK", "Work").await;
-    let fields_path = format!("/api/v1/projects/{work}/fields");
     let mut values = serde_json::Map::new();
     for index in 0..50 {
         let (kind, value) = if index < 3 {
@@ -1063,17 +1056,14 @@ async fn values_too_large_as_stored_are_refused_not_failed() {
         } else {
             ("number", json!(1e-300))
         };
-        let (status, field) = send(
+        let (status, field) = create_field(
             app,
-            setup.browser.request(
-                "POST",
-                &fields_path,
-                Some(&format!("size-field-{index}")),
-                json!({"name": format!("F{index}"), "type": kind}),
-            ),
+            &setup.browser,
+            &work,
+            json!({"name": format!("F{index}"), "type": kind}),
         )
         .await;
-        assert_eq!(status, StatusCode::CREATED, "{field}");
+        assert_eq!(status, StatusCode::OK, "{field}");
         values.insert(field["id"].as_str().expect("field").to_owned(), value);
     }
     let (status, task) = send(
@@ -1153,17 +1143,14 @@ async fn a_large_change_keeps_its_history_within_the_payload_limit() {
     let work = create_project(&setup, "WORK", "Work").await;
     let mut ids = Vec::new();
     for index in 0..8 {
-        let (status, field) = send(
+        let (status, field) = create_field(
             app,
-            setup.browser.request(
-                "POST",
-                &format!("/api/v1/projects/{work}/fields"),
-                Some(&format!("payload-field-{index}")),
-                json!({"name": format!("F{index}"), "type": "text"}),
-            ),
+            &setup.browser,
+            &work,
+            json!({"name": format!("F{index}"), "type": "text"}),
         )
         .await;
-        assert_eq!(status, StatusCode::CREATED, "{field}");
+        assert_eq!(status, StatusCode::OK, "{field}");
         ids.push(field["id"].as_str().expect("field").to_owned());
     }
     let values = |text: &str| {
@@ -1451,17 +1438,14 @@ async fn fields_are_renamed_and_reordered() {
     let fields_path = format!("/api/v1/projects/{work}/fields");
     let mut ids = Vec::new();
     for name in ["Alpha", "Beta", "Gamma"] {
-        let (status, field) = send(
+        let (status, field) = create_field(
             app,
-            setup.browser.request(
-                "POST",
-                &fields_path,
-                Some(&format!("reorder-{name}")),
-                json!({"name": name, "type": "text"}),
-            ),
+            &setup.browser,
+            &work,
+            json!({"name": name, "type": "text"}),
         )
         .await;
-        assert_eq!(status, StatusCode::CREATED, "{field}");
+        assert_eq!(status, StatusCode::OK, "{field}");
         ids.push(field["id"].as_str().expect("field").to_owned());
     }
     let fields_of = |status: StatusCode, body: Value| {
@@ -1516,10 +1500,10 @@ async fn fields_are_renamed_and_reordered() {
     let (status, body) = send(
         app,
         setup.browser.request(
-            "PATCH",
-            &format!("{fields_path}/{}", ids[2]),
+            "POST",
+            "/api/v2/ops/field_update",
             Some("reorder-gamma"),
-            json!({"expectedVersion": version_of(&fields, &ids[2]), "position": 1}),
+            json!({"projectId": work, "field": ids[2], "expectedVersion": version_of(&fields, &ids[2]), "position": 1}),
         ),
     )
     .await;
@@ -1529,10 +1513,10 @@ async fn fields_are_renamed_and_reordered() {
     let (status, body) = send(
         app,
         setup.browser.request(
-            "PATCH",
-            &format!("{fields_path}/{}", ids[0]),
+            "POST",
+            "/api/v2/ops/field_update",
             Some("rename-alpha"),
-            json!({"expectedVersion": version_of(&fields, &ids[0]), "name": "First"}),
+            json!({"projectId": work, "field": ids[0], "expectedVersion": version_of(&fields, &ids[0]), "name": "First"}),
         ),
     )
     .await;
@@ -1586,14 +1570,11 @@ async fn fields_are_renamed_and_reordered() {
     ] {
         let mut body = change;
         body["expectedVersion"] = json!(version_of(&fields, &ids[1]));
+        body["projectId"] = json!(work);
+        body["field"] = json!(ids[1]);
         let (status, refused) = send(
             app,
-            member_browser.request(
-                "PATCH",
-                &format!("{fields_path}/{}", ids[1]),
-                Some(key),
-                body,
-            ),
+            member_browser.request("POST", "/api/v2/ops/field_update", Some(key), body),
         )
         .await;
         assert!(status.is_client_error(), "{status}: {refused}");

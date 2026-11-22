@@ -350,13 +350,13 @@ async fn joining_another_workspace_doesnt_route_reset_mail_through_it() {
         setup,
         &mallory_browser,
         "POST",
-        &format!("/api/v1/organizations/{b}/invitations"),
-        None,
-        json!({"role": "member", "expiresInHours": 24}),
+            &format!("/api/v2/w/{b}/ops/invitation_create"),
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"projectId": "workspace", "wholeWorkspace": true, "role": "member", "expiresInHours": 24}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{invitation}");
-    let token = invitation["invitationUrl"]
+    assert_eq!(status, StatusCode::OK, "{invitation}");
+    let token = invitation["value"]["joinUrl"]
         .as_str()
         .and_then(|url| url.split_once("#token="))
         .expect("token")

@@ -25,9 +25,12 @@ async function ensureField(request: APIRequestContext, headers: (key: string) =>
   const listed = (await (await request.get(`/api/v1/projects/${projectId}/fields`)).json()) as { fields: Field[] }
   const found = listed.fields.find((field) => field.name === body.name)
   if (found) return found
-  const created = await request.post(`/api/v1/projects/${projectId}/fields`, { headers: headers(`field-${String(body.name).replace(/[^A-Za-z0-9]+/g, '-')}`), data: body })
+  const created = await request.post('/api/v2/ops/field_create', {
+    headers: headers(`field-${String(body.name).replace(/[^A-Za-z0-9]+/g, '-')}`),
+    data: { projectId, ...body },
+  })
   expect(created.ok(), await created.text()).toBe(true)
-  return (await created.json()) as Field
+  return ((await created.json()) as { value: { field: Field } }).value.field
 }
 
 async function seed(context: BrowserContext, page: Page) {

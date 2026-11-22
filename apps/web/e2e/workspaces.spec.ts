@@ -38,8 +38,8 @@ test('opens a second workspace by its address, with its own modules', async ({ p
   try {
     // Whiteboards off in the second workspace only.
     const csrf = (await page.context().cookies()).find((cookie) => cookie.name.endsWith('agent_workspace_csrf'))?.value ?? ''
-    const switched = await page.request.put(`${serverOrigin}/api/v1/organizations/${workspaceId}/modules`, {
-      data: { switches: { whiteboards: false } },
+    const switched = await page.request.post(`${serverOrigin}/api/v2/w/${workspaceId}/ops/workspace_update`, {
+      data: { projectId: 'workspace', modules: { whiteboards: false } },
       headers: { origin: webOrigin, 'x-csrf-token': csrf, 'idempotency-key': randomUUID() },
     })
     expect(switched.ok(), await switched.text()).toBe(true)
