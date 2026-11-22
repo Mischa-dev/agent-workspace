@@ -48,6 +48,7 @@ export function FieldPicker({
   onManageLabels,
   onPick,
   projectId,
+  suggesting = false,
   workflow,
 }: {
   anchor: HTMLElement | null
@@ -57,6 +58,8 @@ export function FieldPicker({
   onManageLabels?: () => void
   onPick: (result: PickResult) => void
   projectId: string
+  /** The pick becomes a proposal: labels are picked from the project's, never made here. */
+  suggesting?: boolean
   workflow: WorkItemWorkflow
 }) {
   const label = PICKER_LABELS[field]
@@ -121,6 +124,7 @@ export function FieldPicker({
       {field === 'milestone' ? <MilestoneOptions current={current} label={label} onClose={close} onPick={onPick} projectId={projectId} /> : null}
       {field === 'labels' ? (
         <LabelOptions
+          creates={!suggesting}
           label={label}
           onManage={
             onManageLabels
@@ -263,6 +267,7 @@ function MilestoneOptions({
 }
 
 function LabelOptions({
+  creates,
   label,
   onManage,
   projectId,
@@ -270,6 +275,7 @@ function LabelOptions({
   setSelected,
 }: {
   label: string
+  creates: boolean
   onManage?: () => void
   projectId: string
   selected: string[]
@@ -291,11 +297,14 @@ function LabelOptions({
       label={label}
       loading={labels.isPending || create.isPending}
       multiple
-      onCreate={(name) =>
-        create.mutate(
-          { projectId, name, idempotencyKey: crypto.randomUUID() },
-          { onSuccess: (created) => setSelected([...selected, created.id]) },
-        )
+      onCreate={
+        creates
+          ? (name) =>
+              create.mutate(
+                { projectId, name, idempotencyKey: crypto.randomUUID() },
+                { onSuccess: (created) => setSelected([...selected, created.id]) },
+              )
+          : undefined
       }
       onSelect={(value) => setSelected(selected.includes(value) ? selected.filter((id) => id !== value) : [...selected, value])}
       options={(labels.data ?? []).map((entry) => ({
@@ -303,7 +312,7 @@ function LabelOptions({
         label: entry.name,
         leading: <span aria-hidden="true" className="aw-label__dot" style={{ backgroundColor: entry.color }} />,
       }))}
-      placeholder="Search or create labels"
+      placeholder={creates ? 'Search or create labels' : 'Search labels'}
       selected={selected}
     />
   )

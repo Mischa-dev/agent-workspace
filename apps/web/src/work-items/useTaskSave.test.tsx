@@ -4,6 +4,7 @@ import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../api/errors'
+import { callOp } from '../api/ops'
 import { queryKeys } from '../api/queryKeys'
 import { discardOutbound, useOutbound, type OutboundEntry } from '../data/outbound'
 import { useQueueWorkItemUpdate, useUpdateWorkItem } from './hooks'
@@ -13,6 +14,7 @@ import { useTaskSave } from './useTaskSave'
 
 vi.mock('./hooks', () => ({ useUpdateWorkItem: vi.fn(), useQueueWorkItemUpdate: vi.fn() }))
 vi.mock('../data/outbound', () => ({ useOutbound: vi.fn(() => []), discardOutbound: vi.fn() }))
+vi.mock('../api/ops', async (original) => ({ ...(await original<typeof import('../api/ops')>()), callOp: vi.fn() }))
 
 const task: WorkItem = {
   id: 'task-a',
@@ -42,13 +44,13 @@ const task: WorkItem = {
 const conflict = (current: WorkItem) =>
   new ApiError({ status: 409, code: 'conflict', message: 'The task changed.', details: { reason: 'version', currentVersion: current.version, current: { task: current, whole: true } } })
 
-function setup(mutateAsync: ReturnType<typeof vi.fn>) {
+function setup(mutateAsync: ReturnType<typeof vi.fn>, suggest = false) {
   vi.mocked(useUpdateWorkItem).mockReturnValue({ mutateAsync } as unknown as ReturnType<typeof useUpdateWorkItem>)
   vi.mocked(useQueueWorkItemUpdate).mockReturnValue({ mutateAsync } as unknown as ReturnType<typeof useQueueWorkItemUpdate>)
   const client = new QueryClient()
   client.setQueryData(queryKeys.workItem(task.projectId, task.id), task)
   const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>
-  return { client, ...renderHook(() => useTaskSave(task), { wrapper }) }
+  return { client, ...renderHook(() => useTaskSave(task, { suggest }), { wrapper }) }
 }
 
 afterEach(() => {
@@ -64,6 +66,79 @@ const keptOffline = () =>
   })
 
 describe('useTaskSave', () => {
+  it('suggests through task_update, and a retry of a lost answer reuses the request id', async () => {
+    const mutateAsync = vi.fn()
+    vi.mocked(callOp)
+      .mockRejectedValueOnce(new ApiError({ status: 503, code: 'temporarily_unavailable', message: 'Try again.' }))
+      .mockResolvedValue({ workItemId: task.id, version: 1, changedFields: [], resultId: 'p1', idempotentReplay: true, proposalId: 'p1' })
+    const { client, result } = setup(mutateAsync, true)
+
+    act(() => result.current.save('priority', { priority: 'high' }))
+    await waitFor(() => expect(result.current.stopped).toHaveLength(1))
+    // An unrelated change arrives, then the same patch again, as the
+    // description's retry button sends it.
+    act(() => client.setQueryData(queryKeys.workItem(task.projectId, task.id), { ...task, dueDate: '2026-12-01', version: 2 }))
+    act(() => result.current.retry('priority', { priority: 'high' }))
+    await waitFor(() => expect(result.current.stopped).toHaveLength(0))
+    expect(mutateAsync).not.toHaveBeenCalled()
+    const [first, second] = vi.mocked(callOp).mock.calls
+    expect(first[1]).toEqual({ taskId: task.id, expectedVersion: 1, priority: 'high' })
+    expect(second[2]?.requestId).toBe(first[2]?.requestId)
+    expect(second[1]).toEqual(first[1])
+  })
+
+  it('sends a second suggestion for a field while the first is on its way', async () => {
+    let answer: (value: unknown) => void = () => {}
+    vi.mocked(callOp)
+      .mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)) as never)
+      .mockResolvedValue({ workItemId: task.id, version: 1, changedFields: [], resultId: 'p2', idempotentReplay: false, proposalId: 'p2' })
+    const { result } = setup(vi.fn(), true)
+
+    act(() => result.current.save('title', { title: 'Parse the options' }))
+    await waitFor(() => expect(callOp).toHaveBeenCalledTimes(1))
+    act(() => result.current.save('title', { title: 'Parse every flag' }))
+    answer({ workItemId: task.id, version: 1, changedFields: [], resultId: 'p1', idempotentReplay: false, proposalId: 'p1' })
+    await waitFor(() => expect(callOp).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(callOp).mock.calls[1][1]).toMatchObject({ title: 'Parse every flag' })
+    await waitFor(() => expect(result.current.pending('title')).toBeNull())
+  })
+
+  it('keeps the task as the baseline for a draft opened while a suggestion is on its way', async () => {
+    let answer: (value: unknown) => void = () => {}
+    vi.mocked(callOp)
+      .mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)) as never)
+      .mockResolvedValue({ workItemId: task.id, version: 1, changedFields: [], resultId: 'p2', idempotentReplay: false, proposalId: 'p2' })
+    const { result } = setup(vi.fn(), true)
+
+    act(() => result.current.save('description', { description: 'First idea' }))
+    await waitFor(() => expect(callOp).toHaveBeenCalledTimes(1))
+    // The description editor opens now and records what it shows as its baseline.
+    const base = result.current.baseFor('description')
+    expect(base).toBe('First idea')
+    answer({ workItemId: task.id, version: 1, changedFields: [], resultId: 'p1', idempotentReplay: false, proposalId: 'p1' })
+    await waitFor(() => expect(result.current.pending('description')).toBeNull())
+
+    act(() => result.current.save('description', { description: 'Second idea' }, base))
+    await waitFor(() => expect(callOp).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(callOp).mock.calls[1][1]).toMatchObject({ description: 'Second idea' })
+    await waitFor(() => expect(result.current.pending('description')).toBeNull())
+  })
+
+  it('stops a queued suggestion when someone else changed the field meanwhile', async () => {
+    let answer: (value: unknown) => void = () => {}
+    vi.mocked(callOp).mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)) as never)
+    const { client, result } = setup(vi.fn(), true)
+
+    act(() => result.current.save('title', { title: 'Parse the options' }))
+    await waitFor(() => expect(callOp).toHaveBeenCalledTimes(1))
+    act(() => result.current.save('title', { title: 'Parse every flag' }))
+    // A live update brings someone else's title before the first answer.
+    act(() => client.setQueryData(queryKeys.workItem(task.projectId, task.id), { ...task, title: 'Parse the CLI', version: 2 }))
+    answer({ workItemId: task.id, version: 1, changedFields: [], resultId: 'p1', idempotentReplay: false, proposalId: 'p1' })
+    await waitFor(() => expect(result.current.pending('title')?.state).toBe('conflict'))
+    expect(callOp).toHaveBeenCalledTimes(1)
+  })
+
   it('shows an edit kept offline, and lets it go once it has been sent', async () => {
     const mutateAsync = keptOffline()
     const { client, result, rerender } = setup(mutateAsync)
