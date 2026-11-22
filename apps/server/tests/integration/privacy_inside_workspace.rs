@@ -4469,14 +4469,13 @@ async fn a_groups_role_counts_beside_a_lower_seat() {
             ),
         )
         .await;
-        let (task, _) = send(
+        let (task, _) = crate::support::tasks::send(
             app,
-            lena.request(
-                "POST",
-                &format!("/api/v1/projects/{team}/work-items"),
-                Some(&format!("{key}-task")),
-                json!({"title": format!("Task {key}")}),
-            ),
+            lena,
+            "POST",
+            &format!("/api/v1/projects/{team}/work-items"),
+            Some(&format!("{key}-task")),
+            json!({"title": format!("Task {key}")}),
         )
         .await;
         (page.is_success(), task.is_success())

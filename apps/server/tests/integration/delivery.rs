@@ -726,14 +726,13 @@ async fn a_webhook_an_app_set_up_stops_when_the_app_is_disconnected() {
     .execute(world.pool())
     .await
     .expect("disconnect the app");
-    let owner_task = send(
+    let owner_task = crate::support::tasks::send(
         &world.app,
-        world.owner.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{}/work-items", world.project("WORK")),
-            Some("after-disconnect"),
-            json!({"title": "After the app left"}),
-        ),
+        &world.owner.browser,
+        "POST",
+        &format!("/api/v1/projects/{}/work-items", world.project("WORK")),
+        Some("after-disconnect"),
+        json!({"title": "After the app left"}),
     )
     .await;
     assert!(owner_task.0.is_success(), "{owner_task:?}");
@@ -1223,14 +1222,13 @@ async fn ask_an_agent_posts_as_the_maker_and_asks_them() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{rule}");
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         &world.app,
-        world.owner.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("ask-task"),
-            json!({"title": "Login is slow"}),
-        ),
+        &world.owner.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("ask-task"),
+        json!({"title": "Login is slow"}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");

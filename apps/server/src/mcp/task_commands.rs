@@ -311,6 +311,27 @@ pub(crate) async fn mark_blocked(
     )
 }
 
+pub(crate) async fn clear_blocker(
+    state: &AppState,
+    ctx: &OpContext,
+    task_id: Uuid,
+    expected_version: i64,
+) -> Result<TaskWritten, OpError> {
+    let principal = principal_of(ctx);
+    written(
+        writes::clear_blocker(
+            state,
+            &principal,
+            writes::ClearBlockerArguments {
+                work_item_id: task_id.to_string(),
+                expected_version,
+                client_request_id: request_id(ctx),
+            },
+        )
+        .await,
+    )
+}
+
 pub(crate) async fn mark_ready_for_review(
     state: &AppState,
     ctx: &OpContext,

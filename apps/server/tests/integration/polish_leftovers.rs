@@ -52,14 +52,13 @@ async fn task_comments_are_edited_by_their_author_and_deleted_by_author_or_admin
     let (mara, mara_browser) = add_person(&setup, &[&project], "mara").await;
     let (ben, ben_browser) = add_person(&setup, &[&project], "ben").await;
     let base = format!("/api/v1/projects/{project}/work-items");
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         &setup.app,
-        setup.browser.request(
-            "POST",
-            &base,
-            Some("task"),
-            json!({"title": "Pick colours"}),
-        ),
+        &setup.browser,
+        "POST",
+        &base,
+        Some("task"),
+        json!({"title": "Pick colours"}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");

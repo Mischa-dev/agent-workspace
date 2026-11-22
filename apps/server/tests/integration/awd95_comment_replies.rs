@@ -27,11 +27,13 @@ async fn replies_quote_a_comment_on_the_same_task_and_tell_its_author() {
     let base = format!("/api/v1/projects/{project}/work-items");
     let mut tasks = Vec::new();
     for (key, title) in [("task-a", "Pick colours"), ("task-b", "Pick fonts")] {
-        let (status, task) = send(
+        let (status, task) = crate::support::tasks::send(
             app,
-            setup
-                .browser
-                .request("POST", &base, Some(key), json!({"title": title})),
+            &setup.browser,
+            "POST",
+            &base,
+            Some(key),
+            json!({"title": title}),
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "{task}");

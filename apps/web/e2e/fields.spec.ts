@@ -62,11 +62,12 @@ async function seed(context: BrowserContext, page: Page) {
   }
   let taskId = existing.items[0]?.id
   if (!taskId) {
-    const created = await request.post(`/api/v1/projects/${projectId}/work-items`, {
+    const created = await request.post('/api/v2/ops/task_create', {
       headers: headers('fields-task'),
       data: {
+        projectId,
         title,
-        fieldValues: {
+        fields: {
           Risk: 'High',
           Areas: ['Web', 'Agents'],
           'Story points': 5,
@@ -79,7 +80,7 @@ async function seed(context: BrowserContext, page: Page) {
       },
     })
     expect(created.ok(), await created.text()).toBe(true)
-    taskId = ((await created.json()) as { id: string }).id
+    taskId = ((await created.json()) as { value: { workItemId: string } }).value.workItemId
   }
   const columns = ['priority', 'key', 'status', 'details', 'due', `field:${risk.id}`, `field:${areas.id}`, `field:${points.id}`, 'assignee']
   return { projectId, taskId, title, columns }

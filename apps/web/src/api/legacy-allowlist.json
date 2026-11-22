@@ -60,8 +60,8 @@
   "threads/useThreadRunActions.ts": 1,
   "views/api.ts": 8,
   "whiteboards/api.ts": 9,
-  "work-items/api.ts": 13,
-  "work-items/moveApi.ts": 3,
-  "work-items/planningApi.ts": 3,
+  "work-items/api.ts": 10,
+  "work-items/moveApi.ts": 2,
+  "work-items/planningApi.ts": 2,
   "workspace-templates/api.ts": 1
 }

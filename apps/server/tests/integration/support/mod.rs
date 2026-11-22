@@ -10,6 +10,7 @@ pub(crate) mod db;
 pub(crate) mod live;
 pub(crate) mod long;
 pub(crate) mod requests;
+pub(crate) mod tasks;
 pub(crate) mod test_host;
 pub(crate) mod two_workspaces;
 pub(crate) mod world;

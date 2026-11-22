@@ -116,14 +116,13 @@ async fn boards_live_in_a_workspace_or_project_and_links_never_copy_or_delete_th
     )
     .await;
     // A project board, linked to a task as it's made.
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         &setup.app,
-        owner.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("task-sync"),
-            json!({"title": "Design the sync"}),
-        ),
+        owner,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("task-sync"),
+        json!({"title": "Design the sync"}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");
@@ -658,14 +657,13 @@ async fn agents_draw_read_render_and_restore_boards_through_mcp_alone() {
     let (rook, token) = create_agent(app, &setup.browser, &space, "Rook", "rook").await;
     add_member(&setup, &work, rook, "member").await;
     let session = initialize(app, &token).await.expect("agent MCP");
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("task-launch"),
-            json!({"title": "Plan the launch"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("task-launch"),
+        json!({"title": "Plan the launch"}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");

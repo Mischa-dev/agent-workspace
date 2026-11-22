@@ -1492,19 +1492,55 @@ pub async fn mark_blocked(
     principal: &McpPrincipal,
     arguments: MarkBlockedArguments,
 ) -> WriteResult {
+    let Some(reason) = normalize_text(
+        arguments.reason.clone(),
+        MAX_BLOCKED_REASON_CHARACTERS,
+        false,
+    ) else {
+        return WriteResult::invalid(
+            "reason",
+            "Say what's blocking it in 1 to 2,000 characters, on one line.",
+        );
+    };
+    set_blocker(state, principal, &arguments, Some(reason)).await
+}
+
+/// The arguments of a cleared blocker: the task, the version and the key.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearBlockerArguments {
+    pub work_item_id: String,
+    pub expected_version: i64,
+    pub client_request_id: String,
+}
+
+/// Clears a task's blocker where it stands: its status stays as it is
+/// (`mark_ready_for_review` clears it and moves it to review).
+pub async fn clear_blocker(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: ClearBlockerArguments,
+) -> WriteResult {
+    let blocked = MarkBlockedArguments {
+        work_item_id: arguments.work_item_id,
+        expected_version: arguments.expected_version,
+        reason: String::new(),
+        client_request_id: arguments.client_request_id,
+    };
+    set_blocker(state, principal, &blocked, None).await
+}
+
+/// Sets (Some) or clears (None) a task's blocked reason.
+async fn set_blocker(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: &MarkBlockedArguments,
+    reason: Option<String>,
+) -> WriteResult {
+    let clearing = reason.is_none();
     let result = async {
         let Some(work_item_id) = parse_id(&arguments.work_item_id) else {
             return Ok(WriteResult::invalid("workItemId", TASK_ID_MESSAGE));
-        };
-        let Some(reason) = normalize_text(
-            arguments.reason.clone(),
-            MAX_BLOCKED_REASON_CHARACTERS,
-            false,
-        ) else {
-            return Ok(WriteResult::invalid(
-                "reason",
-                "Say what's blocking it in 1 to 2,000 characters, on one line.",
-            ));
         };
         if arguments.expected_version < 1 {
             return Ok(WriteResult::invalid(
@@ -1519,8 +1555,16 @@ pub async fn mark_blocked(
         if let Some(result) = authorize_write(&mut transaction, principal).await? {
             return Ok(result);
         }
-        let scope = resource_bound_scope("mcp_work_items", work_item_id, "mark_blocked")?;
-        let request_hash = RequestHash::for_value(&arguments)?;
+        let scope = resource_bound_scope(
+            "mcp_work_items",
+            work_item_id,
+            if clearing {
+                "clear_blocker"
+            } else {
+                "mark_blocked"
+            },
+        )?;
+        let request_hash = RequestHash::for_value(arguments)?;
         let reservation = match reserve(
             &mut transaction,
             principal.actor_id,
@@ -1569,11 +1613,19 @@ pub async fn mark_blocked(
                 board_placement: None,
                 labels: None,
                 fields: TaskFieldChanges {
-                    blocked_reason: Some(Some(reason)),
+                    blocked_reason: Some(reason),
                     ..TaskFieldChanges::default()
                 },
-                summary: "Work Item marked blocked through MCP",
-                audit_action: "work_item.mcp_marked_blocked",
+                summary: if clearing {
+                    "Work Item unblocked through MCP"
+                } else {
+                    "Work Item marked blocked through MCP"
+                },
+                audit_action: if clearing {
+                    "work_item.mcp_unblocked"
+                } else {
+                    "work_item.mcp_marked_blocked"
+                },
                 audit_version_metadata: AuditVersionMetadata::Include,
             },
         )

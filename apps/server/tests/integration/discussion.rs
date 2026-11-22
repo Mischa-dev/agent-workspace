@@ -544,14 +544,13 @@ async fn comments_that_mention_agents_tell_them() {
     assert!(mentioned_events(app, pool, rook).await.is_empty());
     assert!(mentioned_events(app, pool, kite).await.is_empty());
 
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         app,
-        lena.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some(&Uuid::now_v7().to_string()),
-            json!({"title": "Ship it"}),
-        ),
+        &lena.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some(&Uuid::now_v7().to_string()),
+        json!({"title": "Ship it"}),
     )
     .await;
     assert!(status.is_success(), "{task}");

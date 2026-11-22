@@ -61,13 +61,16 @@ async fn write_on_one_read_on_the_other() {
     let (status, task) = a
         .send(browser.request(
             "POST",
-            &format!("/api/v1/projects/{project}/work-items"),
+            "/api/v2/ops/task_create",
             Some("cluster-task"),
-            json!({"title": "Written on A"}),
+            json!({"projectId": project, "title": "Written on A"}),
         ))
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{task}");
-    let task = task["id"].as_str().expect("task").to_owned();
+    assert_eq!(status, StatusCode::OK, "{task}");
+    let task = task["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
     let (status, read) = b
         .send(browser.request(
             "GET",

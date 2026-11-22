@@ -885,6 +885,14 @@ pub(super) async fn send(
     body: Value,
 ) -> (StatusCode, String, Value) {
     let key = key.replace(|character: char| !character.is_ascii_alphanumeric(), "-");
+    // The task writes moved to operations (K2.22).
+    if crate::support::tasks::op_for(method, path, &body).is_some() {
+        let browser = crate::support::tasks::browser(cookie, csrf);
+        let (status, value) =
+            crate::support::tasks::send(application, &browser, method, path, Some(&key), body)
+                .await;
+        return (status, value.to_string(), value);
+    }
     response_json(
         application
             .clone()

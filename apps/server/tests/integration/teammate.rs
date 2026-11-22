@@ -405,6 +405,83 @@ async fn guards_hold_tools_called_by_their_old_names() {
     assert_eq!(next["value"]["status"], "pending_review", "{next}");
 }
 
+/// A wrapped tool's command runs apart from the call's transaction, so the
+/// review it used is committed before it runs. When the command then
+/// refuses, the review is given back: the same call, made again without a
+/// request id once it can work, goes through without a second review.
+#[tokio::test]
+async fn a_review_a_refused_command_used_is_given_back() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .agent("rook", "member")
+        .build("teammate_guards_refused_given_back")
+        .await
+    else {
+        return;
+    };
+    let rook = &world.agents["rook"];
+    let space = world.project("WORK");
+    let first = op(
+        &world,
+        "task_create",
+        json!({"projectId": space, "title": "First"}),
+    )
+    .await;
+    let second = op(
+        &world,
+        "task_create",
+        json!({"projectId": space, "title": "Second"}),
+    )
+    .await;
+    let (first, second) = (
+        first["workItemId"].as_str().expect("first").to_owned(),
+        second["workItemId"].as_str().expect("second").to_owned(),
+    );
+    // In different columns, the two can't be put in order.
+    sqlx::query(
+        "UPDATE work_items SET status_id = (SELECT id FROM work_item_statuses \
+         WHERE project_id = work_items.project_id AND id <> work_items.status_id \
+         ORDER BY position LIMIT 1) WHERE id = $1",
+    )
+    .bind(second.parse::<Uuid>().expect("id"))
+    .execute(world.pool())
+    .await
+    .expect("another column");
+    op(
+        &world,
+        "guard_set",
+        json!({"name": "Order gets a look", "action": "review",
+               "operations": ["task_reorder"], "reviewers": [world.owner.actor]}),
+    )
+    .await;
+    let reorder = json!({"taskIds": [second, first]});
+    let held = tool(&world, rook, "task_reorder", reorder.clone()).await;
+    assert_eq!(held["value"]["status"], "pending_review", "{held}");
+    op(
+        &world,
+        "request_respond",
+        json!({"requestId": held["value"]["requestId"], "optionId": "allow"}),
+    )
+    .await;
+    let refused = tool(&world, rook, "task_reorder", reorder.clone()).await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    assert_ne!(refused["value"]["status"], "pending_review", "{refused}");
+
+    sqlx::query(
+        "UPDATE work_items SET status_id = (SELECT status_id FROM work_items WHERE id = $2) \
+         WHERE id = $1",
+    )
+    .bind(second.parse::<Uuid>().expect("id"))
+    .bind(first.parse::<Uuid>().expect("id"))
+    .execute(world.pool())
+    .await
+    .expect("same column");
+    let made = tool(&world, rook, "task_reorder", reorder.clone()).await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let next = tool(&world, rook, "task_reorder", reorder).await;
+    assert_eq!(next["value"]["status"], "pending_review", "{next}");
+}
+
 /// A review given back after the same call asked again while the first
 /// ran (the first then made nothing): the unanswered second ask is
 /// withdrawn, and the allowed review is used by the next call. Once a

@@ -777,6 +777,8 @@ async fn pipeline<O: Operation>(
     // one stalls), on rows the reservation references, and across any
     // network call the command makes.
     let apart = O::OWN_TRANSACTION && !request.preview;
+    // The reviewer's hold a command apart used, to give back if it fails.
+    let mut used_hold = None;
     if let Some((key, scope, hash)) = keyed.as_ref() {
         let (key, hash) = (*key, *hash);
         if apart {
@@ -794,6 +796,7 @@ async fn pipeline<O: Operation>(
             }
             if let Some(hold) = guard_hold.take() {
                 crate::guards::use_hold(&mut tx, hold, ctx.request_id.as_deref()).await?;
+                used_hold = Some(hold);
             }
             tx.commit()
                 .await
@@ -818,6 +821,7 @@ async fn pipeline<O: Operation>(
         if apart {
             let mut tx = begin(state, &ctx).await?;
             crate::guards::use_hold(&mut tx, hold, ctx.request_id.as_deref()).await?;
+            used_hold = Some(hold);
             tx.commit()
                 .await
                 .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
@@ -835,12 +839,20 @@ async fn pipeline<O: Operation>(
         Ok(output) => output,
         Err(error) => {
             // A refused or failed command made nothing: its reservation goes,
-            // so a retry runs (as the rolled-back one does when it is held
-            // in the call's transaction).
-            if apart && let Some(reservation) = reservation.as_ref() {
+            // so a retry runs, and the reviewer's hold it used is given back,
+            // so the retry needs no second review (as both roll back when
+            // they are held in the call's transaction).
+            if apart && (reservation.is_some() || used_hold.is_some()) {
                 drop(call.tx.take());
                 let mut tx = begin(state, &ctx).await?;
-                idempotency::release(&mut tx, reservation).await?;
+                if let Some(reservation) = reservation.as_ref() {
+                    idempotency::release(&mut tx, reservation).await?;
+                }
+                if let Some(hold) = used_hold {
+                    crate::guards::give_back_hold(&mut tx, hold)
+                        .await
+                        .map_err(|given| OpError::logged(O::NAME, &given))?;
+                }
                 tx.commit()
                     .await
                     .map_err(|released| OpError::logged(O::NAME, &released.into()))?;

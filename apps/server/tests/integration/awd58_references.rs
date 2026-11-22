@@ -45,11 +45,16 @@ async fn referenced_in(
 }
 
 async fn create(setup: &Setup, path: &str, key: &str, body: Value) -> String {
-    let (status, created) = send(
-        &setup.app,
-        setup.browser.request("POST", path, Some(key), body),
-    )
-    .await;
+    // The task writes moved to operations (K2.22).
+    let (status, created) = if crate::support::tasks::op_for("POST", path, &body).is_some() {
+        crate::support::tasks::send(&setup.app, &setup.browser, "POST", path, Some(key), body).await
+    } else {
+        send(
+            &setup.app,
+            setup.browser.request("POST", path, Some(key), body),
+        )
+        .await
+    };
     assert!(status.is_success(), "{created}");
     created["id"]
         .as_str()

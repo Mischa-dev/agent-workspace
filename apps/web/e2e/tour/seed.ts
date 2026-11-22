@@ -229,34 +229,37 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   for (const [index, task] of tourTasks().entries()) {
     const creator = team[index % team.length]
     const assignee = index % 7 === 3 ? me.actorId : task.assignee === null ? undefined : team[task.assignee].actorId
-    const created = await creator.write('POST', `/api/v1/projects/${projectId}/work-items`, {
+    const labels = task.labels.map((name) => labelIds.get(name)).filter(Boolean)
+    const created = await creator.op('task_create', {
+      projectId,
       title: task.title,
-      description: index % 5 === 0 ? `Raised in #releases. ${task.title}.` : '',
-      typeId: typeId(task.labels.includes('bug') ? 'Bug' : index % 9 === 0 ? 'Feature' : 'Task'),
-      statusId: statusId(task.status),
+      description: index % 5 === 0 ? `Raised in #releases. ${task.title}.` : undefined,
+      type: typeId(task.labels.includes('bug') ? 'Bug' : index % 9 === 0 ? 'Feature' : 'Task'),
+      status: statusId(task.status),
       priority: task.priority,
-      assigneeActorId: assignee,
-      milestoneId: task.milestone ? milestoneIds.get(task.milestone) : undefined,
-      labelIds: task.labels.map((name) => labelIds.get(name)).filter(Boolean),
+      assignee,
+      milestone: task.milestone ? milestoneIds.get(task.milestone) : undefined,
+      labels: labels.length ? labels : undefined,
       estimate: index % 4 === 0 ? (index % 8) + 1 : undefined,
       dueDate: index % 11 === 0 ? `2026-11-${String((index % 27) + 1).padStart(2, '0')}` : undefined,
     })
-    taskIds.push(String(created.id))
+    taskIds.push(String(created.workItemId))
   }
-  const featured = await team[3].write('POST', `/api/v1/projects/${projectId}/work-items`, {
+  const featured = await team[3].op('task_create', {
+    projectId,
     title: featuredTask.title,
     description: featuredTask.description,
-    typeId: typeId('Feature'),
-    statusId: statusId('In Progress'),
+    type: typeId('Feature'),
+    status: statusId('In Progress'),
     priority: 'high',
-    assigneeActorId: team[3].actorId,
-    milestoneId: milestoneIds.get(milestones[0]),
-    labelIds: [labelIds.get('dashboard'), labelIds.get('customer-reported')],
+    assignee: team[3].actorId,
+    milestone: milestoneIds.get(milestones[0]),
+    labels: [labelIds.get('dashboard'), labelIds.get('customer-reported')],
     estimate: 5,
     dueDate: '2026-11-07',
     acceptanceCriteria: featuredTask.criteria.map((criterion) => criterion.text),
   })
-  const featuredId = String(featured.id)
+  const featuredId = String(featured.workItemId)
   const opened = (await me.get(`/api/v1/projects/${projectId}/work-items/${featuredId}`)) as {
     version?: number
     workItem?: { version?: number }

@@ -101,6 +101,22 @@ impl Client {
     }
 
     async fn send(&self, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+        // The task writes moved to operations (K2.22).
+        if let Some(body) = body
+            .as_ref()
+            .filter(|body| crate::support::tasks::op_for(method, uri, body).is_some())
+        {
+            let browser = crate::support::tasks::browser(&self.cookie, &self.csrf);
+            return crate::support::tasks::send(
+                &self.application,
+                &browser,
+                method,
+                uri,
+                None,
+                body.clone(),
+            )
+            .await;
+        }
         let mut request = Request::builder()
             .method(method)
             .uri(uri)

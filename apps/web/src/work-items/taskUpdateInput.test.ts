@@ -21,9 +21,9 @@ describe('taskUpdateInput', () => {
     expect(taskUpdateInput('task-1', { expectedVersion: 4, delegateActorId: null })).toEqual({ taskId: 'task-1', expectedVersion: 4, delegate: 'none' })
   })
 
-  it('leaves what the operation can’t carry yet to the old route', () => {
-    expect(taskUpdateInput('task-1', { expectedVersion: 4, statusId: 'status-done' })).toBeNull()
-    expect(taskUpdateInput('task-1', { expectedVersion: 4, fieldValues: { risk: null } })).toBeNull()
+  it('carries a status and field values, and leaves a blocker change to go on its own', () => {
+    expect(taskUpdateInput('task-1', { expectedVersion: 4, statusId: 'status-done' })).toEqual({ taskId: 'task-1', expectedVersion: 4, status: 'status-done' })
+    expect(taskUpdateInput('task-1', { expectedVersion: 4, fieldValues: { risk: null } })).toEqual({ taskId: 'task-1', expectedVersion: 4, fields: { risk: null } })
     expect(taskUpdateInput('task-1', { expectedVersion: 4, blockedReason: null })).toBeNull()
   })
 })

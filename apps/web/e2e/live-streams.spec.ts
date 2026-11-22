@@ -68,16 +68,17 @@ test('records the live frames of a chat burst, task moves, page edits and a reco
   const target = workflow.statuses[1]?.id ?? workflow.statuses[0].id
   const tasks: Array<{ id: string; version: number }> = []
   for (const title of ['Record the frames', 'Replay the frames']) {
-    const created = await request.post(`/api/v1/projects/${projectId}/work-items`, { headers: headers(), data: { title } })
+    const created = await request.post('/api/v2/ops/task_create', { headers: headers(), data: { projectId, title } })
     expect(created.ok(), await created.text()).toBe(true)
-    tasks.push((await created.json()) as { id: string; version: number })
+    const { workItemId, version } = ((await created.json()) as { value: { workItemId: string; version: number } }).value
+    tasks.push({ id: workItemId, version })
   }
   await page.waitForTimeout(500)
   recorder.clear()
   for (const task of tasks) {
-    const moved = await request.post(`/api/v1/projects/${projectId}/work-items/${task.id}/move`, {
+    const moved = await request.post('/api/v2/ops/task_update', {
       headers: headers(),
-      data: { expectedVersion: task.version, targetStatusId: target, targetPosition: 1 },
+      data: { taskId: task.id, expectedVersion: task.version, status: target, position: 'top' },
     })
     expect(moved.ok(), await moved.text()).toBe(true)
   }

@@ -179043,7 +179043,7 @@
     },
     "/api/v2/w/{workspace}/ops/task_update": {
       "post": {
-        "description": "Change a task: title, description, priority, assignee, delegate (who it is handed to), type, status (by name), its place in its column (position, beforeTaskId, afterTaskId), its parent (parentId, or clearParent for top-level), labels (addLabels, removeLabels), or archive it (archived: true; false restores; pass it on its own). Mark it blocked with blockedReason, or clear the blocker and move it to review with readyForReview: true (each on its own). Pass the version you last read as expectedVersion; on a conflict, open it again and retry. If your role only suggests on tasks, a change to its own fields becomes a proposal (proposalId) that someone who edits the task accepts or rejects, from its request card or with proposal_decide; it is then written as yours. Needs \"Suggest task changes\" where it acts.",
+        "description": "Change a task: title, description, priority, assignee, delegate (who it is handed to), type, status (by name), its place in its column (position, beforeTaskId, afterTaskId), its parent (parentId, or clearParent for top-level), labels (addLabels, removeLabels), or archive it (archived: true; false restores; pass it on its own). Mark it blocked with blockedReason, clear the blocker with unblock: true, or clear it and move it to review with readyForReview: true (each on its own). Pass the version you last read as expectedVersion; on a conflict, open it again and retry. If your role only suggests on tasks, a change to its own fields becomes a proposal (proposalId) that someone who edits the task accepts or rejects, from its request card or with proposal_decide; it is then written as yours. Needs \"Suggest task changes\" where it acts.",
         "operationId": "task_update",
         "parameters": [
           {
@@ -179266,6 +179266,13 @@
                     "description": "Change its type, by name (such as \"Bug\").",
                     "type": [
                       "string",
+                      "null"
+                    ]
+                  },
+                  "unblock": {
+                    "description": "true clears its blocker and leaves it in its status. Pass it on its\nown.",
+                    "type": [
+                      "boolean",
                       "null"
                     ]
                   }

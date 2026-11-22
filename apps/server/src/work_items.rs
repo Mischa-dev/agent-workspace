@@ -1,12 +1,11 @@
 use axum::{
     Json, Router,
     extract::State,
-    http::{HeaderMap, HeaderValue, StatusCode, header::LOCATION},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
@@ -16,26 +15,14 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     conversations::ActorView,
     error::{ApiJson, ApiPath, ApiQuery, AppError},
-    idempotency::{
-        IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
-    },
+    idempotency::{IdempotencyKey, RequestHash},
     policy::{Action, Decision, Permission, RoleGrant},
     work_item_commands::{
-        AllocatedNumberMetadata, ArchiveCommand, ArchiveOutcome, AuditAttribution,
-        AuditVersionMetadata, BoardPlacement, ChangeFinalization, CommandActor,
-        CreateWorkItemCommand, CreateWorkItemOutcome, LinkWording, MAX_BLOCKED_REASON_CHARACTERS,
-        NewTaskFields, PlacementProblem, ProjectMembership, RepositoryLinkOutcome,
-        TaskFieldChanges, ThreadLinkOutcome, UpdateWorkItemCommand, UpdateWorkItemOutcome,
-        authorize_mutation, change_repository_link, change_thread_link,
-        create_work_item as execute_create_work_item, finalize_change, lock_membership,
-        lock_work_item, set_archived, update_locked_work_item, update_work_item_by_id,
-        valid_estimate,
+        AuditAttribution, ChangeFinalization, CommandActor, ProjectMembership, authorize_mutation,
+        finalize_change, lock_membership,
     },
-    work_item_labels::LabelDelta,
 };
 
-#[cfg(test)]
-const MAX_DESCRIPTION_CHARACTERS: usize = crate::work_item_commands::MAX_DESCRIPTION_CHARACTERS;
 const MAX_SEARCH_CHARACTERS: usize = 120;
 
 const DEFAULT_TYPES: [(&str, i32, bool); 6] = [
@@ -97,7 +84,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/api/v1/projects/{project_id}/work-items",
-            get(list::list_work_items).post(create_work_item),
+            get(list::list_work_items),
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/board",
@@ -109,19 +96,11 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}",
-            get(get_work_item).patch(update_work_item),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/archive",
-            axum::routing::post(archive_work_item),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/move",
-            axum::routing::post(move_work_item),
+            get(get_work_item),
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
-            get(moves::preview_move).post(moves::move_to_project),
+            get(moves::preview_move),
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/project-move/destinations",
@@ -130,10 +109,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/work-with-worker",
             axum::routing::post(work_with_worker),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
-            axum::routing::post(restore_work_item),
         )
         .route(
             "/api/v1/projects/{project_id}/work-items/by-key/{key}",
@@ -150,10 +125,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/work-item-workflow",
             get(planning::get_workflow),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/work-items/bulk",
-            axum::routing::post(planning::bulk_update),
         )
         .route(
             "/api/v1/projects/{project_id}/labels",
@@ -203,14 +174,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/timeline",
             get(get_work_item_timeline),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
-            axum::routing::post(link_work_item_thread),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-            axum::routing::post(link_work_item_repository),
         )
 }
 
@@ -301,83 +264,6 @@ struct WorkItemRow {
     field_values: serde_json::Value,
     field_references: serde_json::Value,
     collection_id: Option<Uuid>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CreateWorkItemRequest {
-    title: String,
-    #[serde(default)]
-    description: String,
-    type_id: Option<Uuid>,
-    status_id: Option<Uuid>,
-    #[serde(default = "default_priority")]
-    priority: String,
-    assignee_actor_id: Option<Uuid>,
-    parent_work_item_id: Option<Uuid>,
-    milestone_id: Option<Uuid>,
-    #[serde(default)]
-    label_ids: Vec<Uuid>,
-    start_date: Option<String>,
-    due_date: Option<String>,
-    estimate: Option<f64>,
-    #[serde(default)]
-    acceptance_criteria: Vec<String>,
-    /// W21: made from this message, which is linked back to (it must be one
-    /// in this project the creator can see).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    source_message_id: Option<Uuid>,
-    /// C2.20: with a source message, also say so in its conversation ("Lena
-    /// made a message here into a task").
-    #[serde(default)]
-    say_so: bool,
-    /// Custom field values by field ID or name (AWD-89).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    field_values: Option<serde_json::Map<String, serde_json::Value>>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct UpdateWorkItemRequest {
-    expected_version: i64,
-    title: Option<String>,
-    description: Option<String>,
-    type_id: Option<Uuid>,
-    status_id: Option<Uuid>,
-    priority: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
-    assignee_actor_id: Option<Option<Uuid>>,
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
-    parent_work_item_id: Option<Option<Uuid>>,
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
-    milestone_id: Option<Option<Uuid>>,
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
-    start_date: Option<Option<String>>,
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
-    due_date: Option<Option<String>>,
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
-    estimate: Option<Option<f64>>,
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
-    blocked_reason: Option<Option<String>>,
-    /// Who the task is handed to (T1.22); null takes it back.
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
-    delegate_actor_id: Option<Option<Uuid>>,
-    /// The cycle it is planned in (T1.24); null takes it out.
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
-    cycle_id: Option<Option<Uuid>>,
-    #[serde(default)]
-    add_label_ids: Vec<Uuid>,
-    #[serde(default)]
-    remove_label_ids: Vec<Uuid>,
-    /// Custom field values to set by field ID or name; null clears one.
-    #[serde(default)]
-    field_values: Option<serde_json::Map<String, serde_json::Value>>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct WorkItemVersionRequest {
-    expected_version: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -547,17 +433,6 @@ struct LinkedPullRequestCheck {
     conclusion: Option<String>,
     url: Option<String>,
 }
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LinkRepositoryRequest {
-    expected_version: i64,
-    role: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct EmptyLinkRequest {}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -812,18 +687,6 @@ struct WorkerInvocationRow {
     response_body: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct MoveWorkItemRequest {
-    expected_version: i64,
-    target_status_id: Uuid,
-    /// 1-based among the column's open tasks. Give exactly one of this,
-    /// `before_id` or `after_id`; anchors stay right on a filtered board.
-    target_position: Option<i32>,
-    before_id: Option<Uuid>,
-    after_id: Option<Uuid>,
-}
-
 #[derive(Debug, Serialize)]
 struct WorkItemConflictEnvelope {
     error: WorkItemConflictBody,
@@ -992,369 +855,6 @@ async fn get_work_item_by_key(
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
     Ok(Json(work_item_view(row, capabilities(&membership)?)?))
-}
-
-async fn update_work_item(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(mut request): ApiJson<UpdateWorkItemRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let fields = planning_field_changes(&request)?;
-    let labels_change = !request.add_label_ids.is_empty() || !request.remove_label_ids.is_empty();
-    if request.expected_version < 1
-        || (request.title.is_none()
-            && request.description.is_none()
-            && request.type_id.is_none()
-            && request.status_id.is_none()
-            && request.priority.is_none()
-            && request.assignee_actor_id.is_none()
-            && request.parent_work_item_id.is_none()
-            && fields.is_empty()
-            && !labels_change
-            && request
-                .field_values
-                .as_ref()
-                .is_none_or(|values| values.is_empty()))
-    {
-        return Err(AppError::Validation("Work Item update"));
-    }
-    if request.add_label_ids.len() + request.remove_label_ids.len() > MAX_LABEL_CHANGES
-        || request
-            .add_label_ids
-            .iter()
-            .any(|id| request.remove_label_ids.contains(id))
-    {
-        return Err(AppError::Validation("labelIds"));
-    }
-    request.title = request.title.as_deref().map(normalize_title).transpose()?;
-    request.description = request
-        .description
-        .as_deref()
-        .map(normalize_description)
-        .transpose()?;
-    if let Some(priority) = request.priority.as_deref() {
-        validate_priority(priority)?;
-    }
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let scope = resource_bound_scope("work_items", work_item_id, "update")?;
-    let mut hashed = serde_json::json!({
-        "expectedVersion": request.expected_version,
-        "title": request.title,
-        "description": request.description,
-        "typeId": request.type_id,
-        "statusId": request.status_id,
-        "priority": request.priority,
-        "assigneeSpecified": request.assignee_actor_id.is_some(),
-        "assigneeActorId": request.assignee_actor_id.flatten(),
-        "parentWorkItemId": request.parent_work_item_id,
-        "milestoneId": request.milestone_id,
-        "startDate": request.start_date,
-        "dueDate": request.due_date,
-        "estimate": request.estimate,
-        "blockedReason": request.blocked_reason,
-        "addLabelIds": request.add_label_ids,
-        "removeLabelIds": request.remove_label_ids,
-    });
-    if let (Some(values), Some(object)) = (&request.field_values, hashed.as_object_mut()) {
-        object.insert(
-            "fieldValues".to_owned(),
-            serde_json::Value::Object(values.clone()),
-        );
-    }
-    let request_hash = RequestHash::for_value(&hashed)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
-    authorize_work_item(
-        &principal,
-        &membership,
-        Action::WorkItemEdit,
-        Some(work_item_id),
-    )?;
-    if membership.project_archived_at.is_some() {
-        return Err(AppError::ProjectArchived);
-    }
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let item: WorkItemView = replay.decode()?;
-            transaction.commit().await?;
-            return work_item_response(replay.status(), item);
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let capabilities = capabilities(&membership)?;
-    if labels_change {
-        let all = [
-            request.add_label_ids.as_slice(),
-            request.remove_label_ids.as_slice(),
-        ]
-        .concat();
-        if !labels_are_active(&mut transaction, project_id, &all).await? {
-            return Err(AppError::Validation("labelIds"));
-        }
-    }
-    let field_values = match &request.field_values {
-        Some(written) if !written.is_empty() => {
-            match custom_fields::web_field_values(
-                &mut transaction,
-                project_id,
-                principal.actor_id,
-                written,
-                Some(work_item_id),
-            )
-            .await?
-            {
-                Ok(values) => Some(values),
-                Err(refusal) => return Ok(refusal),
-            }
-        }
-        _ => None,
-    };
-    let outcome = update_work_item_by_id(
-        &mut transaction,
-        &browser_actor(&headers, &principal, project_id)?,
-        work_item_id,
-        UpdateWorkItemCommand {
-            field_values: field_values.as_ref(),
-            expected_version: request.expected_version,
-            title: request.title.as_deref(),
-            description: request.description.as_deref(),
-            type_id: request.type_id,
-            status_id: request.status_id,
-            priority: request.priority.as_deref(),
-            assignee_actor_id: request.assignee_actor_id,
-            parent_work_item_id: request.parent_work_item_id,
-            board_placement: None,
-            labels: labels_change.then_some(LabelDelta {
-                add: &request.add_label_ids,
-                remove: &request.remove_label_ids,
-            }),
-            fields,
-            summary: "Work Item updated",
-            audit_action: "work_item.updated",
-            audit_version_metadata: AuditVersionMetadata::Omit,
-        },
-    )
-    .await?;
-    match outcome {
-        UpdateWorkItemOutcome::NotFound => return Err(AppError::NotFound("work_item")),
-        UpdateWorkItemOutcome::InvalidAssignee => {
-            return Err(AppError::Validation("assigneeActorId"));
-        }
-        UpdateWorkItemOutcome::InvalidDelegate => {
-            return Err(AppError::Validation("delegateActorId"));
-        }
-        UpdateWorkItemOutcome::InvalidMilestone => {
-            return Err(AppError::Validation("milestoneId"));
-        }
-        UpdateWorkItemOutcome::InvalidDates => return Err(AppError::Validation("dueDate")),
-        UpdateWorkItemOutcome::InvalidTransition { .. } => {
-            return Err(AppError::Conflict("work_item_status", "transition"));
-        }
-        UpdateWorkItemOutcome::Conflict(current) => {
-            if current.version == request.expected_version && current.archived {
-                return Err(AppError::Conflict("work_item", "archived"));
-            }
-            let row = fetch_work_item_in_transaction(
-                &mut transaction,
-                project_id,
-                work_item_id,
-                principal.actor_id,
-            )
-            .await?
-            .ok_or(AppError::NotFound("work_item"))?;
-            return work_item_version_conflict_response(work_item_view(row, capabilities)?);
-        }
-        UpdateWorkItemOutcome::TooManyLabels { .. } => {
-            return Err(AppError::Validation("addLabelIds"));
-        }
-        UpdateWorkItemOutcome::InvalidParent(_) => {
-            return Err(AppError::Validation("parentWorkItemId"));
-        }
-        UpdateWorkItemOutcome::InvalidPlacement(_) => {
-            return Err(AppError::Internal("the web update changed position"));
-        }
-        UpdateWorkItemOutcome::Noop(_) | UpdateWorkItemOutcome::Applied { .. } => {}
-    }
-    let row = fetch_work_item_in_transaction(
-        &mut transaction,
-        project_id,
-        work_item_id,
-        principal.actor_id,
-    )
-    .await?
-    .ok_or(AppError::Internal("updated Work Item is unavailable"))?;
-    let item = work_item_view(row, capabilities)?;
-    complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
-    transaction.commit().await?;
-    work_item_response(StatusCode::OK, item)
-}
-
-async fn archive_work_item(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<WorkItemVersionRequest>,
-) -> Result<Response, AppError> {
-    set_work_item_archived(
-        &state,
-        &headers,
-        &principal,
-        project_id,
-        work_item_id,
-        request,
-        true,
-    )
-    .await
-}
-
-async fn restore_work_item(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<WorkItemVersionRequest>,
-) -> Result<Response, AppError> {
-    set_work_item_archived(
-        &state,
-        &headers,
-        &principal,
-        project_id,
-        work_item_id,
-        request,
-        false,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn set_work_item_archived(
-    state: &AppState,
-    headers: &HeaderMap,
-    principal: &AuthenticatedActor,
-    project_id: Uuid,
-    work_item_id: Uuid,
-    request: WorkItemVersionRequest,
-    archived: bool,
-) -> Result<Response, AppError> {
-    require_authenticated_write(state, headers, principal).await?;
-    if request.expected_version < 1 {
-        return Err(AppError::Validation("expectedVersion"));
-    }
-    let idempotency_key = IdempotencyKey::from_headers(headers)?;
-    let action = if archived { "archive" } else { "restore" };
-    let scope = resource_bound_scope("work_items", work_item_id, action)?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
-    authorize_work_item(
-        principal,
-        &membership,
-        Action::WorkItemArchive,
-        Some(work_item_id),
-    )?;
-    if membership.project_archived_at.is_some() {
-        return Err(AppError::ProjectArchived);
-    }
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let item: WorkItemView = replay.decode()?;
-            transaction.commit().await?;
-            return work_item_response(replay.status(), item);
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let capabilities = capabilities(&membership)?;
-    let (summary, audit_action) = if archived {
-        ("Work Item archived", "work_item.archived")
-    } else {
-        ("Work Item restored", "work_item.restored")
-    };
-    let outcome = set_archived(
-        &mut transaction,
-        &browser_actor(headers, principal, project_id)?,
-        work_item_id,
-        ArchiveCommand {
-            expected_version: request.expected_version,
-            archived,
-            summary,
-            audit_action,
-        },
-    )
-    .await?;
-    match outcome {
-        ArchiveOutcome::NotFound => return Err(AppError::NotFound("work_item")),
-        // Restoring the original of a moved task would make a live copy
-        // whose old key opens the moved one.
-        ArchiveOutcome::MovedAway { .. } => return Err(AppError::Conflict("work_item", "moved")),
-        ArchiveOutcome::VersionConflict(_) => {
-            let current = fetch_work_item_in_transaction(
-                &mut transaction,
-                project_id,
-                work_item_id,
-                principal.actor_id,
-            )
-            .await?
-            .ok_or(AppError::NotFound("work_item"))?;
-            return work_item_version_conflict_response(work_item_view(current, capabilities)?);
-        }
-        ArchiveOutcome::Unchanged(_) | ArchiveOutcome::Applied { .. } => {}
-    }
-    let row = fetch_work_item_in_transaction(
-        &mut transaction,
-        project_id,
-        work_item_id,
-        principal.actor_id,
-    )
-    .await?
-    .ok_or(AppError::Internal("archived Work Item is unavailable"))?;
-    let item = work_item_view(row, capabilities)?;
-    complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
-    transaction.commit().await?;
-    work_item_response(StatusCode::OK, item)
-}
-
-async fn link_work_item_thread(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, work_item_id, conversation_id)): ApiPath<(Uuid, Uuid, Uuid)>,
-    ApiJson(request): ApiJson<EmptyLinkRequest>,
-) -> Result<Response, AppError> {
-    change_work_item_thread_link(
-        &state,
-        &headers,
-        &principal,
-        project_id,
-        work_item_id,
-        conversation_id,
-        request,
-        true,
-    )
-    .await
 }
 
 async fn work_with_worker(
@@ -1617,227 +1117,6 @@ pub(crate) fn worker_thread_name(key: &str, title: &str, thread_id: Uuid) -> Str
     format!("{prefix}{title}{suffix}")
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn change_work_item_thread_link(
-    state: &AppState,
-    headers: &HeaderMap,
-    principal: &AuthenticatedActor,
-    project_id: Uuid,
-    work_item_id: Uuid,
-    conversation_id: Uuid,
-    request: EmptyLinkRequest,
-    linked: bool,
-) -> Result<Response, AppError> {
-    require_authenticated_write(state, headers, principal).await?;
-    let key = IdempotencyKey::from_headers(headers)?;
-    let scope = resource_bound_scope(
-        "work_items",
-        work_item_id,
-        if linked {
-            "thread_link"
-        } else {
-            "thread_unlink"
-        },
-    )?;
-    let request_hash = RequestHash::for_value(&(conversation_id, request))?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
-    authorize_work_item(
-        principal,
-        &membership,
-        Action::WorkItemEdit,
-        Some(work_item_id),
-    )?;
-    if membership.project_archived_at.is_some() {
-        return Err(AppError::ProjectArchived);
-    }
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let item: WorkItemView = replay.decode()?;
-            transaction.commit().await?;
-            return work_item_response(replay.status(), item);
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let current = lock_work_item(&mut transaction, project_id, work_item_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
-    // An archived task takes no new threads, but the thread page offers
-    // Unlink on every task linked to it, archived ones included.
-    if current.archived && linked {
-        return Err(AppError::Conflict("work_item", "archived"));
-    }
-    match change_thread_link(
-        &mut transaction,
-        &browser_actor(headers, principal, project_id)?,
-        &current,
-        None,
-        conversation_id,
-        linked,
-        LinkWording::WEB,
-    )
-    .await?
-    {
-        ThreadLinkOutcome::ThreadNotFound => return Err(AppError::NotFound("conversation")),
-        ThreadLinkOutcome::VersionConflict => {
-            return Err(AppError::Internal("thread link checked no version"));
-        }
-        ThreadLinkOutcome::Unchanged | ThreadLinkOutcome::Changed { .. } => {}
-    }
-    let item = current_work_item_view(
-        &mut transaction,
-        project_id,
-        work_item_id,
-        principal.actor_id,
-        capabilities(&membership)?,
-    )
-    .await?;
-    complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
-    transaction.commit().await?;
-    work_item_response(StatusCode::OK, item)
-}
-
-async fn link_work_item_repository(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, work_item_id, repository_id)): ApiPath<(Uuid, Uuid, Uuid)>,
-    ApiJson(request): ApiJson<LinkRepositoryRequest>,
-) -> Result<Response, AppError> {
-    if !matches!(request.role.as_str(), "primary" | "related") {
-        return Err(AppError::Validation("repository role"));
-    }
-    change_work_item_repository_link(
-        &state,
-        &headers,
-        &principal,
-        project_id,
-        work_item_id,
-        repository_id,
-        request.expected_version,
-        Some(request.role),
-        "repository_link",
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn change_work_item_repository_link(
-    state: &AppState,
-    headers: &HeaderMap,
-    principal: &AuthenticatedActor,
-    project_id: Uuid,
-    work_item_id: Uuid,
-    repository_id: Uuid,
-    expected_version: i64,
-    desired_role: Option<String>,
-    action: &'static str,
-) -> Result<Response, AppError> {
-    require_authenticated_write(state, headers, principal).await?;
-    let key = IdempotencyKey::from_headers(headers)?;
-    let scope = resource_bound_scope("work_items", work_item_id, action)?;
-    let request_hash = RequestHash::for_value(&(repository_id, expected_version, &desired_role))?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
-    authorize_work_item(
-        principal,
-        &membership,
-        Action::WorkItemEdit,
-        Some(work_item_id),
-    )?;
-    if membership.project_archived_at.is_some() {
-        return Err(AppError::ProjectArchived);
-    }
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let item: WorkItemView = replay.decode()?;
-            transaction.commit().await?;
-            return work_item_response(replay.status(), item);
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let current = lock_work_item(&mut transaction, project_id, work_item_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
-    let caps = capabilities(&membership)?;
-    if current.version != expected_version {
-        let row = fetch_work_item_in_transaction(
-            &mut transaction,
-            project_id,
-            work_item_id,
-            principal.actor_id,
-        )
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
-        return work_item_version_conflict_response(work_item_view(row, caps)?);
-    }
-    if current.archived {
-        return Err(AppError::Conflict("work_item", "archived"));
-    }
-    match change_repository_link(
-        &mut transaction,
-        &browser_actor(headers, principal, project_id)?,
-        &current,
-        None,
-        repository_id,
-        desired_role.as_deref(),
-        LinkWording::WEB,
-    )
-    .await?
-    {
-        RepositoryLinkOutcome::RepositoryNotFound => {
-            return Err(AppError::NotFound("repository"));
-        }
-        RepositoryLinkOutcome::NotEligibleForPrimary { .. } => {
-            return Err(AppError::Conflict(
-                "repository",
-                "the primary repository must be enabled, trusted, ready, and active",
-            ));
-        }
-        RepositoryLinkOutcome::RepositoryArchived => {
-            return Err(AppError::Conflict(
-                "repository",
-                "archived repositories can't be linked",
-            ));
-        }
-        RepositoryLinkOutcome::VersionConflict => {
-            return Err(AppError::Internal("repository link checked its version"));
-        }
-        RepositoryLinkOutcome::Unchanged | RepositoryLinkOutcome::Changed { .. } => {}
-    }
-    let item = current_work_item_view(
-        &mut transaction,
-        project_id,
-        work_item_id,
-        principal.actor_id,
-        caps,
-    )
-    .await?;
-    complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
-    transaction.commit().await?;
-    work_item_response(StatusCode::OK, item)
-}
-
 async fn search_assignable_actors(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
@@ -1992,300 +1271,6 @@ async fn search_work_item_references(
             .map(|row| work_item_reference_view(project_id, row))
             .collect(),
     }))
-}
-
-async fn move_work_item(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<MoveWorkItemRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let placement = match (request.target_position, request.before_id, request.after_id) {
-        (Some(position), None, None) if (1..=10_000).contains(&position) => BoardPlacement::Index(
-            usize::try_from(position - 1).map_err(|_| AppError::Validation("targetPosition"))?,
-        ),
-        (None, Some(anchor), None) => BoardPlacement::Before(anchor),
-        (None, None, Some(anchor)) => BoardPlacement::After(anchor),
-        _ => return Err(AppError::Validation("targetPosition")),
-    };
-    let key = IdempotencyKey::from_headers(&headers)?;
-    let scope = resource_bound_scope("work_items", work_item_id, "move")?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
-    authorize_work_item(
-        &principal,
-        &membership,
-        Action::WorkItemEdit,
-        Some(work_item_id),
-    )?;
-    if membership.project_archived_at.is_some() {
-        return Err(AppError::ProjectArchived);
-    }
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let item: WorkItemView = replay.decode()?;
-            transaction.commit().await?;
-            return work_item_response(replay.status(), item);
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let current = fetch_work_item_for_update(
-        &mut transaction,
-        project_id,
-        work_item_id,
-        principal.actor_id,
-    )
-    .await?
-    .ok_or(AppError::NotFound("work_item"))?;
-    let caps = capabilities(&membership)?;
-    if current.version != request.expected_version {
-        return work_item_version_conflict_response(work_item_view(current, caps)?);
-    }
-    if current.archived_at.is_some() {
-        return Err(AppError::NotFound("work_item"));
-    }
-    let target_status = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM work_item_statuses WHERE project_id = $1 AND id = $2 AND enabled",
-    )
-    .bind(project_id)
-    .bind(request.target_status_id)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AppError::Validation("targetStatusId"))?;
-    // The move is a task change like any other: one version bump, an
-    // activity with what changed and its before and after, the assigned
-    // agent's event, watching agents' notes, one audit row and one outbox
-    // event (P0.12).
-    let locked = lock_work_item(&mut transaction, project_id, work_item_id)
-        .await?
-        .ok_or(AppError::NotFound("work_item"))?;
-    let outcome = update_locked_work_item(
-        &mut transaction,
-        &browser_actor(&headers, &principal, project_id)?,
-        locked,
-        UpdateWorkItemCommand {
-            expected_version: request.expected_version,
-            title: None,
-            description: None,
-            type_id: None,
-            status_id: Some(target_status),
-            priority: None,
-            assignee_actor_id: None,
-            parent_work_item_id: None,
-            board_placement: Some(placement),
-            labels: None,
-            fields: TaskFieldChanges::default(),
-            field_values: None,
-            summary: "Work Item moved",
-            audit_action: "work_item.moved",
-            audit_version_metadata: AuditVersionMetadata::Include,
-        },
-    )
-    .await?;
-    match outcome {
-        UpdateWorkItemOutcome::Applied { .. } | UpdateWorkItemOutcome::Noop(_) => {}
-        UpdateWorkItemOutcome::Conflict(_) => {
-            return work_item_version_conflict_response(work_item_view(current, caps)?);
-        }
-        UpdateWorkItemOutcome::NotFound => return Err(AppError::NotFound("work_item")),
-        UpdateWorkItemOutcome::InvalidTransition { .. } => {
-            return Err(AppError::Conflict("work_item_status", "transition"));
-        }
-        UpdateWorkItemOutcome::InvalidPlacement(PlacementProblem::OutOfRange { .. }) => {
-            return Err(AppError::Validation("targetPosition"));
-        }
-        UpdateWorkItemOutcome::InvalidPlacement(
-            PlacementProblem::AnchorIsSelf | PlacementProblem::AnchorNotInColumn { .. },
-        ) => {
-            return Err(AppError::Validation(if request.before_id.is_some() {
-                "beforeId"
-            } else {
-                "afterId"
-            }));
-        }
-        UpdateWorkItemOutcome::InvalidAssignee
-        | UpdateWorkItemOutcome::InvalidDelegate
-        | UpdateWorkItemOutcome::TooManyLabels { .. }
-        | UpdateWorkItemOutcome::InvalidParent(_)
-        | UpdateWorkItemOutcome::InvalidMilestone
-        | UpdateWorkItemOutcome::InvalidDates => {
-            return Err(AppError::Internal("a move changed more than its place"));
-        }
-    }
-    let item = current_work_item_view(
-        &mut transaction,
-        project_id,
-        work_item_id,
-        principal.actor_id,
-        caps,
-    )
-    .await?;
-    complete(&mut transaction, &reservation, StatusCode::OK, &item).await?;
-    transaction.commit().await?;
-    work_item_response(StatusCode::OK, item)
-}
-
-async fn create_work_item(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(mut request): ApiJson<CreateWorkItemRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    request.title = normalize_title(&request.title)?;
-    request.description = normalize_description(&request.description)?;
-    validate_priority(&request.priority)?;
-    request.acceptance_criteria = request
-        .acceptance_criteria
-        .iter()
-        .map(|text| normalize_criterion_text(text))
-        .collect::<Result<_, _>>()?;
-    if request.acceptance_criteria.len() > MAX_NEW_CRITERIA
-        || request.label_ids.len() > MAX_LABEL_CHANGES
-    {
-        return Err(AppError::Validation("Work Item create"));
-    }
-    request.label_ids.sort();
-    request.label_ids.dedup();
-    let fields = NewTaskFields {
-        milestone_id: request.milestone_id,
-        start_date: parse_task_date(request.start_date.as_deref(), "startDate")?,
-        due_date: parse_task_date(request.due_date.as_deref(), "dueDate")?,
-        estimate: request.estimate,
-    };
-    let key = IdempotencyKey::from_headers(&headers)?;
-    let scope = resource_bound_scope("projects", project_id, "work_items_create")?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let membership = lock_project_membership(&mut transaction, principal.actor_id, project_id)
-        .await?
-        .ok_or(AppError::NotFound("project"))?;
-    authorize_work_item(&principal, &membership, Action::WorkItemCreate, None)?;
-    if membership.project_archived_at.is_some() {
-        return Err(AppError::ProjectArchived);
-    }
-    match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let item: WorkItemView = replay.decode()?;
-            transaction.commit().await?;
-            work_item_response(replay.status(), item)
-        }
-        IdempotencyOutcome::Reserved(reservation) => {
-            ensure_default_workflow(&mut transaction, project_id).await?;
-            if !labels_are_active(&mut transaction, project_id, &request.label_ids).await? {
-                return Err(AppError::Validation("labelIds"));
-            }
-            let field_values = match &request.field_values {
-                Some(written) if !written.is_empty() => {
-                    match custom_fields::web_field_values(
-                        &mut transaction,
-                        project_id,
-                        principal.actor_id,
-                        written,
-                        None,
-                    )
-                    .await?
-                    {
-                        Ok(values) => Some(values),
-                        Err(refusal) => return Ok(refusal),
-                    }
-                }
-                _ => None,
-            };
-            let outcome = execute_create_work_item(
-                &mut transaction,
-                &browser_actor(&headers, &principal, project_id)?,
-                CreateWorkItemCommand {
-                    collection_id: None,
-                    field_values: field_values.as_ref(),
-                    title: &request.title,
-                    description: &request.description,
-                    type_id: request.type_id,
-                    status_id: request.status_id,
-                    priority: &request.priority,
-                    assignee_actor_id: request.assignee_actor_id,
-                    parent_work_item_id: request.parent_work_item_id,
-                    label_ids: &request.label_ids,
-                    acceptance_criteria: &request.acceptance_criteria,
-                    board_placement: None,
-                    fields,
-                    activity_summary: "Work Item created",
-                    activity_metadata: serde_json::json!({}),
-                    activity_number_metadata: AllocatedNumberMetadata::Omit,
-                    audit_action: "work_item.created",
-                    audit_metadata: serde_json::json!({}),
-                },
-            )
-            .await?;
-            let work_item_id = match outcome {
-                CreateWorkItemOutcome::Created { work_item_id, .. } => work_item_id,
-                CreateWorkItemOutcome::InvalidAssignee => {
-                    return Err(AppError::Validation("assigneeActorId"));
-                }
-                CreateWorkItemOutcome::InvalidMilestone => {
-                    return Err(AppError::Validation("milestoneId"));
-                }
-                CreateWorkItemOutcome::InvalidDates => {
-                    return Err(AppError::Validation("dueDate"));
-                }
-                CreateWorkItemOutcome::ParentNotFound
-                | CreateWorkItemOutcome::ParentArchived(_)
-                | CreateWorkItemOutcome::ParentTooDeep => {
-                    return Err(AppError::Validation("parentWorkItemId"));
-                }
-                CreateWorkItemOutcome::InvalidPlacement(_) => {
-                    return Err(AppError::Internal("new Work Item had a board position"));
-                }
-            };
-            if let Some(message_id) = request.source_message_id
-                && !crate::conversations::system_entries::task_made_from_message(
-                    &mut transaction,
-                    project_id,
-                    work_item_id,
-                    principal.actor_id,
-                    message_id,
-                    request.say_so,
-                )
-                .await?
-            {
-                return Err(AppError::Validation("sourceMessageId"));
-            }
-            let row = fetch_work_item_in_transaction(
-                &mut transaction,
-                project_id,
-                work_item_id,
-                principal.actor_id,
-            )
-            .await?
-            .ok_or(AppError::Internal("created Work Item is unavailable"))?;
-            let item = work_item_view(row, capabilities(&membership)?)?;
-            complete(&mut transaction, &reservation, StatusCode::CREATED, &item).await?;
-            transaction.commit().await?;
-            work_item_response(StatusCode::CREATED, item)
-        }
-    }
 }
 
 async fn list_acceptance_criteria(
@@ -2828,20 +1813,6 @@ async fn fetch_work_item(
         .await?)
 }
 
-async fn fetch_work_item_in_transaction(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    work_item_id: Uuid,
-    viewer: Uuid,
-) -> Result<Option<WorkItemRow>, AppError> {
-    Ok(sqlx::query_as::<_, WorkItemRow>(WORK_ITEM_SELECT)
-        .bind(project_id)
-        .bind(work_item_id)
-        .bind(viewer)
-        .fetch_optional(&mut **transaction)
-        .await?)
-}
-
 async fn fetch_work_item_for_update(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -2855,19 +1826,6 @@ async fn fetch_work_item_for_update(
         .bind(viewer)
         .fetch_optional(&mut **transaction)
         .await?)
-}
-
-async fn current_work_item_view(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    work_item_id: Uuid,
-    viewer: Uuid,
-    capabilities: WorkItemCapabilities,
-) -> Result<WorkItemView, AppError> {
-    let row = fetch_work_item_in_transaction(transaction, project_id, work_item_id, viewer)
-        .await?
-        .ok_or(AppError::Internal("updated Work Item is unavailable"))?;
-    work_item_view(row, capabilities)
 }
 
 async fn advance_work_item_version(
@@ -3499,98 +2457,6 @@ fn json_list(value: serde_json::Value) -> Result<Vec<serde_json::Value>, AppErro
     }
 }
 
-/// Most labels one change may add and remove together.
-const MAX_LABEL_CHANGES: usize = 50;
-/// Most acceptance criteria a new task may come with.
-const MAX_NEW_CRITERIA: usize = 50;
-
-fn parse_task_date(
-    value: Option<&str>,
-    field: &'static str,
-) -> Result<Option<NaiveDate>, AppError> {
-    value
-        .map(|value| {
-            NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| AppError::Validation(field))
-        })
-        .transpose()
-}
-
-fn normalize_blocked_reason(value: &str) -> Result<String, AppError> {
-    let value = value.trim();
-    if value.is_empty()
-        || value.chars().count() > MAX_BLOCKED_REASON_CHARACTERS
-        || value
-            .chars()
-            .any(|character| character.is_control() && character != '\n')
-    {
-        return Err(AppError::Validation("blockedReason"));
-    }
-    Ok(value.to_owned())
-}
-
-fn planning_field_changes(request: &UpdateWorkItemRequest) -> Result<TaskFieldChanges, AppError> {
-    let date = |value: &Option<Option<String>>, field| {
-        value
-            .as_ref()
-            .map(|value| parse_task_date(value.as_deref(), field))
-            .transpose()
-    };
-    if request
-        .estimate
-        .flatten()
-        .is_some_and(|estimate| !valid_estimate(estimate))
-    {
-        return Err(AppError::Validation("estimate"));
-    }
-    Ok(TaskFieldChanges {
-        milestone_id: request.milestone_id,
-        start_date: date(&request.start_date, "startDate")?,
-        due_date: date(&request.due_date, "dueDate")?,
-        estimate: request.estimate,
-        blocked_reason: request
-            .blocked_reason
-            .as_ref()
-            .map(|value| value.as_deref().map(normalize_blocked_reason).transpose())
-            .transpose()?,
-        delegate_actor_id: request.delegate_actor_id,
-        cycle_id: request.cycle_id,
-    })
-}
-
-/// Whether every ID is an active label of the project.
-async fn labels_are_active(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: Uuid,
-    label_ids: &[Uuid],
-) -> Result<bool, AppError> {
-    if label_ids.is_empty() {
-        return Ok(true);
-    }
-    let found = sqlx::query_scalar::<_, i64>(
-        "SELECT count(DISTINCT id) FROM project_labels WHERE project_id = $1 AND id = ANY($2) AND archived_at IS NULL",
-    )
-    .bind(project_id)
-    .bind(label_ids)
-    .fetch_one(&mut **transaction)
-    .await?;
-    let mut distinct = label_ids.to_vec();
-    distinct.sort();
-    distinct.dedup();
-    Ok(found == distinct.len() as i64)
-}
-
-fn normalize_title(value: &str) -> Result<String, AppError> {
-    crate::work_item_commands::normalize_title(value)
-}
-
-fn normalize_description(value: &str) -> Result<String, AppError> {
-    crate::work_item_commands::normalize_description(value)
-}
-
-fn normalize_criterion_text(value: &str) -> Result<String, AppError> {
-    crate::work_item_commands::normalize_criterion_text(value)
-}
-
 fn normalize_search(value: Option<&str>) -> Result<Option<String>, AppError> {
     let value = value.map(str::trim).filter(|value| !value.is_empty());
     if value.is_some_and(|value| {
@@ -3617,18 +2483,6 @@ fn validate_readable_key(value: &str) -> Result<(), AppError> {
         return Err(AppError::Invalid("Work Item key"));
     }
     Ok(())
-}
-
-fn deserialize_optional_field<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer).map(Some)
-}
-
-fn default_priority() -> String {
-    "no_priority".to_owned()
 }
 
 fn validate_priority(value: &str) -> Result<(), AppError> {
@@ -3686,13 +2540,6 @@ pub(crate) fn decode_work_item_timeline_cursor(
         return Err(AppError::Invalid("Work Item timeline cursor"));
     }
     Ok(sequence)
-}
-
-fn work_item_response(status: StatusCode, item: WorkItemView) -> Result<Response, AppError> {
-    let location =
-        HeaderValue::from_str(&crate::addresses::Target::task(item.project_id, item.id).href())
-            .map_err(|_| AppError::Internal("construct Work Item Location header"))?;
-    Ok((status, [(LOCATION, location)], Json(item)).into_response())
 }
 
 fn work_item_version_conflict_response(item: WorkItemView) -> Result<Response, AppError> {
@@ -3767,43 +2614,17 @@ fn browser_actor(
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_DESCRIPTION_CHARACTERS, UpdateWorkItemRequest, normalize_description, normalize_title,
         normalize_worker_prompt, validate_priority, validate_readable_key, worker_thread_name,
     };
     use uuid::Uuid;
 
     #[test]
-    fn work_item_text_and_priority_are_bounded() {
-        assert_eq!(
-            normalize_title("  Build it  ").expect("normalize valid Work Item title"),
-            "Build it"
-        );
-        assert!(normalize_title("bad\u{1b}").is_err());
-        assert!(normalize_description("line one\nline two").is_ok());
-        assert!(normalize_description("bad\u{7}").is_err());
-        assert!(normalize_description(&"a".repeat(MAX_DESCRIPTION_CHARACTERS + 1)).is_err());
+    fn priorities_and_readable_keys_are_checked() {
         assert!(validate_priority("urgent").is_ok());
         assert!(validate_priority("critical").is_err());
-    }
-
-    #[test]
-    fn readable_keys_and_nullable_assignee_patch_are_unambiguous() {
         assert!(validate_readable_key("AW-42").is_ok());
         assert!(validate_readable_key("aw-42").is_err());
         assert!(validate_readable_key("AW-nope").is_err());
-
-        let omitted: UpdateWorkItemRequest = serde_json::from_value(serde_json::json!({
-            "expectedVersion": 1,
-            "title": "Keep assignment"
-        }))
-        .expect("decode omitted assignee patch");
-        assert_eq!(omitted.assignee_actor_id, None);
-        let cleared: UpdateWorkItemRequest = serde_json::from_value(serde_json::json!({
-            "expectedVersion": 1,
-            "assigneeActorId": null
-        }))
-        .expect("decode cleared assignee patch");
-        assert_eq!(cleared.assignee_actor_id, Some(None));
     }
 
     #[test]

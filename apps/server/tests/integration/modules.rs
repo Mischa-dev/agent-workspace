@@ -124,14 +124,13 @@ async fn a_module_switched_off_is_hidden_for_people_and_agents_and_comes_back_wh
     let app = &setup.app;
     let work = create_project(&setup, "WORK", "Work").await;
     let (_bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
-    let (status, made) = send(
+    let (status, made) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("awd75-lantern"),
-            json!({"title": "Lantern repair"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("awd75-lantern"),
+        json!({"title": "Lantern repair"}),
     )
     .await;
     assert!(status.is_success(), "{status}: {made}");
@@ -488,14 +487,13 @@ async fn file_search_follows_the_module_each_file_came_from() {
     let in_dm = upload_to(&setup, owner, &dm, "ledger-dm.txt").await;
     let (status, sent) = send_with(&setup, owner, &dm, "ledger-dm", "", &[&in_dm]).await;
     assert_eq!(status, StatusCode::CREATED, "{sent}");
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         &setup.app,
-        owner.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("awd75-ledger-task"),
-            json!({"title": "Close the books"}),
-        ),
+        owner,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("awd75-ledger-task"),
+        json!({"title": "Close the books"}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");
@@ -877,14 +875,13 @@ async fn task_lists_leave_out_projects_where_tasks_is_off() {
         (&work, "Lantern repair", "awd75-t1"),
         (&other, "Harbour survey", "awd75-t2"),
     ] {
-        let (status, made) = send(
+        let (status, made) = crate::support::tasks::send(
             app,
-            setup.browser.request(
-                "POST",
-                &format!("/api/v1/projects/{project}/work-items"),
-                Some(key),
-                json!({"title": title}),
-            ),
+            &setup.browser,
+            "POST",
+            &format!("/api/v1/projects/{project}/work-items"),
+            Some(key),
+            json!({"title": title}),
         )
         .await;
         assert!(status.is_success(), "{status}: {made}");
@@ -1084,14 +1081,13 @@ async fn notifications_follow_the_recipient_s_role_modules() {
     let app = &setup.app;
     let work = create_project(&setup, "WORK", "Work").await;
     let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("awd75-notified-task"),
-            json!({"title": "Ledger review"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("awd75-notified-task"),
+        json!({"title": "Ledger review"}),
     )
     .await;
     assert!(status.is_success(), "{status}: {task}");
@@ -1199,14 +1195,13 @@ async fn task_lists_count_and_page_only_workspaces_with_tasks_on() {
         (&second_project, "B three"),
     ] {
         let key = format!("awd75-{title}").replace(' ', "-");
-        let (status, made) = send(
+        let (status, made) = crate::support::tasks::send(
             app,
-            setup.browser.request(
-                "POST",
-                &format!("/api/v1/projects/{project}/work-items"),
-                Some(key.as_str()),
-                json!({"title": title}),
-            ),
+            &setup.browser,
+            "POST",
+            &format!("/api/v1/projects/{project}/work-items"),
+            Some(key.as_str()),
+            json!({"title": title}),
         )
         .await;
         assert!(status.is_success(), "{status}: {made}");
@@ -1316,14 +1311,13 @@ async fn a_project_role_s_modules_reach_boards_links_and_module_list() {
     let work = create_project(&setup, "WORK", "Work").await;
     let other = create_project(&setup, "OTHER", "Other").await;
     let (bea, bea_browser) = add_person(&setup, &[&work, &other], "bea").await;
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{other}/work-items"),
-            Some("awd75-reach-task"),
-            json!({"title": "Harbour survey"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{other}/work-items"),
+        Some("awd75-reach-task"),
+        json!({"title": "Harbour survey"}),
     )
     .await;
     assert!(status.is_success(), "{status}: {task}");
@@ -1601,17 +1595,16 @@ async fn an_off_module_s_routes_answer_turned_off_until_it_comes_back() {
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["error"]["code"], "module_off", "{body}");
     assert_eq!(body["error"]["details"]["module"], "tasks", "{body}");
-    let (status, body) = send(
+    let (status, body) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &tasks,
-            Some("awd97-refused"),
-            json!({"title": "Never made"}),
-        ),
+        &setup.browser,
+        "POST",
+        &tasks,
+        Some("awd97-refused"),
+        json!({"title": "Never made"}),
     )
     .await;
-    assert_eq!(body["error"]["code"], "module_off", "{status}: {body}");
+    assert_eq!(body["code"], "module_off", "{status}: {body}");
     let (status, body) = send(app, get(&modules_path(&setup))).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     // Turning Projects off turns what needs it off too, Tasks included.

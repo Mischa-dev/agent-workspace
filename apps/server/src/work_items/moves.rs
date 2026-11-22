@@ -16,28 +16,15 @@ use uuid::Uuid;
 use super::{browser_actor, planning::refusal};
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
-    error::{ApiJson, ApiPath, ApiQuery, AppError},
-    idempotency::IdempotencyKey,
-    work_item_move::{self, MoveRequest, Mover, Refusal, Resolution, Surface},
+    auth::AuthenticatedActor,
+    error::{ApiPath, ApiQuery, AppError},
+    work_item_move::{self, Mover, Refusal, Surface},
 };
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct MovePreviewQuery {
     target_project_id: Uuid,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct MoveBody {
-    target_project_id: Uuid,
-    /// The preview's snapshot: the web app always previews first.
-    snapshot: String,
-    #[serde(default)]
-    resolutions: Vec<Resolution>,
-    #[serde(default)]
-    leave_unresolved: bool,
 }
 
 fn mover(
@@ -103,35 +90,6 @@ pub(super) async fn preview_move(
         .await?
         {
             Ok(plan) => Json(plan).into_response(),
-            Err(refusal_reason) => refused(refusal_reason),
-        },
-    )
-}
-
-/// Moves the task and its subtasks with the person's choices, or nothing.
-/// An `Idempotency-Key` makes a retry return the first result; the same key
-/// with any other target or choice is a conflict.
-pub(super) async fn move_to_project(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, work_item_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(body): ApiJson<MoveBody>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let key = IdempotencyKey::from_headers(&headers)?;
-    let mover = mover(&headers, &principal, project_id, body.target_project_id)?;
-    let request = MoveRequest {
-        task_id: work_item_id,
-        target_project_id: body.target_project_id,
-        snapshot: Some(body.snapshot),
-        resolutions: body.resolutions,
-        leave_unresolved: body.leave_unresolved,
-        idempotency_key: Some(key),
-    };
-    Ok(
-        match work_item_move::execute(&state, &mover, project_id, request).await? {
-            Ok(done) => Json(done).into_response(),
             Err(refusal_reason) => refused(refusal_reason),
         },
     )

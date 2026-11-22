@@ -341,14 +341,13 @@ async fn files_open_only_where_their_message_or_task_does() {
     assert!(entry["message"].get("attachments").is_none(), "{entry}");
 
     // A task's file opens for its project's members only.
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         &setup.app,
-        owner.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("task-1"),
-            json!({"title": "Ship it"}),
-        ),
+        owner,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("task-1"),
+        json!({"title": "Ship it"}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");

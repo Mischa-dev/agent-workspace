@@ -216,17 +216,16 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
         assert_eq!(refused["outcome"], "invalid_request", "{fields}: {refused}");
         assert_eq!(refused["field"], at, "{refused}");
     }
-    let (status, body) = send(
+    let (status, body) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "PATCH",
-            &format!(
-                "/api/v1/projects/{work}/work-items/{}",
-                created["value"]["workItemId"].as_str().expect("id")
-            ),
-            Some("web-wrong"),
-            json!({"expectedVersion": version, "fieldValues": {risk.clone(): "Medium"}}),
+        &setup.browser,
+        "PATCH",
+        &format!(
+            "/api/v1/projects/{work}/work-items/{}",
+            created["value"]["workItemId"].as_str().expect("id")
         ),
+        Some("web-wrong"),
+        json!({"expectedVersion": version, "fieldValues": {risk.clone(): "Medium"}}),
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
@@ -259,14 +258,13 @@ async fn fields_are_typed_checked_recorded_and_filtered_the_same_for_agents_and_
         .as_str()
         .expect("id")
         .to_owned();
-    let (status, body) = send(
+    let (status, body) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/work-items/{task_id}"),
-            Some("web-customer"),
-            json!({"expectedVersion": version + 1, "fieldValues": {customer.clone(): "Acme"}}),
-        ),
+        &setup.browser,
+        "PATCH",
+        &format!("/api/v1/projects/{work}/work-items/{task_id}"),
+        Some("web-customer"),
+        json!({"expectedVersion": version + 1, "fieldValues": {customer.clone(): "Acme"}}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -668,14 +666,13 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
     };
     let app = &setup.app;
     let work = create_project(&setup, "WORK", "Work").await;
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("roles-task"),
-            json!({"title": "Roles"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("roles-task"),
+        json!({"title": "Roles"}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");
@@ -733,15 +730,7 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
     )
     .await;
     assert!(status.is_client_error(), "{status}: {refused}");
-    let (status, refused) = send(
-        app,
-        bea_browser.request(
-            "PATCH",
-            &task_path,
-            Some("bea-value"),
-            json!({"expectedVersion": task_version(&setup.pool, &task_id).await, "fieldValues": {risk_id.clone(): "High"}}),
-        ),
-    )
+    let (status, refused) = crate::support::tasks::send(app, &bea_browser, "PATCH", &task_path, Some("bea-value"), json!({"expectedVersion": task_version(&setup.pool, &task_id).await, "fieldValues": {risk_id.clone(): "High"}}))
     .await;
     assert!(status.is_client_error(), "{status}: {refused}");
 
@@ -832,15 +821,7 @@ async fn defining_fields_follows_the_workflow_permission_and_values_follow_task_
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{made}");
-    let (status, refused) = send(
-        app,
-        cam_browser.request(
-            "PATCH",
-            &task_path,
-            Some("cam-value"),
-            json!({"expectedVersion": task_version(&setup.pool, &task_id).await, "fieldValues": {risk_id.clone(): "Low"}}),
-        ),
-    )
+    let (status, refused) = crate::support::tasks::send(app, &cam_browser, "PATCH", &task_path, Some("cam-value"), json!({"expectedVersion": task_version(&setup.pool, &task_id).await, "fieldValues": {risk_id.clone(): "Low"}}))
     .await;
     assert!(status.is_client_error(), "{status}: {refused}");
 }
@@ -867,14 +848,13 @@ async fn tiny_numbers_changing_together_keep_history_under_its_limit() {
         assert_eq!(status, StatusCode::OK, "{field}");
         ids.push(field["id"].as_str().expect("field").to_owned());
     }
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("tiny-task"),
-            json!({"title": "Tiny numbers"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("tiny-task"),
+        json!({"title": "Tiny numbers"}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");
@@ -885,15 +865,7 @@ async fn tiny_numbers_changing_together_keep_history_under_its_limit() {
             .iter()
             .map(|id| (id.clone(), json!(number)))
             .collect::<serde_json::Map<_, _>>();
-        let (status, body) = send(
-            app,
-            setup.browser.request(
-                "PATCH",
-                &task_path,
-                Some(&format!("tiny-values-{step}")),
-                json!({"expectedVersion": task_version(&setup.pool, &task_id).await, "fieldValues": values}),
-            ),
-        )
+        let (status, body) = crate::support::tasks::send(app, &setup.browser, "PATCH", &task_path, Some(&format!("tiny-values-{step}")), json!({"expectedVersion": task_version(&setup.pool, &task_id).await, "fieldValues": values}))
         .await;
         assert_eq!(status, StatusCode::OK, "step {step}: {body}");
     }
@@ -942,14 +914,13 @@ async fn number_filters_compare_by_value_and_text_filters_as_written() {
     .into_iter()
     .enumerate()
     {
-        let (status, task) = send(
+        let (status, task) = crate::support::tasks::send(
             app,
-            setup.browser.request(
-                "POST",
-                &format!("/api/v1/projects/{work}/work-items"),
-                Some(&format!("numbers-task-{index}")),
-                json!({"title": format!("Task {index}"), "fieldValues": {field.clone(): value}}),
-            ),
+            &setup.browser,
+            "POST",
+            &format!("/api/v1/projects/{work}/work-items"),
+            Some(&format!("numbers-task-{index}")),
+            json!({"title": format!("Task {index}"), "fieldValues": {field.clone(): value}}),
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "{task}");
@@ -1066,35 +1037,33 @@ async fn values_too_large_as_stored_are_refused_not_failed() {
         assert_eq!(status, StatusCode::OK, "{field}");
         values.insert(field["id"].as_str().expect("field").to_owned(), value);
     }
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("size-task"),
-            json!({"title": "Big values"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("size-task"),
+        json!({"title": "Big values"}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");
     let task_id = task["id"].as_str().expect("task").to_owned();
     let before = task_version(&setup.pool, &task_id).await;
-    let (status, body) = send(
+    let (status, body) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/work-items/{task_id}"),
-            Some("size-values"),
-            json!({"expectedVersion": before, "fieldValues": values}),
-        ),
+        &setup.browser,
+        "PATCH",
+        &format!("/api/v1/projects/{work}/work-items/{task_id}"),
+        Some("size-values"),
+        json!({"expectedVersion": before, "fieldValues": values}),
     )
     .await;
     // The size refusal itself, not some other validation failure.
     let too_large = |status: StatusCode, body: &Value| {
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-        assert_eq!(body["error"]["code"], "validation_failed", "{body}");
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body["outcome"], "invalid_request", "{body}");
         assert_eq!(
-            body["error"]["message"],
+            body["message"],
             agent_workspace_server::work_item_fields::TOO_LARGE,
             "{body}"
         );
@@ -1110,14 +1079,13 @@ async fn values_too_large_as_stored_are_refused_not_failed() {
     assert_eq!((version, stored), (before, json!({})));
 
     // A new task with the same values is refused the same way, and isn't made.
-    let (status, body) = send(
+    let (status, body) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("size-create"),
-            json!({"title": "Too big from the start", "fieldValues": values}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("size-create"),
+        json!({"title": "Too big from the start", "fieldValues": values}),
     )
     .await;
     too_large(status, &body);
@@ -1158,28 +1126,19 @@ async fn a_large_change_keeps_its_history_within_the_payload_limit() {
             .map(|id| (id.clone(), json!(text.repeat(80))))
             .collect::<serde_json::Map<_, _>>()
     };
-    let (status, task) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("payload-task"),
-            json!({"title": "😀".repeat(240), "description": "a".repeat(2_248), "fieldValues": values("😀")}),
-        ),
-    )
+    let (status, task) = crate::support::tasks::send(app, &setup.browser, "POST", &format!("/api/v1/projects/{work}/work-items"), Some("payload-task"), json!({"title": "😀".repeat(240), "description": "a".repeat(2_248), "fieldValues": values("😀")}))
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");
     let task_id = task["id"].as_str().expect("task").to_owned();
-    let (status, body) = send(
+    let (status, body) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/work-items/{task_id}"),
-            Some("payload-update"),
-            json!({"expectedVersion": task_version(&setup.pool, &task_id).await,
+        &setup.browser,
+        "PATCH",
+        &format!("/api/v1/projects/{work}/work-items/{task_id}"),
+        Some("payload-update"),
+        json!({"expectedVersion": task_version(&setup.pool, &task_id).await,
                    "title": "😁".repeat(240), "description": "b".repeat(2_248),
                    "fieldValues": values("😁")}),
-        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -1380,14 +1339,14 @@ async fn bulk_tools_set_fields_on_every_task_or_none() {
             json!({"items": bulk_items, "changes": changes}),
         )
     };
-    let (status, body) = send(
+    let (status, body) = crate::support::tasks::send_built(
         app,
         bulk("bulk-bad", json!({"fieldValues": {risk.clone(): "nope"}})),
     )
     .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(values().await, tasks, "nothing changed");
-    let (status, body) = send(
+    let (status, body) = crate::support::tasks::send_built(
         app,
         bulk("bulk-clear", json!({"fieldValues": {risk.clone(): null}})),
     )
@@ -1411,14 +1370,13 @@ async fn bulk_tools_set_fields_on_every_task_or_none() {
             json!({"id": ids.iter().find(|(number, _)| *number == task.0).expect("id").1, "expectedVersion": task.1})
         })
         .collect::<Vec<_>>();
-    let (status, body) = send(
+    let (status, body) = crate::support::tasks::send(
         app,
-        pat_browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items/bulk"),
-            Some("bulk-viewer"),
-            json!({"items": after_items, "changes": {"fieldValues": {risk.clone(): low}}}),
-        ),
+        &pat_browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items/bulk"),
+        Some("bulk-viewer"),
+        json!({"items": after_items, "changes": {"fieldValues": {risk.clone(): low}}}),
     )
     .await;
     assert!(status.is_client_error(), "{status}: {body}");
@@ -1482,14 +1440,13 @@ async fn fields_are_renamed_and_reordered() {
     };
 
     // A value set on Alpha stays with it through a rename.
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("reorder-task"),
-            json!({"title": "Keeps its value", "fieldValues": {ids[0].clone(): "kept"}}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("reorder-task"),
+        json!({"title": "Keeps its value", "fieldValues": {ids[0].clone(): "kept"}}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");
@@ -1704,7 +1661,7 @@ async fn bulk_field_changes_hold_task_by_task() {
         "{refused}"
     );
     assert_eq!(snapshot().await, before);
-    let (status, body) = send(
+    let (status, body) = crate::support::tasks::send_built(
         app,
         bulk(
             "per-task-archived-web",
@@ -1713,7 +1670,7 @@ async fn bulk_field_changes_hold_task_by_task() {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(snapshot().await, before);
     // WORK-1 alone may keep the X it holds.
     let kept = owner(
@@ -1819,7 +1776,7 @@ async fn bulk_field_changes_hold_task_by_task() {
     .fetch_one(&setup.pool)
     .await
     .expect("N1");
-    let (status, body) = send(
+    let (status, body) = crate::support::tasks::send_built(
         app,
         bulk(
             "per-task-overflow-web",
@@ -1828,9 +1785,9 @@ async fn bulk_field_changes_hold_task_by_task() {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert_eq!(
-        body["error"]["message"],
+        body["message"],
         agent_workspace_server::work_item_fields::TOO_LARGE,
         "{body}"
     );

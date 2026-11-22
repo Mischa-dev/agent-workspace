@@ -1057,38 +1057,8 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/projects/{id}/switch",
         NavigationWrite
     ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items",
-        WorkItemCreate
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/archive",
-        WorkItemArchive
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/move",
-        WorkItemEdit
-    ),
     // AWD-102: moving a task to another project archives it here (and
     // creates in the target, checked there).
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
-        WorkItemArchive
-    ),
     policy_route!(
         "work_items",
         Post,
@@ -1100,30 +1070,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects/{project_id}/launches",
         WorkerInvoke
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
-        WorkItemArchive
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/bulk",
-        WorkItemEdit
     ),
     policy_route!(
         "collections/http",

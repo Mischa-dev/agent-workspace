@@ -285,14 +285,13 @@ async fn task_list_filters_count_and_stay_inside_reachable_projects() {
     assert_eq!(blocked["outcome"], "applied", "{blocked}");
     let claimed = as_mara("task_claim", json!({"taskId": "ALPHA-4"})).await;
     assert_eq!(claimed["outcome"], "ok", "{claimed}");
-    let (status, archived) = send(
+    let (status, archived) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{alpha}/work-items/{}/archive", created[2]),
-            Some("board-archive-3"),
-            json!({"expectedVersion": 1}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{alpha}/work-items/{}/archive", created[2]),
+        Some("board-archive-3"),
+        json!({"expectedVersion": 1}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{archived}");
@@ -973,14 +972,13 @@ async fn task_reorder_places_tasks_beside_neighbours_and_rebalances() {
     .fetch_one(&setup.pool)
     .await
     .expect("backlog");
-    let (status, moved) = send(
+    let (status, moved) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{order}/work-items/{}/move", tasks[0]),
-            Some("board-web-move"),
-            json!({"expectedVersion": 2, "targetStatusId": backlog, "targetPosition": 1}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{order}/work-items/{}/move", tasks[0]),
+        Some("board-web-move"),
+        json!({"expectedVersion": 2, "targetStatusId": backlog, "targetPosition": 1}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{moved}");
@@ -1483,39 +1481,36 @@ async fn task_link_repositories_pull_requests_and_threads() {
     // changes on an archived task, except unlinking a thread: the thread
     // page offers Unlink on every task linked to it, archived ones too.
     let web_version = version(&setup, task).await;
-    let (status, refused) = send(
+    let (status, refused) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{repo}/work-items/{task}/repositories/{r3}"),
-            Some("board-web-archived-repository"),
-            json!({"expectedVersion": web_version, "role": "related"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{repo}/work-items/{task}/repositories/{r3}"),
+        Some("board-web-archived-repository"),
+        json!({"expectedVersion": web_version, "role": "related"}),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
-    let (status, archived) = send(
+    let (status, archived) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{repo}/work-items/{task}/archive"),
-            Some("board-web-archive"),
-            json!({"expectedVersion": web_version}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{repo}/work-items/{task}/archive"),
+        Some("board-web-archive"),
+        json!({"expectedVersion": web_version}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{archived}");
     let on_archived = link(json!({"pageId": page_id, "remove": true})).await;
     assert_eq!(on_archived["outcome"], "conflict", "{on_archived}");
     assert!(message(&on_archived).contains("archived"), "{on_archived}");
-    let (status, refused) = send(
+    let (status, refused) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{repo}/work-items/{task}/repositories/{r1}"),
-            Some("board-web-archived-task"),
-            json!({"expectedVersion": web_version + 1, "role": "related"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{repo}/work-items/{task}/repositories/{r1}"),
+        Some("board-web-archived-task"),
+        json!({"expectedVersion": web_version + 1, "role": "related"}),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
@@ -1544,14 +1539,13 @@ async fn task_link_repositories_pull_requests_and_threads() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{unlinked}");
-    let (status, refused) = send(
+    let (status, refused) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &thread_link,
-            Some("board-web-archived-link"),
-            json!({}),
-        ),
+        &setup.browser,
+        "POST",
+        &thread_link,
+        Some("board-web-archived-link"),
+        json!({}),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
