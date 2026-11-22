@@ -106,6 +106,7 @@ pub fn claude_cloud_manifest() -> AdapterManifest {
             "additionalProperties": false
         }),
         default_models: claude_models(),
+        open_locally: None,
     }
 }
 

@@ -173,6 +173,7 @@ pub fn command_line_manifest(
         },
         options_schema: options,
         default_models: models,
+        open_locally: None,
     })
 }
 

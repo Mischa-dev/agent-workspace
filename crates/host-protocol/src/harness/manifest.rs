@@ -27,6 +27,42 @@ pub struct AdapterManifest {
     pub options_schema: Value,
     /// The catalog to start from when the harness can't list its models.
     pub default_models: Vec<ModelEntry>,
+    /// A link that opens a task in the harness's own app on the person's
+    /// computer (W1.27c), offered on a task with one usable repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_locally: Option<OpenLocally>,
+}
+
+/// How a harness's own app opens a task: a label for the menu and an
+/// address with `{originUrl}` (the repository's clone address) and
+/// `{prompt}` (what to do) in it, each filled in percent-encoded.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenLocally {
+    pub label: String,
+    pub url: String,
+}
+
+impl OpenLocally {
+    /// The address with its two values filled in.
+    pub fn fill(&self, origin_url: &str, prompt: &str) -> String {
+        self.url
+            .replace("{originUrl}", &encode(origin_url))
+            .replace("{prompt}", &encode(prompt))
+    }
+}
+
+/// Percent-encodes everything but RFC 3986's unreserved characters.
+fn encode(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -404,9 +440,26 @@ pub enum LoginKind {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn an_open_link_fills_its_values_encoded() {
+        let open = OpenLocally {
+            label: "Open in Example".to_owned(),
+            url: "example://new?originUrl={originUrl}&prompt={prompt}".to_owned(),
+        };
+        assert_eq!(
+            open.fill("https://code.example/a/b.git", "Task ID: 1\nGo & do"),
+            "example://new?originUrl=https%3A%2F%2Fcode.example%2Fa%2Fb.git&prompt=Task%20ID%3A%201%0AGo%20%26%20do"
+        );
+        let read: OpenLocally =
+            serde_json::from_value(serde_json::json!({"label": "L", "url": "x://{prompt}"}))
+                .unwrap();
+        assert_eq!(read.fill("", "é"), "x://%C3%A9");
+    }
+
     use serde_json::json;
 
-    use super::{ModelEntry, ModelOverrides, VersionRange, validate_options};
+    use super::{ModelEntry, ModelOverrides, OpenLocally, VersionRange, validate_options};
 
     #[test]
     fn version_ranges_accept_only_versions_inside_them() {

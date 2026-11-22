@@ -38,8 +38,8 @@ use super::{
         UsageReport, UsageWindow,
     },
     manifest::{
-        AdapterFeatures, AdapterManifest, ConcurrencyLimits, LoginMethod, ModelEntry, RunLocation,
-        RunOptionSupport, SpeedOption, VersionRange,
+        AdapterFeatures, AdapterManifest, ConcurrencyLimits, LoginMethod, ModelEntry, OpenLocally,
+        RunLocation, RunOptionSupport, SpeedOption, VersionRange,
     },
     run_config::RunConfig,
     shutdown::ShutdownSignal,
@@ -125,6 +125,10 @@ pub fn codex_manifest() -> AdapterManifest {
             "additionalProperties": false
         }),
         default_models: Vec::new(),
+        open_locally: Some(OpenLocally {
+            label: "Open in Codex".to_owned(),
+            url: "codex://new?originUrl={originUrl}&prompt={prompt}".to_owned(),
+        }),
     }
 }
 

@@ -226,6 +226,12 @@ export function normalizeWorkItem(value: unknown): WorkItem {
     fieldValues: normalizeValues(item.fieldValues),
     fieldReferences: normalizeReferences(item.fieldReferences),
     collectionId: nullableString(item.collectionId),
+    openIn: (Array.isArray(item.openIn) ? item.openIn : []).flatMap((value) => {
+      const open = record(value)
+      const href = string(open.href)
+      // Only an app's own address: never a web page or a script.
+      return /^[a-z][a-z0-9+.-]*:/i.test(href) && !/^(https?|javascript|data|vbscript|file):/i.test(href) ? [{ label: string(open.label), href }] : []
+    }),
   }
 }
 

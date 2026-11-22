@@ -124,6 +124,7 @@ pub fn claude_code_manifest() -> AdapterManifest {
             "additionalProperties": false
         }),
         default_models: claude_models(),
+        open_locally: None,
     }
 }
 

@@ -87,6 +87,7 @@ pub fn demo_manifest() -> AdapterManifest {
             "additionalProperties": false
         }),
         default_models: demo_models(),
+        open_locally: None,
     }
 }
 

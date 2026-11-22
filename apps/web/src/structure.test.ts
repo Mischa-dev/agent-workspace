@@ -100,7 +100,7 @@ const rules: Rule[] = [
   {
     id: "web_vendor_names",
     what: "a provider or harness name in the app; use the name its manifest gives",
-    ceiling: 20,
+    ceiling: 15,
     count: (source) => countAll(source, vendorNeedles),
   },
 ];

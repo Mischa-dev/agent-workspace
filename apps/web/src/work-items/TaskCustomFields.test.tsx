@@ -52,6 +52,7 @@ const task: WorkItem = {
   linkedThreads: [],
   linkedRepositories: [],
   linkedPullRequests: [],
+  openIn: [],
   capabilities: { view: true, edit: true, archive: true },
   ...EMPTY_PLANNING,
 }

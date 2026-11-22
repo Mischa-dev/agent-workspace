@@ -18,6 +18,7 @@ export function ThingDetail({
   as = 'panel',
   busy = false,
   children,
+  className,
   eyebrow,
   label,
   onClose,
@@ -30,6 +31,8 @@ export function ThingDetail({
   busy?: boolean
   /** What the detail holds, above any tabs. */
   children?: ReactNode
+  /** The owner's own class, beside the piece's. */
+  className?: string
   /** Where the thing is from: its collection and number, its space. */
   eyebrow?: ReactNode
   /** What a screen reader calls the detail: the thing's name. */
@@ -51,7 +54,7 @@ export function ThingDetail({
     <Box
       aria-busy={busy || undefined}
       aria-label={label}
-      className={['aw-detail', `aw-detail--${as}`, sheet ? 'is-sheet' : ''].filter(Boolean).join(' ')}
+      className={['aw-detail', `aw-detail--${as}`, sheet ? 'is-sheet' : '', className ?? ''].filter(Boolean).join(' ')}
       data-piece="detail"
       onKeyDown={onKeyDown}
     >
