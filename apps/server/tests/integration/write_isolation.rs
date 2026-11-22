@@ -118,7 +118,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/conversations/{id}/threads",
     "POST /api/v1/direct/dms",
     "POST /api/v1/direct/groups",
-    "DELETE /api/v1/files/{id}",
     "POST /api/v1/inbox/update",
     "PUT /api/v1/notification-settings/channels",
     "PUT /api/v1/notification-settings/mutes",
@@ -127,21 +126,14 @@ const WRITE_ROUTES: &[&str] = &[
     "DELETE /api/v1/organizations/{organization_id}/harnesses/{harness_id}",
     "PATCH /api/v1/organizations/{organization_id}/harnesses/{harness_id}",
     "PUT /api/v1/organizations/{organization_id}/layout/mine",
-    "POST /api/v1/organizations/{organization_id}/workspace-templates",
-    "POST /api/v1/organizations/{organization_id}/workspace-templates/apply",
-    "DELETE /api/v1/organizations/{organization_id}/workspace-templates/{template_id}",
     "POST /api/v1/organizations/{organization_id}/leave",
     "DELETE /api/v1/organizations/{organization_id}/mail",
     "PUT /api/v1/organizations/{organization_id}/mail",
     "POST /api/v1/organizations/{organization_id}/mail/test",
     "PATCH /api/v1/organizations/{organization_id}/members/{actor_id}",
-    "DELETE /api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-    "PUT /api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-    "POST /api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
     "PUT /api/v1/organizations/{organization_id}/onboarding",
     "DELETE /api/v1/organizations/{organization_id}/personal-secrets/{name}",
     "PUT /api/v1/organizations/{organization_id}/personal-secrets/{name}",
-    "PATCH /api/v1/organizations/{organization_id}/project-templates/{template_id}",
     "DELETE /api/v1/organizations/{organization_id}/secrets/{name}",
     "PUT /api/v1/organizations/{organization_id}/secrets/{name}",
     "POST /api/v1/organizations/{organization_id}/transfer-ownership",
@@ -155,8 +147,6 @@ const WRITE_ROUTES: &[&str] = &[
     "PUT /api/v1/projects/rail-order",
     "POST /api/v1/projects/{id}/channels",
     "POST /api/v1/projects/{id}/execution-profiles",
-    "DELETE /api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-    "PUT /api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
     "PUT /api/v1/projects/{id}/navigation",
     "POST /api/v1/projects/{id}/pages",
     "POST /api/v1/projects/{id}/pages/import",
@@ -1549,20 +1539,6 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
             }),
         ),
         (
-            "PUT",
-            format!(
-                "/api/v1/organizations/{organization}/model-catalog/codex_app_server/models/net-model"
-            ),
-            json!({"displayName": format!("Model {tag}")}),
-        ),
-        (
-            "PUT",
-            format!(
-                "/api/v1/projects/{project}/harnesses/codex_app_server/models/net-project-model"
-            ),
-            json!({"displayName": format!("Project model {tag}")}),
-        ),
-        (
             "POST",
             format!(
                 "/api/v1/projects/{project}/work-items/{}/threads/{}",
@@ -2249,7 +2225,6 @@ struct Spares {
     projects: [String; 2],
     /// Deleted over HTTP and through MCP.
     messages: [String; 2],
-    file: Uuid,
     /// Unsent uploads A's own tool calls attach: in the channel and for a
     /// task comment, and the agent's, in the group its reply goes to.
     tool_upload: Uuid,
@@ -2400,17 +2375,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         .await;
         messages.push(string_at(&sent, "/message/id"));
     }
-    let file = upload(
-        app,
-        browser,
-        &format!(
-            "/api/v1/conversations/{}/files?name=net-spare.txt",
-            a.channel
-        ),
-        "text/plain",
-        b"Net spare".to_vec(),
-    )
-    .await;
     let mut uploads = Vec::new();
     for uri in [
         format!(
@@ -2905,7 +2869,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
         second_task,
         projects: [projects[0].clone(), projects[1].clone()],
         messages: [messages[0].clone(), messages[1].clone()],
-        file,
         tool_upload: uploads[0],
         tool_comment_upload: uploads[1],
         tool_delete_upload: uploads[2],
@@ -4213,22 +4176,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
                 json!({"name": "Net group", "memberIds": [a.rook, bx.wren]}),
             ],
         ),
-        // Files
-        path_case(
-            "DELETE /api/v1/files/{id}",
-            &[id(sp.file, bx.channel_upload)],
-            empty(),
-        )
-        // And a task's own file, which anyone who may edit the task removes.
-        // A message's files go with the message, for anyone.
-        .and(vec![(
-            Call::new(
-                "DELETE",
-                format!("/api/v1/files/{}", b.task_file),
-                Payload::Json(json!({})),
-            ),
-            Expect::Refused,
-        )]),
         // Inbox, later and scheduled messages
         body_case(
             "POST /api/v1/inbox/update",
@@ -4309,31 +4256,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         // Workspace templates (AWD-76): Everything changes nothing in A, whose
         // modules are all on. B's saved template and project are refused.
         path_case(
-            "POST /api/v1/organizations/{organization_id}/workspace-templates",
-            &[organization()],
-            |values| {
-                let project = if is_a(values, &a.organization.to_string()) {
-                    a.project.clone()
-                } else {
-                    b.project.clone()
-                };
-                Payload::Json(json!({"name": "Net saved", "projectId": project}))
-            },
-        )
-        .rejecting(vec![json!({"name": "Net saved b", "projectId": b.project})]),
-        path_case(
-            "POST /api/v1/organizations/{organization_id}/workspace-templates/apply",
-            &[organization()],
-            json_body(json!({"template": "everything"})),
-        )
-        .rejecting(vec![json!({"template": bx.workspace_template})]),
-        path_case(
-            "DELETE /api/v1/organizations/{organization_id}/workspace-templates/{template_id}",
-            &[organization(), id(ax.workspace_template, bx.workspace_template)],
-            empty(),
-        )
-        .last(),
-        path_case(
             "POST /api/v1/organizations/{organization_id}/leave",
             &[organization()],
             empty(),
@@ -4374,22 +4296,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             },
         ),
         path_case(
-            "PUT /api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-            &[organization(), same("codex_app_server"), same("net-model")],
-            json_body(json!({"displayName": "Net model"})),
-        ),
-        path_case(
-            "DELETE /api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-            &[organization(), same("codex_app_server"), same("net-model")],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
-            &[organization(), same("codex_app_server")],
-            empty(),
-        )
-        .own_reaches("execution_profile_required", NEEDS_ACCOUNT),
-        path_case(
             "PUT /api/v1/organizations/{organization_id}/onboarding",
             &[organization()],
             json_body(json!({"dismissed": false})),
@@ -4404,11 +4310,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             "DELETE /api/v1/organizations/{organization_id}/personal-secrets/{name}",
             &[organization(), secret()],
             empty(),
-        ),
-        path_case(
-            "PATCH /api/v1/organizations/{organization_id}/project-templates/{template_id}",
-            &[organization(), id(ax.project_template, bx.project_template)],
-            versioned("project_templates", 1, json!({"name": "Net setup"})),
         ),
         path_case(
             "PUT /api/v1/organizations/{organization_id}/secrets/{name}",
@@ -4512,16 +4413,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         )
         .rejecting(vec![json!({"providerAccountId": b.provider_account})]),
-        path_case(
-            "PUT /api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-            &[project(), same("codex_app_server"), same("net-project-model")],
-            json_body(json!({"displayName": "Net project model"})),
-        ),
-        path_case(
-            "DELETE /api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-            &[project(), same("codex_app_server"), same("net-project-model")],
-            empty(),
-        ),
         path_case("PUT /api/v1/projects/{id}/navigation", &[project()], |values| {
             Payload::Json(json!({
                 "location": {

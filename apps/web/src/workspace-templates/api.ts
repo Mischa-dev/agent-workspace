@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
+import { callOp, ranOrThrow } from '../api/ops'
 import { queryKeys } from '../api/queryKeys'
 import { refreshLayouts } from '../experience/api'
 import { onboardingKeys } from '../onboarding/api'
@@ -73,14 +74,43 @@ export const templateKeys = {
 
 export const listTemplates = (organizationId: string) => requestJson<TemplatesResponse>(path(organizationId))
 
-export const applyTemplate = (organizationId: string, template: string) =>
-  requestJson<Applied>(`${path(organizationId)}/apply`, { method: 'POST', json: { template } })
+/** Uses a template, in the workspace's own space. */
+export async function applyTemplate(organizationId: string, template: string): Promise<Applied> {
+  const applied = ranOrThrow(
+    await callOp('workspace_template_apply', { projectId: 'workspace', template }, { workspaceId: organizationId }),
+    'Using the template',
+  )
+  return { ...applied, projectId: applied.projectId ?? undefined }
+}
 
-export const saveTemplate = (organizationId: string, input: { name: string; description: string; projectId?: string }) =>
-  requestJson<WorkspaceTemplate>(path(organizationId), { method: 'POST', json: input })
+/** Saves the workspace as a template; with a project, carrying its channels and collections. */
+export async function saveTemplate(
+  organizationId: string,
+  input: { name: string; description: string; projectId?: string },
+): Promise<WorkspaceTemplate> {
+  const saved = ranOrThrow(
+    await callOp(
+      'workspace_template_save',
+      {
+        projectId: input.projectId ?? 'workspace',
+        includeProject: Boolean(input.projectId),
+        name: input.name,
+        description: input.description,
+      },
+      { workspaceId: organizationId },
+    ),
+    'Saving the template',
+  )
+  if (!saved.template) throw new Error('The template wasn’t saved.')
+  return saved.template as WorkspaceTemplate
+}
 
-export const removeTemplate = (organizationId: string, templateId: string) =>
-  requestJson<void>(`${path(organizationId)}/${encodeURIComponent(templateId)}`, { method: 'DELETE' })
+export async function removeTemplate(organizationId: string, templateId: string) {
+  ranOrThrow(
+    await callOp('workspace_template_save', { projectId: 'workspace', remove: templateId }, { workspaceId: organizationId }),
+    'Removing the template',
+  )
+}
 
 /** After a template is used: everything it can touch reads again. */
 export function refreshAfterTemplate(queryClient: QueryClient, organizationId: string) {

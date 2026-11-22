@@ -1686,23 +1686,22 @@ async fn build_workspace(
     );
 
     // AWD-76: a saved workspace template, carrying the project's channels.
-    let (status, created) = send(
-        app,
-        browser.request(
-            "POST",
-            &format!("/api/v1/organizations/{organization}/workspace-templates"),
-            None,
+    let (status, created) = browser
+        .op_in(
+            app,
+            organization,
+            "workspace_template_save",
             json!({
+                "projectId": project,
+                "includeProject": true,
                 "name": format!("Our setup{m}"),
                 "description": format!("How we work{m}"),
-                "projectId": project,
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert_eq!(
         status,
-        StatusCode::CREATED,
+        StatusCode::OK,
         "{label} workspace template: {created}"
     );
 

@@ -134,21 +134,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/organizations/{organization_id}/workspace-templates",
-            Tool("workspace_template_save"),
-        ),
-        (
-            Post,
-            "/api/v1/organizations/{organization_id}/workspace-templates/apply",
-            Tool("workspace_template_apply"),
-        ),
-        (
-            Delete,
-            "/api/v1/organizations/{organization_id}/workspace-templates/{template_id}",
-            Tool("workspace_template_save"),
-        ),
-        (
-            Post,
             "/api/v1/organizations/{organization_id}/leave",
             Person("a person's own account"),
         ),
@@ -380,31 +365,6 @@ mod tests {
             Person("signing in to a provider is a person's"),
         ),
         (
-            Put,
-            "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-            Tool("model_catalog_set"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-            Tool("model_catalog_set"),
-        ),
-        (
-            Post,
-            "/api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
-            Tool("model_catalog_set"),
-        ),
-        (
-            Put,
-            "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-            Tool("model_catalog_set"),
-        ),
-        (
-            Delete,
-            "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-            Tool("model_catalog_set"),
-        ),
-        (
             Post,
             "/api/v1/projects/{id}/channels",
             Tool("channel_create"),
@@ -567,7 +527,6 @@ mod tests {
             "/api/v1/things/{kind}/{id}/files",
             Tool("file_upload"),
         ),
-        (Delete, "/api/v1/files/{id}", Tool("file_delete")),
         (
             Delete,
             "/api/v1/conversations/{id}/messages/{message_id}/link-previews/{preview_id}",
@@ -1050,11 +1009,6 @@ mod tests {
             "/api/v1/projects/{project_id}/imports/{import_id}/commit",
             Tool("task_import"),
         ),
-        (
-            Patch,
-            "/api/v1/organizations/{organization_id}/project-templates/{template_id}",
-            Tool("project_template_update"),
-        ),
     ];
 
     #[test]
@@ -1127,7 +1081,7 @@ mod tests {
     /// Hand-written web writes whose tool is already an operation: each is a
     /// second edge for something the generated route does (K2.22). The
     /// number only goes down; when you delete one, lower it.
-    const HAND_WRITTEN_OPERATION_ROUTES: usize = 76;
+    const HAND_WRITTEN_OPERATION_ROUTES: usize = 66;
 
     #[test]
     fn hand_written_routes_for_operations_only_go_down() {

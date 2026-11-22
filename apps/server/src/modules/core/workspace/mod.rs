@@ -55,8 +55,9 @@ impl CoreModule for Module {
         module.operations(crate::ops::long::register_ops);
         module.operations(crate::files::link::register_ops);
         module.routes(crate::files::link::router);
-        // The workspace's own settings (its invitations, default layout and
-        // layout presets) are set in its own space, where Projects isn't on.
+        // The workspace's own settings (its invitations, default layout,
+        // layout presets, project templates and model catalog) are set in its
+        // own space, where Projects and Runs aren't on.
         module.filter(ModuleFilter::AlsoServes(&[
             "invitation_list",
             "invitation_create",
@@ -64,6 +65,8 @@ impl CoreModule for Module {
             "layout_update",
             "layout_preset_create",
             "layout_preset_update",
+            "project_template_update",
+            "model_catalog_set",
         ]));
     }
 }

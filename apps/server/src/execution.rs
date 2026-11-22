@@ -2,7 +2,7 @@ use axum::{
     Json, Router,
     extract::State,
     http::{HeaderMap, StatusCode},
-    routing::{get, post, put},
+    routing::get,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Postgres, Transaction};
@@ -40,20 +40,8 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/v1/projects/{id}/harnesses", get(list_harnesses))
         .route(
-            "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-            put(save_model_overrides).delete(remove_model),
-        )
-        .route(
             "/api/v1/organizations/{organization_id}/model-catalog",
             get(list_workspace_catalog),
-        )
-        .route(
-            "/api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
-            post(refresh_workspace_catalog),
-        )
-        .route(
-            "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-            put(save_workspace_model).delete(remove_workspace_model),
         )
 }
 
@@ -760,31 +748,6 @@ async fn list_workspace_catalog(
     Ok(Json(HarnessesResponse { harnesses }))
 }
 
-/// The same refresh from the workspace's settings, where no project is open.
-async fn refresh_workspace_catalog(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath((organization_id, kind)): ApiPath<(Uuid, String)>,
-) -> Result<Json<HarnessView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let scope =
-        idempotency::resource_bound_scope("organization", organization_id, "catalog_refresh")?;
-    require_workspace_catalog_editor(&state, &principal, organization_id).await?;
-    Ok(Json(
-        refresh_in(
-            &state,
-            principal.actor_id,
-            organization_id,
-            None,
-            &kind,
-            Some((&scope, &idempotency_key)),
-        )
-        .await?,
-    ))
-}
-
 /// Lists the harness's models through the caller's own signed-in account
 /// (the one they use in `project_id` first, when asked from a project) and
 /// stores them in the workspace's catalog. The caller may edit the catalog.
@@ -908,85 +871,6 @@ pub(crate) fn valid_model_id(model_id: &str) -> Result<(), AppError> {
     }
 }
 
-async fn require_catalog_editor(
-    state: &AppState,
-    principal: &AuthenticatedActor,
-    project_id: Uuid,
-) -> Result<Uuid, AppError> {
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    require_project_action(&mut transaction, principal, project_id, Action::ProjectView).await?;
-    let workspace = workspace_access(&mut transaction, principal, project_id).await?;
-    transaction.commit().await?;
-    if may_edit_catalog(&workspace) {
-        Ok(workspace.organization_id)
-    } else {
-        Err(AppError::Forbidden)
-    }
-}
-
-/// The workspace's owners and admins edit its catalog; other members get a
-/// 403, and people outside it a 404.
-async fn require_workspace_catalog_editor(
-    state: &AppState,
-    principal: &AuthenticatedActor,
-    organization_id: Uuid,
-) -> Result<(), AppError> {
-    crate::settings::authorize_personal(&state.pool, principal, organization_id).await?;
-    crate::settings::authorize_workspace_manage(&state.pool, principal, organization_id).await
-}
-
-/// A workspace owner or admin edits one model (context size, prices, name,
-/// reasoning levels, speeds, hiding it), or adds one by hand.
-async fn save_model_overrides(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath((project_id, kind, model_id)): ApiPath<(Uuid, String, String)>,
-    ApiJson(overrides): ApiJson<ModelOverrides>,
-) -> Result<Json<HarnessView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    IdempotencyKey::from_headers(&headers)?;
-    valid_model_id(&model_id)?;
-    overrides.validate().map_err(AppError::Validation)?;
-    let organization_id = require_catalog_editor(&state, &principal, project_id).await?;
-    Ok(Json(
-        save_overrides_in(
-            &state,
-            principal.actor_id,
-            organization_id,
-            &kind,
-            &model_id,
-            &overrides,
-        )
-        .await?,
-    ))
-}
-
-async fn save_workspace_model(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath((organization_id, kind, model_id)): ApiPath<(Uuid, String, String)>,
-    ApiJson(overrides): ApiJson<ModelOverrides>,
-) -> Result<Json<HarnessView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    IdempotencyKey::from_headers(&headers)?;
-    valid_model_id(&model_id)?;
-    overrides.validate().map_err(AppError::Validation)?;
-    require_workspace_catalog_editor(&state, &principal, organization_id).await?;
-    Ok(Json(
-        save_overrides_in(
-            &state,
-            principal.actor_id,
-            organization_id,
-            &kind,
-            &model_id,
-            &overrides,
-        )
-        .await?,
-    ))
-}
-
 pub(crate) async fn save_overrides_in(
     state: &AppState,
     actor_id: Uuid,
@@ -1010,36 +894,6 @@ pub(crate) async fn save_overrides_in(
     )
     .await?;
     harness_view(state, organization_id, &manifest, true).await
-}
-
-async fn remove_model(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath((project_id, kind, model_id)): ApiPath<(Uuid, String, String)>,
-) -> Result<Json<HarnessView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    IdempotencyKey::from_headers(&headers)?;
-    valid_model_id(&model_id)?;
-    let organization_id = require_catalog_editor(&state, &principal, project_id).await?;
-    Ok(Json(
-        remove_model_in(&state, organization_id, &kind, &model_id).await?,
-    ))
-}
-
-async fn remove_workspace_model(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath((organization_id, kind, model_id)): ApiPath<(Uuid, String, String)>,
-) -> Result<Json<HarnessView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    IdempotencyKey::from_headers(&headers)?;
-    valid_model_id(&model_id)?;
-    require_workspace_catalog_editor(&state, &principal, organization_id).await?;
-    Ok(Json(
-        remove_model_in(&state, organization_id, &kind, &model_id).await?,
-    ))
 }
 
 pub(crate) async fn remove_model_in(

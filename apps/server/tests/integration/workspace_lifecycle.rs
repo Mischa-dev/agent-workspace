@@ -273,16 +273,10 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     .await;
     assert_eq!(status, StatusCode::LOCKED, "{body}");
     // So is removing a file named by id, and the file stays.
-    let (status, body) = send(
-        &t.app,
-        a.browser.request(
-            "DELETE",
-            &format!("/api/v1/files/{}", a.task_file),
-            Some(&Uuid::now_v7().to_string()),
-            Value::Null,
-        ),
-    )
-    .await;
+    let (status, body) = a
+        .browser
+        .op(&t.app, "file_delete", json!({"fileId": a.task_file}))
+        .await;
     assert_eq!(status, StatusCode::LOCKED, "{body}");
     let removed =
         sqlx::query_scalar::<_, bool>("SELECT removed_at IS NOT NULL FROM files WHERE id = $1")

@@ -938,28 +938,14 @@ async fn a_page_keeps_its_own_files() {
     assert_eq!(read_back["outcome"], "ok", "{read_back}");
 
     // Its uploader removes a page's file; nobody else does.
-    let (status, _) = send(
-        &setup.app,
-        rook.request(
-            "DELETE",
-            &format!("/api/v1/files/{notes}"),
-            None,
-            Value::Null,
-        ),
-    )
-    .await;
+    let (status, _) = rook
+        .op(&setup.app, "file_delete", json!({"fileId": notes}))
+        .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
-    let (status, _) = send(
-        &setup.app,
-        owner.request(
-            "DELETE",
-            &format!("/api/v1/files/{notes}"),
-            None,
-            Value::Null,
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = owner
+        .op(&setup.app, "file_delete", json!({"fileId": notes}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(
         read(&setup, owner, &notes).await,
         Err(StatusCode::NOT_FOUND)

@@ -353,9 +353,9 @@ async fn onboarding_reads_each_step_from_what_exists_for_the_reader() {
         setup,
         &setup.browser,
         "POST",
-        &format!("/api/v1/organizations/{organization}/workspace-templates/apply"),
+        &format!("/api/v2/w/{organization}/ops/workspace_template_apply"),
         Some("use-everything"),
-        json!({"template": "everything"}),
+        json!({"projectId": "workspace", "template": "everything"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{used}");

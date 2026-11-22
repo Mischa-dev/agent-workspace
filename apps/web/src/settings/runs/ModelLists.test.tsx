@@ -21,12 +21,17 @@ describe('WorkspaceModelLists', () => {
       const method = init?.method ?? 'GET'
       const path = new URL(String(input), 'http://localhost').pathname
       if (path === base && method === 'GET') return json({ harnesses: [edited()] })
-      if (path === `${base}/demo/models/demo-small` && method === 'PUT') {
+      if (path === `/api/v2/w/${organizationId}/ops/model_catalog_set` && method === 'POST') {
         expect(new Headers(init?.headers).get('idempotency-key')).toBe('test-idempotency-key')
-        expect(JSON.parse(String(init?.body))).toEqual({ contextWindow: 64_000, hidden: true })
+        expect(JSON.parse(String(init?.body))).toEqual({
+          projectId: 'workspace',
+          harness: 'demo',
+          model: 'demo-small',
+          overrides: { contextWindow: 64_000, hidden: true },
+        })
         const updated = edited()
         updated.catalog.models[0] = { ...updated.catalog.models[0], hidden: true }
-        return json(updated)
+        return json({ outcome: 'ok', value: { done: 'saved', harness: updated } })
       }
       throw new Error(`unexpected request: ${method} ${path}`)
     })

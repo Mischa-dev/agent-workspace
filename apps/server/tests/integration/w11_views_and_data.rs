@@ -868,12 +868,13 @@ async fn a_new_project_starts_from_a_saved_setup() {
     // An unknown or archived template refuses the project.
     let (status, _) = fixture
         .owner
-        .patch(
+        .post(
             &format!(
-                "/api/v1/organizations/{}/project-templates/{template_id}",
+                "/api/v2/w/{}/ops/project_template_update",
                 fixture.organization_id
             ),
-            json!({"expectedVersion": 1, "archived": true}),
+            json!({"projectId": "workspace", "template": template_id, "expectedVersion": 1,
+                "archived": true}),
         )
         .await;
     assert_eq!(status, StatusCode::OK);

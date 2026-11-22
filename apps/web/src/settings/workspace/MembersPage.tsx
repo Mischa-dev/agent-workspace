@@ -438,10 +438,13 @@ function InviteSection({
       setNote('')
       setError(null)
     },
-    onError: (reason) =>
+    onError: (reason) => {
+      // A link that didn't arrive leaves no earlier one ready to copy either.
+      if (reason instanceof InvitationLinkMissing) setIssued(null)
       setError(
         reason instanceof InvitationLinkMissing ? reason.message : `The invitation wasn’t created. ${describeError(reason).message}`,
-      ),
+      )
+    },
     onSettled: refresh,
   })
   const revoke = useMutation({

@@ -24,12 +24,7 @@
 
 use std::{collections::BTreeMap, sync::OnceLock};
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    routing::{delete, get, post},
-};
+use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
 use chrono::{DateTime, Utc};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
@@ -39,12 +34,12 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
+    auth::AuthenticatedActor,
     collections::{
         self, CreateOutcome, NewCollection,
         definition::{self, CollectionDefinition},
     },
-    error::{ApiJson, ApiPath, AppError},
+    error::{ApiPath, AppError},
     layouts,
     modules::{manifest, state},
     policy::Permission,
@@ -1623,19 +1618,10 @@ pub(crate) async fn remove(
 // The routes
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/api/v1/organizations/{organization_id}/workspace-templates",
-            get(list_route).post(save_route),
-        )
-        .route(
-            "/api/v1/organizations/{organization_id}/workspace-templates/apply",
-            post(apply_route),
-        )
-        .route(
-            "/api/v1/organizations/{organization_id}/workspace-templates/{template_id}",
-            delete(remove_route),
-        )
+    Router::new().route(
+        "/api/v1/organizations/{organization_id}/workspace-templates",
+        get(list_route),
+    )
 }
 
 #[derive(Debug, Serialize)]
@@ -1664,13 +1650,6 @@ async fn list_route(
     }))
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ApplyRequest {
-    /// A built-in template's id or a saved one's ID.
-    template: String,
-}
-
 /// A refusal the person can act on, as the browser shows it.
 pub(crate) fn refused(problem: Problem) -> (StatusCode, Json<Value>) {
     (
@@ -1683,132 +1662,6 @@ pub(crate) fn refused(problem: Problem) -> (StatusCode, Json<Value>) {
             }
         })),
     )
-}
-
-async fn apply_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(organization_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<ApplyRequest>,
-) -> Result<axum::response::Response, AppError> {
-    use axum::response::IntoResponse;
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let caller = roles::standing(&mut transaction, organization_id, principal.actor_id).await?;
-    if !may_use(caller) {
-        return Err(AppError::Forbidden);
-    }
-    let template = find(&mut transaction, organization_id, &request.template)
-        .await?
-        .ok_or(AppError::NotFound("template"))?;
-    let auditor = Auditor::Browser {
-        headers: &headers,
-        principal: &principal,
-    };
-    let maker = crate::events::Caller::browser(&principal)?;
-    let installer = crate::packages::apply::Installer {
-        workspace: organization_id,
-        actor: principal.actor_id,
-        standing: caller,
-        auditor: &auditor,
-        writer: crate::memory::Writer {
-            actor_id: principal.actor_id,
-            actor_kind: maker.actor_kind,
-            via_grant_id: None,
-            // A browser session is the person's whole account.
-            confined_project: None,
-        },
-        maker,
-        template: None,
-        source: "builtin",
-        source_ref: None,
-        // A browser session is the person's whole account.
-        confined: None,
-    };
-    // M1.11: a template is used by installing it as a package.
-    match crate::packages::apply::use_template(&mut transaction, installer, &template).await {
-        Ok(applied) => {
-            transaction.commit().await?;
-            Ok(Json(applied).into_response())
-        }
-        Err(ApplyError::Problem(problem)) => Ok(refused(problem).into_response()),
-        Err(ApplyError::App(error)) => Err(error),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SaveRequest {
-    name: String,
-    #[serde(default)]
-    description: String,
-    /// A project to carry its channels and collections.
-    #[serde(default)]
-    project_id: Option<Uuid>,
-}
-
-async fn save_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(organization_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<SaveRequest>,
-) -> Result<(StatusCode, Json<TemplateView>), AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let name = normalize_name(&request.name).ok_or(AppError::Validation("name"))?;
-    let description =
-        normalize_description(&request.description).ok_or(AppError::Validation("description"))?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let caller = roles::standing(&mut transaction, organization_id, principal.actor_id).await?;
-    if !may_use(caller) {
-        return Err(AppError::Forbidden);
-    }
-    let auditor = Auditor::Browser {
-        headers: &headers,
-        principal: &principal,
-    };
-    match save(
-        &mut transaction,
-        &auditor,
-        caller,
-        organization_id,
-        &name,
-        &description,
-        request.project_id,
-    )
-    .await?
-    {
-        SaveOutcome::Saved(view) => {
-            transaction.commit().await?;
-            Ok((StatusCode::CREATED, Json(*view)))
-        }
-        SaveOutcome::NameTaken => Err(AppError::Conflict("template", "name_taken")),
-        SaveOutcome::Full => Err(AppError::Conflict("template", "too_many_templates")),
-    }
-}
-
-async fn remove_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((organization_id, template_id)): ApiPath<(Uuid, Uuid)>,
-) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let caller = roles::standing(&mut transaction, organization_id, principal.actor_id).await?;
-    if !may_use(caller) {
-        return Err(AppError::Forbidden);
-    }
-    let auditor = Auditor::Browser {
-        headers: &headers,
-        principal: &principal,
-    };
-    if !remove(&mut transaction, &auditor, organization_id, template_id).await? {
-        return Err(AppError::NotFound("template"));
-    }
-    transaction.commit().await?;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]

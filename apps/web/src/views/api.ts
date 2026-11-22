@@ -1,5 +1,5 @@
 import { apiUrl, requestJson } from '../api/client'
-import { callOp, type OpInput, type OpOutput } from '../api/ops'
+import { callOp, ranOrThrow, type OpInput, type OpOutput } from '../api/ops'
 import { projectLocationHref } from '../projects/locations'
 import { queryKeys } from '../api/queryKeys'
 import type { ProjectStatus } from '../work-items/projectStatusModel'
@@ -390,15 +390,21 @@ export async function saveAsProjectTemplate(projectId: string, input: { name: st
   return template
 }
 
-export function updateProjectTemplate(
-  template: Pick<ProjectTemplate, 'id' | 'organizationId' | 'version'>,
+/** Renames, describes, archives or restores a project template, in its workspace's own space. */
+export async function updateProjectTemplate(
+  template: ProjectTemplate,
   changes: { name?: string; description?: string; archived?: boolean },
   idempotencyKey: string,
-) {
-  return requestJson<ProjectTemplate>(
-    `/api/v1/organizations/${encodeURIComponent(template.organizationId)}/project-templates/${encodeURIComponent(template.id)}`,
-    { method: 'PATCH', idempotencyKey, json: { expectedVersion: template.version, ...changes } },
+): Promise<ProjectTemplate> {
+  const { template: line } = ranOrThrow(
+    await callOp(
+      'project_template_update',
+      { projectId: 'workspace', template: template.id, expectedVersion: template.version, ...changes },
+      { workspaceId: template.organizationId, requestId: idempotencyKey },
+    ),
+    'Changing the template',
   )
+  return { ...template, name: line.name, description: line.description, archived: line.archived, canEdit: line.canEdit, version: line.version }
 }
 
 // Imports and export

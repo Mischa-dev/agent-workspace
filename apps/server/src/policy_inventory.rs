@@ -220,24 +220,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/organizations/{organization_id}/transfer-ownership",
         MembershipManage
     ),
-    policy_route!(
-        "workspace_templates",
-        Post,
-        "/api/v1/organizations/{organization_id}/workspace-templates",
-        SettingsManage
-    ),
-    policy_route!(
-        "workspace_templates",
-        Post,
-        "/api/v1/organizations/{organization_id}/workspace-templates/apply",
-        SettingsManage
-    ),
-    policy_route!(
-        "workspace_templates",
-        Delete,
-        "/api/v1/organizations/{organization_id}/workspace-templates/{template_id}",
-        SettingsManage
-    ),
     boundary_route!(
         "workspace",
         Post,
@@ -514,36 +496,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         CredentialManage
     ),
     policy_route!(
-        "execution",
-        Put,
-        "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-        ProjectManage
-    ),
-    policy_route!(
-        "execution",
-        Delete,
-        "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-        ProjectManage
-    ),
-    policy_route!(
-        "execution",
-        Post,
-        "/api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
-        SettingsManage
-    ),
-    policy_route!(
-        "execution",
-        Put,
-        "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-        SettingsManage
-    ),
-    policy_route!(
-        "execution",
-        Delete,
-        "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-        SettingsManage
-    ),
-    policy_route!(
         "conversations",
         Post,
         "/api/v1/projects/{id}/channels",
@@ -760,7 +712,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/things/{kind}/{id}/files",
         PageEdit
     ),
-    policy_route!("files/http", Delete, "/api/v1/files/{id}", WorkItemEdit),
     // Hiding a link preview follows the rule for removing the message: its
     // author, or a person who may moderate.
     policy_route!(
@@ -1329,12 +1280,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects/{project_id}/imports/{import_id}/commit",
         WorkItemCreate
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/organizations/{organization_id}/project-templates/{template_id}",
-        SettingsManage
     ),
 ];
 

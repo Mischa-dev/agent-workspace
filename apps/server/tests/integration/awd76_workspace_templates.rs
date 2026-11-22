@@ -22,16 +22,15 @@ fn templates_path(setup: &Setup) -> String {
 }
 
 async fn apply(setup: &Setup, template: &str) -> (StatusCode, Value) {
-    send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("{}/apply", templates_path(setup)),
-            None,
-            json!({"template": template}),
-        ),
-    )
-    .await
+    setup
+        .browser
+        .op_in(
+            &setup.app,
+            setup.organization_id,
+            "workspace_template_apply",
+            json!({"projectId": "workspace", "template": template}),
+        )
+        .await
 }
 
 async fn onboarding(setup: &Setup) -> Value {
@@ -266,27 +265,23 @@ async fn only_people_who_manage_the_workspace_use_or_save_templates() {
     .await;
     assert_eq!(status, StatusCode::OK, "{listed}");
     assert_eq!(listed["canUse"], false);
-    let (status, refused) = send(
-        app,
-        bea.request(
-            "POST",
-            &format!("{}/apply", templates_path(&setup)),
-            None,
-            json!({"template": "chat_with_agents"}),
-        ),
-    )
-    .await;
+    let (status, refused) = bea
+        .op_in(
+            app,
+            setup.organization_id,
+            "workspace_template_apply",
+            json!({"projectId": "workspace", "template": "chat_with_agents"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
-    let (status, refused) = send(
-        app,
-        bea.request(
-            "POST",
-            &templates_path(&setup),
-            None,
-            json!({"name": "Bea's"}),
-        ),
-    )
-    .await;
+    let (status, refused) = bea
+        .op_in(
+            app,
+            setup.organization_id,
+            "workspace_template_save",
+            json!({"projectId": "workspace", "name": "Bea's"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
     assert_eq!(
         count(
