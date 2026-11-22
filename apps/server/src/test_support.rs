@@ -99,3 +99,44 @@ async fn retry_deadlock(pool: &PgPool, schema: &str, statement: &str) -> Result<
         }
     }
 }
+
+/// Bytes staged for a workspace before their row exists, for tests of
+/// [`crate::files::stage_content`] and [`crate::files::abandon_content`].
+pub struct StagedBytes(crate::files::StagedContent, uuid::Uuid);
+
+impl StagedBytes {
+    /// Where the bytes are in the store.
+    pub fn key(&self) -> &str {
+        self.0.key()
+    }
+}
+
+/// Stages `bytes` for `workspace` as an upload does before its transaction.
+pub async fn stage_bytes(
+    state: &crate::AppState,
+    workspace: uuid::Uuid,
+    bytes: &[u8],
+) -> Result<StagedBytes, crate::error::AppError> {
+    // In the workspace's scope, as the upload's own request would be.
+    crate::tenancy::scoped(
+        crate::tenancy::Tenancy::Workspace {
+            account: None,
+            workspace,
+        },
+        crate::files::stage_content(state, workspace, bytes),
+    )
+    .await
+    .map(|content| StagedBytes(content, workspace))
+}
+
+/// Takes a stage back, as a refused upload does.
+pub async fn abandon_bytes(state: &crate::AppState, staged: &StagedBytes) {
+    crate::tenancy::scoped(
+        crate::tenancy::Tenancy::Workspace {
+            account: None,
+            workspace: staged.1,
+        },
+        crate::files::abandon_content(state, &staged.0),
+    )
+    .await;
+}

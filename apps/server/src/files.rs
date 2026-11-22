@@ -1211,9 +1211,13 @@ pub(crate) struct StagedContent {
     sha256: String,
     store_id: String,
     key: String,
-    /// When this stage pinned the key: [`abandon_content`] takes back only
-    /// its own pin, not one a later stage of the same content renewed.
-    pinned_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl StagedContent {
+    /// Where the bytes are in the store.
+    pub(crate) fn key(&self) -> &str {
+        &self.key
+    }
 }
 
 /// Writes the bytes of content files for a workspace to the file store
@@ -1233,7 +1237,7 @@ pub(crate) async fn stage_content(
     // are pinned by a pending note whether they're written now or a row
     // already holds them, and cleanup leaves pinned bytes alone until the
     // row that claims them is in.
-    let (key, fresh, pinned_at) = {
+    let (key, fresh) = {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
@@ -1246,23 +1250,23 @@ pub(crate) async fn stage_content(
             require_room(state, &mut transaction, organization_id, size, 0).await?;
         }
         // Fresh bytes count toward the room checks until a row holds them.
-        let pinned_at = sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+        sqlx::query(
             r#"
             INSERT INTO file_objects_pending (storage_key, workspace_id, store_id, byte_size)
             VALUES ($1, $2, $3, $4)
             ON CONFLICT (storage_key) DO UPDATE SET started_at = now(),
+                holders = file_objects_pending.holders + 1,
                 byte_size = COALESCE(EXCLUDED.byte_size, file_objects_pending.byte_size)
-            RETURNING started_at
             "#,
         )
         .bind(&key)
         .bind(organization_id)
         .bind(store.id())
         .bind(fresh.then(|| i64::try_from(size).unwrap_or(i64::MAX)))
-        .fetch_one(&mut *transaction)
+        .execute(&mut *transaction)
         .await?;
         transaction.commit().await?;
-        (key, fresh, pinned_at)
+        (key, fresh)
     };
     if fresh {
         store.put(&key, bytes).await?;
@@ -1272,16 +1276,15 @@ pub(crate) async fn stage_content(
         sha256,
         store_id: store.id().to_owned(),
         key,
-        pinned_at,
     })
 }
 
 /// Takes back a stage no row claimed: the write stored nothing new (the
-/// board already had that image) or didn't commit. Its pin goes, and its
-/// bytes too unless a row holds them, deleted outside any transaction under
-/// a claim as cleanup does. A pin another stage of the same content renewed
-/// since is left for that one. Never fails the caller: what it can't take
-/// back, the sweep does.
+/// board already had that image) or didn't commit. Its hold on the pin
+/// goes; once no other in-flight stage of the same content holds it, the
+/// pin goes too, and the bytes unless a row holds them, deleted outside any
+/// transaction under a claim as cleanup does. Never fails the caller: what
+/// it can't take back, the sweep does.
 pub(crate) async fn abandon_content(state: &AppState, staged: &StagedContent) {
     if let Err(error) = abandon_staged_content(state, staged).await {
         tracing::warn!(
@@ -1298,17 +1301,30 @@ async fn abandon_staged_content(state: &AppState, staged: &StagedContent) -> Res
             .bind(format!("files-quota:{}", staged.organization_id))
             .execute(&mut *transaction)
             .await?;
+        let left = sqlx::query_scalar::<_, i32>(
+            "UPDATE file_objects_pending SET holders = GREATEST(holders - 1, 0) \
+             WHERE storage_key = $1 AND store_id = $2 AND deleting_since IS NULL \
+             RETURNING holders",
+        )
+        .bind(&staged.key)
+        .bind(&staged.store_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        // Gone already (the sweep took it), or another stage still needs it.
+        if left != Some(0) {
+            transaction.commit().await?;
+            return Ok(());
+        }
         let held = content_stored(&mut transaction, &staged.store_id, &staged.key).await?;
         let query = if held {
-            "DELETE FROM file_objects_pending WHERE storage_key = $1 AND started_at = $2 \
+            "DELETE FROM file_objects_pending WHERE storage_key = $1 AND holders = 0 \
                AND deleting_since IS NULL RETURNING true"
         } else {
             "UPDATE file_objects_pending SET deleting_since = now(), byte_size = NULL \
-             WHERE storage_key = $1 AND started_at = $2 AND deleting_since IS NULL RETURNING true"
+             WHERE storage_key = $1 AND holders = 0 AND deleting_since IS NULL RETURNING true"
         };
         let ours = sqlx::query_scalar::<_, bool>(query)
             .bind(&staged.key)
-            .bind(staged.pinned_at)
             .fetch_optional(&mut *transaction)
             .await?
             .is_some();
@@ -1357,16 +1373,35 @@ pub(crate) async fn store_content(
         .bind(format!("files-quota:{}", staged.organization_id))
         .execute(&mut **transaction)
         .await?;
-    // The pin goes first, so the bytes it counted aren't counted twice.
+    // This write's hold on the pin goes first, and the size it counted with
+    // it, so the bytes aren't counted twice; the pin itself stays while
+    // another in-flight stage of the same bytes still holds it.
+    let pinned = sqlx::query_scalar::<_, i32>(
+        "UPDATE file_objects_pending SET holders = GREATEST(holders - 1, 0), byte_size = NULL \
+         WHERE store_id = $1 AND storage_key = $2 AND deleting_since IS NULL RETURNING holders",
+    )
+    .bind(&staged.store_id)
+    .bind(&staged.key)
+    .fetch_optional(&mut **transaction)
+    .await?;
     sqlx::query(
         "DELETE FROM file_objects_pending WHERE store_id = $1 AND storage_key = $2 \
-           AND deleting_since IS NULL",
+           AND holders = 0 AND deleting_since IS NULL",
     )
     .bind(&staged.store_id)
     .bind(&staged.key)
     .execute(&mut **transaction)
     .await?;
-    if !content_stored(transaction, &staged.store_id, &staged.key).await? {
+    let stored = content_stored(transaction, &staged.store_id, &staged.key).await?;
+    // Neither pinned nor held by a row: cleanup may have taken the bytes,
+    // so no row may point at them.
+    if pinned.is_none() && !stored {
+        return Err(AppError::Conflict(
+            "file",
+            "That upload took too long and was cleared away. Try again.",
+        ));
+    }
+    if !stored {
         let size = u64::try_from(file.bytes.len()).unwrap_or(u64::MAX);
         require_room(state, transaction, staged.organization_id, size, size).await?;
     }

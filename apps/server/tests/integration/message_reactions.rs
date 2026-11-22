@@ -59,7 +59,8 @@ async fn react_http(
     // As the web does: the operation, then the message read back for the
     // reactions as the timeline shows them.
     let mut value = answer["value"].clone();
-    value["reactions"] = timeline_message(setup, browser, conversation, message).await["reactions"].clone();
+    value["reactions"] =
+        timeline_message(setup, browser, conversation, message).await["reactions"].clone();
     (status, value)
 }
 

@@ -389,15 +389,17 @@ pub async fn decide(
     Ok(Ok(Decided { status, version }))
 }
 
-/// Moves the cells of `sheet_id`'s waiting proposals on `tab_id` with the
-/// rows and columns a write inserted or deleted, in the write's
-/// transaction, so accepting one later sets the cells the author meant. A
-/// cell whose row or column went stays in its place in the list (parts are
-/// numbered by it) and can't be accepted.
+/// Moves the cells of `sheet_id`'s waiting proposals on `tab_id` (named
+/// `tab_name`) with the rows and columns a write inserted or deleted, in the
+/// write's transaction, so accepting one later sets the cells the author
+/// meant, and moves what their formulas read on that tab, whichever tab
+/// they edit. A cell whose row or column went stays in its place in the
+/// list (parts are numbered by it) and can't be accepted.
 pub async fn follow_moves(
     connection: &mut sqlx::PgConnection,
     sheet_id: Uuid,
     tab_id: Uuid,
+    tab_name: &str,
     moves: &[crate::discussion::anchors::GridMove],
 ) -> Result<(), AppError> {
     if moves.is_empty() {
@@ -406,15 +408,13 @@ pub async fn follow_moves(
     let waiting = sqlx::query_as::<_, (Uuid, sqlx::types::Json<Vec<ProposedCell>>)>(
         "SELECT id, change -> 'cells' FROM proposals \
          WHERE thing_kind = 'sheet' AND thing_id = $1 AND status = 'pending' \
-           AND change -> 'cells' @> jsonb_build_array(jsonb_build_object('tabId', $2::text)) \
          ORDER BY id FOR UPDATE",
     )
     .bind(sheet_id)
-    .bind(tab_id)
     .fetch_all(&mut *connection)
     .await?;
     for (id, sqlx::types::Json(mut cells)) in waiting {
-        if !move_cells(&mut cells, tab_id, moves) {
+        if !move_cells(&mut cells, tab_id, tab_name, moves) {
             continue;
         }
         sqlx::query(
@@ -433,26 +433,21 @@ pub async fn follow_moves(
 fn move_cells(
     cells: &mut [ProposedCell],
     tab_id: Uuid,
+    tab_name: &str,
     moves: &[crate::discussion::anchors::GridMove],
 ) -> bool {
     let mut moved = false;
     // A proposed formula's references move too, so accepting it later reads
     // the cells it meant: on its own tab, and on others where it names the
     // moved tab.
-    let tab_name = cells
-        .iter()
-        .find(|cell| cell.tab_id == tab_id)
-        .map(|cell| cell.tab.clone());
-    if let Some(tab_name) = &tab_name {
-        for cell in cells.iter_mut().filter(|cell| !cell.gone) {
-            if !cell.after.starts_with('=') {
-                continue;
-            }
-            let shifted = shift_formula(&cell.after, tab_name, cell.tab_id == tab_id, moves);
-            if shifted != cell.after {
-                cell.after = shifted;
-                moved = true;
-            }
+    for cell in cells.iter_mut().filter(|cell| !cell.gone) {
+        if !cell.after.starts_with('=') {
+            continue;
+        }
+        let shifted = shift_formula(&cell.after, tab_name, cell.tab_id == tab_id, moves);
+        if shifted != cell.after {
+            cell.after = shifted;
+            moved = true;
         }
     }
     for cell in cells
@@ -794,7 +789,7 @@ mod tests {
                 count: 1,
             },
         ];
-        assert!(move_cells(&mut cells, tab, &moves));
+        assert!(move_cells(&mut cells, tab, "Plan", &moves));
         assert_eq!(
             (cells[0].row, cells[0].column, cells[0].gone),
             (7, 2, false)
@@ -810,6 +805,27 @@ mod tests {
             at: 20,
             count: 1,
         }];
-        assert!(!move_cells(&mut cells, tab, &far));
+        assert!(!move_cells(&mut cells, tab, "Plan", &far));
+    }
+
+    #[test]
+    fn a_formula_on_another_tab_follows_the_tab_it_reads() {
+        let plan = Uuid::from_u128(1);
+        let summary = Uuid::from_u128(2);
+        // Only Summary is edited; its formula reads Plan.
+        let mut cells = vec![ProposedCell {
+            tab: "Summary".to_owned(),
+            after: "=Plan!A2*2".to_owned(),
+            ..cell(summary, 1, 2)
+        }];
+        let above = [GridMove {
+            rows: true,
+            insert: true,
+            at: 0,
+            count: 1,
+        }];
+        assert!(move_cells(&mut cells, plan, "Plan", &above));
+        assert_eq!(cells[0].after, "=Plan!A3*2");
+        assert_eq!((cells[0].row, cells[0].column), (1, 2));
     }
 }

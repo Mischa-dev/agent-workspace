@@ -49,19 +49,24 @@ fn translate(method: &str, path: &str, body: &Value) -> Option<Translated> {
             input: with(body, &[("pageId", Value::from(*page))]),
             read_back: page_of,
         }),
-        ("POST", ["channels" | "threads", conversation, action @ ("archive" | "restore")]) => {
-            Some(Translated {
-                name: "conversation_update",
-                input: with(
-                    body,
-                    &[
-                        ("conversationId", Value::from(*conversation)),
-                        ("archived", Value::from(*action == "archive")),
-                    ],
-                ),
-                read_back: |_| None,
-            })
-        }
+        (
+            "POST",
+            [
+                "channels" | "threads",
+                conversation,
+                action @ ("archive" | "restore"),
+            ],
+        ) => Some(Translated {
+            name: "conversation_update",
+            input: with(
+                body,
+                &[
+                    ("conversationId", Value::from(*conversation)),
+                    ("archived", Value::from(*action == "archive")),
+                ],
+            ),
+            read_back: |_| None,
+        }),
         _ => None,
     }
 }

@@ -787,18 +787,8 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
             .expect("restore Conversation")
         }
     };
-    assert_eq!(
-        restore(thread_id, 2)
-            .await
-            .status(),
-        StatusCode::CONFLICT
-    );
-    assert_eq!(
-        restore(channel_id, 1)
-            .await
-            .status(),
-        StatusCode::CONFLICT
-    );
+    assert_eq!(restore(thread_id, 2).await.status(), StatusCode::CONFLICT);
+    assert_eq!(restore(channel_id, 1).await.status(), StatusCode::CONFLICT);
     let restored = restore(channel_id, 2).await;
     assert_eq!(restored.status(), StatusCode::OK);
     let restored = response_json(restored).await;

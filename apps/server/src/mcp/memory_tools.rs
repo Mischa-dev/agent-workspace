@@ -777,16 +777,22 @@ pub(crate) async fn page_write(
                 if mode == Some(access::WriteMode::Propose) {
                     // The web's editor sends every field: only one that
                     // changes needs edit access.
-                    let (title, is_guide, skill, archived, is_template, parent) =
-                        sqlx::query_as::<_, (String, bool, Option<String>, bool, bool, Option<Uuid>)>(
-                            "SELECT title, is_guide, skill_description, archived_at IS NOT NULL, \
+                    let (title, is_guide, skill, archived, is_template, parent) = sqlx::query_as::<
+                        _,
+                        (String, bool, Option<String>, bool, bool, Option<Uuid>),
+                    >(
+                        "SELECT title, is_guide, skill_description, archived_at IS NOT NULL, \
                                     is_template, parent_page_id \
                              FROM project_pages WHERE id = $1",
-                        )
-                        .bind(page_id)
-                        .fetch_one(&mut *transaction)
-                        .await?;
-                    if input.title.as_deref().is_some_and(|value| value.trim() == title) {
+                    )
+                    .bind(page_id)
+                    .fetch_one(&mut *transaction)
+                    .await?;
+                    if input
+                        .title
+                        .as_deref()
+                        .is_some_and(|value| value.trim() == title)
+                    {
                         input.title = None;
                     }
                     if input.is_guide == Some(is_guide) {
