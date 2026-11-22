@@ -1042,7 +1042,8 @@ async fn rewrap_rows(
 const KEYS_IN_USE_SQL: &str = "SELECT master_key_id FROM secrets \
      UNION SELECT master_key_id FROM user_totp_factors \
      UNION SELECT api_key_master_key_id FROM provider_login_ceremonies \
-           WHERE api_key_master_key_id IS NOT NULL ORDER BY 1";
+           WHERE api_key_master_key_id IS NOT NULL \
+     UNION SELECT master_key_id FROM host_command_secrets ORDER BY 1";
 
 /// The master key ids secrets still use.
 pub async fn master_keys_in_use(pool: &PgPool) -> Result<Vec<String>, AppError> {

@@ -93,6 +93,8 @@ impl RepositoryQuestion {
 pub enum RepositoryAnswer {
     /// Whether the mirror is ready.
     Prepared { ready: bool },
+    /// The host's disk has no room to clone into now: ask again later.
+    NoRoom,
     /// The stored worktree path isn't where this host keeps it.
     Moved,
     /// The branch can't be published as it is, and why, in a sentence.

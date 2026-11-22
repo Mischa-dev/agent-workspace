@@ -292,39 +292,44 @@ pub struct Mirror {
 
 /// Have the host clone or refresh a repository's mirror (an imported one
 /// is checked instead), with a short-lived token from its code host.
-/// Whether the mirror is ready.
+/// Whether the mirror is ready; an error, worth trying again later, when
+/// the host has no room or didn't answer.
 pub async fn prepare(
     state: &AppState,
     workspace_id: Uuid,
     project_id: Uuid,
     mirror: Mirror,
-) -> bool {
+) -> Result<bool, AppError> {
     let token = if mirror.imported {
         None
     } else {
         match crate::github::repository_git_token(state, project_id, mirror.repository_id).await {
             Ok(token) => Some(token),
-            Err(_) => return false,
+            Err(_) => return Ok(false),
         }
     };
+    let repository_id = mirror.repository_id;
     let question = RepositoryQuestion::Prepare {
         mirror: MirrorSpec {
-            repository_id: mirror.repository_id,
+            repository_id,
             clone_url: mirror.clone_url,
             default_branch: mirror.default_branch,
         },
         imported: mirror.imported,
     };
-    match ask(state, workspace_id, question, token).await {
-        Ok(Asked::Answered(RepositoryAnswer::Prepared { ready })) => ready,
-        Ok(Asked::Answered(_)) => false,
-        Ok(Asked::Failed(reason)) => {
-            tracing::warn!(repository_id = %mirror.repository_id, reason, "the host didn't prepare a repository");
-            false
-        }
-        Err(error) => {
-            tracing::warn!(repository_id = %mirror.repository_id, error = %error, "asking the host to prepare a repository failed");
-            false
+    match ask(state, workspace_id, question, token).await? {
+        Asked::Answered(RepositoryAnswer::Prepared { ready }) => Ok(ready),
+        Asked::Answered(RepositoryAnswer::NoRoom) => Err(AppError::Conflict(
+            "repository",
+            "the built-in host's disk has no room for it yet",
+        )),
+        Asked::Answered(_) => Ok(false),
+        Asked::Failed(reason) => {
+            tracing::warn!(%repository_id, reason, "the host didn't prepare a repository");
+            Err(AppError::Conflict(
+                "repository",
+                "the built-in host didn't prepare it; try again",
+            ))
         }
     }
 }
@@ -497,11 +502,14 @@ async fn carry_out(
             let quota = state.config.data_quota_bytes;
             let free = state.config.minimum_free_bytes;
             let root = data_root.clone();
-            tokio::task::spawn_blocking(move || {
+            let admitted = tokio::task::spawn_blocking(move || {
                 crate::storage_admission::require_growth(&root, quota, free)
             })
             .await
-            .map_err(|_| AppError::Internal("join storage admission"))??;
+            .map_err(|_| AppError::Internal("join storage admission"))?;
+            if admitted.is_err() {
+                return Ok(RepositoryAnswer::NoRoom);
+            }
             let registered = RegisteredRepository {
                 id: mirror.repository_id,
                 mirror_path: git::expected_repository_mirror_path(

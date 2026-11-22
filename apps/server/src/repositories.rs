@@ -226,7 +226,7 @@ async fn run_preparation(
             imported: row.legacy_mirror_path.is_some(),
         },
     )
-    .await;
+    .await?;
     if !prepared {
         tracing::warn!(%project_id, %repository_id, "repository preparation failed");
     }

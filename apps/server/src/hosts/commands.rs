@@ -243,8 +243,8 @@ pub async fn forget_answered(pool: &PgPool, command_id: Uuid) -> Result<(), AppE
     Ok(())
 }
 
-/// An account question whose asker stopped waiting before the host
-/// answered (or that its asker never came back to read) is forgotten once
+/// An account or repository question whose asker stopped waiting before
+/// the host answered (or that its asker never came back to read) is forgotten once
 /// it is older than any asker waits, so a late answer doesn't stay in its
 /// row.
 async fn forget_late_answers(
@@ -253,18 +253,22 @@ async fn forget_late_answers(
     Ok(sqlx::query(
         "DELETE FROM host_commands WHERE kind = 'action' \
            AND state IN ('acked', 'refused', 'expired') \
-           AND body->>'action' = $1 \
+           AND body->>'action' = ANY($1) \
            AND updated_at < now() - make_interval(secs => $2) \
            AND host_id IN (SELECT id FROM hosts WHERE builtin)",
     )
-    .bind(agent_workspace_host_protocol::account::ACCOUNT_ACTION)
+    .bind([
+        agent_workspace_host_protocol::account::ACCOUNT_ACTION,
+        agent_workspace_host_protocol::repository::REPOSITORY_ACTION,
+    ])
     .bind(LATE_ANSWER.as_secs_f64())
     .execute(&mut **transaction)
     .await?
     .rows_affected() as usize)
 }
 
-/// Longer than any account question's asker waits for its answer.
+/// Longer than any account or repository question's asker waits for its
+/// answer.
 const LATE_ANSWER: Duration = Duration::from_secs(60 * 60);
 
 /// For a push host, a job that sends the host this command's thin event;

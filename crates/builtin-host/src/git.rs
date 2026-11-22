@@ -403,6 +403,8 @@ pub const REFUSED_HEAD: &str = "HEAD commit is invalid";
 pub const REFUSED_NOTHING_AHEAD: &str = "workspace has no commit ahead of its recorded base";
 pub const REFUSED_NOT_DESCENDED: &str = "workspace HEAD is not descended from its recorded base";
 pub const REFUSED_MOVED_ON: &str = "workspace HEAD changed after publication was queued";
+/// Any other refusal, read back after it crossed the wire.
+pub const REFUSED_OTHER: &str = "workspace can't be published as it is";
 const PUBLICATION_REFUSALS: [&str; 6] = [
     REFUSED_DIRTY,
     REFUSED_BRANCH,
@@ -413,13 +415,13 @@ const PUBLICATION_REFUSALS: [&str; 6] = [
 ];
 
 /// The refusal an inspection answered with, from its text: one of
-/// [`PUBLICATION_REFUSALS`] reads back as itself, anything else as a
-/// changed workspace.
+/// [`PUBLICATION_REFUSALS`] reads back as itself, anything else as
+/// [`REFUSED_OTHER`].
 pub fn publication_refusal(why: &str) -> RuntimeError {
     let why = PUBLICATION_REFUSALS
         .into_iter()
         .find(|known| *known == why)
-        .unwrap_or(REFUSED_MOVED_ON);
+        .unwrap_or(REFUSED_OTHER);
     RuntimeError::Conflict("git_worktree", why)
 }
 
