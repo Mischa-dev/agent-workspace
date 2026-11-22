@@ -151,12 +151,9 @@ impl Operation for SheetRowAdd {
                 message: problem.message.into(),
             },
         })?;
-        let row = applied
-            .changed
-            .iter()
-            .map(|cell| cell.row)
-            .max()
-            .unwrap_or(0);
+        // The row it chose, not the furthest cell that changed: a formula
+        // elsewhere can recalculate below it.
+        let row = applied.rows.first().copied().unwrap_or(0);
         if applied.revision != sheet.revision {
             crate::outbox::enqueue_sheet_updated(tx, space, sheet.id, applied.revision).await?;
         }

@@ -1233,3 +1233,79 @@ async fn pages_nest_and_move_with_the_pages_inside() {
             .expect("thing");
     assert_eq!(parent.map(|id| id.to_string()), Some(onboarding.clone()));
 }
+
+/// Two moves at once can't close a loop between them: with B inside A and
+/// D inside C, putting A inside D and C inside B at the same moment lets at
+/// most one through, and every page still reaches the top.
+#[tokio::test]
+async fn moves_at_once_never_loop_pages() {
+    let Some(setup) = super::mcp_admin::setup("c138_pages_no_loop").await else {
+        return;
+    };
+    let space = space(&setup).await;
+    let work = create_project(&setup, "LOOP", "Loop").await;
+    let (wren, token) = create_agent(&setup.app, &setup.browser, &space, "Wren", "wren").await;
+    add_member(&setup, &work, wren, "member").await;
+    let session = initialize(&setup.app, &token).await.expect("MCP session");
+    let write = |arguments: Value| {
+        let name = if arguments.get("pageId").is_some() {
+            "page_update"
+        } else {
+            "page_create"
+        };
+        tool(&setup.app, &token, &session, name, arguments)
+    };
+    let id_of = |value: &Value| value["value"]["id"].as_str().expect("page id").to_owned();
+    let mut ids = Vec::new();
+    for (title, parent) in [("A", None), ("B", Some(0)), ("C", None), ("D", Some(2))] {
+        let parent: Option<&String> = parent.map(|index: usize| &ids[index]);
+        let made = write(json!({"projectId": work, "title": title, "body": title,
+                                "parentPageId": parent}))
+        .await;
+        assert_eq!(made["outcome"], "ok", "{made}");
+        ids.push(id_of(&made));
+    }
+    let (a, b, c, d) = (&ids[0], &ids[1], &ids[2], &ids[3]);
+    let other = initialize(&setup.app, &token)
+        .await
+        .expect("second MCP session");
+    for round in 0..6 {
+        // Each on a session of its own, as two agents' calls would be.
+        let (first, second) = tokio::join!(
+            write(json!({"pageId": a, "parentPageId": d})),
+            tool(
+                &setup.app,
+                &token,
+                &other,
+                "page_update",
+                json!({"pageId": c, "parentPageId": b})
+            ),
+        );
+        let through = [&first, &second]
+            .iter()
+            .filter(|result| result["outcome"] == "ok")
+            .count();
+        assert_eq!(through, 1, "round {round}: {first} {second}");
+        let looped = sqlx::query_scalar::<_, i64>(
+            r#"
+            WITH RECURSIVE up(id, parent, depth) AS (
+                SELECT id, parent_page_id, 0 FROM project_pages WHERE project_id = $1
+                UNION ALL
+                SELECT up.id, page.parent_page_id, up.depth + 1
+                FROM project_pages page JOIN up ON page.id = up.parent
+                WHERE up.depth < 20
+            )
+            SELECT count(DISTINCT id) FROM up WHERE parent IS NOT NULL AND depth >= 19
+            "#,
+        )
+        .bind(Uuid::parse_str(&work).expect("space id"))
+        .fetch_one(&setup.pool)
+        .await
+        .expect("loop check");
+        assert_eq!(looped, 0, "round {round}: pages loop");
+        for page in [a, c] {
+            let top = write(json!({"pageId": page, "parentPageId": null})).await;
+            assert_eq!(top["outcome"], "ok", "{top}");
+        }
+    }
+}

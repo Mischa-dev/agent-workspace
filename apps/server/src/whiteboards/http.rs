@@ -413,29 +413,50 @@ async fn put_file_http(
     let data = store::decode_data_url(&upload.data_url, &upload.mime_type)?;
     // Only for a board the caller may edit, the bytes go to the file store
     // before the write's transaction opens; it checks again.
+    // An image the board already has is answered at once, with nothing
+    // staged.
     let workspace = {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
         access(&mut transaction, &caller, id, true).await?;
+        if elements::valid_id(&upload.id)
+            && !store::stored_files(&mut transaction, id, std::slice::from_ref(&upload.id))
+                .await?
+                .is_empty()
+        {
+            return Ok(Json(FileStored {
+                id: upload.id,
+                stored: false,
+            }));
+        }
         sqlx::query_scalar::<_, Uuid>("SELECT organization_id FROM whiteboards WHERE id = $1")
             .bind(id)
             .fetch_one(&mut *transaction)
             .await?
     };
     let staged = crate::files::stage_content(&state, workspace, &data).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    access(&mut transaction, &caller, id, true).await?;
-    let stored = store::put_file(
-        &state,
-        &mut transaction,
-        &caller,
-        id,
-        &upload.id,
-        &upload.mime_type,
-        &data,
-        &staged,
-    )
-    .await?;
-    transaction.commit().await?;
+    let stored = async {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        access(&mut transaction, &caller, id, true).await?;
+        let stored = store::put_file(
+            &state,
+            &mut transaction,
+            &caller,
+            id,
+            &upload.id,
+            &upload.mime_type,
+            &data,
+            &staged,
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok::<_, AppError>(stored)
+    }
+    .await;
+    // Bytes no row came to hold go now, not with the sweep an hour on.
+    if !matches!(stored, Ok(true)) {
+        crate::files::abandon_content(&state, &staged).await;
+    }
+    let stored = stored?;
     Ok(Json(FileStored {
         id: upload.id,
         stored,
@@ -516,16 +537,10 @@ async fn restore_http(
 ) -> Result<Json<store::WriteOutcome>, AppError> {
     require_authenticated_write(&state, &headers, &principal).await?;
     let caller = Caller::browser(&principal)?;
+    let stores = crate::history::warm_moved(&state, "whiteboard", id, i64::from(revision)).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let board = access(&mut transaction, &caller, id, true).await?;
-    let outcome = store::restore_revision(
-        &crate::files::FileStore::from_config(&state.config),
-        &mut transaction,
-        &caller,
-        id,
-        revision,
-    )
-    .await?;
+    let outcome = store::restore_revision(&stores, &mut transaction, &caller, id, revision).await?;
     super::audit(
         &mut transaction,
         &caller,

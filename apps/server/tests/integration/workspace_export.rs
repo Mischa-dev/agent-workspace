@@ -52,6 +52,69 @@ async fn an_export_holds_the_workspace_and_nothing_it_must_not() {
     .await
     .expect("its activity");
 
+    // C1.34: a sheet snapshot and a board version the compaction jobs
+    // moved to the file store leave whole, with no key into this server's
+    // store.
+    let store = agent_workspace_server::files::store::FileStore::from_config(&fixture.state.config);
+    sqlx::query(
+        "INSERT INTO whiteboard_revisions (whiteboard_id, revision, scene_seq, elements, element_count) \
+         SELECT id, 1 + COALESCE((SELECT max(revision) FROM whiteboard_revisions WHERE whiteboard_id = $1), 0), \
+                scene_seq, '[{\"id\": \"kept\", \"type\": \"rectangle\"}]'::jsonb, 1 \
+         FROM whiteboards WHERE id = $1",
+    )
+    .bind(a.whiteboard)
+    .execute(&fixture.pool)
+    .await
+    .expect("a saved board version");
+    let mut moved = Vec::new();
+    for (table, owner, field, owner_id) in [
+        ("sheet_snapshots", "sheet_id", "state", a.sheet),
+        (
+            "whiteboard_revisions",
+            "whiteboard_id",
+            "elements",
+            a.whiteboard,
+        ),
+    ] {
+        let (revision, payload) = sqlx::query_as::<_, (i64, Value)>(&format!(
+            "SELECT revision::bigint, {field} FROM {table} WHERE {owner} = $1 \
+             ORDER BY revision DESC LIMIT 1"
+        ))
+        .bind(owner_id)
+        .fetch_one(&fixture.pool)
+        .await
+        .unwrap_or_else(|error| panic!("a {table} row: {error}"));
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut encoder, payload.to_string().as_bytes()).expect("gzip");
+        let key = format!(
+            "{}/history/{}-{}-{revision}.json.gz",
+            a.organization.simple(),
+            table.split('_').next().unwrap_or("thing"),
+            owner_id.simple()
+        );
+        store
+            .put(&key, &encoder.finish().expect("gzip"))
+            .await
+            .expect("payload stored");
+        let emptied = if table == "sheet_snapshots" {
+            "'{}'::jsonb"
+        } else {
+            "'[]'::jsonb"
+        };
+        sqlx::query(&format!(
+            "UPDATE {table} SET {field} = {emptied}, payload_key = $3, payload_store_id = $4 \
+             WHERE {owner} = $1 AND revision = $2"
+        ))
+        .bind(owner_id)
+        .bind(revision)
+        .bind(&key)
+        .bind(store.id())
+        .execute(&fixture.pool)
+        .await
+        .expect("moved");
+        moved.push((table, owner, field, owner_id, revision, payload));
+    }
+
     let (status, started) = send(
         app,
         a.browser.request(
@@ -161,6 +224,21 @@ async fn an_export_holds_the_workspace_and_nothing_it_must_not() {
     assert_eq!(manifest["format"], transfer::FORMAT);
     assert_eq!(manifest["formatVersion"], transfer::FORMAT_VERSION);
     assert_eq!(manifest["workspace"]["slug"], a.slug.as_str());
+
+    for (table, owner, field, owner_id, revision, payload) in &moved {
+        let line = text
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find(|line| {
+                line["kind"] == *table
+                    && line["data"][owner] == json!(owner_id)
+                    && line["data"]["revision"].as_i64() == Some(*revision)
+            })
+            .unwrap_or_else(|| panic!("the moved {table} row leaves"));
+        assert_eq!(&line["data"][field], payload, "{table} leaves whole");
+        assert!(line["data"]["payload_key"].is_null(), "{line}");
+        assert!(line["data"]["payload_store_id"].is_null(), "{line}");
+    }
 
     // A's own things are in it.
     for (what, id) in [

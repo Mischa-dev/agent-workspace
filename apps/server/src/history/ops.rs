@@ -224,6 +224,7 @@ impl Operation for HistoryShow {
         if kind == "page" {
             super::cold::warm_page(call.state, id, input.version).await?;
         }
+        let stores = super::warm_moved(call.state, &kind, id, input.version).await?;
         let mut connection = crate::db::scoped_tx(&call.state.pool)
             .await
             .map_err(crate::error::AppError::from)?;
@@ -240,15 +241,9 @@ impl Operation for HistoryShow {
                 Some(Ok(earlier)) => earlier.to_json(input.version),
             }
         } else {
-            super::show(
-                &crate::files::FileStore::from_config(&call.state.config),
-                &mut connection,
-                &kind,
-                id,
-                input.version,
-            )
-            .await?
-            .ok_or_else(|| OpError::not_found("That version"))?
+            super::show(&stores, &mut connection, &kind, id, input.version)
+                .await?
+                .ok_or_else(|| OpError::not_found("That version"))?
         };
         Ok(HistoryShowOutput {
             kind,
@@ -362,7 +357,7 @@ impl Operation for HistoryRestore {
             space_id: call.ctx.space_id,
             workspace_id: call.ctx.workspace_id,
             actor_id: call.account_id(),
-            files: crate::files::FileStore::from_config(&call.state.config),
+            files: super::warm_moved(call.state, &kind, id, input.version).await?,
         };
         if kind == "page" {
             super::cold::warm_page(call.state, id, input.version).await?;

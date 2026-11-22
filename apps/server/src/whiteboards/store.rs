@@ -286,6 +286,7 @@ pub async fn write_elements(
             id: element.id.clone(),
             before: stored.get(&element.id).map(|(_, _, data)| data.clone()),
             version: element.version,
+            nonce: Some(element.version_nonce),
         })
         .collect();
     crate::change_sets::record_board(
@@ -365,38 +366,30 @@ pub async fn save_revision(
 /// A saved version's elements, from the row or, once the compaction job
 /// moved them, from the file store. None when there is no such version.
 pub async fn revision_elements(
-    store: &files::FileStore,
+    stores: &files::store::Stores<'_>,
     connection: &mut sqlx::PgConnection,
     whiteboard_id: Uuid,
     revision: i32,
 ) -> Result<Option<Value>, AppError> {
-    let Some((elements, key)) = sqlx::query_as::<_, (Value, Option<String>)>(
-        "SELECT elements, payload_key FROM whiteboard_revisions WHERE whiteboard_id = $1 AND revision = $2",
-    )
-    .bind(whiteboard_id)
-    .bind(revision)
-    .fetch_optional(&mut *connection)
-    .await?
+    let Some((elements, key, store_id)) =
+        sqlx::query_as::<_, (Value, Option<String>, Option<String>)>(
+            "SELECT elements, payload_key, payload_store_id FROM whiteboard_revisions \
+         WHERE whiteboard_id = $1 AND revision = $2",
+        )
+        .bind(whiteboard_id)
+        .bind(revision)
+        .fetch_optional(&mut *connection)
+        .await?
     else {
         return Ok(None);
     };
     let Some(key) = key else {
         return Ok(Some(elements));
     };
-    let bytes = store.read_all(&key, MAX_PAYLOAD_BYTES).await?;
-    let mut json = Vec::new();
-    std::io::Read::read_to_end(
-        &mut flate2::read::GzDecoder::new(bytes.as_slice()),
-        &mut json,
-    )
-    .map_err(|_| AppError::Internal("a moved board version couldn't be read"))?;
-    Ok(Some(serde_json::from_slice(&json).map_err(|_| {
-        AppError::Internal("a moved board version couldn't be read")
-    })?))
+    crate::history::read_moved_payload(stores, store_id.as_deref(), &key)
+        .await
+        .map(Some)
 }
-
-/// The largest moved version read back, compressed.
-const MAX_PAYLOAD_BYTES: u64 = 64 * 1024 * 1024;
 
 pub fn register_compaction(registry: &mut crate::jobs::JobRegistry) {
     registry.register(
@@ -463,13 +456,15 @@ pub async fn compact_revisions(state: &AppState) -> Result<u64, AppError> {
         // version is saved, so this only guards against a second run.
         let updated = sqlx::query(
             r#"
-            UPDATE whiteboard_revisions SET elements = '[]'::jsonb, payload_key = $3
+            UPDATE whiteboard_revisions
+            SET elements = '[]'::jsonb, payload_key = $3, payload_store_id = $4
             WHERE whiteboard_id = $1 AND revision = $2 AND payload_key IS NULL
             "#,
         )
         .bind(board)
         .bind(revision)
         .bind(&key)
+        .bind(store.id())
         .execute(crate::db::scoped(&state.pool))
         .await?
         .rows_affected();
@@ -521,13 +516,13 @@ pub async fn revisions(
 /// new versions and everything added since is deleted, so open browsers
 /// merge the restore like any edit. The current state is saved first.
 pub async fn restore_revision(
-    store: &files::FileStore,
+    stores: &files::store::Stores<'_>,
     transaction: &mut Transaction<'_, Postgres>,
     caller: &Caller,
     whiteboard_id: Uuid,
     revision: i32,
 ) -> Result<WriteOutcome, AppError> {
-    let saved = revision_elements(store, transaction, whiteboard_id, revision)
+    let saved = revision_elements(stores, transaction, whiteboard_id, revision)
         .await?
         .ok_or(AppError::NotFound("whiteboard revision"))?;
     let scene_seq = lock(transaction, whiteboard_id).await?;
@@ -1082,6 +1077,14 @@ pub async fn copy_files(
     to: Uuid,
     actor: Uuid,
 ) -> Result<(), AppError> {
+    // Images still in the old table are held first: this waits out a move
+    // of one of them in flight (whose row is then in `files`, which the
+    // next statement sees), and the move job skips the ones held until
+    // this commits, so each image is copied from exactly one store.
+    sqlx::query("SELECT 1 FROM whiteboard_files WHERE whiteboard_id = $1 FOR SHARE")
+        .bind(from)
+        .execute(&mut **transaction)
+        .await?;
     sqlx::query(
         r#"
         INSERT INTO files (

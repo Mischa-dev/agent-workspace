@@ -1013,6 +1013,31 @@ async fn a_strict_rule_refuses_what_breaks_it_and_names_the_rule() {
         written_otherwise["outcome"], "invalid_request",
         "{written_otherwise}"
     );
+
+    // Rules set in the same write as an insert name the cells as they are
+    // after it: they don't move with it.
+    let both = call(
+        "sheet_update",
+        json!({"projectId": "VAL", "sheet": sheet,
+               "tabs": [{"tab": "Work", "insertRowsAt": 1, "count": 1}],
+               "validations": [{"tab": "Work", "rules": [{"range": "A2:A10", "allow": "number"}]}],
+               "clientRequestId": "insert-and-rules"}),
+    )
+    .await;
+    assert_eq!(both["outcome"], "ok", "{both}");
+    let read = call(
+        "sheet_get",
+        json!({"projectId": "VAL", "sheet": sheet, "tab": "Work"}),
+    )
+    .await;
+    let tab = read["value"]["tabs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|tab| tab["name"] == "Work")
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(tab["validations"][0]["range"], "A2:A10", "{tab}");
 }
 
 /// C1.18: a chart over a named range follows its cells: it reads them as
@@ -1233,4 +1258,47 @@ async fn a_sheet_write_is_undone_in_a_step() {
         changes["value"]["changes"][0]["undoable"], false,
         "{changes}"
     );
+}
+
+#[tokio::test]
+async fn an_added_row_reports_its_own_row_not_a_formula_below_it() {
+    let Some(setup) = setup("c2_sheet_row_add_row").await else {
+        return;
+    };
+    let app = &setup.app;
+    create_project(&setup, "ROW", "Rows").await;
+    let codex = connect_app(app, &setup.browser, "Codex", "full").await;
+    let session = initialize(app, &codex).await.expect("Codex MCP");
+    let made = tool(
+        app,
+        &codex,
+        &session,
+        "sheet_create",
+        json!({
+            "projectId": "ROW",
+            "name": "Log",
+            "tabs": [{"add": "Work"}, {"add": "Totals"}],
+            "cells": [
+                {"tab": "Work", "cell": "A1", "input": "Task"},
+                {"tab": "Work", "cell": "A2", "input": "Paint"},
+                {"tab": "Totals", "cell": "A40", "input": "=COUNTA(Work!A1:A100)"},
+            ],
+            "clientRequestId": "log-1",
+        }),
+    )
+    .await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let sheet = made["value"]["id"].as_str().expect("id").to_owned();
+    // The count on the other tab, forty rows down, changes with the
+    // append; the row reported is still the one the values went in.
+    let added = tool(
+        app,
+        &codex,
+        &session,
+        "sheet_row_add",
+        json!({"sheetId": sheet, "tab": "Work", "values": {"Task": "Sand"}, "clientRequestId": "row-1"}),
+    )
+    .await;
+    assert_eq!(added["outcome"], "ok", "{added}");
+    assert_eq!(added["value"]["row"], 3, "{added}");
 }

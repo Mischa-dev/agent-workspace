@@ -29,8 +29,6 @@ use crate::{error::AppError, files};
 const COMPACT_AFTER_DAYS: i32 = 30;
 /// Snapshots moved per compaction run.
 const COMPACT_BATCH: i64 = 100;
-/// The largest moved snapshot read back, compressed.
-const MAX_PAYLOAD_BYTES: u64 = 64 * 1024 * 1024;
 
 /// One cell a revision changed, as it is after it: its input (None when
 /// nothing is typed in it) and its look.
@@ -267,38 +265,32 @@ impl State {
 /// The sheet's tabs and inputs at `revision`, or None when its history
 /// doesn't reach back that far (revisions from before snapshots were kept).
 pub async fn state_at(
-    store: &files::FileStore,
+    stores: &files::store::Stores<'_>,
     connection: &mut PgConnection,
     sheet_id: Uuid,
     revision: i64,
 ) -> Result<Option<State>, AppError> {
     // A moved snapshot's row holds an empty object, so the state is read
     // as JSON first and only then as a state, from wherever it is.
-    let Some((base, stored, key)) = sqlx::query_as::<_, (i64, Json, Option<String>)>(
-        "SELECT revision, state, payload_key FROM sheet_snapshots \
+    let Some((base, stored, key, store_id)) =
+        sqlx::query_as::<_, (i64, Json, Option<String>, Option<String>)>(
+            "SELECT revision, state, payload_key, payload_store_id FROM sheet_snapshots \
              WHERE sheet_id = $1 AND revision <= $2 ORDER BY revision DESC LIMIT 1",
-    )
-    .bind(sheet_id)
-    .bind(revision)
-    .fetch_optional(&mut *connection)
-    .await?
+        )
+        .bind(sheet_id)
+        .bind(revision)
+        .fetch_optional(&mut *connection)
+        .await?
     else {
         return Ok(None);
     };
     let mut state: State = match key {
         None => serde_json::from_value(stored)
             .map_err(|_| AppError::Internal("a sheet snapshot couldn't be read"))?,
-        Some(key) => {
-            let bytes = store.read_all(&key, MAX_PAYLOAD_BYTES).await?;
-            let mut json = Vec::new();
-            std::io::Read::read_to_end(
-                &mut flate2::read::GzDecoder::new(bytes.as_slice()),
-                &mut json,
-            )
-            .map_err(|_| AppError::Internal("a moved sheet snapshot couldn't be read"))?;
-            serde_json::from_slice(&json)
-                .map_err(|_| AppError::Internal("a moved sheet snapshot couldn't be read"))?
-        }
+        Some(key) => serde_json::from_value(
+            crate::history::read_moved_payload(stores, store_id.as_deref(), &key).await?,
+        )
+        .map_err(|_| AppError::Internal("a moved sheet snapshot couldn't be read"))?,
     };
     let later = sqlx::query_as::<_, (i64, Option<Json>)>(
         "SELECT revision, cells FROM sheet_revisions \
@@ -574,13 +566,13 @@ pub enum Refusal {
 /// Puts the locked sheet's tabs and inputs back as they were at
 /// `revision`, as a new revision by `actor_id`.
 pub async fn restore(
-    store: &files::FileStore,
+    stores: &files::store::Stores<'_>,
     connection: &mut PgConnection,
     sheet: &Sheet,
     actor_id: Uuid,
     revision: i64,
 ) -> Result<Result<Applied, Refusal>, AppError> {
-    let Some(target) = state_at(store, &mut *connection, sheet.id, revision).await? else {
+    let Some(target) = state_at(stores, &mut *connection, sheet.id, revision).await? else {
         return Ok(Err(Refusal::NotKept));
     };
     let now = current(&mut *connection, sheet.id).await?;
@@ -648,12 +640,13 @@ pub async fn compact_snapshots(state: &crate::AppState) -> Result<u64, AppError>
         // A snapshot never changes once kept, so this only guards against a
         // second run.
         moved += sqlx::query(
-            "UPDATE sheet_snapshots SET state = '{}'::jsonb, payload_key = $3 \
+            "UPDATE sheet_snapshots SET state = '{}'::jsonb, payload_key = $3, payload_store_id = $4 \
              WHERE sheet_id = $1 AND revision = $2 AND payload_key IS NULL",
         )
         .bind(sheet)
         .bind(revision)
         .bind(&key)
+        .bind(store.id())
         .execute(crate::db::scoped(&state.pool))
         .await?
         .rows_affected();

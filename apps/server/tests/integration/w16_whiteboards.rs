@@ -1647,6 +1647,44 @@ async fn board_changes_are_listed_and_undone() {
         json!(0.0),
         "{now}"
     );
+
+    // An edit that wins a tie at the same version on its nonce is a change
+    // since, so undo leaves it alone.
+    let edited = call(
+        "whiteboard_update_elements",
+        json!({"whiteboardId": board, "operations": [{"op": "update", "id": "plan", "x": 555}]}),
+    )
+    .await;
+    assert_eq!(edited["outcome"], "ok", "{edited}");
+    sqlx::query(
+        "UPDATE whiteboard_elements \
+         SET version_nonce = CASE WHEN version_nonce = 0 THEN 1 ELSE 0 END, \
+             data = jsonb_set(data, '{x}', '777') \
+         WHERE whiteboard_id::text = $1 AND element_id = 'plan'",
+    )
+    .bind(&board)
+    .execute(&setup.pool)
+    .await
+    .expect("a tie won on the nonce");
+    let listed = call(
+        "change_list",
+        json!({"thingKind": "whiteboard", "thingId": board}),
+    )
+    .await;
+    let changes = listed["value"]["changes"].as_array().expect("changes");
+    let undo = call(
+        "change_undo",
+        json!({"changeSetId": changes[0]["id"], "clientRequestId": "board-undo-tie"}),
+    )
+    .await;
+    assert_eq!(undo["outcome"], "ok", "{undo}");
+    assert_eq!(undo["value"]["skipped"], json!(["element plan"]), "{undo}");
+    let now = scene(&setup, owner, &board, None).await;
+    assert_eq!(
+        element(&now, "plan").expect("plan")["x"],
+        json!(777),
+        "{now}"
+    );
 }
 
 /// C1.29: a board's images are files of the board in the file store. A
@@ -1684,6 +1722,28 @@ async fn board_images_live_in_the_file_store() {
     .await
     .expect("the image is a file of the board");
     assert_eq!((kind.as_str(), purpose.as_str()), ("whiteboard", "inline"));
+    // The same image id again with other bytes stores nothing and leaves no
+    // staged bytes behind (they'd count toward nothing for an hour).
+    use base64::Engine as _;
+    let other = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\nother bytes")
+    );
+    let (status, again) = request(
+        &setup,
+        owner,
+        "POST",
+        &format!("/api/v1/whiteboards/{board}/files"),
+        json!({"id": "photo1", "mimeType": "image/png", "dataURL": other}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["stored"], false, "{again}");
+    let staged = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM file_objects_pending")
+        .fetch_one(&setup.pool)
+        .await
+        .expect("pending notes");
+    assert_eq!(staged, 0, "nothing staged stays behind");
     let file_url = |board: &str, file: &str| format!("/api/v1/whiteboards/{board}/files/{file}");
     let (status, file) = request(
         &setup,
