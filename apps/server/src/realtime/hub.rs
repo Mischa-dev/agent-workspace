@@ -1509,6 +1509,75 @@ mod tests {
         assert!(wire.get("kind").is_none());
     }
 
+    /// A module change as the tail reads it from the log, for its space or
+    /// (workspace-wide) the workspace's own space: each reaches a socket.
+    #[tokio::test]
+    async fn module_changes_reach_live_sockets() {
+        use crate::outbox::{ModuleChange, ModuleChangedPayload};
+        let hub = RealtimeHub::new(16);
+        let mut receiver = hub.subscribe();
+        let (workspace, space, module) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+        for (position, change) in [
+            ModuleChange::Created,
+            ModuleChange::Updated,
+            ModuleChange::Switched,
+            ModuleChange::Removed,
+            ModuleChange::Connected,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let whole_workspace = change == ModuleChange::Connected;
+            let payload = serde_json::to_value(ModuleChangedPayload {
+                workspace_id: workspace,
+                project_id: space,
+                module_id: module,
+                change,
+                whole_workspace,
+            })
+            .expect("payload JSON");
+            let event = crate::events::LoggedEvent {
+                position: 100 + i64::try_from(position).expect("position"),
+                id: Uuid::now_v7(),
+                workspace_id: workspace,
+                space_id: Some(space),
+                thing_id: Some(module),
+                thing_kind: Some("module".to_owned()),
+                access_thing_id: None,
+                thing_version: None,
+                event_type: change.event_type().to_owned(),
+                class: "fact".to_owned(),
+                changes: Vec::new(),
+                audience: if whole_workspace {
+                    "workspace"
+                } else {
+                    "space"
+                }
+                .to_owned(),
+                conversation_id: None,
+                conversation_restricted: None,
+                audience_account_id: None,
+                actor_account_id: None,
+                via_credential_id: None,
+                requested_by_account_id: None,
+                run_id: None,
+                request_id: None,
+                legacy_type: Some(change.event_type().to_owned()),
+                payload,
+                created_at: chrono::Utc::now(),
+            };
+            hub.deliver_logged(&event);
+            let delivery = receiver
+                .try_recv()
+                .expect("a live frame for the module change");
+            let wire: serde_json::Value =
+                serde_json::from_str(&delivery.to_wire_json().expect("wire JSON")).expect("decode");
+            assert_eq!(wire["type"], change.event_type());
+            assert_eq!(wire["payload"]["moduleId"], module.to_string());
+            assert_eq!(wire["payload"]["workspaceId"], workspace.to_string());
+        }
+    }
+
     #[test]
     fn conversation_updates_and_reply_requests_reach_subscribers() {
         let hub = RealtimeHub::new(2);
