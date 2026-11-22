@@ -31,6 +31,10 @@ pub(crate) struct ModuleListArguments {
     /// kinds of thing with their fields, and the live blocks it offers.
     #[serde(default)]
     pub module: Option<String>,
+    /// Without projectId: true lists the built modules of every space you
+    /// can reach too, not only the workspace-wide ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub everywhere: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]

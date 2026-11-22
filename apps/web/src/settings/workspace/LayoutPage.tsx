@@ -22,6 +22,7 @@ function WorkspaceLayout({ name, organizationId }: { name: string; organizationI
   const layout = useWorkspaceLayout(organizationId)
   const experience = useWorkspaceExperience(organizationId)
   const modules = useModuleParts(organizationId)
+  const yourModules = useModuleParts(organizationId, 'everywhere')
   const save = useMutation({
     mutationFn: ({ next, version }: { next: Layout | null; version: number }) => saveWorkspaceLayout(organizationId, next, version),
     onSuccess: (response) => {
@@ -82,7 +83,7 @@ function WorkspaceLayout({ name, organizationId }: { name: string; organizationI
         <YourLayout effective={view.effective} previewName="A project" />
       )}
       <SavedPresets canManage={manage} organizationId={organizationId} presets={view.savedPresets.filter((preset) => !preset.removed)} />
-      <MyViewSection key={`${view.myView.hidden.join()}:${view.myView.showHidden}`} layoutHidden={view.effective.layoutHidden} modules={modules} myView={view.myView} organizationId={organizationId} />
+      <MyViewSection key={`${view.myView.hidden.join()}:${view.myView.showHidden}`} layoutHidden={view.effective.layoutHidden} modules={yourModules} myView={view.myView} organizationId={organizationId} />
     </>
   )
 }

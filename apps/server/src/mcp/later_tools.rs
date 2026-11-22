@@ -22,6 +22,7 @@ use crate::{
     AppState,
     addresses::Addresses,
     error::AppError,
+    idempotency::{self, IdempotencyOutcome, RequestHash, resource_bound_scope},
     later::{self, ChangeRequest, ListView, SaveRequest, SavedItemView, Saver},
     message_content::MessageContent,
     policy::ActorKind,
@@ -640,7 +641,7 @@ pub(super) async fn message_schedule(
     }
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ScheduledUpdateArguments {
     /// The scheduled message's ID, from message_schedule or later_list.
@@ -655,6 +656,11 @@ pub(super) struct ScheduledUpdateArguments {
     pub send_now: Option<bool>,
     /// true: don't send it.
     pub cancel: Option<bool>,
+    /// The caller's request id: a retry of this change answers with the
+    /// message as it is now, without changing it again. Not part of what
+    /// the retry is compared on.
+    #[serde(default, skip_serializing)]
+    pub client_request_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -663,6 +669,35 @@ pub struct ScheduledUpdateValue {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scheduled: Option<ScheduledLine>,
     pub canceled: bool,
+    /// True when this answers a retry: the change was made by the first
+    /// call, and this is the message as it is now.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idempotent_replay: bool,
+}
+
+/// What a scheduled message's change keeps for its retries: only whether it
+/// canceled the message. A retry reads the message again, as its author and
+/// with their access now, so a stored answer never stands in for that check.
+#[derive(Deserialize, Serialize)]
+struct KeptChange {
+    canceled: bool,
+}
+
+/// A retry key the change can't use: reused for a different change, still
+/// running, or stopped midway.
+fn retry_key_refusal<T>(error: AppError) -> ToolResult<T> {
+    match error {
+        AppError::Conflict("idempotency_key", "payload mismatch") => ToolResult::conflict(
+            "That clientRequestId was already used for a different change. Use a new one.",
+        ),
+        AppError::Conflict("idempotency_key", "command in progress") => ToolResult::unavailable(),
+        AppError::Conflict("idempotency_key", _) => ToolResult::conflict(
+            "A change with this clientRequestId stopped before it answered, so it may or may \
+             not have been made. Check the message with later_list, then retry with a new \
+             clientRequestId.",
+        ),
+        error => ToolResult::from_error(error, "scheduled_message_update"),
+    }
 }
 
 pub(super) async fn scheduled_message_update(
@@ -679,6 +714,13 @@ pub(super) async fn scheduled_message_update(
     let actor = match message_actor(principal) {
         Ok(actor) => actor,
         Err(message) => return ToolResult::denied(message),
+    };
+    let retry_key = match arguments.client_request_id.as_deref() {
+        Some(value) => match parse_request_id(value) {
+            Some(key) => Some(key),
+            None => return ToolResult::invalid("clientRequestId", REQUEST_ID_MESSAGE),
+        },
+        None => None,
     };
     let result = async {
         let existing = match scheduled_messages::get_scheduled(
@@ -708,11 +750,81 @@ pub(super) async fn scheduled_message_update(
         {
             return Ok(ToolResult::module_off("scheduled_message_update", module));
         }
+        // Reserved only now, after the author's access is checked above: a
+        // retry answers with the message as they can see it now, never with
+        // a stored copy. The reservation is kept apart from the changes
+        // (each commits on its own), so a retry never runs them twice.
+        let Some(key) = retry_key.as_ref() else {
+            return change_scheduled(state, principal, &actor, id, existing, &arguments).await;
+        };
+        let scope = resource_bound_scope("scheduled_messages", id, "update")?;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        let outcome = idempotency::reserve_apart(
+            &mut transaction,
+            principal.actor_id,
+            &scope,
+            key,
+            RequestHash::for_value(&arguments)?,
+        )
+        .await;
+        let reservation = match outcome {
+            Ok(IdempotencyOutcome::Reserved(reservation)) => {
+                transaction.commit().await?;
+                reservation
+            }
+            Ok(IdempotencyOutcome::Replay(replay)) => {
+                transaction.commit().await?;
+                let kept: KeptChange = replay.decode()?;
+                return Ok(ToolResult::ok(ScheduledUpdateValue {
+                    scheduled: (!kept.canceled).then(|| scheduled_line(state, existing)),
+                    canceled: kept.canceled,
+                    idempotent_replay: true,
+                }));
+            }
+            Err(error) => return Ok(retry_key_refusal(error)),
+        };
+        let changed = change_scheduled(state, principal, &actor, id, existing, &arguments).await;
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        match &changed {
+            Ok(ToolResult::Ok { value }) => {
+                idempotency::complete(
+                    &mut transaction,
+                    &reservation,
+                    axum::http::StatusCode::OK,
+                    &KeptChange {
+                        canceled: value.canceled,
+                    },
+                )
+                .await?;
+            }
+            // Refused or failed: a retry runs it again. A refusal can come
+            // after an edit was saved (sending now, once edited); running
+            // the same edit again leaves the message as it is.
+            _ => idempotency::release(&mut transaction, &reservation).await?,
+        }
+        transaction.commit().await?;
+        changed
+    }
+    .await;
+    result.unwrap_or_else(|error| ToolResult::from_error(error, "scheduled_message_update"))
+}
+
+/// The changes themselves, once the author's access is checked.
+async fn change_scheduled(
+    state: &AppState,
+    principal: &McpPrincipal,
+    actor: &crate::conversations::MessageCommandActor,
+    id: Uuid,
+    existing: ScheduledMessageView,
+    arguments: &ScheduledUpdateArguments,
+) -> Result<ToolResult<ScheduledUpdateValue>, AppError> {
+    {
         if arguments.cancel == Some(true) {
             return match scheduled_messages::cancel(&state.pool, principal.actor_id, id).await {
                 Ok(()) => Ok(ToolResult::ok(ScheduledUpdateValue {
                     scheduled: None,
                     canceled: true,
+                    idempotent_replay: false,
                 })),
                 Err(error) => Ok(schedule_refusal(error, "scheduled_message_update")),
             };
@@ -749,7 +861,7 @@ pub(super) async fn scheduled_message_update(
         if content.is_some() || arguments.send_at.is_some() {
             updated = match scheduled_messages::update(
                 state,
-                &actor,
+                actor,
                 id,
                 content,
                 arguments.send_at.as_deref(),
@@ -767,11 +879,10 @@ pub(super) async fn scheduled_message_update(
                 Err(error) => return Ok(schedule_refusal(error, "scheduled_message_update")),
             };
         }
-        Ok::<_, AppError>(ToolResult::ok(ScheduledUpdateValue {
+        Ok(ToolResult::ok(ScheduledUpdateValue {
             scheduled: Some(scheduled_line(state, updated)),
             canceled: false,
+            idempotent_replay: false,
         }))
     }
-    .await;
-    result.unwrap_or_else(|error| ToolResult::from_error(error, "scheduled_message_update"))
 }

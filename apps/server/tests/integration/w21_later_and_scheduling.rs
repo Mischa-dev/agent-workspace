@@ -567,6 +567,115 @@ async fn a_scheduled_send_posts_once_as_its_author_and_fails_cleanly_after_acces
 }
 
 #[tokio::test]
+async fn a_keyed_scheduled_change_replays_the_message_now_and_only_to_its_author_while_they_see_it()
+{
+    let Some(fixture) = fixture("w21_schedule_retry").await else {
+        return;
+    };
+    let setup = &fixture.setup;
+    let pool = &setup.pool;
+    let project = create_project(setup, "SCR", "Schedule retries").await;
+    let space = direct_space(setup).await;
+    let channel = create_channel(setup, &project, "updates").await;
+    let (mara, mara_browser) = add_person(setup, &[&project, &space], "mara").await;
+    let (status, scheduled) = call(
+        setup,
+        &mara_browser,
+        "POST",
+        "/api/v2/ops/message_schedule",
+        Some(&Uuid::now_v7().to_string()),
+        json!({"conversationId": channel, "content": text("Draft"), "sendAt": in_an_hour()}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{scheduled}");
+    let id = scheduled["value"]["scheduled"]["id"]
+        .as_str()
+        .expect("scheduled")
+        .to_owned();
+    let change = |key: &str, body: Value| {
+        let browser = Browser {
+            cookie: mara_browser.cookie.clone(),
+            csrf: mara_browser.csrf.clone(),
+        };
+        let key = key.to_owned();
+        async move {
+            call(
+                setup,
+                &browser,
+                "POST",
+                "/api/v2/ops/scheduled_message_update",
+                Some(&key),
+                body,
+            )
+            .await
+        }
+    };
+    let saved_text = || async {
+        sqlx::query_scalar::<_, String>("SELECT plain_text FROM scheduled_messages WHERE id = $1")
+            .bind(id.parse::<Uuid>().expect("id"))
+            .fetch_one(pool)
+            .await
+            .expect("text")
+    };
+
+    let edit = json!({"id": id, "text": "First edit"});
+    let (status, first) = change("edit-1", edit.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["replayed"], false, "{first}");
+    assert_eq!(first["replaySafe"], true, "{first}");
+    assert_eq!(first["value"]["scheduled"]["text"], "First edit");
+
+    // A later edit, then a retry of the first: nothing changes back, and
+    // the answer is the message as it is now, not a stored copy.
+    let (status, second) = change("edit-2", json!({"id": id, "text": "Second edit"})).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    let (status, retried) = change("edit-1", edit.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{retried}");
+    assert_eq!(retried["replayed"], true, "{retried}");
+    assert_eq!(retried["value"]["scheduled"]["text"], "Second edit", "{retried}");
+    assert!(retried["value"].get("idempotentReplay").is_none(), "{retried}");
+    assert_eq!(saved_text().await, "Second edit");
+
+    // The same id for a different change is refused.
+    let (status, reused) = change("edit-1", json!({"id": id, "text": "Other"})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{reused}");
+    assert_eq!(saved_text().await, "Second edit");
+
+    // A refused change gives its id back: a retry runs it.
+    let late = json!({"id": id, "sendAt": "not a time"});
+    let (status, refused) = change("late", late.clone()).await;
+    assert!(status.is_client_error(), "{refused}");
+    let (again, refused_again) = change("late", late).await;
+    assert_eq!(again, status, "{refused_again}");
+    assert_eq!(refused_again, refused);
+
+    // A retried cancel says canceled again.
+    let cancel = json!({"id": id, "cancel": true});
+    let (status, canceled) = change("cancel-1", cancel.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{canceled}");
+    assert_eq!(canceled["value"]["canceled"], true);
+    let (status, canceled_again) = change("cancel-1", cancel.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{canceled_again}");
+    assert_eq!(canceled_again["replayed"], true);
+    assert_eq!(canceled_again["value"]["canceled"], true);
+
+    // Once Mara can't see the channel, a retry gets nothing back.
+    sqlx::query(
+        "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(project.parse::<Uuid>().expect("project"))
+    .bind(mara)
+    .execute(pool)
+    .await
+    .expect("remove Mara");
+    let (status, gone) = change("edit-1", edit).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{gone}");
+    assert!(!gone.to_string().contains("Second edit"), "{gone}");
+    let (status, gone) = change("cancel-1", cancel).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{gone}");
+}
+
+#[tokio::test]
 async fn forwarding_posts_only_where_the_sender_can_and_quotes_only_to_who_can_see() {
     let Some(fixture) = fixture("w21_forward").await else {
         return;

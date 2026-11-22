@@ -650,9 +650,9 @@ impl Operation for ScheduledMessageUpdate {
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "messages";
     const PERMISSION: Option<Perm> = Some(Perm::ChannelsPost);
-    // Not replayed by the dispatcher: a stored answer would skip the
-    // command's check that the author still reaches the conversation, and
-    // a send-now refusal can follow a saved edit. replaySafe stays false.
+    // The command keeps the key itself, after its check that the author
+    // still reaches the conversation: a retry answers with the message as
+    // it is now, never with a stored copy.
     const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const TITLE: &'static str = "Change scheduled message";
     const DESCRIPTION: &'static str = "Change a message you scheduled: its text or time \
@@ -668,7 +668,8 @@ impl Operation for ScheduledMessageUpdate {
         input: ScheduledMessageUpdateInput,
     ) -> Result<ScheduledUpdateValue, OpError> {
         let id = input.id.id();
-        let updated = messaging::scheduled_update(
+        let keyed = call.ctx.request_id.is_some();
+        let mut updated = messaging::scheduled_update(
             call.state,
             call.ctx,
             id,
@@ -681,6 +682,16 @@ impl Operation for ScheduledMessageUpdate {
             },
         )
         .await?;
+        if keyed {
+            call.key_honoured();
+        }
+        call.mark_replayed(updated.idempotent_replay);
+        if updated.idempotent_replay {
+            // A replay changed nothing: no second audit row.
+            call.audited_by_command();
+        }
+        // The envelope says it replayed; the value is the message now.
+        updated.idempotent_replay = false;
         call.audit_target("scheduled_message", id, json!({}));
         Ok(updated)
     }

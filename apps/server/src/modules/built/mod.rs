@@ -178,6 +178,22 @@ pub async fn list(
     .await?)
 }
 
+/// Every live module of the workspace, whatever space owns it. Callers
+/// keep only the spaces the reader reaches.
+pub async fn list_everywhere(
+    connection: &mut PgConnection,
+    workspace_id: Uuid,
+) -> Result<Vec<ModuleRow>, AppError> {
+    Ok(sqlx::query_as::<_, ModuleRow>(&format!(
+        "SELECT {MODULE_COLUMNS} FROM modules \
+         WHERE workspace_id = $1 AND archived_at IS NULL \
+         ORDER BY name, id LIMIT 200"
+    ))
+    .bind(workspace_id)
+    .fetch_all(&mut *connection)
+    .await?)
+}
+
 /// Whether a module is switched on where it lives.
 pub async fn is_on(connection: &mut PgConnection, module: &ModuleRow) -> Result<bool, AppError> {
     Ok(sqlx::query_scalar::<_, bool>(

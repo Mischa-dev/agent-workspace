@@ -335,6 +335,7 @@ pub(crate) async fn scheduled_update(
         send_at: change.send_at,
         send_now: change.send_now,
         cancel: change.cancel,
+        client_request_id: ctx.request_id.clone(),
     };
     answer(
         later_tools::scheduled_message_update(state, &principal, arguments).await,

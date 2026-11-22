@@ -10,12 +10,15 @@ export type ModulePart = { id: PartId; label: string; description: string }
 /**
  * The built modules with sidebar entries, as layout parts (`module.<key>`):
  * in a space, the ones whose entries show there; across the workspace,
- * every one that's on.
+ * every workspace-wide one that's on, or with `'everywhere'` (for your own
+ * view, which follows you into every space) each reachable space's own too.
  */
-export function useModuleParts(workspaceId: string, spaceId?: string): ModulePart[] {
-  const list = useQuery({ ...opQuery('module_list', spaceId ? { projectId: spaceId } : {}, { workspaceId }), staleTime: 60_000 })
+export function useModuleParts(workspaceId: string, spaceId?: string | 'everywhere'): ModulePart[] {
+  const everywhere = spaceId === 'everywhere'
+  const space = everywhere ? undefined : spaceId
+  const list = useQuery({ ...opQuery('module_list', space ? { projectId: space } : everywhere ? { everywhere: true } : {}, { workspaceId }), staleTime: 60_000 })
   return (list.data?.built ?? [])
-    .filter((module) => module.on && module.nav.some((entry) => !spaceId || entry.spaceId === spaceId || module.spaceId === spaceId))
+    .filter((module) => module.on && module.nav.some((entry) => !space || entry.spaceId === space || module.spaceId === space))
     .map((module) => ({
       id: modulePart(module.key),
       label: module.name,

@@ -647,3 +647,58 @@ async fn a_form_named_like_its_collection_keeps_the_references_apart() {
     let nav = made["value"].to_string();
     assert!(nav.contains(&collection) && nav.contains(&form), "{nav}");
 }
+
+/// Your own view follows you into every space, so `module_list` with
+/// `everywhere` lists each space's own modules too, but only those of spaces
+/// the caller still reaches.
+#[tokio::test]
+async fn everywhere_lists_a_space_s_modules_only_to_who_reaches_the_space() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("pat", "member")
+        .connected_app("builder")
+        .build("m16_everywhere")
+        .await
+    else {
+        return;
+    };
+    let made = tool(&world, "builder", "module_create", module_input()).await;
+    assert_eq!(made["outcome"], "ok", "{made}");
+    let module_id = made["value"]["id"].as_str().expect("module").to_owned();
+    let module_id = module_id.as_str();
+    let pat = &world.people["pat"];
+    let shared = &world;
+    let listed_by = |everywhere: bool| async move {
+        let input = if everywhere {
+            json!({"everywhere": true})
+        } else {
+            json!({})
+        };
+        let (status, listed) = pat
+            .browser
+            .op_in(&shared.app, shared.organization, "module_list", input)
+            .await;
+        assert_eq!(status, StatusCode::OK, "{listed}");
+        listed["built"]
+            .as_array()
+            .expect("built")
+            .iter()
+            .any(|row| row["id"] == module_id)
+    };
+
+    // The workspace-wide list leaves a space's module out; everywhere has it.
+    assert!(!listed_by(false).await);
+    assert!(listed_by(true).await);
+
+    // Once Pat is out of the space, it's gone from theirs.
+    sqlx::query(
+        "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND actor_id = $2",
+    )
+    .bind(Uuid::parse_str(world.project("WORK")).expect("space"))
+    .bind(pat.actor)
+    .execute(world.pool())
+    .await
+    .expect("Pat leaves the space");
+    assert!(!listed_by(true).await);
+    world.finish().await;
+}

@@ -113,8 +113,9 @@ impl Operation for ModuleList {
     const DESCRIPTION: &'static str = "Which modules are on in the workspace (or, with \
         projectId, in a space, as your role there narrows them) and what each does: its kinds \
         of thing, its tools by what they do, the live blocks it offers, and why one is off; \
-        and the built modules there. Pass module for one module's full declaration. Tools of a \
-        module that's off aren't listed and say so when called.";
+        and the built modules there (everywhere: true adds those of every space you reach). \
+        Pass module for one module's full declaration. Tools of a module that's off aren't \
+        listed and say so when called.";
 
     type Input = module_tools::ModuleListArguments;
     type Output = ModuleListValue;
@@ -159,7 +160,40 @@ impl Operation for ModuleList {
                 .unwrap_or_default(),
             None => state::for_member(tx, workspace, account).await?,
         };
-        let rows = modules::built::list(tx, workspace, space, false).await?;
+        let rows = match space {
+            None if input.everywhere == Some(true) => {
+                // Each space-owned module only where the caller reaches its
+                // space, as a call there would be checked.
+                let need = crate::access::Need::maybe(Self::PERMISSION).in_module(Self::MODULE);
+                let mut reached = std::collections::BTreeMap::new();
+                let mut kept = Vec::new();
+                for row in modules::built::list_everywhere(tx, workspace).await? {
+                    if let Some(owner) = row.space_id {
+                        let reaches = match reached.get(&owner) {
+                            Some(reaches) => *reaches,
+                            None => {
+                                let reaches = crate::access::check(
+                                    tx,
+                                    &call.ctx.caller,
+                                    need,
+                                    crate::access::Target::Space(owner),
+                                )
+                                .await?
+                                .is_ok();
+                                reached.insert(owner, reaches);
+                                reaches
+                            }
+                        };
+                        if !reaches {
+                            continue;
+                        }
+                    }
+                    kept.push(row);
+                }
+                kept
+            }
+            _ => modules::built::list(tx, workspace, space, false).await?,
+        };
         let counts = modules::built::part_counts(
             tx,
             &rows.iter().map(|row| row.id).collect::<Vec<_>>(),

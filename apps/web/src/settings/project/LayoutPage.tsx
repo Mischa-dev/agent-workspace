@@ -25,11 +25,10 @@ function ProjectLayout({ project }: { project: Project }) {
   const experience = useProjectExperience(project.id)
   const queryClient = useQueryClient()
   const layout = useProjectLayout(project.id)
-  // The editor offers this space's built modules; your view is workspace-wide,
-  // with this space's own modules (which the workspace-wide list leaves out) too.
+  // The editor offers this space's built modules; your view follows you into
+  // every space, so it offers every reachable space's.
   const spaceModules = useModuleParts(project.organizationId, project.id)
-  const workspaceModules = useModuleParts(project.organizationId)
-  const yourModules = [...workspaceModules, ...spaceModules.filter((part) => !workspaceModules.some((other) => other.id === part.id))]
+  const yourModules = useModuleParts(project.organizationId, 'everywhere')
   const save = useMutation({
     mutationFn: ({ next, version }: { next: Layout | null; version: number }) => saveProjectLayout(project.id, next, version),
     onSuccess: (response) => {
