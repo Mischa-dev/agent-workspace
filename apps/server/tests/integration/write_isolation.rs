@@ -122,21 +122,14 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/inbox/update",
     "PUT /api/v1/notification-settings/channels",
     "PUT /api/v1/notification-settings/mutes",
-    "PATCH /api/v1/organizations/{organization_id}",
     "POST /api/v1/organizations/{organization_id}/ai/test",
     "POST /api/v1/organizations/{organization_id}/harnesses",
     "DELETE /api/v1/organizations/{organization_id}/harnesses/{harness_id}",
     "PATCH /api/v1/organizations/{organization_id}/harnesses/{harness_id}",
-    "POST /api/v1/organizations/{organization_id}/invitations",
-    "PUT /api/v1/organizations/{organization_id}/layout",
     "PUT /api/v1/organizations/{organization_id}/layout/mine",
-    "PUT /api/v1/organizations/{organization_id}/modules",
     "POST /api/v1/organizations/{organization_id}/workspace-templates",
     "POST /api/v1/organizations/{organization_id}/workspace-templates/apply",
     "DELETE /api/v1/organizations/{organization_id}/workspace-templates/{template_id}",
-    "POST /api/v1/organizations/{organization_id}/layout/presets",
-    "DELETE /api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-    "PATCH /api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
     "POST /api/v1/organizations/{organization_id}/leave",
     "DELETE /api/v1/organizations/{organization_id}/mail",
     "PUT /api/v1/organizations/{organization_id}/mail",
@@ -194,8 +187,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/imports/{import_id}/commit",
     "POST /api/v1/projects/{project_id}/integrations/github/connect",
     "POST /api/v1/projects/{project_id}/integrations/github/repositories",
-    "POST /api/v1/projects/{project_id}/fields",
-    "PATCH /api/v1/projects/{project_id}/fields/{field_id}",
     "POST /api/v1/projects/{project_id}/collections",
     "PATCH /api/v1/projects/{project_id}/collections/{collection_id}",
     "POST /api/v1/projects/{project_id}/collections/{collection_id}/fields",
@@ -207,8 +198,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/sheets/import",
     "POST /api/v1/projects/{project_id}/sheets/{sheet_id}/changes",
     "POST /api/v1/projects/{project_id}/launches",
-    "PUT /api/v1/projects/{project_id}/layout",
-    "PUT /api/v1/projects/{project_id}/layout/rules",
     "POST /api/v1/projects/{project_id}/provider-accounts",
     "DELETE /api/v1/projects/{project_id}/provider-accounts/{account_id}",
     "PATCH /api/v1/projects/{project_id}/provider-accounts/{account_id}",
@@ -255,7 +244,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/whiteboards/{id}/operations",
     "POST /api/v1/whiteboards/{id}/revisions/{revision}/restore",
     "POST /api/v1/whiteboards/{id}/scene",
-    "POST /api/v1/workspace-invitations/{invitation_id}/revoke",
     "POST /connect/confirm",
     "POST /oauth/authorize",
 ];
@@ -1584,8 +1572,9 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         ),
         (
             "POST",
-            format!("/api/v1/organizations/{organization}/invitations"),
-            json!({"role": "member", "expiresInHours": 24}),
+            format!("/api/v2/w/{organization}/ops/invitation_create"),
+            json!({"projectId": "workspace", "wholeWorkspace": true, "role": "member",
+                "expiresInHours": 24}),
         ),
         (
             "POST",
@@ -4268,11 +4257,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         ),
         // The workspace
         path_case(
-            "PATCH /api/v1/organizations/{organization_id}",
-            &[organization()],
-            versioned("organizations", 0, json!({"name": "Acme net"})),
-        ),
-        path_case(
             "POST /api/v1/organizations/{organization_id}/ai/test",
             &[organization()],
             empty(),
@@ -4312,26 +4296,8 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[organization(), id(sp.harness, bx.harness)],
             empty(),
         ),
-        path_case(
-            "POST /api/v1/organizations/{organization_id}/invitations",
-            &[organization()],
-            json_body(json!({"role": "member", "expiresInHours": 24})),
-        ),
         // Layouts: a saved preset is the workspace's own, so B's is refused
         // wherever A's would do.
-        path_case(
-            "PUT /api/v1/organizations/{organization_id}/layout",
-            &[organization()],
-            |values| {
-                let preset = if is_a(values, &a.organization.to_string()) {
-                    ax.layout_preset
-                } else {
-                    bx.layout_preset
-                };
-                Payload::Json(json!({"layout": {"preset": preset}}))
-            },
-        )
-        .rejecting(vec![json!({"layout": {"preset": bx.layout_preset}})]),
         path_case(
             "PUT /api/v1/organizations/{organization_id}/layout/mine",
             &[organization()],
@@ -4340,14 +4306,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         // Modules: switching one on that is on changes nothing in A, so the
         // rest of the run keeps every module. B's space can't be narrowed
         // from A (M1.2).
-        path_case(
-            "PUT /api/v1/organizations/{organization_id}/modules",
-            &[organization()],
-            json_body(json!({"switches": {"whiteboards": true}})),
-        )
-        .rejecting(vec![
-            json!({"switches": {"whiteboards": false}, "space": b.project}),
-        ]),
         // Workspace templates (AWD-76): Everything changes nothing in A, whose
         // modules are all on. B's saved template and project are refused.
         path_case(
@@ -4372,31 +4330,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         path_case(
             "DELETE /api/v1/organizations/{organization_id}/workspace-templates/{template_id}",
             &[organization(), id(ax.workspace_template, bx.workspace_template)],
-            empty(),
-        )
-        .last(),
-        path_case(
-            "POST /api/v1/organizations/{organization_id}/layout/presets",
-            &[organization()],
-            |values| {
-                let preset = if is_a(values, &a.organization.to_string()) {
-                    ax.layout_preset
-                } else {
-                    bx.layout_preset
-                };
-                Payload::Json(json!({"name": "Net preset", "layout": {"preset": preset}}))
-            },
-        )
-        .rejecting(vec![json!({"name": "Net preset b", "layout": {"preset": bx.layout_preset}})]),
-        path_case(
-            "PATCH /api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-            &[organization(), id(ax.layout_preset, bx.layout_preset)],
-            json_body(json!({"description": "Net preset"})),
-        )
-        .rejecting(vec![json!({"layout": {"preset": bx.layout_preset}})]),
-        path_case(
-            "DELETE /api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-            &[organization(), id(ax.layout_preset, bx.layout_preset)],
             empty(),
         )
         .last(),
@@ -4498,11 +4431,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         )
         .rejecting(vec![json!({"actorId": b.rook})])
         .without_own("it would hand A to someone else; transfers are checked in the workspace tests"),
-        path_case(
-            "POST /api/v1/workspace-invitations/{invitation_id}/revoke",
-            &[id(ax.workspace_invitation, bx.workspace_invitation)],
-            versioned("workspace_invitations", 0, json!({})),
-        ),
         // Pages
         path_case(
             "PATCH /api/v1/pages/{id}",
@@ -4806,16 +4734,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         )
         .without_own(NEEDS_GITHUB),
         // Invitations, labels, launches, members, milestones
-        path_case(
-            "POST /api/v1/projects/{project_id}/fields",
-            &[project()],
-            json_body(json!({"name": "Net field", "type": "text"})),
-        ),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/fields/{field_id}",
-            &[project(), id(ax.field, bx.field)],
-            versioned("field_definitions", 1, json!({"description": "Net"})),
-        ),
         // Collections (AWD-90). A view or a record may only name A's fields,
         // people, tasks and pages.
         path_case(
@@ -4954,44 +4872,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             json!({"workItemIds": [a.subtask], "startWhen": "at", "startAt": far, "agentProfileId": bx.agent_profile}),
         ]),
         // Layouts
-        path_case(
-            "PUT /api/v1/projects/{project_id}/layout",
-            &[project()],
-            |values| {
-                let preset = if is_a(values, &a.project) {
-                    ax.layout_preset
-                } else {
-                    bx.layout_preset
-                };
-                Payload::Json(json!({"layout": {"preset": preset}}))
-            },
-        )
-        .rejecting(vec![json!({"layout": {"preset": bx.layout_preset}})]),
-        path_case(
-            "PUT /api/v1/projects/{project_id}/layout/rules",
-            &[project()],
-            |values| {
-                let (preset, person) = if is_a(values, &a.project) {
-                    (ax.layout_preset, a.rook)
-                } else {
-                    (bx.layout_preset, b.rook)
-                };
-                Payload::Json(json!({"rules": [
-                    {"role": "viewer", "preset": preset},
-                    {"actorId": person, "preset": "bug_reporting"},
-                ]}))
-            },
-        )
-        .rejecting(vec![
-            json!({"rules": [
-                {"role": "viewer", "preset": bx.layout_preset},
-                {"actorId": a.rook, "preset": "bug_reporting"},
-            ]}),
-            json!({"rules": [
-                {"role": "viewer", "preset": ax.layout_preset},
-                {"actorId": b.rook, "preset": "bug_reporting"},
-            ]}),
-        ]),
         // Provider accounts
         path_case(
             "POST /api/v1/projects/{project_id}/provider-accounts",

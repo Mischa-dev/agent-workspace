@@ -112,50 +112,8 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "layouts",
         Put,
-        "/api/v1/projects/{project_id}/layout",
-        SettingsManage
-    ),
-    policy_route!(
-        "layouts",
-        Put,
-        "/api/v1/projects/{project_id}/layout/rules",
-        SettingsManage
-    ),
-    policy_route!(
-        "layouts",
-        Put,
-        "/api/v1/organizations/{organization_id}/layout",
-        SettingsManage
-    ),
-    policy_route!(
-        "layouts",
-        Put,
         "/api/v1/organizations/{organization_id}/layout/mine",
         NavigationWrite
-    ),
-    policy_route!(
-        "modules/http",
-        Put,
-        "/api/v1/organizations/{organization_id}/modules",
-        SettingsManage
-    ),
-    policy_route!(
-        "layouts",
-        Post,
-        "/api/v1/organizations/{organization_id}/layout/presets",
-        SettingsManage
-    ),
-    policy_route!(
-        "layouts",
-        Patch,
-        "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-        SettingsManage
-    ),
-    policy_route!(
-        "layouts",
-        Delete,
-        "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-        SettingsManage
     ),
     policy_route!(
         "harnesses",
@@ -253,12 +211,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "workspace",
         Patch,
-        "/api/v1/organizations/{organization_id}",
-        SettingsManage
-    ),
-    policy_route!(
-        "workspace",
-        Patch,
         "/api/v1/organizations/{organization_id}/members/{actor_id}",
         MembershipManage
     ),
@@ -291,18 +243,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/organizations/{organization_id}/leave",
         SessionAuthentication
-    ),
-    policy_route!(
-        "workspace",
-        Post,
-        "/api/v1/organizations/{organization_id}/invitations",
-        InvitationManage
-    ),
-    policy_route!(
-        "workspace",
-        Post,
-        "/api/v1/workspace-invitations/{invitation_id}/revoke",
-        InvitationManage
     ),
     boundary_route!(
         "workspace",
@@ -1233,18 +1173,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects/{project_id}/work-items/bulk",
         WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/fields",
-        WorkflowManage
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/projects/{project_id}/fields/{field_id}",
-        WorkflowManage
     ),
     policy_route!(
         "collections/http",

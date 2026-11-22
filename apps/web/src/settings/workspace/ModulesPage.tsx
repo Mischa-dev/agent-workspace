@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Blocks } from 'lucide-react'
 
 import { requestJson } from '../../api/client'
+import { callOp, ranOrThrow } from '../../api/ops'
 import { can } from '../../auth/can'
 import { queryKeys } from '../../api/queryKeys'
 import { toastError } from '../../app/mutations'
@@ -90,10 +91,14 @@ function WorkspaceModules({
     queryFn: () => requestJson<ModulesResponse>(modulesPath(organizationId)),
   })
   const change = useMutation({
-    mutationFn: (body: { preset?: string; switches?: Record<string, boolean> }) =>
-      requestJson<ModulesResponse>(modulesPath(organizationId), { method: 'PUT', json: body }),
-    onSuccess: (response) => {
-      queryClient.setQueryData(modulesKey(organizationId), response)
+    // Through `workspace_update`, in the workspace's own space.
+    mutationFn: async (body: { preset?: string; switches?: Record<string, boolean> }) =>
+      ranOrThrow(
+        await callOp('workspace_update', { projectId: 'workspace', preset: body.preset, modules: body.switches }, { workspaceId: organizationId }),
+        'Switching modules',
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: modulesKey(organizationId) })
       // What everyone sees follows from the layouts, which carry the modules,
       // and the rail and the command menu from each project's modulesOff.
       void refreshLayouts(queryClient)

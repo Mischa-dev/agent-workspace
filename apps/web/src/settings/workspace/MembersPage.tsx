@@ -36,6 +36,7 @@ import { OneTimeValue } from '../OneTimeValue'
 import type { SettingsPageProps } from '../types'
 import {
   createWorkspaceInvitation,
+  InvitationLinkMissing,
   listWorkspaceInvitations,
   listWorkspaceMembers,
   revokeWorkspaceInvitation,
@@ -437,11 +438,14 @@ function InviteSection({
       setNote('')
       setError(null)
     },
-    onError: (reason) => setError(`The invitation wasn’t created. ${describeError(reason).message}`),
+    onError: (reason) =>
+      setError(
+        reason instanceof InvitationLinkMissing ? reason.message : `The invitation wasn’t created. ${describeError(reason).message}`,
+      ),
     onSettled: refresh,
   })
   const revoke = useMutation({
-    mutationFn: revokeWorkspaceInvitation,
+    mutationFn: (invitation: WorkspaceInvitation) => revokeWorkspaceInvitation(organizationId, invitation),
     onSuccess: () => {
       setRevoking(null)
       showToast({ tone: 'success', title: 'Invitation revoked', description: 'Its link no longer works.' })

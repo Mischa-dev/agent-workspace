@@ -233,42 +233,41 @@ async fn slug_rename_keeps_old_links() {
     // Reserved words and malformed slugs are refused; a member without
     // settings.manage can't rename.
     for reserved in ["api", "settings", "aw-direct-scope", "x", "Not A Slug"] {
-        let (status, body) = send(
-            &world.app,
-            world.owner.browser.request(
-                "PATCH",
-                &format!("/api/v1/organizations/{workspace}"),
-                None,
-                json!({ "slug": reserved, "expectedVersion": version }),
-            ),
-        )
-        .await;
+        let (status, body) = world
+            .owner
+            .browser
+            .op_in(
+                &world.app,
+                workspace,
+                "workspace_update",
+                json!({ "projectId": "workspace", "slug": reserved, "expectedVersion": version }),
+            )
+            .await;
         assert!(status.is_client_error(), "{reserved}: {status} {body}");
     }
-    let (status, _) = send(
-        &world.app,
-        world.people["lena"].browser.request(
-            "PATCH",
-            &format!("/api/v1/organizations/{workspace}"),
-            None,
-            json!({ "slug": "lenas-place", "expectedVersion": version }),
-        ),
-    )
-    .await;
+    let (status, _) = world.people["lena"]
+        .browser
+        .op_in(
+            &world.app,
+            workspace,
+            "workspace_update",
+            json!({ "projectId": "workspace", "slug": "lenas-place", "expectedVersion": version }),
+        )
+        .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
     // The owner renames; the old slug now redirects members.
     let new_slug = format!("renamed-{}", &Uuid::now_v7().simple().to_string()[24..]);
-    let (status, body) = send(
-        &world.app,
-        world.owner.browser.request(
-            "PATCH",
-            &format!("/api/v1/organizations/{workspace}"),
-            None,
-            json!({ "slug": new_slug, "expectedVersion": version }),
-        ),
-    )
-    .await;
+    let (status, body) = world
+        .owner
+        .browser
+        .op_in(
+            &world.app,
+            workspace,
+            "workspace_update",
+            json!({ "projectId": "workspace", "slug": new_slug, "expectedVersion": version }),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["slug"], new_slug);
     assert_eq!(body["version"], version + 1);
@@ -326,16 +325,16 @@ async fn slug_rename_keeps_old_links() {
     }
 
     // The workspace can take its own retired slug back.
-    let (status, body) = send(
-        &world.app,
-        world.owner.browser.request(
-            "PATCH",
-            &format!("/api/v1/organizations/{workspace}"),
-            None,
-            json!({ "slug": old_slug, "expectedVersion": version + 1 }),
-        ),
-    )
-    .await;
+    let (status, body) = world
+        .owner
+        .browser
+        .op_in(
+            &world.app,
+            workspace,
+            "workspace_update",
+            json!({ "projectId": "workspace", "slug": old_slug, "expectedVersion": version + 1 }),
+        )
+        .await;
     if old_slug.len() <= 40 {
         assert_eq!(status, StatusCode::OK, "{body}");
         let current = sqlx::query_scalar::<_, String>(

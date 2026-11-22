@@ -23,6 +23,26 @@ async fn get(app: &axum::Router, browser: &Browser, path: &str) -> Value {
     body
 }
 
+/// One operation, in a workspace, as the browser calls it.
+async fn op(
+    app: &axum::Router,
+    browser: &Browser,
+    workspace: impl std::fmt::Display,
+    name: &str,
+    input: Value,
+) -> (StatusCode, Value) {
+    send(
+        app,
+        browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        ),
+    )
+    .await
+}
+
 fn strings(value: &Value) -> Vec<&str> {
     value
         .as_array()
@@ -57,81 +77,73 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
     assert_eq!(fresh["effective"]["source"], "default", "{fresh}");
     assert!(strings(&fresh["effective"]["hidden"]).is_empty(), "{fresh}");
     assert_eq!(fresh["capabilities"]["manage"], false);
-    for (method, path, body) in [
+    for (name, input) in [
         (
-            "PUT",
-            project_layout.clone(),
-            json!({"layout": {"preset": "minimal"}}),
+            "layout_update",
+            json!({"projectId": work, "preset": "minimal"}),
         ),
         (
-            "PUT",
-            format!("{project_layout}/rules"),
-            json!({"rules": [{"actorId": rook, "preset": "software_team"}]}),
+            "layout_update",
+            json!({"projectId": work, "rules": [{"person": rook.to_string(), "preset": "software_team"}]}),
         ),
         (
-            "PUT",
-            format!("/api/v1/organizations/{organization}/layout"),
-            json!({"layout": {"preset": "minimal"}}),
+            "layout_update",
+            json!({"projectId": "workspace", "wholeWorkspace": true, "preset": "minimal"}),
         ),
         (
-            "POST",
-            format!("/api/v1/organizations/{organization}/layout/presets"),
-            json!({"name": "Mine", "layout": {"preset": "minimal"}}),
+            "layout_preset_create",
+            json!({"projectId": "workspace", "name": "Mine", "base": "minimal"}),
         ),
     ] {
-        let (status, body) = send(app, rook_browser.request(method, &path, None, body)).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}: {body}");
+        let (status, body) = op(app, &rook_browser, organization, name, input).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{name}: {body}");
     }
 
     // The owner makes the project Personal life, gives Rook Bug reporting
     // and viewers Stakeholder, and members a preset the workspace saved.
-    let (status, chores) = send(
+    let (status, chores) = op(
         app,
-        owner.request(
-            "POST",
-            &format!("/api/v1/organizations/{organization}/layout/presets"),
-            None,
-            json!({
-                "name": "Chores",
-                "layout": {
-                    "preset": "household",
-                    "changes": {"area.runs": true},
-                    "words": {"task": {"one": "chore", "many": "chores"}},
-                },
-            }),
-        ),
+        owner,
+        organization,
+        "layout_preset_create",
+        json!({
+            "projectId": "workspace",
+            "name": "Chores",
+            "base": "household",
+            "show": {"area.runs": true},
+            "words": {"task": {"one": "chore", "many": "chores"}},
+        }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{chores}");
-    let chores = chores["id"].as_str().expect("preset id").to_owned();
-    let (status, set) = send(
+    assert_eq!(status, StatusCode::OK, "{chores}");
+    let chores = chores["value"]["id"]
+        .as_str()
+        .expect("preset id")
+        .to_owned();
+    let (status, set) = op(
         app,
-        owner.request(
-            "PUT",
-            &project_layout,
-            None,
-            json!({"layout": {"preset": "personal_life"}, "expectedVersion": 0}),
-        ),
+        owner,
+        organization,
+        "layout_update",
+        json!({"projectId": work, "preset": "personal_life", "expectedVersion": 0}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{set}");
-    assert_eq!(set["version"], 1);
-    let (status, ruled) = send(
+    assert_eq!(set["value"]["version"], 1);
+    let (status, ruled) = op(
         app,
-        owner.request(
-            "PUT",
-            &format!("{project_layout}/rules"),
-            None,
-            json!({"rules": [
-                {"actorId": rook, "preset": "bug_reporting"},
-                {"role": "viewer", "preset": "stakeholder"},
-                {"role": "member", "preset": chores},
-            ]}),
-        ),
+        owner,
+        organization,
+        "layout_update",
+        json!({"projectId": work, "rules": [
+            {"person": rook.to_string(), "preset": "bug_reporting"},
+            {"role": "viewer", "preset": "stakeholder"},
+            {"role": "member", "preset": chores},
+        ]}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{ruled}");
-    assert_eq!(ruled["rules"].as_array().map(Vec::len), Some(3), "{ruled}");
+    assert_eq!(ruled["value"]["rules"], 3, "{ruled}");
 
     // A rule for one person beats the one for their role.
     let rook_view = get(app, &rook_browser, &project_layout).await;
@@ -162,23 +174,75 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
     assert_eq!(owner_view["capabilities"]["manage"], true);
 
     // A removed preset leaves pickers but keeps working where it's used.
-    let (status, removed) = send(
+    let (status, removed) = op(
         app,
-        owner.request(
-            "DELETE",
-            &format!("/api/v1/organizations/{organization}/layout/presets/{chores}"),
-            None,
-            Value::Null,
-        ),
+        owner,
+        organization,
+        "layout_preset_update",
+        json!({"projectId": "workspace", "preset": chores, "remove": true}),
     )
     .await;
-    assert_eq!(status, StatusCode::NO_CONTENT, "{removed}");
+    assert_eq!(status, StatusCode::OK, "{removed}");
     let finch_view = get(app, &finch_browser, &project_layout).await;
     assert_eq!(
         finch_view["effective"]["preset"]["removed"], true,
         "{finch_view}"
     );
     assert_eq!(finch_view["effective"]["words"]["task"]["many"], "chores");
+    // Saving the rules again keeps the one that uses it, as the settings page
+    // sends them all, and so does a layout or a preset based on it.
+    let (status, ruled) = op(
+        app,
+        owner,
+        organization,
+        "layout_update",
+        json!({"projectId": work, "rules": [
+            {"person": rook.to_string(), "preset": "bug_reporting"},
+            {"role": "viewer", "preset": "stakeholder"},
+            {"role": "member", "preset": chores},
+        ]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ruled}");
+    assert_eq!(ruled["value"]["rules"], 3, "{ruled}");
+    let (status, kept) = op(
+        app,
+        owner,
+        organization,
+        "layout_update",
+        json!({"projectId": "workspace", "wholeWorkspace": true, "preset": chores,
+            "show": {"area.runs": false}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    let (status, copied) = op(
+        app,
+        owner,
+        organization,
+        "layout_preset_create",
+        json!({"projectId": "workspace", "name": "Chores again", "base": chores}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{copied}");
+    // By name it's gone from pickers.
+    let (status, refused) = op(
+        app,
+        owner,
+        organization,
+        "layout_update",
+        json!({"projectId": work, "preset": "Chores"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let (status, reset) = op(
+        app,
+        owner,
+        organization,
+        "layout_update",
+        json!({"projectId": "workspace", "wholeWorkspace": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reset}");
 
     // "Show hidden parts" works for owners and admins only; anyone can hide
     // more for themselves.
@@ -217,25 +281,44 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
     assert!(!strings(&owner_view["effective"]["layoutHidden"]).is_empty());
 
     // Unknown parts and presets, and stale versions, are refused.
-    for body in [
-        json!({"layout": {"preset": "minimal", "changes": {"area.nothing": true}}}),
-        json!({"layout": {"preset": "no_such_preset"}}),
-        json!({"layout": {"preset": "minimal", "words": {"robot": {"one": "a", "many": "b"}}}}),
+    for input in [
+        json!({"projectId": work, "preset": "minimal", "show": {"area.nothing": true}}),
+        json!({"projectId": work, "preset": "no_such_preset"}),
+        json!({"projectId": work, "preset": "minimal", "words": {"robot": {"one": "a", "many": "b"}}}),
+        json!({"projectId": work, "show": {"area.runs": true}}),
     ] {
-        let (status, refused) = send(app, owner.request("PUT", &project_layout, None, body)).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        let (status, refused) = op(app, owner, organization, "layout_update", input).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
     }
-    let (status, stale) = send(
+    let (status, stale) = op(
         app,
-        owner.request(
-            "PUT",
-            &project_layout,
-            None,
-            json!({"layout": {"preset": "kanban"}, "expectedVersion": 0}),
-        ),
+        owner,
+        organization,
+        "layout_update",
+        json!({"projectId": work, "preset": "kanban", "expectedVersion": 0}),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+    // A preset with its parts and words, as the settings page saves one.
+    let (status, shaped) = op(
+        app,
+        owner,
+        organization,
+        "layout_update",
+        json!({"projectId": work, "preset": "minimal", "show": {"area.runs": true},
+            "words": {"task": {"one": "job", "many": "jobs"}}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{shaped}");
+    let owner_view = get(app, owner, &project_layout).await;
+    assert_eq!(
+        owner_view["layout"]["changes"]["area.runs"], true,
+        "{owner_view}"
+    );
+    assert_eq!(
+        owner_view["layout"]["words"]["task"]["many"], "jobs",
+        "{owner_view}"
+    );
 
     // Another workspace's preset can't be used or changed from here.
     let elsewhere = Uuid::now_v7();
@@ -256,34 +339,32 @@ async fn owners_choose_layouts_for_roles_and_people_and_members_only_hide_more()
         )
         .await
         .expect("another workspace and its preset");
-    for (path, body) in [
-        (
-            project_layout.clone(),
-            json!({"layout": {"preset": foreign}}),
-        ),
-        (
-            format!("{project_layout}/rules"),
-            json!({"rules": [{"role": "member", "preset": foreign}]}),
-        ),
-        (
-            format!("/api/v1/organizations/{organization}/layout"),
-            json!({"layout": {"preset": foreign}}),
-        ),
+    for input in [
+        json!({"projectId": work, "preset": foreign}),
+        json!({"projectId": work, "rules": [{"role": "member", "preset": foreign}]}),
+        json!({"projectId": "workspace", "wholeWorkspace": true, "preset": foreign}),
     ] {
-        let (status, refused) = send(app, owner.request("PUT", &path, None, body)).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {refused}");
+        let (status, refused) = op(app, owner, organization, "layout_update", input).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
     }
-    for path in [
-        format!("/api/v1/organizations/{organization}/layout/presets/{foreign}"),
-        format!("/api/v1/organizations/{elsewhere}/layout/presets/{foreign}"),
-    ] {
-        let (status, refused) = send(
-            app,
-            owner.request("PATCH", &path, None, json!({"name": "Mine now"})),
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{path}: {refused}");
-    }
+    let (status, refused) = op(
+        app,
+        owner,
+        organization,
+        "layout_preset_update",
+        json!({"projectId": "workspace", "preset": foreign, "name": "Mine now"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+    let (status, refused) = op(
+        app,
+        owner,
+        elsewhere,
+        "layout_preset_update",
+        json!({"projectId": "workspace", "preset": foreign, "name": "Mine now"}),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK, "{refused}");
     let (status, hidden) = send(
         app,
         owner.request(

@@ -201,7 +201,7 @@ pub(crate) async fn layout_preset_write(
         .await?;
         let base = match arguments.base.as_deref() {
             Some(text) => {
-                match layouts::find_preset(&mut transaction, organization_id, text).await? {
+                match layouts::find_preset_in_use(&mut transaction, organization_id, text).await? {
                     Some(base) => Some(base),
                     None => {
                         let names =

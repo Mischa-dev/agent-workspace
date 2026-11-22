@@ -55,7 +55,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/api/v1/organizations/{organization_id}",
-            get(read_workspace).patch(rename_workspace),
+            get(read_workspace),
         )
         .route(
             "/api/v1/organizations/{organization_id}/members",
@@ -75,11 +75,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/organizations/{organization_id}/invitations",
-            get(list_invitations).post(issue_invitation),
-        )
-        .route(
-            "/api/v1/workspace-invitations/{invitation_id}/revoke",
-            post(revoke_invitation),
+            get(list_invitations),
         )
         .route(
             "/api/v1/workspace-invitations/resolve",
@@ -314,61 +310,12 @@ async fn read_workspace(
     Ok(Json(view))
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RenameRequest {
-    #[serde(default)]
-    name: Option<String>,
-    /// A new address (K4.5); the old one keeps working for members.
-    #[serde(default)]
-    slug: Option<String>,
-    expected_version: i64,
-}
-
 pub(crate) fn normalize_workspace_name(value: &str) -> Result<String, AppError> {
     let name = value.trim();
     if name.is_empty() || name.chars().count() > 120 || name.chars().any(char::is_control) {
         return Err(AppError::Validation("workspace name"));
     }
     Ok(name.to_owned())
-}
-
-async fn rename_workspace(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(organization_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<RenameRequest>,
-) -> Result<Json<WorkspaceView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let renamed = rename_workspace_in(
-        &mut transaction,
-        principal.actor_id,
-        organization_id,
-        WorkspaceChange {
-            name: request.name.as_deref(),
-            slug: request.slug.as_deref(),
-        },
-        request.expected_version,
-    )
-    .await?;
-    if let Some(metadata) = renamed {
-        audit(
-            &mut transaction,
-            &headers,
-            &principal,
-            organization_id,
-            "workspace.renamed",
-            "workspace",
-            Some(organization_id),
-            metadata,
-        )
-        .await?;
-    }
-    let view = load_workspace(&mut transaction, organization_id, principal.actor_id).await?;
-    transaction.commit().await?;
-    Ok(Json(view))
 }
 
 /// What a workspace update changes: its name, its slug, or both.
@@ -1111,26 +1058,6 @@ pub(crate) async fn fetch_invitation(
     .ok_or(AppError::NotFound("workspace_invitation"))
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct IssueRequest {
-    role: String,
-    /// A custom role of the workspace, instead of `role`.
-    #[serde(default)]
-    role_id: Option<Uuid>,
-    expires_in_hours: i32,
-    #[serde(default)]
-    note: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct IssuedInvitation {
-    #[serde(flatten)]
-    invitation: InvitationView,
-    invitation_url: String,
-}
-
 /// Whether `issuer`, who may invite people, may invite someone with `role`:
 /// an admin-tier role comes only from an owner.
 pub(crate) fn may_invite(issuer: Standing, role: &str) -> bool {
@@ -1145,47 +1072,6 @@ pub(crate) fn may_invite(issuer: Standing, role: &str) -> bool {
 fn generate_token() -> (String, String, [u8; 32]) {
     let issued = engine::issue(Family::Workspace);
     (issued.token, issued.prefix, issued.digest)
-}
-
-async fn issue_invitation(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(organization_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<IssueRequest>,
-) -> Result<(StatusCode, Json<IssuedInvitation>), AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let issued = issue_workspace_invitation_in(
-        &mut transaction,
-        principal.actor_id,
-        organization_id,
-        &request.role,
-        request.role_id,
-        request.expires_in_hours,
-        request.note.as_deref(),
-    )
-    .await?;
-    audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        organization_id,
-        "workspace.invitation.issue",
-        "workspace_invitation",
-        Some(issued.invitation_id),
-        issued.metadata,
-    )
-    .await?;
-    let invitation = fetch_invitation(&mut transaction, issued.invitation_id).await?;
-    transaction.commit().await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(IssuedInvitation {
-            invitation,
-            invitation_url: crate::invitations::join_url(&state, &issued.token),
-        }),
-    ))
 }
 
 /// A new workspace invitation's ID, its one-time token (only the link
@@ -1302,44 +1188,6 @@ pub(crate) async fn issue_workspace_invitation_in(
             "expiresInHours": expires_in_hours,
         }),
     })
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RevokeRequest {
-    expected_version: i64,
-}
-
-async fn revoke_invitation(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(invitation_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<RevokeRequest>,
-) -> Result<Json<InvitationView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (organization_id, role) = revoke_workspace_invitation_in(
-        &mut transaction,
-        principal.actor_id,
-        invitation_id,
-        request.expected_version,
-    )
-    .await?;
-    audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        organization_id,
-        "workspace.invitation.revoke",
-        "workspace_invitation",
-        Some(invitation_id),
-        serde_json::json!({ "role": role }),
-    )
-    .await?;
-    let view = fetch_invitation(&mut transaction, invitation_id).await?;
-    transaction.commit().await?;
-    Ok(Json(view))
 }
 
 /// Revoke an active workspace invitation, for someone who may send one with

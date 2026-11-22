@@ -92130,11 +92130,31 @@
                       "null"
                     ]
                   },
+                  "show": {
+                    "additionalProperties": {
+                      "type": "boolean"
+                    },
+                    "description": "With preset: parts to show (true) or hide (false) on top of it, by\npart ID (such as \"area.runs\"), where they differ from the preset.",
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
                   "wholeWorkspace": {
                     "default": null,
                     "description": "Set the workspace's default layout (with preset, or without it for\nnone) instead of this project's: the workspace's owners and admins.",
                     "type": [
                       "boolean",
+                      "null"
+                    ]
+                  },
+                  "words": {
+                    "additionalProperties": {
+                      "$ref": "#/components/schemas/PresetWord"
+                    },
+                    "description": "With preset: nouns to rename on top of it, by noun ID, each with its\nwords for one and many: {\"task\": {\"one\": \"to-do\", \"many\": \"to-dos\"}}.",
+                    "type": [
+                      "object",
                       "null"
                     ]
                   }

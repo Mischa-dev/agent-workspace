@@ -34,8 +34,8 @@ use std::{
 use axum::{
     Json, Router,
     extract::State,
-    http::{HeaderMap, StatusCode},
-    routing::{get, patch, post, put},
+    http::HeaderMap,
+    routing::{get, put},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1382,6 +1382,25 @@ pub async fn find_preset(
         .map(|preset| preset.id.to_string()))
 }
 
+/// [`find_preset`] for a preset something already uses (a layout, a rule or
+/// a saved preset's base): one named by its ID may be removed, as removing a
+/// preset only takes it out of pickers and what uses it keeps working.
+pub async fn find_preset_in_use(
+    connection: &mut PgConnection,
+    organization_id: Uuid,
+    text: &str,
+) -> Result<Option<String>, AppError> {
+    if let Some(found) = find_preset(connection, organization_id, text).await? {
+        return Ok(Some(found));
+    }
+    let Ok(id) = Uuid::parse_str(text.trim()) else {
+        return Ok(None);
+    };
+    Ok(saved_preset(connection, organization_id, id)
+        .await?
+        .map(|preset| preset.id.to_string()))
+}
+
 /// Every preset a project in this workspace can pick, by name.
 pub async fn preset_names(
     connection: &mut PgConnection,
@@ -1406,29 +1425,14 @@ pub async fn preset_names(
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route(
-            "/api/v1/projects/{project_id}/layout",
-            get(project_layout).put(change_project_layout),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/layout/rules",
-            put(change_project_rules),
-        )
+        .route("/api/v1/projects/{project_id}/layout", get(project_layout))
         .route(
             "/api/v1/organizations/{organization_id}/layout",
-            get(workspace_layout).put(change_workspace_layout),
+            get(workspace_layout),
         )
         .route(
             "/api/v1/organizations/{organization_id}/layout/mine",
             put(change_my_view),
-        )
-        .route(
-            "/api/v1/organizations/{organization_id}/layout/presets",
-            post(create_preset),
-        )
-        .route(
-            "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-            patch(change_preset).delete(remove_preset),
         )
 }
 
@@ -1460,55 +1464,6 @@ async fn workspace_layout(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LayoutRequest {
-    /// The new layout; null to fall back to the next one down.
-    layout: Option<Layout>,
-    #[serde(default)]
-    expected_version: Option<i64>,
-}
-
-/// `PUT /api/v1/projects/{project_id}/layout`: owners and admins.
-async fn change_project_layout(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<LayoutRequest>,
-) -> Result<Json<ProjectLayoutView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let organization_id =
-        settings::authorize_project_manage(&mut *transaction, &principal, project_id).await?;
-    let preset = request.layout.as_ref().map(|layout| layout.preset.clone());
-    let version = write_layout(
-        &mut transaction,
-        Target::Project {
-            organization_id,
-            project_id,
-        },
-        request.layout,
-        request.expected_version,
-        principal.actor_id,
-    )
-    .await?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        Some(project_id),
-        "layout.project_changed",
-        "project",
-        Some(project_id),
-        json!({ "preset": preset, "version": version, "organizationId": organization_id }),
-    )
-    .await?;
-    let view = project_view(&mut transaction, &principal, project_id).await?;
-    transaction.commit().await?;
-    Ok(Json(view))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct RuleInput {
     /// admin (owners too), member or viewer.
     #[serde(default)]
@@ -1521,59 +1476,6 @@ pub(crate) struct RuleInput {
     pub(crate) actor_id: Option<Uuid>,
     /// A built-in preset's id or a saved preset's ID.
     pub(crate) preset: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RulesRequest {
-    /// Every rule the project should have; others are removed.
-    rules: Vec<RuleInput>,
-}
-
-/// `PUT /api/v1/projects/{project_id}/layout/rules`: owners and admins set
-/// which preset each role, or each named person, gets.
-async fn change_project_rules(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<RulesRequest>,
-) -> Result<Json<ProjectLayoutView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    if request.rules.len() > MAX_RULES {
-        return Err(AppError::Validation("rules"));
-    }
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    // Lock the project first, as membership changes do, so two saves of the
-    // rules don't interleave.
-    sqlx::query("SELECT id FROM projects WHERE id = $1 FOR UPDATE")
-        .bind(project_id)
-        .execute(&mut *transaction)
-        .await?;
-    let organization_id =
-        settings::authorize_project_manage(&mut *transaction, &principal, project_id).await?;
-    let metadata = set_rules_in(
-        &mut transaction,
-        principal.actor_id,
-        organization_id,
-        project_id,
-        &request.rules,
-    )
-    .await?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        Some(project_id),
-        "layout.rules_changed",
-        "project",
-        Some(project_id),
-        metadata,
-    )
-    .await?;
-    let view = project_view(&mut transaction, &principal, project_id).await?;
-    transaction.commit().await?;
-    Ok(Json(view))
 }
 
 /// Replaces a project's layout rules (which preset each role, custom role
@@ -1714,43 +1616,6 @@ pub(crate) async fn set_rules_in(
     }))
 }
 
-/// `PUT /api/v1/organizations/{organization_id}/layout`: the workspace's
-/// default, for owners and admins.
-async fn change_workspace_layout(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(organization_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<LayoutRequest>,
-) -> Result<Json<WorkspaceLayoutView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    settings::authorize_workspace_manage(&mut *transaction, &principal, organization_id).await?;
-    let preset = request.layout.as_ref().map(|layout| layout.preset.clone());
-    let version = write_layout(
-        &mut transaction,
-        Target::Workspace { organization_id },
-        request.layout,
-        request.expected_version,
-        principal.actor_id,
-    )
-    .await?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        None,
-        "layout.workspace_changed",
-        "organization",
-        Some(organization_id),
-        json!({ "preset": preset, "version": version, "organizationId": organization_id }),
-    )
-    .await?;
-    let view = workspace_view(&mut transaction, &principal, organization_id).await?;
-    transaction.commit().await?;
-    Ok(Json(view))
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MyViewRequest {
@@ -1820,16 +1685,6 @@ async fn change_my_view(
     Ok(Json(view))
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PresetRequest {
-    name: String,
-    #[serde(default)]
-    description: String,
-    /// The layout to save: a preset with its changes and words.
-    layout: Layout,
-}
-
 fn unique_name(error: sqlx::Error) -> AppError {
     match &error {
         sqlx::Error::Database(database) if database.is_unique_violation() => {
@@ -1837,42 +1692,6 @@ fn unique_name(error: sqlx::Error) -> AppError {
         }
         _ => AppError::Database(error),
     }
-}
-
-/// `POST /api/v1/organizations/{organization_id}/layout/presets`: "Save as
-/// preset", for the workspace's owners and admins.
-async fn create_preset(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(organization_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<PresetRequest>,
-) -> Result<(StatusCode, Json<SavedPreset>), AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    settings::authorize_workspace_manage(&mut *transaction, &principal, organization_id).await?;
-    let preset = create_preset_in(
-        &mut transaction,
-        principal.actor_id,
-        organization_id,
-        &request.name,
-        &request.description,
-        request.layout,
-    )
-    .await?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        None,
-        "layout.preset_created",
-        "layout_preset",
-        Some(preset.id),
-        json!({ "name": preset.name, "base": preset.base, "organizationId": organization_id }),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok((StatusCode::CREATED, Json(preset)))
 }
 
 /// Saves a layout as one of the workspace's presets, for a caller already
@@ -1920,32 +1739,6 @@ pub(crate) async fn create_preset_in(
     Ok(preset.into())
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PresetChange {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    /// Replace what it shows and its words with this layout's.
-    #[serde(default)]
-    layout: Option<Layout>,
-    #[serde(default)]
-    expected_version: Option<i64>,
-}
-
-/// The caller may change the workspace's presets, and this one is the
-/// workspace's (another workspace's is "not found"). Returns its version.
-async fn lock_preset(
-    transaction: &mut Transaction<'_, Postgres>,
-    principal: &AuthenticatedActor,
-    organization_id: Uuid,
-    preset_id: Uuid,
-) -> Result<i64, AppError> {
-    settings::authorize_workspace_manage(&mut **transaction, principal, organization_id).await?;
-    lock_preset_row(transaction, organization_id, preset_id).await
-}
-
 async fn lock_preset_row(
     transaction: &mut Transaction<'_, Postgres>,
     organization_id: Uuid,
@@ -1963,43 +1756,6 @@ async fn lock_preset_row(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("layout preset"))
-}
-
-/// `PATCH /api/v1/organizations/{organization_id}/layout/presets/{preset_id}`.
-async fn change_preset(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((organization_id, preset_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<PresetChange>,
-) -> Result<Json<SavedPreset>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    settings::authorize_workspace_manage(&mut *transaction, &principal, organization_id).await?;
-    let preset = change_preset_in(
-        &mut transaction,
-        principal.actor_id,
-        organization_id,
-        preset_id,
-        request.name.as_deref(),
-        request.description.as_deref(),
-        request.layout,
-        request.expected_version,
-    )
-    .await?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        None,
-        "layout.preset_changed",
-        "layout_preset",
-        Some(preset_id),
-        json!({ "name": preset.name, "version": preset.version, "organizationId": organization_id }),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(preset))
 }
 
 /// Changes one of the workspace's saved presets, for a caller already
@@ -2061,39 +1817,6 @@ pub(crate) async fn change_preset_in(
     .await
     .map_err(unique_name)?;
     Ok(preset.into())
-}
-
-/// `DELETE /api/v1/organizations/{organization_id}/layout/presets/{preset_id}`:
-/// takes it out of pickers. Layouts and rules that use it keep working.
-async fn remove_preset(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((organization_id, preset_id)): ApiPath<(Uuid, Uuid)>,
-) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    lock_preset(&mut transaction, &principal, organization_id, preset_id).await?;
-    let name = remove_preset_in(
-        &mut transaction,
-        principal.actor_id,
-        organization_id,
-        preset_id,
-    )
-    .await?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        None,
-        "layout.preset_removed",
-        "layout_preset",
-        Some(preset_id),
-        json!({ "name": name, "organizationId": organization_id }),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Takes a saved preset out of pickers, for a caller already allowed to

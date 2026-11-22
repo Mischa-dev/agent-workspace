@@ -42,43 +42,8 @@ mod tests {
     const WEB_WRITES: &[(MutationMethod, &str, Parity)] = &[
         (
             Put,
-            "/api/v1/projects/{project_id}/layout",
-            Tool("layout_update"),
-        ),
-        (
-            Put,
-            "/api/v1/projects/{project_id}/layout/rules",
-            Tool("layout_update"),
-        ),
-        (
-            Put,
-            "/api/v1/organizations/{organization_id}/layout",
-            Tool("layout_update"),
-        ),
-        (
-            Put,
             "/api/v1/organizations/{organization_id}/layout/mine",
             Person("each person's own sidebar"),
-        ),
-        (
-            Put,
-            "/api/v1/organizations/{organization_id}/modules",
-            Tool("workspace_update"),
-        ),
-        (
-            Post,
-            "/api/v1/organizations/{organization_id}/layout/presets",
-            Tool("layout_preset_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-            Tool("layout_preset_update"),
-        ),
-        (
-            Delete,
-            "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-            Tool("layout_preset_update"),
         ),
         (
             Post,
@@ -159,11 +124,6 @@ mod tests {
         ),
         (
             Patch,
-            "/api/v1/organizations/{organization_id}",
-            Tool("workspace_update"),
-        ),
-        (
-            Patch,
             "/api/v1/organizations/{organization_id}/members/{actor_id}",
             Tool("role_assign"),
         ),
@@ -191,16 +151,6 @@ mod tests {
             Post,
             "/api/v1/organizations/{organization_id}/leave",
             Person("a person's own account"),
-        ),
-        (
-            Post,
-            "/api/v1/organizations/{organization_id}/invitations",
-            Tool("invitation_create"),
-        ),
-        (
-            Post,
-            "/api/v1/workspace-invitations/{invitation_id}/revoke",
-            Tool("invitation_update"),
         ),
         (
             Post,
@@ -972,16 +922,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/fields",
-            Tool("field_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/fields/{field_id}",
-            Tool("field_update"),
-        ),
-        (
-            Post,
             "/api/v1/projects/{project_id}/collections",
             Tool("collection_create"),
         ),
@@ -1187,7 +1127,7 @@ mod tests {
     /// Hand-written web writes whose tool is already an operation: each is a
     /// second edge for something the generated route does (K2.22). The
     /// number only goes down; when you delete one, lower it.
-    const HAND_WRITTEN_OPERATION_ROUTES: usize = 88;
+    const HAND_WRITTEN_OPERATION_ROUTES: usize = 76;
 
     #[test]
     fn hand_written_routes_for_operations_only_go_down() {

@@ -1606,7 +1606,7 @@ export type LayoutPresetUpdateInput = { base?: string | null; description?: stri
 
 export type LayoutPresetUpdateOutput = { done: string; id: string; name: string; preset?: LayoutPresetLine | null }
 
-export type LayoutUpdateInput = { expectedVersion?: number | null; preset?: string | null; projectId: string; rules?: LayoutRuleArgument[] | null; wholeWorkspace?: boolean | null }
+export type LayoutUpdateInput = { expectedVersion?: number | null; preset?: string | null; projectId: string; rules?: LayoutRuleArgument[] | null; show?: Record<string, boolean> | null; wholeWorkspace?: boolean | null; words?: Record<string, PresetWord> | null }
 
 export type LayoutUpdateOutput = { layout?: LayoutLine | null; projectId: string; rules?: number | null; version: number }
 

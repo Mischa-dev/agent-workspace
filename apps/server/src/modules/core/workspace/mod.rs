@@ -1,7 +1,7 @@
 //! The Workspace module's registration. Its feature code lives where it
 //! always has; this folder is how the server finds the module.
 
-use crate::modules::registry::{CoreModule, Registrar};
+use crate::modules::registry::{CoreModule, ModuleFilter, Registrar};
 
 pub struct Module;
 
@@ -55,5 +55,15 @@ impl CoreModule for Module {
         module.operations(crate::ops::long::register_ops);
         module.operations(crate::files::link::register_ops);
         module.routes(crate::files::link::router);
+        // The workspace's own settings (its invitations, default layout and
+        // layout presets) are set in its own space, where Projects isn't on.
+        module.filter(ModuleFilter::AlsoServes(&[
+            "invitation_list",
+            "invitation_create",
+            "invitation_update",
+            "layout_update",
+            "layout_preset_create",
+            "layout_preset_update",
+        ]));
     }
 }

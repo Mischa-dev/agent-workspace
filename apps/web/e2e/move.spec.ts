@@ -39,9 +39,9 @@ test('a task moves to another project after a private preview and one confirmati
 
   // Notes fits the target's Notes; the target's Tier has no Gold.
   const field = async (projectId: string, body: Record<string, unknown>, key: string) => {
-    const made = await request.post(`/api/v1/projects/${projectId}/fields`, { headers: headers(key), data: body })
+    const made = await request.post('/api/v2/ops/field_create', { headers: headers(key), data: { projectId, ...body } })
     expect(made.ok(), await made.text()).toBe(true)
-    return (await made.json()) as Field
+    return ((await made.json()) as { value: { field: Field } }).value.field
   }
   await field(source, { name: `Notes ${run}`, type: 'text' }, `move-notes-src-${run}`)
   await field(source, { name: `Tier ${run}`, type: 'single_choice', options: [{ name: 'Gold' }] }, `move-tier-src-${run}`)

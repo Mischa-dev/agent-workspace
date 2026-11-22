@@ -112,8 +112,7 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     // Open: the agent works.
     let body = agent_task_list(&t, &a.agent_token).await;
     assert!(!refused_as_suspended(&body), "{body}");
-    // The owner may delete it, and a rename's answer says so too, since
-    // the settings page shows that answer in place of the one it read.
+    // The owner may delete it, before and after a rename.
     let (status, body) = send(
         &t.app,
         a.browser.request(
@@ -126,17 +125,27 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["capabilities"]["delete"], true, "{body}");
+    let (status, renamed) = op(
+        &t,
+        &a.browser,
+        a.organization,
+        "workspace_update",
+        json!({"projectId": "workspace", "name": "Renamed", "expectedVersion": body["version"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{renamed}");
     let (status, body) = send(
         &t.app,
         a.browser.request(
-            "PATCH",
+            "GET",
             &format!("/api/v1/organizations/{}", a.organization),
             None,
-            json!({"name": "Renamed", "expectedVersion": body["version"]}),
+            Value::Null,
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["name"], "Renamed", "{body}");
     assert_eq!(body["capabilities"]["delete"], true, "{body}");
 
     // A run each agent reports for itself (not one the built-in host
@@ -190,10 +199,10 @@ async fn a_workspace_is_suspended_kept_and_deleted_without_touching_another() {
     let (status, body) = send(
         &t.app,
         a.browser.request(
-            "PATCH",
-            &format!("/api/v1/organizations/{}", a.organization),
+            "PUT",
+            &format!("/api/v1/organizations/{}/layout/mine", a.organization),
             None,
-            json!({"name": "Renamed while suspended"}),
+            json!({"hidden": [], "showHidden": false}),
         ),
     )
     .await;

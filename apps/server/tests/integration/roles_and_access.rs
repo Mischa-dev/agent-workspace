@@ -306,12 +306,9 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
         &setup.app,
         alex_browser.request(
             "POST",
-            &format!(
-                "/api/v1/organizations/{}/invitations",
-                setup.organization_id
-            ),
-            None,
-            json!({"role": "member", "expiresInHours": 24}),
+            &format!("/api/v2/w/{}/ops/invitation_create", setup.organization_id),
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"projectId": "workspace", "wholeWorkspace": true, "role": "member", "expiresInHours": 24}),
         ),
     )
     .await;
@@ -1491,14 +1488,12 @@ async fn invitations_and_agents_stay_within_what_the_giver_holds_now() {
     let mut tokens = Vec::new();
     for (path, key, body, resolve, made) in [
         (
-            format!(
-                "/api/v1/organizations/{}/invitations",
-                setup.organization_id
-            ),
-            None,
-            json!({"role": "member", "expiresInHours": 24}),
+            format!("/api/v2/w/{}/ops/invitation_create", setup.organization_id),
+            Some("alex-invites-to-the-workspace"),
+            json!({"projectId": "workspace", "wholeWorkspace": true, "role": "member",
+                "expiresInHours": 24}),
             "/api/v1/workspace-invitations/resolve",
-            StatusCode::CREATED,
+            StatusCode::OK,
         ),
         (
             "/api/v2/ops/invitation_create".to_owned(),
@@ -2353,11 +2348,9 @@ async fn a_project_role_never_makes_a_workspace_role() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{manager}");
-    let invitations = format!(
-        "/api/v1/organizations/{}/invitations",
-        setup.organization_id
-    );
-    let invite = json!({"role": "member", "expiresInHours": 24});
+    let invitations = format!("/api/v2/w/{}/ops/invitation_create", setup.organization_id);
+    let invite = json!({"projectId": "workspace", "wholeWorkspace": true, "role": "member",
+        "expiresInHours": 24});
 
     let (status, changed) = set_project_role(
         &setup,
@@ -2371,24 +2364,32 @@ async fn a_project_role_never_makes_a_workspace_role() {
     assert_eq!(workspace_role(&setup, bea).await, "member");
     let (status, refused) = send(
         app,
-        bea_browser.request("POST", &invitations, None, invite.clone()),
+        bea_browser.request("POST", &invitations, Some("bea-invites"), invite.clone()),
     )
     .await;
     assert!(
         !status.is_success(),
         "a custom project admin invited to the workspace: {refused}"
     );
+    assert_eq!(
+        refused["outcome"], "permission_denied",
+        "refused for access, not a bad call: {refused}"
+    );
 
     let (status, changed) =
         set_project_role(&setup, &work, cal, "cal-admin", json!({"role": "admin"})).await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     assert_eq!(workspace_role(&setup, cal).await, "member");
-    let (status, refused) =
-        send(app, cal_browser.request("POST", &invitations, None, invite)).await;
+    let (status, refused) = send(
+        app,
+        cal_browser.request("POST", &invitations, Some("cal-invites"), invite),
+    )
+    .await;
     assert!(
         !status.is_success(),
         "a project admin invited to the workspace: {refused}"
     );
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
 }
 
 const OAUTH_REDIRECT: &str = "http://127.0.0.1:49152/callback";
