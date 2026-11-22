@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../api/errors'
 import { resetSaveQueue, undoLast } from '../views/saveQueue'
-import { getWorkItem, updateWorkItem } from './api'
+import { getWorkItem, updateWorkItem, writeWorkItem } from './api'
 import type { PickResult } from './FieldPicker'
 import { useApplyPick } from './taskEdits'
 import type { WorkItemCard } from './types'
@@ -14,6 +14,7 @@ vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./api')>()),
   getWorkItem: vi.fn(),
   updateWorkItem: vi.fn(),
+  writeWorkItem: vi.fn(),
 }))
 
 const card = {
@@ -34,6 +35,7 @@ const wrapper = (client: QueryClient) =>
 afterEach(() => {
   resetSaveQueue()
   vi.mocked(updateWorkItem).mockReset()
+  vi.mocked(writeWorkItem).mockReset()
   vi.mocked(getWorkItem).mockReset()
 })
 
@@ -41,7 +43,7 @@ describe('undoing a picked change', () => {
   it('can be undone before its save answers, and never undoes a save that failed', async () => {
     const client = new QueryClient()
     let refuse!: (error: unknown) => void
-    vi.mocked(updateWorkItem).mockReturnValueOnce(new Promise((_, reject) => (refuse = reject)))
+    vi.mocked(writeWorkItem).mockReturnValueOnce(new Promise((_, reject) => (refuse = reject)))
     // Another editor already set High, so the task reads as if this change saved.
     vi.mocked(getWorkItem).mockResolvedValue({ ...card, priority: 'high', version: 2 } as never)
     const { result } = renderHook(() => useApplyPick(), { wrapper: wrapper(client) })
@@ -50,13 +52,14 @@ describe('undoing a picked change', () => {
     act(() => {
       saving = result.current.mutateAsync({ projectId: 'project-a', result: pick, targets: [card] }).catch(() => undefined)
     })
-    await vi.waitFor(() => expect(updateWorkItem).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(writeWorkItem).toHaveBeenCalledTimes(1))
     // ⌘Z before the answer: kept already.
     const undoing = undoLast(client)
     refuse(new ApiError({ status: 409, code: 'conflict', message: 'Changed since.' }))
     await expect(undoing).rejects.toThrow('didn’t save')
     await saving
     // Only the change itself was sent: no inverse over the other editor's High.
-    expect(updateWorkItem).toHaveBeenCalledTimes(1)
+    expect(writeWorkItem).toHaveBeenCalledTimes(1)
+    expect(updateWorkItem).not.toHaveBeenCalled()
   })
 })
