@@ -114,7 +114,7 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
     let codex = connect_app(&app, &browser, "Codex", "full").await;
     let session = initialize(&app, &codex).await.expect("Codex MCP");
 
-    let projects = tool(&app, &codex, &session, "projects_list", json!({})).await;
+    let projects = tool(&app, &codex, &session, "project_list", json!({})).await;
     let names = projects["value"]["projects"]
         .as_array()
         .expect("projects")
@@ -147,7 +147,7 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         &app,
         &codex,
         &session,
-        "search",
+        "workspace_search",
         json!({"query": "zeppelin"}),
     )
     .await;
@@ -157,7 +157,7 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         &app,
         &mara_token,
         &mara_session,
-        "search",
+        "workspace_search",
         json!({"query": "zeppelin"}),
     )
     .await;
@@ -395,7 +395,7 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         &app,
         &codex,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": task_id}),
     )
     .await;
@@ -404,13 +404,13 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         opened["value"]["task"]["description"], "Steps:\n- inflate\n- launch",
         "{opened}"
     );
-    let briefing = tool(&app, &codex, &session, "briefing", json!({})).await;
+    let briefing = tool(&app, &codex, &session, "briefing_get", json!({})).await;
     assert_eq!(briefing["outcome"], "ok", "{briefing}");
     let unclaimed = tool(
         &app,
         &codex,
         &session,
-        "project_open",
+        "project_get",
         json!({"projectId": project_id}),
     )
     .await;
@@ -458,7 +458,7 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         &app,
         &codex,
         &session,
-        "page_write",
+        "page_create",
         json!({"projectId": project_id, "title": "Theming", "body": "Use tokens.", "isGuide": true}),
     )
     .await;
@@ -468,7 +468,7 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         &app,
         &codex,
         &session,
-        "page_write",
+        "page_update",
         json!({"pageId": page_id, "body": "Use raw hex.", "expectedVersion": 1}),
     )
     .await;
@@ -477,7 +477,7 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         &app,
         &codex,
         &session,
-        "page_write",
+        "page_update",
         json!({"pageId": page_id, "body": "Lost update", "expectedVersion": 1}),
     )
     .await;
@@ -486,7 +486,7 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         &app,
         &codex,
         &session,
-        "page_write",
+        "page_update",
         json!({"pageId": page_id, "restoreVersion": 1}),
     )
     .await;
@@ -496,7 +496,7 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         &app,
         &codex,
         &session,
-        "project_open",
+        "project_get",
         json!({"projectId": project_id}),
     )
     .await;
@@ -533,7 +533,7 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         &app,
         &codex,
         &session,
-        "page_write",
+        "page_create",
         json!({"projectId": side["id"], "title": "Side notes", "body": "Elsewhere."}),
     )
     .await;
@@ -575,7 +575,14 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
     )
     .await;
     assert_eq!(decided["outcome"], "ok", "{decided}");
-    let owner_search = tool(&app, &codex, &session, "search", json!({"query": "capped"})).await;
+    let owner_search = tool(
+        &app,
+        &codex,
+        &session,
+        "workspace_search",
+        json!({"query": "capped"}),
+    )
+    .await;
     assert_eq!(
         owner_search["value"]["results"],
         json!([]),
@@ -598,7 +605,7 @@ async fn connected_apps_and_agents_see_exactly_what_they_should() {
         &app,
         &reader,
         &reader_session,
-        "mark_read",
+        "conversation_mark_read",
         json!({"conversationId": owner_dm}),
     )
     .await;

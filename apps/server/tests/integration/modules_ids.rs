@@ -249,7 +249,7 @@ async fn usage_tools_follow_runs_in_each_project_the_account_serves() {
             .as_u64()
             .expect("readyTasks")
     };
-    let windows = call("usage_windows", json!({})).await;
+    let windows = call("usage_window_list", json!({})).await;
     assert_eq!(windows["outcome"], "ok", "{windows}");
     assert!(ready(&windows) >= 1, "{windows}");
 
@@ -258,10 +258,14 @@ async fn usage_tools_follow_runs_in_each_project_the_account_serves() {
     let (status, changed) =
         switch(setup, &setup.browser, json!({"switches": {"runs": false}})).await;
     assert_eq!(status, StatusCode::OK, "{changed}");
-    let windows = call("usage_windows", json!({})).await;
+    let windows = call("usage_window_list", json!({})).await;
     assert_eq!(windows["outcome"], "ok", "{windows}");
     assert_eq!(ready(&windows), 0, "{windows}");
-    let batch = call("usage_batch", json!({"accountId": account.to_string()})).await;
+    let batch = call(
+        "usage_batch_preview",
+        json!({"accountId": account.to_string()}),
+    )
+    .await;
     assert_eq!(batch["outcome"], "ok", "{batch}");
     assert!(!batch.to_string().contains("Alpha outage"), "{batch}");
     assert!(

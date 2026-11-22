@@ -128,8 +128,8 @@ async fn refused_status_changes_explain_the_way_and_writes_name_the_task() {
         app,
         &codex,
         &session,
-        "task_mark_ready_for_review",
-        json!({"taskId": "WORK-1", "expectedVersion": 2, "clientRequestId": "ground-review"}),
+        "task_update",
+        json!({"taskId": "WORK-1", "expectedVersion": 2, "clientRequestId": "ground-review", "readyForReview": true }),
     )
     .await;
     assert_eq!(review["outcome"], "conflict", "{review}");
@@ -200,7 +200,7 @@ async fn refused_status_changes_explain_the_way_and_writes_name_the_task() {
         app,
         &codex,
         &session,
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": "WORK-1", "text": "Picked this up.", "clientRequestId": "ground-comment"}),
     )
     .await;

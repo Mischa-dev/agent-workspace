@@ -38,20 +38,20 @@ async fn pages_and_boards_restore_through_one_seam() {
     // A page with two versions.
     let page = ok(
         call(
-            "page_write",
+            "page_create",
             json!({"projectId": "WORK", "title": "Gate", "body": "Paint it red."}),
         )
         .await,
-        "page_write",
+        "page_create",
     );
     let page = page["value"]["id"].as_str().expect("page").to_owned();
     ok(
         call(
-            "page_write",
+            "page_update",
             json!({"pageId": page, "body": "Paint it blue.", "expectedVersion": 1}),
         )
         .await,
-        "page_write",
+        "page_update",
     );
     let listed = ok(
         call("history_list", json!({"thing": page})).await,
@@ -131,11 +131,11 @@ async fn pages_and_boards_restore_through_one_seam() {
         async move {
             ok(
                 call(
-                    "whiteboard_edit",
+                    "whiteboard_update_elements",
                     json!({"whiteboardId": board, "operations": operations}),
                 )
                 .await,
-                "whiteboard_edit",
+                "whiteboard_update_elements",
             )
         }
     };
@@ -187,11 +187,11 @@ async fn pages_and_boards_restore_through_one_seam() {
     // awd54_sheets.rs).
     let sheet = ok(
         call(
-            "sheet_write",
+            "sheet_create",
             json!({"projectId": "WORK", "name": "Costs", "cells": [{"cell": "A1", "input": "Paint"}], "clientRequestId": "k3-19-sheet"}),
         )
         .await,
-        "sheet_write",
+        "sheet_create",
     );
     let sheet = sheet["value"]["id"]
         .as_str()

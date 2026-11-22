@@ -172,10 +172,10 @@ pub fn listed(
             .any(|also| modules.contains(also))
 }
 
-/// Whether `name` is an operation's tool, or an old name for one
-/// (`aliases`) whose operation exists.
+/// Whether `name` is an operation's tool, or a retired old name for one
+/// (`retired`), which answers what to use instead.
 pub fn is_operation(name: &str) -> bool {
-    registry().contains(name) || super::aliases::active(name).is_some()
+    registry().contains(name) || super::retired::find(name).is_some()
 }
 
 /// Run an operation's tool for an MCP caller (`Edge::Mcp`), or for a caller
@@ -190,44 +190,15 @@ pub async fn call(
     name: &str,
     arguments: Option<JsonObject>,
 ) -> CallToolResult {
-    // An old name runs its operation with its old arguments and answers in
-    // its old shape, saying what to use instead.
-    let renamed = (!registry().contains(name))
-        .then(|| super::aliases::active(name))
-        .flatten();
-    let (name, arguments) = match renamed {
-        Some(old) => {
-            let arguments = arguments.unwrap_or_default();
-            ((old.canonical)(&arguments), Some((old.adapt_in)(arguments)))
-        }
-        None => (name, arguments),
-    };
-    let mut envelope = match request(state, principal, alias, edge, trace_id, arguments).await {
-        Ok((mut request, input)) => {
-            request.renamed_from = renamed.map(|old| old.name);
-            dispatch(state, request, name, input).await.body
-        }
+    // A retired old name says what to use instead (K2.23).
+    if let Some(old) = super::retired::find(name) {
+        return CallToolResult::structured(old.refusal());
+    }
+    let envelope = match request(state, principal, alias, edge, trace_id, arguments).await {
+        Ok((request, input)) => dispatch(state, request, name, input).await.body,
         Err(error) => error.to_json(),
     };
-    let Some(old) = renamed else {
-        return CallToolResult::structured(envelope);
-    };
-    // The old tool answered with its value alone, so an alias does too; a
-    // refusal keeps the envelope. Either way `_meta` says what to use.
-    let answer = if envelope["outcome"] == "ok" {
-        let replayed = envelope["replayed"].as_bool().unwrap_or(false);
-        (old.adapt_out)(name, envelope["value"].take(), replayed)
-    } else {
-        envelope
-    };
-    let mut result = CallToolResult::structured(answer);
-    let mut meta = JsonObject::new();
-    meta.insert(
-        "deprecated".to_owned(),
-        Value::String(super::aliases::deprecation(&old, name)),
-    );
-    result.meta = Some(rmcp::model::MetaObject(meta));
-    result
+    CallToolResult::structured(envelope)
 }
 
 /// The MCP task handle for a long call answered `started` (K2.21): its id
@@ -313,7 +284,6 @@ async fn request(
             // runs once and says it isn't retry-safe (R52).
             unkeyed: super::Unkeyed::RunOnce,
             preview,
-            renamed_from: None,
             // MCP clients follow a long call (`tasks/get`, `job_get`); the
             // older direct path and automations wait for it.
             defer_long,

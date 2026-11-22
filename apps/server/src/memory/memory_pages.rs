@@ -47,7 +47,7 @@ impl MemoryFor {
     }
 }
 
-/// A pointer to a memory page, as `conversation_open`, `project_open` and
+/// A pointer to a memory page, as `conversation_open`, `project_get` and
 /// `reply_claim` include it: read it before acting there.
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

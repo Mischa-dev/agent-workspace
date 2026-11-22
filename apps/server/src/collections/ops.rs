@@ -1058,7 +1058,6 @@ impl Operation for ButtonPress {
                 request_id: step_request_id(call.ctx.request_id.as_deref(), index),
                 unkeyed: Unkeyed::RunOnce,
                 preview: false,
-                renamed_from: None,
                 // A button's steps run in its press, one after another.
                 defer_long: false,
             };

@@ -59,7 +59,7 @@ async fn expired_claims_cannot_post_or_renew_and_reply_modes_cannot_replay_each_
     sqlx::query("UPDATE reply_requests SET lease_expires_at = now() - interval '1 minute' WHERE id = $1::uuid")
         .bind(request["requestId"].as_str().expect("request"))
         .execute(&pool).await.expect("expire without sweeping status");
-    let progress = session.tool(&app, "reply_progress", json!({
+    let progress = session.tool(&app, "reply_progress_report", json!({
         "requestId": request["requestId"], "generation": generation, "status": "Still working"
     })).await;
     assert_eq!(
@@ -674,7 +674,7 @@ async fn agents_report_progress_and_post_interim_messages_on_one_claim() {
         app,
         owner,
         space,
-    }) = fixture("reply_progress").await
+    }) = fixture("reply_progress_report").await
     else {
         return;
     };
@@ -702,7 +702,7 @@ async fn agents_report_progress_and_post_interim_messages_on_one_claim() {
     let early = mara_mcp
         .tool(
             &app,
-            "reply_progress",
+            "reply_progress_report",
             json!({ "requestId": request_id, "generation": 1, "status": "Reading" }),
         )
         .await;
@@ -720,7 +720,7 @@ async fn agents_report_progress_and_post_interim_messages_on_one_claim() {
     let other = rook_mcp
         .tool(
             &app,
-            "reply_progress",
+            "reply_progress_report",
             json!({ "requestId": request_id, "generation": generation, "status": "Mine now" }),
         )
         .await;
@@ -728,7 +728,7 @@ async fn agents_report_progress_and_post_interim_messages_on_one_claim() {
     let stale = mara_mcp
         .tool(
             &app,
-            "reply_progress",
+            "reply_progress_report",
             json!({ "requestId": request_id, "generation": generation + 1, "status": "Reading" }),
         )
         .await;
@@ -737,7 +737,7 @@ async fn agents_report_progress_and_post_interim_messages_on_one_claim() {
         let invalid = mara_mcp
             .tool(
                 &app,
-                "reply_progress",
+                "reply_progress_report",
                 json!({ "requestId": request_id, "generation": generation, "status": status }),
             )
             .await;
@@ -755,7 +755,7 @@ async fn agents_report_progress_and_post_interim_messages_on_one_claim() {
     let progress = mara_mcp
         .tool(
             &app,
-            "reply_progress",
+            "reply_progress_report",
             json!({ "requestId": request_id, "generation": generation, "status": "Running the server tests" }),
         )
         .await;
@@ -810,7 +810,7 @@ async fn agents_report_progress_and_post_interim_messages_on_one_claim() {
     assert!(shown["progress"].is_null(), "{shown}");
     for (tool, arguments) in [
         (
-            "reply_progress",
+            "reply_progress_report",
             json!({ "requestId": request_id, "generation": generation, "status": "More" }),
         ),
         (
@@ -1112,7 +1112,7 @@ async fn stop_cancels_the_claim_and_refuses_the_next_call() {
 
     for (tool, arguments) in [
         (
-            "reply_progress",
+            "reply_progress_report",
             json!({ "requestId": request_id, "generation": generation, "status": "Still going" }),
         ),
         (

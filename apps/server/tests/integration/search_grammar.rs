@@ -237,7 +237,7 @@ async fn each_filter_narrows_and_none_widens() {
         .call(
             app,
             Call::Tool {
-                name: "search",
+                name: "workspace_search",
                 arguments: json!({"query": format!("{word} in:#design from:@mara")}),
             },
         )
@@ -254,7 +254,7 @@ async fn each_filter_narrows_and_none_widens() {
         .call(
             app,
             Call::Tool {
-                name: "search",
+                name: "workspace_search",
                 arguments: json!({"query": format!("{word} is:urgent")}),
             },
         )

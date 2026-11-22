@@ -282,7 +282,7 @@ pub(crate) async fn own_task_ref(
     }))
 }
 
-/// The task a link change (task_depend, task_relate) was on. Someone who may
+/// The task a link change (task_link) was on. Someone who may
 /// change tasks here but not see them (their role, or an app's agent limit)
 /// gets only its id and key: no title, status or whether it's finished.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -940,7 +940,7 @@ pub(crate) struct MilestoneValue {
     pub canceled: i64,
     /// Open tasks past the target date make it overdue.
     pub overdue: bool,
-    /// Pass as expectedVersion to milestone_write.
+    /// Pass as expectedVersion to milestone_update.
     pub version: i64,
     pub url: String,
     /// The initiative it is part of (initiative_list), by name.

@@ -30,7 +30,7 @@ pub(super) const ARCHIVED_PROJECT_MESSAGE: &str =
 /// Someone else changed a task between the caller's read and write.
 pub(super) fn version_conflict_message(task: &str, version: i64) -> String {
     format!(
-        "Someone changed {task} first (now version {version}). Open it again with task_open, then retry with expectedVersion {version}."
+        "Someone changed {task} first (now version {version}). Open it again with task_get, then retry with expectedVersion {version}."
     )
 }
 

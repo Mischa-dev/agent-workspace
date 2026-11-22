@@ -437,7 +437,7 @@ export class WorkspaceChannel {
   }
 
   async edit(messageId: string, text: string, clientRequestId?: string): Promise<void> {
-    unwrap(await this.tools.callTool('message_edit', { messageId, text, ...(clientRequestId && { clientRequestId }) }))
+    unwrap(await this.tools.callTool('message_update', { messageId, text, ...(clientRequestId && { clientRequestId }) }))
   }
 
   async delete(messageId: string): Promise<void> {
@@ -450,7 +450,7 @@ export class WorkspaceChannel {
 
   /** Shows what you're doing on a reply request you hold (and keeps it held). */
   async typing(requestId: string, generation: number, status = 'Working'): Promise<void> {
-    unwrap(await this.tools.callTool('reply_progress', { requestId, generation, status: status.slice(0, 200) }))
+    unwrap(await this.tools.callTool('reply_progress_report', { requestId, generation, status: status.slice(0, 200) }))
   }
 
   /** Fetches a file attached to a message or task, through a short-lived link. */

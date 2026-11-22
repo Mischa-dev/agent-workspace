@@ -101,10 +101,10 @@ pub(crate) struct PageCommentsValue {
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ThreadLine {
-    /// The thread's id; reply with page_comment (replyTo), resolve with
+    /// The thread's id; reply with page_comment_create (replyTo), resolve with
     /// page_comment_update.
     pub id: String,
-    /// The block it's about (an id from page_blocks); none for the whole
+    /// The block it's about (an id from page_blocks_get); none for the whole
     /// page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_id: Option<String>,
@@ -202,7 +202,7 @@ pub(crate) struct PageCommentArguments {
     pub page_id: String,
     /// The comment, in Markdown (up to 10,000 characters).
     pub text: String,
-    /// Start a thread about one block: its id from page_blocks. Leave it
+    /// Start a thread about one block: its id from page_blocks_get. Leave it
     /// out to comment on the whole page.
     pub block_id: Option<String>,
     /// With blockId: the exact words in that block the comment is about.
@@ -622,12 +622,12 @@ pub(crate) async fn page_suggestion_decide(
             Err(Refusal::Archived) => {
                 return Ok(ToolResult::invalid(
                     "pageId",
-                    "That page is archived. Bring it back with page_write (archived: false) first.",
+                    "That page is archived. Bring it back with page_update (archived: false) first.",
                 ));
             }
             Err(Refusal::Stale(why)) => {
                 return Ok(ToolResult::conflict(format!(
-                    "{why} The suggestion no longer fits the page; reject it, or (if it's yours) withdraw it and suggest again from page_blocks."
+                    "{why} The suggestion no longer fits the page; reject it, or (if it's yours) withdraw it and suggest again from page_blocks_get."
                 )));
             }
         };

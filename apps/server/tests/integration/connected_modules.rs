@@ -869,8 +869,8 @@ async fn a_connected_module_runs_its_operations_and_sends_in_its_events() {
     let rule = tool(
         &world,
         "desk",
-        "automation_write",
-        json!({"projectId": work, "operation": "create", "name": "Builds",
+        "automation_create",
+        json!({"projectId": work, "name": "Builds",
                "trigger": {"kind": "module_event", "eventType": "acme.build.finished"},
                "actions": [{"kind": "notify", "recipients": "owner", "message": "A build finished"}]}),
     )

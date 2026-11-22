@@ -3364,7 +3364,7 @@ pub enum PullRequestLinkChange {
 }
 
 /// Links a pull request Agent Workspace knows about to a task in the same
-/// project, or unlinks it, for task_link and task_link_pull_request alike. A
+/// project, or unlinks it, for task_link. A
 /// link made here is explicit and confirmed, so the project's GitHub
 /// automation moves the task when the pull request opens or merges; a
 /// suggested link (from a branch name) becomes explicit. A change bumps the

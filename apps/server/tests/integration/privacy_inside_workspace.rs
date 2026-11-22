@@ -170,13 +170,13 @@ async fn members_never_read_what_they_are_not_in() {
     .await;
     let task_key = string_at(&task, "/value/key");
     owner_call(
-        "task_comment",
+        "task_comment_create",
         json!({"workItemId": task_key, "update": format!("{TASK} is half done"), "clientRequestId": "quokka-comment"}),
     )
     .await;
     // WORK-1, which most of the cases name, carries it too.
     owner_call(
-        "task_comment",
+        "task_comment_create",
         json!({"workItemId": "WORK-1", "update": format!("The {TASK} estimate"), "clientRequestId": "quokka-comment-1"}),
     )
     .await;
@@ -325,7 +325,7 @@ async fn members_never_read_what_they_are_not_in() {
             continue;
         }
         let mut arguments = case.own.clone();
-        if case.tool == "search" {
+        if case.tool == "workspace_search" {
             arguments.extend([PRIVATE, TASK].map(|word| json!({"query": word})));
         }
         for own in &case.own {
@@ -1428,7 +1428,7 @@ async fn comment_writes_keep_to_what_the_writer_may_see() {
         app,
         &phone.token,
         &phone.session,
-        "sheet_write",
+        "sheet_create",
         json!({"projectId": work, "name": "Budget", "cells": [{"cell": "A1", "input": "Rent"}],
                "clientRequestId": "privacy-sheet"}),
     )
@@ -1515,7 +1515,7 @@ async fn comment_writes_keep_to_what_the_writer_may_see() {
         app,
         &phone.token,
         &phone.session,
-        "page_write",
+        "page_create",
         json!({"projectId": work, "title": "Plan", "body": "Ship it."}),
     )
     .await;
@@ -1572,7 +1572,7 @@ async fn comment_writes_keep_to_what_the_writer_may_see() {
         app,
         &phone.token,
         &phone.session,
-        "whiteboard_edit",
+        "whiteboard_update_elements",
         json!({"whiteboardId": board, "operations": [
             {"op": "add", "type": "text", "id": "idea", "x": 0, "y": 0, "text": "Try it"}]}),
     )
@@ -2535,14 +2535,14 @@ async fn history_restore_needs_the_things_edit_permission() {
     };
 
     let written = as_mara(
-        "page_write",
+        "page_create",
         json!({"projectId": "REST", "title": "Gate", "body": "Paint it red."}),
     )
     .await;
     assert_eq!(written["outcome"], "ok", "{written}");
     let page = written["value"]["id"].as_str().expect("page").to_owned();
     let edited = as_mara(
-        "page_write",
+        "page_update",
         json!({"pageId": page, "body": "Paint it blue.", "expectedVersion": 1}),
     )
     .await;
@@ -5021,7 +5021,7 @@ async fn triage_keeps_to_the_edit_and_workflow_permissions() {
         Some(3),
         "{listed}"
     );
-    let opened = as_owner("task_open", json!({"taskId": key})).await;
+    let opened = as_owner("task_get", json!({"taskId": key})).await;
     let planned = json!({"taskId": key, "expectedVersion": opened["value"]["task"]["version"], "cycle": "current"});
     let refused = as_rook("task_update", planned.clone()).await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
@@ -5080,7 +5080,7 @@ async fn triage_keeps_to_the_edit_and_workflow_permissions() {
     .expect("viewer in the workspace space");
     // Milestones (T1.42): a viewer can't reorder them.
     let made = as_owner(
-        "milestone_write",
+        "milestone_create",
         json!({"projectId": "TRI", "name": "Ordered", "clientRequestId": "ordered"}),
     )
     .await;
@@ -5275,13 +5275,13 @@ async fn record_changes_keep_to_roles_that_edit_records() {
         desk.call(app, Call::Tool { name, arguments }).await.1
     };
     let made = tool(
-        "collection_write",
+        "collection_create",
         json!({"projectId": "WORK", "name": "Accounts", "fields": [{"name": "Tier", "type": "text"}]}),
     )
     .await;
     assert_eq!(made["outcome"], "ok", "{made}");
     let written = tool(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Accounts", "clientRequestId": "acct",
                "records": [{"title": "Globex", "fields": {"Tier": "gold"}}]}),
     )
@@ -5584,7 +5584,7 @@ async fn a_private_channels_memory_stays_with_its_members() {
         .call(
             &world.app,
             Call::Tool {
-                name: "page_edit",
+                name: "page_update_blocks",
                 arguments: json!({
                     "pageId": page,
                     "edits": [{ "op": "append", "markdown": "Overwritten." }],
@@ -5616,7 +5616,7 @@ async fn a_private_channels_memory_stays_with_its_members() {
         .call(
             &world.app,
             Call::Tool {
-                name: "record_query",
+                name: "record_list",
                 arguments: json!({ "projectId": "WORK", "collection": "Pages" }),
             },
         )

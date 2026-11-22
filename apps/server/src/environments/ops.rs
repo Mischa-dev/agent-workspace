@@ -5,7 +5,7 @@
 //! dispatcher checked, which keeps its own checks inside: changing takes
 //! the right to manage the space's settings, checking the right to run
 //! there. Those that change something write their own audit row. The old
-//! `environment_write` tool is an alias.
+//! `environment_write` tool is retired.
 
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};

@@ -8,7 +8,7 @@
 //! only to find the workspace, so the command checks the caller's
 //! workspace role itself (as it did) rather than the dispatcher checking
 //! their role in that space. The `_write` tools became a create
-//! and an update each; their old names stay as aliases (`ops::aliases`).
+//! and an update each; their old names are retired (`ops::retired`).
 
 use uuid::Uuid;
 

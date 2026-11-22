@@ -55,7 +55,7 @@ async fn an_initiative_counts_only_the_spaces_its_reader_can_see() {
     // (and a canceled one left out), SIDE 2 of 3.
     for (space, milestone, done, open) in [("WORK", "Beta", 1, 1), ("SIDE", "Docs", 2, 1)] {
         let written = call(
-            "milestone_write",
+            "milestone_create",
             json!({"projectId": space, "name": milestone, "initiative": "Launch",
                    "clientRequestId": format!("{space}-milestone")}),
         )
@@ -143,7 +143,7 @@ async fn an_initiative_counts_only_the_spaces_its_reader_can_see() {
     // A milestone can't join an initiative of another workspace, or one
     // that isn't there.
     let nowhere = call(
-        "milestone_write",
+        "milestone_create",
         json!({"projectId": "WORK", "name": "Stray", "initiative": "Nope",
                "clientRequestId": "stray"}),
     )
@@ -177,7 +177,7 @@ async fn milestones_keep_their_order_and_roll_up_their_tasks() {
         ("Gamma", ""),
     ] {
         let made = call(
-            "milestone_write",
+            "milestone_create",
             json!({"projectId": "WORK", "name": name, "targetDate": date,
                    "clientRequestId": format!("order-{name}")}),
         )

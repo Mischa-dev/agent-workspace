@@ -348,7 +348,7 @@ pub async fn unknown_message(
         .await?;
         let Some(total) = names.first().map(|(_, total)| *total) else {
             return Ok(format!(
-                "{key} has no labels yet. Create one with label_write first."
+                "{key} has no labels yet. Create one with label_create first."
             ));
         };
         let mut listed = names
@@ -368,18 +368,18 @@ pub async fn unknown_message(
             "No labels called"
         };
         return Ok(format!(
-            "{called} {} in {key}. Its labels: {listed}. Create one with label_write first.",
+            "{called} {} in {key}. Its labels: {listed}. Create one with label_create first.",
             quoted(&resolution.unknown)
         ));
     }
     Ok(if resolution.archived.len() == 1 {
         format!(
-            "{} is archived in {key}. Restore it with label_write (archived: false) to use it.",
+            "{} is archived in {key}. Restore it with label_update (archived: false) to use it.",
             quoted(&resolution.archived)
         )
     } else {
         format!(
-            "{} are archived in {key}. Restore them with label_write (archived: false) to use them.",
+            "{} are archived in {key}. Restore them with label_update (archived: false) to use them.",
             quoted(&resolution.archived)
         )
     })

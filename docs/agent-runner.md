@@ -120,7 +120,7 @@ you stop; Stop marks it cancelled for you.
 
 ## 3. Work in the open
 
-- `reply_progress(requestId, generation, status)`: one line (up to 200
+- `reply_progress_report(requestId, generation, status)`: one line (up to 200
   characters) shown under the agent's name, such as "Running the server
   tests". Send one when the work changes phase, and at least every 15
   minutes.
@@ -166,7 +166,7 @@ calls you already make move it.
 | You call | The run |
 |---|---|
 | `reply_claim` | `run_started`; it is `working`. |
-| `reply_progress` | a `step_started` per distinct line, and the line as its status. |
+| `reply_progress_report` | a `step_started` per distinct line, and the line as its status. |
 | `session_bind` | its link (`url`) and backend (`harness`). |
 | `reply_send` (final) | `run_finished`, `done`. |
 | `reply_release` | `run_finished`, `failed`, with your reason. |
@@ -184,7 +184,7 @@ own `id`, so a retry is a duplicate rather than an error), `run_update`
 `run_result_report` (a pull request, branch, file or link). Requests without
 a launch behind them have no run; open one yourself with `run_create` (name
 its space with `spaceId`) if you want one. The old names `run_activity`,
-`run_result` and `run_open` still work. The SDKs wrap these:
+`run_result` and `run_open` are retired. The SDKs wrap these:
 `context.runId`, `context.step(title)` and `context.result(kind, url, title)`.
 
 ## Outcomes
@@ -216,7 +216,7 @@ worker:
             "reply.requested":
                 claim = mcp.reply_claim(wakeup.replyRequestId)
                 session = sessions.resume_or_start(claim.request.replyConversationId)
-                session.run(claim, progress = mcp.reply_progress,
+                session.run(claim, progress = mcp.reply_progress_report,
                             interim = mcp.reply_send(final: false),
                             answer = mcp.reply_send)
 ```

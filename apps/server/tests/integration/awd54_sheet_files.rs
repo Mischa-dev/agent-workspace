@@ -76,7 +76,7 @@ async fn sheets_go_out_to_excel_and_csv_and_come_back() {
         app,
         &codex,
         &session,
-        "sheet_write",
+        "sheet_create",
         json!({
             "projectId": "WORK",
             "name": "Costs",
@@ -93,7 +93,7 @@ async fn sheets_go_out_to_excel_and_csv_and_come_back() {
         app,
         &codex,
         &session,
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": "WORK",
             "sheet": "Costs",
@@ -108,7 +108,7 @@ async fn sheets_go_out_to_excel_and_csv_and_come_back() {
         app,
         &codex,
         &session,
-        "sheet_write",
+        "sheet_create",
         json!({
             "projectId": "WORK",
             "name": "Unseen",
@@ -124,7 +124,7 @@ async fn sheets_go_out_to_excel_and_csv_and_come_back() {
         app,
         &codex,
         &session,
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": "WORK",
             "sheet": "Costs",
@@ -227,7 +227,7 @@ async fn formats_and_styles_stay_through_writes_files_and_history() {
     };
 
     let made = call(
-        "sheet_write",
+        "sheet_create",
         json!({
             "projectId": "LOOK",
             "name": "Rates",
@@ -245,7 +245,7 @@ async fn formats_and_styles_stay_through_writes_files_and_history() {
     let sheet = made["value"]["id"].as_str().expect("id").to_owned();
     let read_at = made["value"]["revision"].as_i64().expect("revision");
     let read = call(
-        "sheet_read",
+        "sheet_get",
         json!({"projectId": "LOOK", "sheet": "Rates", "range": "A2:B2"}),
     )
     .await;
@@ -255,7 +255,7 @@ async fn formats_and_styles_stay_through_writes_files_and_history() {
 
     // Formats on a block, empty cells included; nothing typed changes.
     let formatted = call(
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": "LOOK",
             "sheet": "Rates",
@@ -273,7 +273,7 @@ async fn formats_and_styles_stay_through_writes_files_and_history() {
     let styled_at = formatted["value"]["revision"].as_i64().expect("revision");
     assert_eq!(styled_at, read_at + 1);
     let bad = call(
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": "LOOK",
             "sheet": "Rates",
@@ -286,7 +286,7 @@ async fn formats_and_styles_stay_through_writes_files_and_history() {
     assert_eq!(bad["field"], "formats[0].fill", "{bad}");
     // An edit read before the formats still lands.
     let typed = call(
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": "LOOK",
             "sheet": "Rates",
@@ -297,7 +297,7 @@ async fn formats_and_styles_stay_through_writes_files_and_history() {
     .await;
     assert_eq!(typed["outcome"], "ok", "{typed}");
     let now = typed["value"]["revision"].as_i64().expect("revision");
-    let read = call("sheet_read", json!({"projectId": "LOOK", "sheet": "Rates"})).await;
+    let read = call("sheet_get", json!({"projectId": "LOOK", "sheet": "Rates"})).await;
     let cells = read["value"]["cells"].as_array().expect("cells");
     let line = |address: &str| {
         cells
@@ -354,7 +354,7 @@ async fn formats_and_styles_stay_through_writes_files_and_history() {
     )
     .await;
     assert_eq!(restored["outcome"], "ok", "{restored}");
-    let read = call("sheet_read", json!({"projectId": "LOOK", "sheet": "Rates"})).await;
+    let read = call("sheet_get", json!({"projectId": "LOOK", "sheet": "Rates"})).await;
     let cells = read["value"]["cells"].as_array().expect("cells");
     let a1 = cells.iter().find(|cell| cell["cell"] == "A1").expect("A1");
     assert!(a1.get("style").is_none(), "{read}");
@@ -385,7 +385,7 @@ async fn sorting_finding_and_saved_views() {
     };
 
     let made = call(
-        "sheet_write",
+        "sheet_create",
         json!({
             "projectId": "SORT",
             "name": "Team",
@@ -406,13 +406,13 @@ async fn sorting_finding_and_saved_views() {
     let sheet = made["value"]["id"].as_str().expect("id").to_owned();
 
     let sorted = call(
-        "sheet_write",
+        "sheet_update",
         json!({"projectId": "SORT", "sheet": sheet, "sorts": [{"range": "A2:B5", "by": [{"column": "A"}]}]}),
     )
     .await;
     assert_eq!(sorted["outcome"], "ok", "{sorted}");
     let read = call(
-        "sheet_read",
+        "sheet_get",
         json!({"projectId": "SORT", "sheet": sheet, "range": "A1:D5"}),
     )
     .await;
@@ -514,7 +514,7 @@ async fn a_less_than_zero_rule_colours_the_right_cells() {
         async move { tool(app, &codex, &session, name, arguments).await }
     };
     let made = call(
-        "sheet_write",
+        "sheet_create",
         json!({
             "projectId": "RULE",
             "name": "Money",
@@ -533,7 +533,7 @@ async fn a_less_than_zero_rule_colours_the_right_cells() {
     let before_rules = made["value"]["revision"].as_i64().expect("revision");
 
     let bad = call(
-        "sheet_write",
+        "sheet_update",
         json!({"projectId": "RULE", "sheet": sheet, "conditionalFormats": [{"rules": [
             {"range": "A2:A9", "when": "lessThan", "value": 0, "style": {"color": "red"}}
         ]}]}),
@@ -546,7 +546,7 @@ async fn a_less_than_zero_rule_colours_the_right_cells() {
     );
 
     let ruled = call(
-        "sheet_write",
+        "sheet_update",
         json!({"projectId": "RULE", "sheet": sheet, "conditionalFormats": [{"rules": [
             {"range": "a2:a9", "when": "lessThan", "value": 0, "style": {"color": "#C62828"}}
         ]}]}),
@@ -565,7 +565,7 @@ async fn a_less_than_zero_rule_colours_the_right_cells() {
                     .map(str::to_owned)
             })
     };
-    let read = call("sheet_read", json!({"projectId": "RULE", "sheet": sheet})).await;
+    let read = call("sheet_get", json!({"projectId": "RULE", "sheet": sheet})).await;
     assert_eq!(red(&read, "A2"), None, "{read}");
     assert_eq!(red(&read, "A3").as_deref(), Some("#C62828"), "{read}");
     assert_eq!(red(&read, "A4").as_deref(), Some("#C62828"), "{read}");
@@ -576,24 +576,24 @@ async fn a_less_than_zero_rule_colours_the_right_cells() {
 
     // An edit: A2 goes to 20, so A4 is 10 and no longer red; A2 turns red at -1.
     let edited = call(
-        "sheet_write",
+        "sheet_update",
         json!({"projectId": "RULE", "sheet": sheet, "cells": [{"cell": "A2", "input": "20"}, {"cell": "A3", "input": "-1"}]}),
     )
     .await;
     assert_eq!(edited["outcome"], "ok", "{edited}");
-    let read = call("sheet_read", json!({"projectId": "RULE", "sheet": sheet})).await;
+    let read = call("sheet_get", json!({"projectId": "RULE", "sheet": sheet})).await;
     assert_eq!(red(&read, "A2"), None, "{read}");
     assert_eq!(red(&read, "A3").as_deref(), Some("#C62828"), "{read}");
     assert_eq!(red(&read, "A4"), None, "{read}");
 
     // A row inserted above moves the rule with its cells.
     let moved = call(
-        "sheet_write",
+        "sheet_update",
         json!({"projectId": "RULE", "sheet": sheet, "tabs": [{"tab": "Sheet1", "insertRowsAt": 1, "count": 1}]}),
     )
     .await;
     assert_eq!(moved["outcome"], "ok", "{moved}");
-    let read = call("sheet_read", json!({"projectId": "RULE", "sheet": sheet})).await;
+    let read = call("sheet_get", json!({"projectId": "RULE", "sheet": sheet})).await;
     assert_eq!(
         read["value"]["tabs"][0]["conditionalFormats"][0]["range"], "A3:A10",
         "{read}"
@@ -601,7 +601,7 @@ async fn a_less_than_zero_rule_colours_the_right_cells() {
     assert_eq!(red(&read, "A4").as_deref(), Some("#C62828"), "{read}");
 
     // Back to before the rule: no rules, nothing red.
-    let current = call("sheet_read", json!({"projectId": "RULE", "sheet": sheet})).await;
+    let current = call("sheet_get", json!({"projectId": "RULE", "sheet": sheet})).await;
     let revision = current["value"]["sheet"]["revision"]
         .as_i64()
         .expect("revision");
@@ -611,7 +611,7 @@ async fn a_less_than_zero_rule_colours_the_right_cells() {
     )
     .await;
     assert_eq!(restored["outcome"], "ok", "{restored}");
-    let read = call("sheet_read", json!({"projectId": "RULE", "sheet": sheet})).await;
+    let read = call("sheet_get", json!({"projectId": "RULE", "sheet": sheet})).await;
     assert!(
         read["value"]["tabs"][0].get("conditionalFormats").is_none(),
         "{read}"

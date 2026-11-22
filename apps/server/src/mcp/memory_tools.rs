@@ -934,7 +934,7 @@ async fn suggest_text(
             return Ok(Err(ToolResult::invalid(
                 "body",
                 format!(
-                    "That changes more than {} blocks of someone else's page at once. Suggest it in parts with page_edit.",
+                    "That changes more than {} blocks of someone else's page at once. Suggest it in parts with page_update_blocks.",
                     edits::MAX_EDITS
                 ),
             )));
@@ -971,7 +971,7 @@ async fn suggest_text(
 // elsewhere on the page, and a block's hash stops it undoing a change to
 // that block the agent hasn't seen.
 
-/// How much of a block page_blocks shows without includeMarkdown.
+/// How much of a block page_blocks_get shows without includeMarkdown.
 const BLOCK_PREVIEW_CHARACTERS: usize = 120;
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -1031,7 +1031,7 @@ pub(crate) struct PageBlocksValue {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SuggestionMade {
     pub suggestion_id: String,
-    /// pending until someone decides; see page_suggestions.
+    /// pending until someone decides; see page_suggestion_list.
     pub status: String,
     pub message: String,
 }
@@ -1041,7 +1041,7 @@ impl SuggestionMade {
         Self {
             suggestion_id: id.to_string(),
             status: "pending".to_owned(),
-            message: "This page is someone else's, so your edits were kept as a suggestion for them to accept or reject. The page hasn't changed yet; page_suggestions shows what happens to it. Withdraw it with page_suggestion_decide.".to_owned(),
+            message: "This page is someone else's, so your edits were kept as a suggestion for them to accept or reject. The page hasn't changed yet; page_suggestion_list shows what happens to it. Withdraw it with page_suggestion_decide.".to_owned(),
         }
     }
 }
@@ -1062,7 +1062,7 @@ pub(crate) struct OutlineLine {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BlockLine {
     /// The block's lasting id: it stays the same while the block is edited
-    /// or moved. Pass it to page_edit as blockId.
+    /// or moved. Pass it to page_update_blocks as blockId.
     pub id: String,
     /// Where the block is in this version.
     pub position: usize,
@@ -1076,7 +1076,7 @@ pub(crate) struct BlockLine {
     /// A heading's level.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub level: Option<u8>,
-    /// A digest of the block's contents. Pass it to page_edit to replace or
+    /// A digest of the block's contents. Pass it to page_update_blocks to replace or
     /// delete the block; it proves you read the block as it is.
     pub hash: String,
     /// The block's start, when its whole Markdown isn't given.
@@ -1363,7 +1363,7 @@ pub(crate) async fn page_blocks(
                 None => {
                     return Ok(ToolResult::invalid(
                         "version",
-                        "Pass the version your positions came from (page_blocks returns it), or use block ids.",
+                        "Pass the version your positions came from (page_blocks_get returns it), or use block ids.",
                     ));
                 }
                 Some(version) if version != page.version => {
@@ -1424,11 +1424,11 @@ pub(crate) struct PageEditInput {
     /// replace, insertBefore, insertAfter, delete, or append (to the end of
     /// the page; names no block).
     pub op: String,
-    /// The block's id, from page_blocks.
+    /// The block's id, from page_blocks_get.
     pub block_id: Option<String>,
     /// Or the block's position in expectedVersion.
     pub position: Option<usize>,
-    /// The block's hash, from page_blocks: needed to replace or delete, and
+    /// The block's hash, from page_blocks_get: needed to replace or delete, and
     /// the edit is refused if the block has changed since you read it.
     pub hash: Option<String>,
     /// The new Markdown, one or more blocks (not for delete). A replaced
@@ -1498,7 +1498,7 @@ pub(crate) async fn page_edit(
     if by_position && arguments.expected_version.is_none() {
         return ToolResult::invalid(
             "expectedVersion",
-            "Pass the version your positions came from (page_blocks returns it), or name blocks by blockId.",
+            "Pass the version your positions came from (page_blocks_get returns it), or name blocks by blockId.",
         );
     }
     let result = async {

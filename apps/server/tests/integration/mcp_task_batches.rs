@@ -166,7 +166,7 @@ async fn plan_import_previews_creates_once_and_rejects_as_a_whole() {
     assert_eq!(existing["value"]["key"], "PLAN-1", "{existing}");
     let existing = id(&existing["value"]["workItemId"]);
     let label = call(
-        "label_write",
+        "label_create",
         json!({"projectId": "PLAN", "name": "Import"}),
     )
     .await;
@@ -256,7 +256,7 @@ async fn plan_import_previews_creates_once_and_rejects_as_a_whole() {
     assert_eq!(after[5] - before[5], 2);
     assert_eq!(after[6] - before[6], 1);
 
-    let opened = call("task_open", json!({"taskId": "PLAN-2"})).await;
+    let opened = call("task_get", json!({"taskId": "PLAN-2"})).await;
     let task = &opened["value"]["task"];
     assert_eq!(task["itemType"]["name"], "Feature", "{opened}");
     assert_eq!(task["status"]["name"], "Ready");
@@ -268,10 +268,10 @@ async fn plan_import_previews_creates_once_and_rejects_as_a_whole() {
         ["Every plan is a task", "Keys are listed"]
     );
     assert_eq!(keys(&opened["value"]["subtasks"]), ["PLAN-3"]);
-    let nested = call("task_open", json!({"taskId": "PLAN-4"})).await;
+    let nested = call("task_get", json!({"taskId": "PLAN-4"})).await;
     assert_eq!(nested["value"]["task"]["status"]["name"], "Done");
     assert_eq!(id(&nested["value"]["task"]["parentWorkItemId"]), ids[1]);
-    let child = call("task_open", json!({"taskId": "PLAN-5"})).await;
+    let child = call("task_get", json!({"taskId": "PLAN-5"})).await;
     assert_eq!(id(&child["value"]["task"]["parentWorkItemId"]), existing);
     // Each new task went to the bottom of its column, in list order.
     assert_eq!(
@@ -692,7 +692,7 @@ async fn bulk_status_change_follows_the_workflow_or_changes_nothing() {
     // Labels: added in one version per task; an unknown name is refused,
     // never created; the label cap stops the batch.
     let label = call(
-        "label_write",
+        "label_create",
         json!({"projectId": "FLOW", "name": "Mobile"}),
     )
     .await;
@@ -723,7 +723,7 @@ async fn bulk_status_change_follows_the_workflow_or_changes_nothing() {
         .map(|number| format!("L{number}"))
         .collect::<Vec<_>>();
     for name in many.iter().chain(std::iter::once(&"Extra".to_owned())) {
-        let made = call("label_write", json!({"projectId": "FLOW", "name": name})).await;
+        let made = call("label_create", json!({"projectId": "FLOW", "name": name})).await;
         assert_eq!(made["outcome"], "ok", "{made}");
     }
     let full = call(
@@ -742,7 +742,7 @@ async fn bulk_status_change_follows_the_workflow_or_changes_nothing() {
         message(&capped["details"]["current"]["problems"][0]).contains("at most 20 labels"),
         "{capped}"
     );
-    let opened = call("task_open", json!({"taskId": "FLOW-1"})).await;
+    let opened = call("task_get", json!({"taskId": "FLOW-1"})).await;
     assert_eq!(
         opened["value"]["task"]["labels"],
         json!(["Mobile"]),
@@ -885,8 +885,7 @@ async fn bulk_tools_check_access_for_every_task() {
         .await;
         assert_eq!(created["outcome"], "ok", "{created}");
     }
-    let plan_task =
-        id(&call("task_open", json!({"taskId": "PLAN-1"})).await["value"]["task"]["id"]);
+    let plan_task = id(&call("task_get", json!({"taskId": "PLAN-1"})).await["value"]["task"]["id"]);
 
     // Nyx belongs to PLAN only: a task in OTHER is just not found, and
     // nothing in PLAN changes either.
@@ -1048,7 +1047,7 @@ async fn an_agent_imports_a_plan_and_reorganizes_the_board() {
         }
     };
     let label = call(
-        "label_write",
+        "label_create",
         json!({"projectId": "SHIP", "name": "Mobile"}),
     )
     .await;
@@ -1139,7 +1138,7 @@ async fn an_agent_imports_a_plan_and_reorganizes_the_board() {
         regrouped["value"]["changedFields"],
         json!(["parent", "labels"])
     );
-    let parent = call("task_open", json!({"taskId": "SHIP-1"})).await;
+    let parent = call("task_get", json!({"taskId": "SHIP-1"})).await;
     assert_eq!(
         keys(&parent["value"]["subtasks"]),
         ["SHIP-2", "SHIP-3", "SHIP-4", "SHIP-6"],
@@ -1149,7 +1148,7 @@ async fn an_agent_imports_a_plan_and_reorganizes_the_board() {
 
     // Its history tells the story, one entry per change.
     let opened = call(
-        "task_open",
+        "task_get",
         json!({"taskId": "SHIP-4", "include": ["history"]}),
     )
     .await;

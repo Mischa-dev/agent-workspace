@@ -532,7 +532,7 @@ async fn files_open_only_where_their_message_or_task_does() {
         &setup.app,
         &token,
         &session,
-        "task_comment",
+        "task_comment_create",
         json!({
             "taskId": task,
             "text": "taking someone's file",
@@ -546,7 +546,7 @@ async fn files_open_only_where_their_message_or_task_does() {
         &setup.app,
         &token,
         &session,
-        "task_comment",
+        "task_comment_create",
         json!({
             "taskId": task,
             "text": "Trace attached",
@@ -566,7 +566,7 @@ async fn files_open_only_where_their_message_or_task_does() {
         &setup.app,
         &token,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": task}),
     )
     .await;
@@ -1137,7 +1137,14 @@ async fn pages_nest_and_move_with_the_pages_inside() {
     add_member(&setup, &work, wren, "member").await;
     add_member(&setup, &team, wren, "member").await;
     let session = initialize(&setup.app, &token).await.expect("MCP session");
-    let write = |arguments: Value| tool(&setup.app, &token, &session, "page_write", arguments);
+    let write = |arguments: Value| {
+        let name = if arguments.get("pageId").is_some() {
+            "page_update"
+        } else {
+            "page_create"
+        };
+        tool(&setup.app, &token, &session, name, arguments)
+    };
     let id_of = |value: &Value| value["value"]["id"].as_str().expect("page id").to_owned();
     let handbook = write(json!({"projectId": work, "title": "Handbook", "body": "Start"})).await;
     assert_eq!(handbook["outcome"], "ok", "{handbook}");

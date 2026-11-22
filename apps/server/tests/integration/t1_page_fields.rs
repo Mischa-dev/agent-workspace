@@ -36,7 +36,7 @@ async fn pages_have_fields_that_their_list_filters_and_sorts_by() {
             .call(
                 app,
                 tool(
-                    "page_write",
+                    "page_create",
                     json!({"projectId": "WORK", "title": title, "body": "Notes."}),
                 ),
             )
@@ -46,7 +46,7 @@ async fn pages_have_fields_that_their_list_filters_and_sorts_by() {
     }
 
     // Each page is a record of Pages, with the page's ID and title.
-    let query = |arguments: Value| tool("record_query", arguments);
+    let query = |arguments: Value| tool("record_list", arguments);
     let (_, listed) = rook
         .call(
             app,
@@ -69,7 +69,7 @@ async fn pages_have_fields_that_their_list_filters_and_sorts_by() {
         .call(
             app,
             tool(
-                "collection_write",
+                "collection_update",
                 json!({"projectId": "WORK", "collection": "Pages",
                        "fields": [{"name": "Review date", "type": "date"},
                                   {"name": "Heading", "type": "formula",
@@ -86,7 +86,7 @@ async fn pages_have_fields_that_their_list_filters_and_sorts_by() {
         .call(
             app,
             tool(
-                "record_write",
+                "record_create_many",
                 json!({"projectId": "WORK", "collection": "Pages", "records": records,
                        "clientRequestId": "review-dates"}),
             ),
@@ -123,7 +123,7 @@ async fn pages_have_fields_that_their_list_filters_and_sorts_by() {
             .call(
                 app,
                 tool(
-                    "record_write",
+                    "record_create_many",
                     json!({"projectId": "WORK", "collection": "Pages", "records": [entry],
                            "clientRequestId": "refused"}),
                 ),
@@ -148,7 +148,7 @@ async fn pages_have_fields_that_their_list_filters_and_sorts_by() {
         .call(
             app,
             tool(
-                "page_write",
+                "page_update",
                 json!({"pageId": pages[2], "title": "Gamma, reviewed"}),
             ),
         )
@@ -157,7 +157,7 @@ async fn pages_have_fields_that_their_list_filters_and_sorts_by() {
     let (_, archived) = laptop
         .call(
             app,
-            tool("page_write", json!({"pageId": pages[0], "archived": true})),
+            tool("page_update", json!({"pageId": pages[0], "archived": true})),
         )
         .await;
     assert_eq!(archived["outcome"], "ok", "{archived}");

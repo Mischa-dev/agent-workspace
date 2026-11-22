@@ -4122,7 +4122,7 @@ async fn check_realtime(
         app,
         &b.app_token,
         &b_session,
-        "whiteboard_edit",
+        "whiteboard_update_elements",
         json!({"whiteboardId": b.whiteboard, "operations": [
             {"op": "add", "type": "text", "id": "live", "text": format!("Live note {}", b.marker)},
         ]}),

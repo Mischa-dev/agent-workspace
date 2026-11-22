@@ -479,7 +479,7 @@ async fn look_up(
     Ok(lookups)
 }
 
-/// A page of a task's history, oldest first. task_open calls it only after
+/// A page of a task's history, oldest first. task_get calls it only after
 /// it found the task, so the reader passed its membership check.
 pub(super) async fn task_history(
     state: &AppState,

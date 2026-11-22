@@ -201,7 +201,7 @@ async fn creating_a_page_again_creates_it_once() {
         &setup.pool,
         &token,
         &session,
-        "page_write",
+        "page_create",
         json!({"projectId": work, "title": "Plan", "body": BODY, "clientRequestId": key}),
         json!({"projectId": work, "title": "Other plan", "body": BODY, "clientRequestId": key}),
         "SELECT count(*) FROM project_pages",
@@ -213,7 +213,7 @@ async fn creating_a_page_again_creates_it_once() {
         app,
         &token,
         &session,
-        "page_write",
+        "page_update",
         json!({"pageId": page, "title": "Plan B", "expectedVersion": 1, "clientRequestId": key}),
     )
     .await;
@@ -262,7 +262,7 @@ async fn two_people_and_an_agent_edit_one_page_at_once_without_losing_text() {
     let owner_known = owner_editor.state_vector();
 
     // The agent reads the blocks: every one has an id.
-    let read = call("page_blocks", json!({"pageId": page})).await;
+    let read = call("page_blocks_get", json!({"pageId": page})).await;
     assert_eq!(read["outcome"], "ok", "{read}");
     let before = ids(&read);
     assert_eq!(before.len(), 5, "{read}");
@@ -273,7 +273,7 @@ async fn two_people_and_an_agent_edit_one_page_at_once_without_losing_text() {
     lena_editor.type_text(1, 15, " together");
     owner_editor.type_text(4, 8, " Soon");
     let edited = call(
-        "page_edit",
+        "page_update_blocks",
         json!({"pageId": page, "edits": [{
             "op": "replace",
             "blockId": before[3],
@@ -323,7 +323,7 @@ async fn two_people_and_an_agent_edit_one_page_at_once_without_losing_text() {
     assert_eq!(lena_editor.text_of(4), "Ship it. Soon");
 
     // Ids lasted through all of it; the replaced list kept its own.
-    let read_again = call("page_blocks", json!({"pageId": page})).await;
+    let read_again = call("page_blocks_get", json!({"pageId": page})).await;
     assert_eq!(ids(&read_again), before, "{read_again}");
 
     // History: the agent's edit and each person's typing are their own
@@ -371,7 +371,7 @@ async fn two_people_and_an_agent_edit_one_page_at_once_without_losing_text() {
         strip_ids(&server_blocks(&setup, &page).await)
     );
     let rewritten = call(
-        "page_write",
+        "page_update",
         json!({"pageId": page, "body": body, "expectedVersion": 5}),
     )
     .await;
@@ -381,12 +381,12 @@ async fn two_people_and_an_agent_edit_one_page_at_once_without_losing_text() {
     // Rewriting the whole page keeps the ids of blocks that stay, and of a
     // block edited in place.
     let rewritten = call(
-        "page_write",
+        "page_update",
         json!({"pageId": page, "body": body.replace("First we sketch together.", "We sketch first."), "expectedVersion": 5}),
     )
     .await;
     assert_eq!(rewritten["outcome"], "ok", "{rewritten}");
-    let read_again = call("page_blocks", json!({"pageId": page})).await;
+    let read_again = call("page_blocks_get", json!({"pageId": page})).await;
     assert_eq!(ids(&read_again), before, "{read_again}");
 }
 
@@ -410,7 +410,7 @@ async fn edits_that_would_lose_text_or_the_editor_cant_make_are_refused() {
     };
 
     // The agent reads; then Lena types in the paragraph it means to replace.
-    let read = call("page_blocks", json!({"pageId": page})).await;
+    let read = call("page_blocks_get", json!({"pageId": page})).await;
     let before = ids(&read);
     let (editor, _) = Editor::open(&setup, &lena, &page, 303).await;
     let known = editor.state_vector();
@@ -421,7 +421,7 @@ async fn edits_that_would_lose_text_or_the_editor_cant_make_are_refused() {
         (StatusCode::OK, Some("synced"))
     );
     let stale = call(
-        "page_edit",
+        "page_update_blocks",
         json!({"pageId": page, "edits": [{
             "op": "replace", "blockId": before[1],
             "hash": read["value"]["blocks"][1]["hash"], "markdown": "Agent text."
@@ -434,7 +434,7 @@ async fn edits_that_would_lose_text_or_the_editor_cant_make_are_refused() {
     assert_eq!(version, 2);
     // Without a hash, replacing or deleting isn't allowed at all.
     let blind = call(
-        "page_edit",
+        "page_update_blocks",
         json!({"pageId": page, "edits": [{"op": "delete", "blockId": before[1]}]}),
     )
     .await;

@@ -5,7 +5,7 @@
 //! settle an uncertain start (`run_mark_not_started`). The rules are
 //! `runs::ops`; these check what only a call knows (whose run it is, the
 //! report rate) and shape the answers. The old tool names `run_open`,
-//! `run_activity` and `run_result` stay callable (`ops::aliases`).
+//! `run_activity` and `run_result` are retired (`ops::retired`).
 //!
 //! Retries: a run with a `clientRunId`, an activity's `id`, a usage
 //! `reportKey` and a result's address are each kept once by the run

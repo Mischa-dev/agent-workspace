@@ -308,7 +308,7 @@ async fn an_install_runs_only_the_plan_previewed_by_someone_allowed() {
     let made = tool(
         &world,
         "desk",
-        "collection_write",
+        "collection_create",
         json!({"projectId": space, "name": "Bugs"}),
     )
     .await;
@@ -622,7 +622,7 @@ async fn a_new_space_is_planned_as_the_install_makes_it() {
     let made = tool(
         &world,
         "desk",
-        "collection_write",
+        "collection_create",
         json!({"projectId": theirs, "name": "Feedback"}),
     )
     .await;

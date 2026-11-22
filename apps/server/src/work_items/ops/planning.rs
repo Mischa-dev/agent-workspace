@@ -6,7 +6,7 @@
 //! Each runs the command its hand-written tool ran (`mcp::*`), with the
 //! caller the dispatcher checked: the same checks inside, the same answers
 //! inside the envelope. The `_write` tools became a create and an update
-//! each (their old names stay as aliases, `ops::aliases`). Until K3.15's
+//! each (their old names are retired, `ops::retired`). Until K3.15's
 //! `link_create` lands, `task_link` writes today's link tables.
 
 use rmcp::schemars::{self, JsonSchema};
@@ -251,7 +251,7 @@ tool_op!(TaskReorder {
 });
 
 // ---------------------------------------------------------------------------
-// task_link (aliases task_depend, task_relate, task_link_pull_request)
+// task_link
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -472,7 +472,7 @@ tool_op!(TaskLinkMany {
 });
 
 // ---------------------------------------------------------------------------
-// task_watch_set (alias task_watch)
+// task_watch_set
 
 tool_op!(TaskWatchSet {
     name: "task_watch_set",

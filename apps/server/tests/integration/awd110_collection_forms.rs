@@ -455,7 +455,7 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
         app,
         &codex,
         &session,
-        "bug_report_link_write",
+        "bug_report_link_create",
         json!({
             "projectId": "WORK",
             "name": "Agent form",
@@ -470,7 +470,7 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
         app,
         &codex,
         &session,
-        "bug_report_link_write",
+        "bug_report_link_create",
         json!({
             "projectId": "WORK",
             "name": "People form",
@@ -484,7 +484,7 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
         app,
         &codex,
         &session,
-        "bug_report_link_write",
+        "bug_report_link_update",
         json!({
             "projectId": "WORK",
             "linkId": made["value"]["link"]["id"],
@@ -523,7 +523,7 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
         app,
         &codex,
         &session,
-        "bug_report_link_write",
+        "bug_report_link_create",
         json!({"projectId": "WORK", "name": "More crashes"}),
     )
     .await;
@@ -532,7 +532,7 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
         app,
         &codex,
         &session,
-        "bug_report_link_write",
+        "bug_report_link_update",
         json!({"projectId": "WORK", "linkId": task_link["link"]["id"], "state": "paused"}),
     )
     .await;
@@ -541,7 +541,7 @@ async fn a_form_shows_only_itself_and_each_answer_is_one_record_of_its_fields() 
         app,
         &codex,
         &session,
-        "bug_report_link_write",
+        "bug_report_link_update",
         json!({"projectId": "WORK", "linkId": made["value"]["link"]["id"], "name": "Agent form, renamed"}),
     )
     .await;
@@ -764,7 +764,7 @@ async fn tasks_take_fields_records_and_forms_like_any_collection() {
     // An agent writes a record of Tasks by names: it's a task, with the
     // built-in fields and the new one set.
     let written = call(
-        "record_write",
+        "record_create_many",
         json!({
             "projectId": "WORK",
             "collection": "Tasks",
@@ -783,7 +783,7 @@ async fn tasks_take_fields_records_and_forms_like_any_collection() {
     .fetch_one(&setup.pool)
     .await
     .expect("the task, high priority");
-    let opened = call("task_open", json!({"taskId": task.to_string()})).await;
+    let opened = call("task_get", json!({"taskId": task.to_string()})).await;
     let fields = opened["value"]["task"]["fields"]
         .as_array()
         .or_else(|| opened["value"]["fields"].as_array())
@@ -797,7 +797,7 @@ async fn tasks_take_fields_records_and_forms_like_any_collection() {
     );
     // A second write of the same values changes nothing.
     let again = call(
-        "record_write",
+        "record_update_many",
         json!({
             "projectId": "WORK",
             "collection": "Tasks",
@@ -809,7 +809,7 @@ async fn tasks_take_fields_records_and_forms_like_any_collection() {
     assert_eq!(again["outcome"], "ok", "{again}");
     // A wrong option is refused with its record's place.
     let wrong = call(
-        "record_write",
+        "record_create_many",
         json!({
             "projectId": "WORK",
             "collection": "Tasks",
@@ -830,7 +830,7 @@ async fn tasks_take_fields_records_and_forms_like_any_collection() {
 
     // A form on Tasks makes a task of its answers.
     let made = call(
-        "bug_report_link_write",
+        "bug_report_link_create",
         json!({"projectId": "WORK", "name": "Chores form", "collection": "Tasks",
                "form": {"fields": [{"field": "Priority"}, {"field": "Effort", "required": true}]}}),
     )

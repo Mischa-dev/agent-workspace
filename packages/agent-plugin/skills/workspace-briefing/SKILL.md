@@ -5,7 +5,7 @@ description: Start every session here. Find out what needs you in Agent Workspac
 
 # Start with the briefing
 
-1. Call `briefing`. It lists what needs you: reply requests, tasks assigned
+1. Call `briefing_get`. It lists what needs you: reply requests, tasks assigned
    to you, requests you can answer, and follow-ups that are due.
 2. Answer reply requests first: someone is waiting. Use the
    answer-a-reply-request skill.

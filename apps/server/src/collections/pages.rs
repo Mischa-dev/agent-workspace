@@ -20,7 +20,7 @@ pub const READ_ONLY_MESSAGE: &str = "Pages is the built-in collection of this sp
 /// What to say when a write asks to add, retitle or archive one of its
 /// records.
 pub const RECORDS_MESSAGE: &str = "These records are this space's pages: make, rename and archive \
-     pages on Pages (page_write). Here you set their fields.";
+     pages on Pages (page_create). Here you set their fields.";
 
 /// After a page's title or archiving changed (its record follows by
 /// trigger): the record's worked-out values, the records whose rollups

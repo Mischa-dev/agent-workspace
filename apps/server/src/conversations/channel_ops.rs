@@ -328,7 +328,7 @@ impl Operation for ChannelJoin {
     const TITLE: &'static str = "Join channel";
     const DESCRIPTION: &'static str = "Join a public channel, so it's in your sidebar. You can \
         read and post in any public channel without joining. A private channel's managers add \
-        people instead (conversation_members). Joining twice changes nothing.";
+        people instead (conversation_members_update). Joining twice changes nothing.";
     const EMITS: &'static [&'static str] = &["conversation.updated"];
 
     type Input = ChannelInput;

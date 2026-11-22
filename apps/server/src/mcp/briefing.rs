@@ -23,7 +23,7 @@ use crate::{
 };
 
 const GUIDE_CHARACTERS: usize = 20_000;
-/// The most label names project_open lists.
+/// The most label names project_get lists.
 const PROJECT_LABELS: i64 = 100;
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -114,7 +114,7 @@ pub(crate) struct ThreadUpdate {
     pub changed_at: String,
 }
 
-const NEXT_STEPS: &str = "Open anything here with conversation_open or task_open. Answer reply requests with reply_claim then reply_send. When a discussion settles, set the thread's status and outcome with thread_update or record a decision with decision_record, so nobody has to reread it. Claim a task with task_claim before working on it.";
+const NEXT_STEPS: &str = "Open anything here with conversation_open or task_get. Answer reply requests with reply_claim then reply_send. When a discussion settles, set the thread's status and outcome with thread_update or record a decision with decision_record, so nobody has to reread it. Claim a task with task_claim before working on it.";
 
 pub(crate) async fn briefing(
     state: &AppState,
@@ -463,7 +463,7 @@ pub(crate) async fn projects_list(
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ProjectOpenArguments {
-    /// The project's ID, link or key (such as "AWD"). projects_list shows them.
+    /// The project's ID, link or key (such as "AWD"). project_list shows them.
     pub project_id: String,
 }
 

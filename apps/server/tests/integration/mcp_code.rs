@@ -817,7 +817,7 @@ async fn agent_list_shows_work_and_never_secrets() {
     const DANA: usize = 1;
     const MARA: usize = 2;
 
-    let briefed = call(MARA, "briefing", json!({})).await;
+    let briefed = call(MARA, "briefing_get", json!({})).await;
     assert_eq!(briefed["outcome"], "ok", "{briefed}");
     let created = call(
         OWNER,
@@ -1578,7 +1578,7 @@ async fn removing_a_run_prompt_message_scrubs_the_run_and_its_retries() {
         &setup.app,
         &token,
         &session,
-        "message_edit",
+        "message_update",
         json!({"messageId": prompt, "text": "Safe replacement", "clientRequestId": "edit-prompt"}),
     )
     .await;
@@ -1877,7 +1877,7 @@ async fn a_runs_task_and_code_follow_see_tasks_and_see_code() {
     .expect("the task's thread");
     let steps = json!({"runId": run_id, "includeDiff": true});
 
-    let seen = tool(app, &owner_app, &session, "run_steps", steps.clone()).await;
+    let seen = tool(app, &owner_app, &session, "run_step_list", steps.clone()).await;
     assert_eq!(seen["outcome"], "ok", "{seen}");
     assert_eq!(
         seen["value"]["run"]["taskTitle"], "Secret run task",
@@ -1893,7 +1893,7 @@ async fn a_runs_task_and_code_follow_see_tasks_and_see_code() {
     .execute(pool)
     .await
     .expect("the owner's apps see neither");
-    let limited = tool(app, &owner_app, &session, "run_steps", steps).await;
+    let limited = tool(app, &owner_app, &session, "run_step_list", steps).await;
     assert_eq!(limited["outcome"], "ok", "{limited}");
     let run = &limited["value"]["run"];
     assert_eq!(run["id"], run_id.to_string(), "{limited}");

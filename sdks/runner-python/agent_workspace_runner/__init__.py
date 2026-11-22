@@ -245,7 +245,7 @@ class ReplyTools:
 
     def progress(self, request_id: str, generation: int, status: str) -> dict[str, Any]:
         return _unwrap(
-            self.mcp.call_tool("reply_progress", {"requestId": request_id, "generation": generation, "status": status[:200]})
+            self.mcp.call_tool("reply_progress_report", {"requestId": request_id, "generation": generation, "status": status[:200]})
         )
 
     def send(

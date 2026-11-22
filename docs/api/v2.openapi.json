@@ -737,11 +737,11 @@
       "BlockLine": {
         "properties": {
           "hash": {
-            "description": "A digest of the block's contents. Pass it to page_edit to replace or\ndelete the block; it proves you read the block as it is.",
+            "description": "A digest of the block's contents. Pass it to page_update_blocks to replace or\ndelete the block; it proves you read the block as it is.",
             "type": "string"
           },
           "id": {
-            "description": "The block's lasting id: it stays the same while the block is edited\nor moved. Pass it to page_edit as blockId.",
+            "description": "The block's lasting id: it stays the same while the block is edited\nor moved. Pass it to page_update_blocks as blockId.",
             "type": "string"
           },
           "level": {
@@ -1547,7 +1547,7 @@
         "type": "object"
       },
       "ChangedTask": {
-        "description": "The task a link change (task_depend, task_relate) was on. Someone who may\nchange tasks here but not see them (their role, or an app's agent limit)\ngets only its id and key: no title, status or whether it's finished.",
+        "description": "The task a link change (task_link) was on. Someone who may\nchange tasks here but not see them (their role, or an app's agent limit)\ngets only its id and key: no title, status or whether it's finished.",
         "properties": {
           "finished": {
             "description": "True once it's done or canceled. Left out without \"see tasks\" here.",
@@ -4224,7 +4224,7 @@
             "type": "string"
           },
           "version": {
-            "description": "Pass as expectedVersion to change it (environment_write).",
+            "description": "Pass as expectedVersion to change it (environment_update).",
             "format": "int64",
             "type": "integer"
           }
@@ -5286,7 +5286,7 @@
             "type": "string"
           },
           "linkId": {
-            "description": "A public form's link (manage it with bug_report_link_write).",
+            "description": "A public form's link (manage it with bug_report_link_create and bug_report_link_update).",
             "type": [
               "string",
               "null"
@@ -6872,7 +6872,7 @@
             "type": "integer"
           },
           "version": {
-            "description": "Pass as expectedVersion to label_write.",
+            "description": "Pass as expectedVersion to label_update.",
             "format": "int64",
             "type": "integer"
           }
@@ -7696,7 +7696,7 @@
         "type": "object"
       },
       "MemoryPointer": {
-        "description": "A pointer to a memory page, as `conversation_open`, `project_open` and\n`reply_claim` include it: read it before acting there.",
+        "description": "A pointer to a memory page, as `conversation_open`, `project_get` and\n`reply_claim` include it: read it before acting there.",
         "properties": {
           "head": {
             "description": "The page's first 1,500 characters.",
@@ -8060,7 +8060,7 @@
             "type": "string"
           },
           "version": {
-            "description": "Pass as expectedVersion to milestone_write.",
+            "description": "Pass as expectedVersion to milestone_update.",
             "format": "int64",
             "type": "integer"
           }
@@ -9378,14 +9378,14 @@
         "additionalProperties": false,
         "properties": {
           "blockId": {
-            "description": "The block's id, from page_blocks.",
+            "description": "The block's id, from page_blocks_get.",
             "type": [
               "string",
               "null"
             ]
           },
           "hash": {
-            "description": "The block's hash, from page_blocks: needed to replace or delete, and\nthe edit is refused if the block has changed since you read it.",
+            "description": "The block's hash, from page_blocks_get: needed to replace or delete, and\nthe edit is refused if the block has changed since you read it.",
             "type": [
               "string",
               "null"
@@ -15025,7 +15025,7 @@
             "type": "string"
           },
           "status": {
-            "description": "pending until someone decides; see page_suggestions.",
+            "description": "pending until someone decides; see page_suggestion_list.",
             "type": "string"
           },
           "suggestionId": {
@@ -15173,7 +15173,7 @@
         "type": "object"
       },
       "TaskFieldValue": {
-        "description": "One of a task's fields as task_open shows it.",
+        "description": "One of a task's fields as task_get shows it.",
         "properties": {
           "name": {
             "type": "string"
@@ -15464,7 +15464,7 @@
           },
           "fields": {
             "additionalProperties": true,
-            "description": "Its custom field values by field name (only those it has), as\ntask_open reads them.",
+            "description": "Its custom field values by field name (only those it has), as\ntask_get reads them.",
             "type": [
               "object",
               "null"
@@ -15831,7 +15831,7 @@
             "type": "boolean"
           },
           "blockId": {
-            "description": "The block it's about (an id from page_blocks); none for the whole\npage.",
+            "description": "The block it's about (an id from page_blocks_get); none for the whole\npage.",
             "type": [
               "string",
               "null"
@@ -15844,7 +15844,7 @@
             "type": "array"
           },
           "id": {
-            "description": "The thread's id; reply with page_comment (replyTo), resolve with\npage_comment_update.",
+            "description": "The thread's id; reply with page_comment_create (replyTo), resolve with\npage_comment_update.",
             "type": "string"
           },
           "quote": {
@@ -34296,7 +34296,7 @@
                   },
                   "private": {
                     "default": null,
-                    "description": "true for a private channel: only its members see it, starting with\nyou. Add people with conversation_members.",
+                    "description": "true for a private channel: only its members see it, starting with\nyou. Add people with conversation_members_update.",
                     "type": [
                       "boolean",
                       "null"
@@ -35151,7 +35151,7 @@
     },
     "/api/v2/w/{workspace}/ops/channel_join": {
       "post": {
-        "description": "Join a public channel, so it's in your sidebar. You can read and post in any public channel without joining. A private channel's managers add people instead (conversation_members). Joining twice changes nothing.",
+        "description": "Join a public channel, so it's in your sidebar. You can read and post in any public channel without joining. A private channel's managers add people instead (conversation_members_update). Joining twice changes nothing.",
         "operationId": "channel_join",
         "parameters": [
           {
@@ -48090,7 +48090,7 @@
     },
     "/api/v2/w/{workspace}/ops/conversation_member_list": {
       "post": {
-        "description": "Who is in a private channel or a group (or the one a thread is in), which of them manage a private channel, and whether you can add and remove others with conversation_members. An open channel has no member list: everyone in its space reads it.",
+        "description": "Who is in a private channel or a group (or the one a thread is in), which of them manage a private channel, and whether you can add and remove others with conversation_members_update. An open channel has no member list: everyone in its space reads it.",
         "operationId": "conversation_member_list",
         "parameters": [
           {
@@ -48157,7 +48157,7 @@
                         "value": {
                           "properties": {
                             "canManage": {
-                              "description": "Whether you can add and remove others (conversation_members).",
+                              "description": "Whether you can add and remove others (conversation_members_update).",
                               "type": "boolean"
                             },
                             "conversationId": {
@@ -48312,7 +48312,7 @@
                         "value": {
                           "properties": {
                             "canManage": {
-                              "description": "Whether you can add and remove others (conversation_members).",
+                              "description": "Whether you can add and remove others (conversation_members_update).",
                               "type": "boolean"
                             },
                             "conversationId": {
@@ -49605,7 +49605,7 @@
     },
     "/api/v2/w/{workspace}/ops/conversation_task_list": {
       "post": {
-        "description": "The tasks linked to a conversation or made from one of its messages, in the conversation's own space, newest first. task_open opens one. Needs \"See tasks\" where it acts.",
+        "description": "The tasks linked to a conversation or made from one of its messages, in the conversation's own space, newest first. task_get opens one. Needs \"See tasks\" where it acts.",
         "operationId": "conversation_task_list",
         "parameters": [
           {
@@ -50417,7 +50417,7 @@
     },
     "/api/v2/w/{workspace}/ops/conversations_mark_read": {
       "post": {
-        "description": "Mark every conversation you can read as read (channels, threads, DMs and groups), or only those in one space with spaceId. Their notifications are read too. To read one conversation, use mark_read.",
+        "description": "Mark every conversation you can read as read (channels, threads, DMs and groups), or only those in one space with spaceId. Their notifications are read too. To read one conversation, use conversation_mark_read.",
         "operationId": "conversations_mark_read",
         "parameters": [
           {
@@ -67931,7 +67931,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "includeArchived": {
-                    "description": "Also list archived fields, which field_write can restore.",
+                    "description": "Also list archived fields, which field_update can restore.",
                     "type": [
                       "boolean",
                       "null"
@@ -70532,7 +70532,7 @@
     },
     "/api/v2/w/{workspace}/ops/file_upload": {
       "post": {
-        "description": "Upload a file (text or base64, up to 4 MiB) to a conversation, then send it by passing the returned fileId in message_send's or reply_send's attachmentIds; or keep it on a task (taskId; forComment: true holds it for task_comment's attachmentIds), such as a run's output, report or screenshot, or on a record you can edit (thing). Larger files go by file_upload_start.",
+        "description": "Upload a file (text or base64, up to 4 MiB) to a conversation, then send it by passing the returned fileId in message_send's or reply_send's attachmentIds; or keep it on a task (taskId; forComment: true holds it for task_comment_create's attachmentIds), such as a run's output, report or screenshot, or on a record you can edit (thing). Larger files go by file_upload_start.",
         "operationId": "file_upload",
         "parameters": [
           {
@@ -70590,7 +70590,7 @@
                     ]
                   },
                   "forComment": {
-                    "description": "With taskId: hold the file for a comment instead, attached when you\npass its fileId in task_comment's attachmentIds.",
+                    "description": "With taskId: hold the file for a comment instead, attached when you\npass its fileId in task_comment_create's attachmentIds.",
                     "type": [
                       "boolean",
                       "null"
@@ -71013,7 +71013,7 @@
     },
     "/api/v2/w/{workspace}/ops/file_upload_finish": {
       "post": {
-        "description": "After sending a file's bytes to the link file_upload_start gave, make it a file: the server checks what arrived is the size (and SHA-256) declared, and refuses and deletes it otherwise. A picture loses its location data first. Returns the file; pass its id in message_send's or task_comment's attachmentIds as with file_upload. Calling it again returns the same file.",
+        "description": "After sending a file's bytes to the link file_upload_start gave, make it a file: the server checks what arrived is the size (and SHA-256) declared, and refuses and deletes it otherwise. A picture loses its location data first. Returns the file; pass its id in message_send's or task_comment_create's attachmentIds as with file_upload. Calling it again returns the same file.",
         "operationId": "file_upload_finish",
         "parameters": [
           {
@@ -73007,7 +73007,7 @@
     },
     "/api/v2/w/{workspace}/ops/form_create": {
       "post": {
-        "description": "Make an internal form on a collection: the space's members fill it in in the app (form_answer_send) and each answer becomes a record written as them. It may ask for people and relations, split its questions into sections, show a question only after some answer to an earlier one, and set fields on every record. A public form, filled in by anyone with its link, is made with bug_report_link_write. Needs \"Build collections\" where it acts.",
+        "description": "Make an internal form on a collection: the space's members fill it in in the app (form_answer_send) and each answer becomes a record written as them. It may ask for people and relations, split its questions into sections, show a question only after some answer to an earlier one, and set fields on every record. A public form, filled in by anyone with its link, is made with bug_report_link_create. Needs \"Build collections\" where it acts.",
         "operationId": "form_create",
         "parameters": [
           {
@@ -73121,7 +73121,7 @@
                               "type": "string"
                             },
                             "linkId": {
-                              "description": "A public form's link (manage it with bug_report_link_write).",
+                              "description": "A public form's link (manage it with bug_report_link_create and bug_report_link_update).",
                               "type": [
                                 "string",
                                 "null"
@@ -73325,7 +73325,7 @@
                               "type": "string"
                             },
                             "linkId": {
-                              "description": "A public form's link (manage it with bug_report_link_write).",
+                              "description": "A public form's link (manage it with bug_report_link_create and bug_report_link_update).",
                               "type": [
                                 "string",
                                 "null"
@@ -73575,7 +73575,7 @@
                               "type": "string"
                             },
                             "linkId": {
-                              "description": "A public form's link (manage it with bug_report_link_write).",
+                              "description": "A public form's link (manage it with bug_report_link_create and bug_report_link_update).",
                               "type": [
                                 "string",
                                 "null"
@@ -73779,7 +73779,7 @@
                               "type": "string"
                             },
                             "linkId": {
-                              "description": "A public form's link (manage it with bug_report_link_write).",
+                              "description": "A public form's link (manage it with bug_report_link_create and bug_report_link_update).",
                               "type": [
                                 "string",
                                 "null"
@@ -74411,7 +74411,7 @@
                               "type": "string"
                             },
                             "linkId": {
-                              "description": "A public form's link (manage it with bug_report_link_write).",
+                              "description": "A public form's link (manage it with bug_report_link_create and bug_report_link_update).",
                               "type": [
                                 "string",
                                 "null"
@@ -74615,7 +74615,7 @@
                               "type": "string"
                             },
                             "linkId": {
-                              "description": "A public form's link (manage it with bug_report_link_write).",
+                              "description": "A public form's link (manage it with bug_report_link_create and bug_report_link_update).",
                               "type": [
                                 "string",
                                 "null"
@@ -84845,7 +84845,7 @@
     },
     "/api/v2/w/{workspace}/ops/initiative_create": {
       "post": {
-        "description": "Start an initiative: work that spans spaces, followed through its milestones. It is a record of the workspace's Initiatives collection (made with Owner, Status, Target date and Health fields the first time), so it is changed with record_update_many there. Add milestones with milestone_write's initiative.",
+        "description": "Start an initiative: work that spans spaces, followed through its milestones. It is a record of the workspace's Initiatives collection (made with Owner, Status, Target date and Health fields the first time), so it is changed with record_update_many there. Add milestones with milestone_create's initiative.",
         "operationId": "initiative_create",
         "parameters": [
           {
@@ -85217,7 +85217,7 @@
     },
     "/api/v2/w/{workspace}/ops/initiative_list": {
       "post": {
-        "description": "The workspace's initiatives: work that spans spaces, each a record of the workspace's Initiatives collection (change one with record_update_many there) with its milestones in the spaces you can see and their task counts. Put a milestone in one with milestone_write's initiative; make one with initiative_create.",
+        "description": "The workspace's initiatives: work that spans spaces, each a record of the workspace's Initiatives collection (change one with record_update_many there) with its milestones in the spaces you can see and their task counts. Put a milestone in one with milestone_create's initiative; make one with initiative_create.",
         "operationId": "initiative_list",
         "parameters": [
           {
@@ -88771,7 +88771,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "includeArchived": {
-                    "description": "Also list archived labels, which label_write can restore.",
+                    "description": "Also list archived labels, which label_update can restore.",
                     "type": [
                       "boolean",
                       "null"
@@ -97718,7 +97718,7 @@
                               "type": "string"
                             },
                             "version": {
-                              "description": "Pass as expectedVersion to milestone_write.",
+                              "description": "Pass as expectedVersion to milestone_update.",
                               "format": "int64",
                               "type": "integer"
                             }
@@ -97965,7 +97965,7 @@
                               "type": "string"
                             },
                             "version": {
-                              "description": "Pass as expectedVersion to milestone_write.",
+                              "description": "Pass as expectedVersion to milestone_update.",
                               "format": "int64",
                               "type": "integer"
                             }
@@ -99048,7 +99048,7 @@
                               "type": "string"
                             },
                             "version": {
-                              "description": "Pass as expectedVersion to milestone_write.",
+                              "description": "Pass as expectedVersion to milestone_update.",
                               "format": "int64",
                               "type": "integer"
                             }
@@ -99295,7 +99295,7 @@
                               "type": "string"
                             },
                             "version": {
-                              "description": "Pass as expectedVersion to milestone_write.",
+                              "description": "Pass as expectedVersion to milestone_update.",
                               "format": "int64",
                               "type": "integer"
                             }
@@ -110796,7 +110796,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "blockId": {
-                    "description": "Start a thread about one block: its id from page_blocks. Leave it\nout to comment on the whole page.",
+                    "description": "Start a thread about one block: its id from page_blocks_get. Leave it\nout to comment on the whole page.",
                     "type": [
                       "string",
                       "null"
@@ -112531,7 +112531,7 @@
     },
     "/api/v2/w/{workspace}/ops/page_file_upload": {
       "post": {
-        "description": "Keep a file on a page (text, or base64 up to 4 MiB). It answers the block that shows it in the page; add that with page_write or page_edit. Needs \"Edit pages and decisions\" where it acts.",
+        "description": "Keep a file on a page (text, or base64 up to 4 MiB). It answers the block that shows it in the page; add that with page_update or page_update_blocks. Needs \"Edit pages and decisions\" where it acts.",
         "operationId": "page_file_upload",
         "parameters": [
           {
@@ -112637,7 +112637,7 @@
                               "type": "string"
                             },
                             "embed": {
-                              "description": "The block that shows it, for page_write or page_edit.",
+                              "description": "The block that shows it, for page_update or page_update_blocks.",
                               "type": "string"
                             },
                             "fileId": {
@@ -112797,7 +112797,7 @@
                               "type": "string"
                             },
                             "embed": {
-                              "description": "The block that shows it, for page_write or page_edit.",
+                              "description": "The block that shows it, for page_update or page_update_blocks.",
                               "type": "string"
                             },
                             "fileId": {
@@ -113837,7 +113837,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "blocks": {
-                    "description": "The blocks to take, by id (page_blocks lists them).",
+                    "description": "The blocks to take, by id (page_blocks_get lists them).",
                     "items": {
                       "type": "string"
                     },
@@ -118340,7 +118340,7 @@
     },
     "/api/v2/w/{workspace}/ops/place_search": {
       "post": {
-        "description": "Find places in this workspace by name: channels, DMs and groups, people, spaces, tasks by key (AWD-12) and pages by title, at most 20, best matches first, each only where you can open it. For words inside messages and documents, use search.",
+        "description": "Find places in this workspace by name: channels, DMs and groups, people, spaces, tasks by key (AWD-12) and pages by title, at most 20, best matches first, each only where you can open it. For words inside messages and documents, use workspace_search.",
         "operationId": "place_search",
         "parameters": [
           {
@@ -120360,7 +120360,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "projectId": {
-                    "description": "The project's ID, link or key (such as \"AWD\"). projects_list shows them.",
+                    "description": "The project's ID, link or key (such as \"AWD\"). project_list shows them.",
                     "type": "string"
                   }
                 },
@@ -130049,7 +130049,7 @@
                     ]
                   },
                   "expectedVersion": {
-                    "description": "The version from template_list or an earlier recurring_write. Leave\nit out to change the current one.",
+                    "description": "The version from template_list or an earlier recurring_create or recurring_update. Leave\nit out to change the current one.",
                     "format": "int64",
                     "type": [
                       "integer",
@@ -132346,7 +132346,7 @@
                     ]
                   },
                   "expectedVersion": {
-                    "description": "The version from template_list or an earlier recurring_write. Leave\nit out to change the current one.",
+                    "description": "The version from template_list or an earlier recurring_create or recurring_update. Leave\nit out to change the current one.",
                     "format": "int64",
                     "type": [
                       "integer",
@@ -152060,7 +152060,7 @@
     },
     "/api/v2/w/{workspace}/ops/saved_search_list": {
       "post": {
-        "description": "Your own saved searches in this workspace, in order. Each is a query in the search grammar; run one with search.",
+        "description": "Your own saved searches in this workspace, in order. Each is a query in the search grammar; run one with workspace_search.",
         "operationId": "saved_search_list",
         "parameters": [
           {
@@ -170144,7 +170144,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "expectedVersion": {
-                    "description": "The version you last read (from task_open or task_list).",
+                    "description": "The version you last read (from task_get or task_list).",
                     "format": "int64",
                     "type": "integer"
                   },
@@ -171080,7 +171080,7 @@
                     "description": "Structured content instead of text."
                   },
                   "replyToCommentId": {
-                    "description": "To answer one comment on this task, its id (task_open lists them): it\nshows quoted above yours, and its author is told.",
+                    "description": "To answer one comment on this task, its id (task_get lists them): it\nshows quoted above yours, and its author is told.",
                     "type": [
                       "string",
                       "null"
@@ -171586,7 +171586,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "commentId": {
-                    "description": "The comment's ID. task_open lists the task's recent comments with\ntheir IDs.",
+                    "description": "The comment's ID. task_get lists the task's recent comments with\ntheir IDs.",
                     "maxLength": 2048,
                     "type": "string"
                   },
@@ -171958,7 +171958,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "commentId": {
-                    "description": "The comment's ID. task_open lists the task's recent comments with\ntheir IDs.",
+                    "description": "The comment's ID. task_get lists the task's recent comments with\ntheir IDs.",
                     "maxLength": 2048,
                     "type": "string"
                   },
@@ -172391,7 +172391,7 @@
                     ]
                   },
                   "collection": {
-                    "description": "Make it in a collection that acts like a task, such as \"Bugs\", by\nname or ID (project_open lists them). Left out, it's a plain task.",
+                    "description": "Make it in a collection that acts like a task, such as \"Bugs\", by\nname or ID (project_get lists them). Left out, it's a plain task.",
                     "type": [
                       "string",
                       "null"
@@ -172435,7 +172435,7 @@
                     ]
                   },
                   "labels": {
-                    "description": "Labels by name or ID, at most 20. They must exist already; create one\nwith label_write.",
+                    "description": "Labels by name or ID, at most 20. They must exist already; create one\nwith label_create.",
                     "items": {
                       "type": "string"
                     },
@@ -173030,7 +173030,7 @@
                     ]
                   },
                   "projectId": {
-                    "description": "The project: ID, link, or key such as \"AWD\" (see projects_list).\nRequired for apps connected for a whole account; agents and\nsingle-project connections default to their own project.",
+                    "description": "The project: ID, link, or key such as \"AWD\" (see project_list).\nRequired for apps connected for a whole account; agents and\nsingle-project connections default to their own project.",
                     "type": [
                       "string",
                       "null"
@@ -173445,7 +173445,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "expectedVersion": {
-                    "description": "The task's version you last read (from task_open or task_list).",
+                    "description": "The task's version you last read (from task_get or task_list).",
                     "format": "int64",
                     "type": "integer"
                   },
@@ -173504,7 +173504,7 @@
                           "type": "string"
                         },
                         "value": {
-                          "description": "task_criteria's result. It is stored for replays, so it deserializes too.",
+                          "description": "task_criteria_update's result. It is stored for replays, so it deserializes too.",
                           "properties": {
                             "completed": {
                               "description": "How many of them are checked.",
@@ -173694,7 +173694,7 @@
                           "type": "string"
                         },
                         "value": {
-                          "description": "task_criteria's result. It is stored for replays, so it deserializes too.",
+                          "description": "task_criteria_update's result. It is stored for replays, so it deserializes too.",
                           "properties": {
                             "completed": {
                               "description": "How many of them are checked.",
@@ -173965,7 +173965,7 @@
                               "type": "array"
                             },
                             "blockedReason": {
-                              "description": "Why it's marked blocked (task_mark_blocked), if it is.",
+                              "description": "Why it's marked blocked (task_update), if it is.",
                               "type": [
                                 "string",
                                 "null"
@@ -174043,7 +174043,7 @@
                               "type": "array"
                             },
                             "guidePageId": {
-                              "description": "Where to read how this project works: project_open or page_get.",
+                              "description": "Where to read how this project works: project_get or page_get.",
                               "type": [
                                 "string",
                                 "null"
@@ -174105,7 +174105,7 @@
                               "type": "boolean"
                             },
                             "relations": {
-                              "description": "Related and duplicate tasks (task_relate).",
+                              "description": "Related and duplicate tasks (task_link).",
                               "items": {
                                 "$ref": "#/components/schemas/RelationRef"
                               },
@@ -174128,7 +174128,7 @@
                               "$ref": "#/components/schemas/WorkItemProjection"
                             },
                             "watchers": {
-                              "description": "Who hears about its changes (task_watch).",
+                              "description": "Who hears about its changes (task_watch_set).",
                               "items": {
                                 "$ref": "#/components/schemas/WatcherRef"
                               },
@@ -174281,7 +174281,7 @@
                               "type": "array"
                             },
                             "blockedReason": {
-                              "description": "Why it's marked blocked (task_mark_blocked), if it is.",
+                              "description": "Why it's marked blocked (task_update), if it is.",
                               "type": [
                                 "string",
                                 "null"
@@ -174359,7 +174359,7 @@
                               "type": "array"
                             },
                             "guidePageId": {
-                              "description": "Where to read how this project works: project_open or page_get.",
+                              "description": "Where to read how this project works: project_get or page_get.",
                               "type": [
                                 "string",
                                 "null"
@@ -174421,7 +174421,7 @@
                               "type": "boolean"
                             },
                             "relations": {
-                              "description": "Related and duplicate tasks (task_relate).",
+                              "description": "Related and duplicate tasks (task_link).",
                               "items": {
                                 "$ref": "#/components/schemas/RelationRef"
                               },
@@ -174444,7 +174444,7 @@
                               "$ref": "#/components/schemas/WorkItemProjection"
                             },
                             "watchers": {
-                              "description": "Who hears about its changes (task_watch).",
+                              "description": "Who hears about its changes (task_watch_set).",
                               "items": {
                                 "$ref": "#/components/schemas/WatcherRef"
                               },
@@ -176336,7 +176336,7 @@
                     ]
                   },
                   "blocked": {
-                    "description": "true: only blocked tasks, whether marked blocked or waiting on an\nunfinished task (task_depend). false: leave them out.",
+                    "description": "true: only blocked tasks, whether marked blocked or waiting on an\nunfinished task (task_link). false: leave them out.",
                     "type": [
                       "boolean",
                       "null"
@@ -176351,7 +176351,7 @@
                     ]
                   },
                   "collection": {
-                    "description": "Only the tasks of one collection that acts like a task, such as\n\"Bugs\", by name or ID (project_open lists them); \"Tasks\" for plain\ntasks. Needs projectId.",
+                    "description": "Only the tasks of one collection that acts like a task, such as\n\"Bugs\", by name or ID (project_get lists them); \"Tasks\" for plain\ntasks. Needs projectId.",
                     "type": [
                       "string",
                       "null"
@@ -178575,7 +178575,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "expectedVersion": {
-                    "description": "The version you last read (from task_open or task_list).",
+                    "description": "The version you last read (from task_get or task_list).",
                     "format": "int64",
                     "type": "integer"
                   },
@@ -179173,7 +179173,7 @@
                     ]
                   },
                   "expectedVersion": {
-                    "description": "The version you last read (from task_open or task_list).",
+                    "description": "The version you last read (from task_get or task_list).",
                     "format": "int64",
                     "type": "integer"
                   },
@@ -179774,7 +179774,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "addLabels": {
-                    "description": "Labels to put on them, by name or ID (at most 20). They must exist;\ncreate one with label_write.",
+                    "description": "Labels to put on them, by name or ID (at most 20). They must exist;\ncreate one with label_create.",
                     "items": {
                       "type": "string"
                     },
@@ -180721,7 +180721,7 @@
                     ]
                   },
                   "expectedVersion": {
-                    "description": "The version from template_list or an earlier template_write. Leave\nit out to change the current one.",
+                    "description": "The version from template_list or an earlier template_create or template_update. Leave\nit out to change the current one.",
                     "format": "int64",
                     "type": [
                       "integer",
@@ -181517,7 +181517,7 @@
                     ]
                   },
                   "expectedVersion": {
-                    "description": "The version from template_list or an earlier template_write. Leave\nit out to change the current one.",
+                    "description": "The version from template_list or an earlier template_create or template_update. Leave\nit out to change the current one.",
                     "format": "int64",
                     "type": [
                       "integer",
@@ -183905,7 +183905,7 @@
     },
     "/api/v2/w/{workspace}/ops/thing_link": {
       "post": {
-        "description": "Link one thing to another in the same workspace: about (it discusses or concerns the other), relates_to, or made_from. Both show the link from their side (thing_open). For dependencies, relations and duplicates between two tasks use task_depend and task_relate.",
+        "description": "Link one thing to another in the same workspace: about (it discusses or concerns the other), relates_to, or made_from. Both show the link from their side (thing_open). For dependencies, relations and duplicates between two tasks use task_link.",
         "operationId": "thing_link",
         "parameters": [
           {
@@ -189017,7 +189017,7 @@
                   },
                   "taskIds": {
                     "default": null,
-                    "description": "Task IDs to launch (from usage_batch). Left out, the suggested batch\nas it stands now.",
+                    "description": "Task IDs to launch (from usage_batch_preview). Left out, the suggested batch\nas it stands now.",
                     "items": {
                       "type": "string"
                     },
@@ -189391,7 +189391,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "accountId": {
-                    "description": "The provider account (usage_windows lists yours).",
+                    "description": "The provider account (usage_window_list lists yours).",
                     "type": "string"
                   },
                   "windowKey": {

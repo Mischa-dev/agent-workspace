@@ -249,7 +249,7 @@ async fn every_served_revision_lists_reads_writes_and_resumes() {
             request(
                 3,
                 "tools/call",
-                json!({ "name": "projects_list", "arguments": {} }),
+                json!({ "name": "project_list", "arguments": {} }),
                 revision,
             ),
         )

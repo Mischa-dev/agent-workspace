@@ -5,8 +5,8 @@
 //! Each runs the command its hand-written tool ran (`ops::wrapped`), as the
 //! caller the dispatcher checked, so how someone may write to a page (edit
 //! it, or only suggest) is still decided inside, by their role there.
-//! `page_write` became `page_create` and `page_update`; the old names stay
-//! as aliases (`ops::aliases`).
+//! `page_write` became `page_create` and `page_update`; the old names are
+//! retired (`ops::retired`).
 
 use uuid::Uuid;
 

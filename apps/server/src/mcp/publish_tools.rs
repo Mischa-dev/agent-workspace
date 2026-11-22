@@ -53,7 +53,7 @@ pub(crate) struct PullRequestRefreshArguments {
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PullRequestMergeArguments {
-    /// The pull request (pull_request_list, pull_request_get, task_open).
+    /// The pull request (pull_request_list, pull_request_get, task_get).
     pub pull_request_id: String,
     /// Merge only if its head is still this commit (pull_request_get's
     /// headSha). Default: the head Agent Workspace last read.
@@ -403,7 +403,7 @@ fn outcome(result: Result<QueuedValue, AppError>, tool: &'static str) -> ToolRes
                 "Another run is working in that run's workspace. Wait for it to finish."
             }
             ("github_installation", "repository_unavailable") => {
-                "The project's GitHub installation doesn't reach that repository (github_integration_write)."
+                "The project's GitHub installation doesn't reach that repository (github_installation_link)."
             }
             ("repository_workspace", _) => "That run's workspace isn't where it should be.",
             _ => why,

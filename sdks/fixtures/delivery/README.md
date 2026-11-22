@@ -20,7 +20,7 @@ the published Standard Webhooks test secret, not a real one.
 ## The rules a client can rely on
 
 - An event carries ids, kinds and field names, never what someone wrote.
-  Fetch text live (`conversation_read`, `task_open`, ...) with your own
+  Fetch text live (`conversation_read`, `task_get`, ...) with your own
   access.
 - A shape may grow: new keys can appear anywhere, so ignore keys you don't
   know. Keys shown here don't go away or change type.

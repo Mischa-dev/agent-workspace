@@ -35,13 +35,13 @@ async fn field_rules_hold_on_every_way_in() {
     };
     let write = |records: Value| {
         call(
-            "record_write",
+            "record_create_many",
             json!({"projectId": "WORK", "collection": "Parts", "records": records}),
         )
     };
 
     let made = call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": "WORK",
             "name": "Parts",
@@ -64,7 +64,7 @@ async fn field_rules_hold_on_every_way_in() {
 
     // A rule that doesn't fit its field is refused.
     let wrong = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Parts",
                "fields": [{"field": "Kind", "rules": {"unique": true}}]}),
     )
@@ -74,7 +74,7 @@ async fn field_rules_hold_on_every_way_in() {
     // The definition (what a workspace template keeps) has the rules, a
     // choice's default by its option's name.
     let described = call(
-        "collection_describe",
+        "collection_get",
         json!({"projectId": "WORK", "collection": "Parts"}),
     )
     .await;
@@ -105,11 +105,16 @@ async fn field_rules_hold_on_every_way_in() {
         json!({"projectId": "WORK", "collection": "Bins", "fields": [
             {"field": "Kind", "options": [{"name": "Bolt"}]}]}),
     ] {
-        let changed = call("collection_write", change).await;
+        let name = if change.get("collection").is_some() {
+            "collection_update"
+        } else {
+            "collection_create"
+        };
+        let changed = call(name, change).await;
         assert_eq!(changed["outcome"], "ok", "{changed}");
     }
     let bins = call(
-        "collection_describe",
+        "collection_get",
         json!({"projectId": "WORK", "collection": "Bins"}),
     )
     .await;
@@ -226,7 +231,7 @@ async fn field_rules_hold_on_every_way_in() {
     // A two-way relation whose other side only builders set: setting this
     // side would set that one, so rita is refused here too.
     let suppliers = call(
-        "collection_write",
+        "collection_create",
         json!({"projectId": "WORK", "name": "Suppliers",
                "fields": [{"name": "Supplies", "type": "relation", "target": "record:Parts",
                            "twoWay": true, "pairName": "Supplied by"}]}),
@@ -234,7 +239,7 @@ async fn field_rules_hold_on_every_way_in() {
     .await;
     assert_eq!(suppliers["outcome"], "ok", "{suppliers}");
     let guarded = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Parts",
                "fields": [{"field": "Supplied by", "rules": {"buildersOnly": true}}]}),
     )
@@ -269,7 +274,7 @@ async fn field_rules_hold_on_every_way_in() {
     .await;
     assert_eq!(shared["outcome"], "ok", "{shared}");
     let stock_unique = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Parts",
                "fields": [{"field": "Stock", "rules": {"unique": true}}]}),
     )

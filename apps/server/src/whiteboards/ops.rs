@@ -1,5 +1,5 @@
 //! Whiteboards as operations (K2.12). Drawing on a board
-//! (`whiteboard_update_elements`, alias `whiteboard_edit`) runs in the
+//! (`whiteboard_update_elements`, once `whiteboard_edit`) runs in the
 //! operation's own transaction over `access` and `edit::apply`, so the web's
 //! operations route and the agent tool write the same audit row. Creating,
 //! changing, copying and linking a board run the commands the hand-written
@@ -41,7 +41,7 @@ pub fn register_ops(registry: &mut Registry) {
 }
 
 // ---------------------------------------------------------------------------
-// whiteboard_update_elements (alias whiteboard_edit)
+// whiteboard_update_elements
 
 pub struct WhiteboardUpdateElements;
 

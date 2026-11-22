@@ -1,7 +1,7 @@
 //! Messages as operations (K2.7): send, update, delete, react, forward,
 //! mark read, history, schedule, change a scheduled message, and hide link
-//! previews. Agents call them as tools of the same names (`message_edit`
-//! and `mark_read` stay as aliases), scripts through the v2 route, and
+//! previews. Agents call them as tools of the same names (the old
+//! `message_edit` and `mark_read` are retired, `ops::retired`), scripts through the v2 route, and
 //! rules as actions. Each runs the message command the web runs
 //! (`mcp::messaging`), which keeps its own idempotency (the web's scopes,
 //! so a request id retried on either surface replays) and its own checks
@@ -198,7 +198,7 @@ impl Operation for MessageForward {
 }
 
 // ---------------------------------------------------------------------------
-// message_update (alias message_edit)
+// message_update
 
 pub struct MessageUpdate;
 
@@ -470,7 +470,7 @@ impl Operation for MessageReact {
 }
 
 // ---------------------------------------------------------------------------
-// conversation_mark_read (alias mark_read)
+// conversation_mark_read
 
 pub struct ConversationMarkRead;
 
@@ -723,7 +723,7 @@ pub struct ConversationMembers {
     #[schemars(with = "String")]
     pub conversation_id: uuid::Uuid,
     pub members: Vec<ConversationMember>,
-    /// Whether you can add and remove others (conversation_members).
+    /// Whether you can add and remove others (conversation_members_update).
     pub can_manage: bool,
 }
 
@@ -736,7 +736,7 @@ impl Operation for ConversationMemberList {
     const TITLE: &'static str = "List members";
     const DESCRIPTION: &'static str = "Who is in a private channel or a group (or the one a \
         thread is in), which of them manage a private channel, and whether you can add and \
-        remove others with conversation_members. An open channel has no member list: everyone \
+        remove others with conversation_members_update. An open channel has no member list: everyone \
         in its space reads it.";
 
     type Input = ConversationMemberListInput;
@@ -865,7 +865,7 @@ impl Operation for ConversationTaskList {
     const IDEMPOTENCY: Idempotency = Idempotency::None;
     const TITLE: &'static str = "List a conversation's tasks";
     const DESCRIPTION: &'static str = "The tasks linked to a conversation or made from one of \
-        its messages, in the conversation's own space, newest first. task_open opens one.";
+        its messages, in the conversation's own space, newest first. task_get opens one.";
 
     type Input = ConversationTaskListInput;
     type Output = ConversationTasks;

@@ -520,7 +520,7 @@ class WorkspaceChannel:
         args = {"messageId": message_id, "text": text}
         if client_request_id:
             args["clientRequestId"] = client_request_id
-        unwrap(self.tools.call_tool("message_edit", args))
+        unwrap(self.tools.call_tool("message_update", args))
 
     def delete(self, message_id: str) -> None:
         unwrap(self.tools.call_tool("message_delete", {"messageId": message_id}))
@@ -530,7 +530,7 @@ class WorkspaceChannel:
 
     def typing(self, request_id: str, generation: int, status: str = "Working") -> None:
         """Shows what you're doing on a reply request you hold (and keeps it held)."""
-        unwrap(self.tools.call_tool("reply_progress", {"requestId": request_id, "generation": generation, "status": status[:200]}))
+        unwrap(self.tools.call_tool("reply_progress_report", {"requestId": request_id, "generation": generation, "status": status[:200]}))
 
     def download(self, file_id: str) -> tuple[str, str, bytes]:
         """Fetches a file attached to a message or task: ``(name, content type, bytes)``."""

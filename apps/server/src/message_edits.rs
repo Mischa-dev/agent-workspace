@@ -180,7 +180,7 @@ pub(crate) struct MessageRemoval {
 }
 
 /// What the web edit route returns and stores for idempotent replays. MCP's
-/// message_edit stores the same body under the same scope, so a key retried
+/// message_update stores the same body under the same scope, so a key retried
 /// on the other surface still replays.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]

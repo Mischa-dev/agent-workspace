@@ -188,7 +188,7 @@ async fn the_alert_launches_its_batch_on_the_account_in_each_projects_environmen
         &setup.app,
         &owner_app,
         &session,
-        "usage_batch",
+        "usage_batch_preview",
         batch_tool.clone(),
     )
     .await;
@@ -209,7 +209,14 @@ async fn the_alert_launches_its_batch_on_the_account_in_each_projects_environmen
     .execute(&setup.pool)
     .await
     .expect("the owner's apps no longer see tasks");
-    let listed = tool(&setup.app, &owner_app, &session, "usage_batch", batch_tool).await;
+    let listed = tool(
+        &setup.app,
+        &owner_app,
+        &session,
+        "usage_batch_preview",
+        batch_tool,
+    )
+    .await;
     assert!(!listed.to_string().contains("Fix the outage"), "{listed}");
     assert!(!listed.to_string().contains("Tidy the docs"), "{listed}");
     sqlx::query(

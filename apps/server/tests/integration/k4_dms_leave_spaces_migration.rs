@@ -156,7 +156,7 @@ async fn pre_r20_dms_are_personal_and_leave_their_space() {
     for table in [
         "messages",
         "conversation_read_states",
-        "conversation_members",
+        "conversation_members_update",
     ] {
         let left = one::<i64>(
             &pool,

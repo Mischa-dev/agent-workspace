@@ -41,7 +41,7 @@ use crate::{
 };
 
 const MESSAGES_SPACE_MESSAGE: &str =
-    "The Messages space has no tasks, so it has no fields. Pick a project with projects_list.";
+    "The Messages space has no tasks, so it has no fields. Pick a project with project_list.";
 const MANAGERS_MESSAGE: &str = "Only people whose role can change the workflow (owners and admins, unless a custom role says otherwise) can change the project's fields. Anyone who can edit tasks sets their values with task_update.";
 
 // ---------------------------------------------------------------------------
@@ -52,7 +52,7 @@ const MANAGERS_MESSAGE: &str = "Only people whose role can change the workflow (
 pub(crate) struct FieldListArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
-    /// Also list archived fields, which field_write can restore.
+    /// Also list archived fields, which field_update can restore.
     pub include_archived: Option<bool>,
 }
 
@@ -506,7 +506,7 @@ pub(crate) async fn field_write(
 // ---------------------------------------------------------------------------
 // Values on tasks, for the task tools
 
-/// One of a task's fields as task_open shows it.
+/// One of a task's fields as task_get shows it.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TaskFieldValue {

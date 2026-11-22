@@ -118,7 +118,7 @@ async fn a_key_two_workspaces_share_is_refused_rather_than_guessed() {
         app,
         &codex,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": "WORK-1"}),
     )
     .await;
@@ -127,7 +127,7 @@ async fn a_key_two_workspaces_share_is_refused_rather_than_guessed() {
         app,
         &codex,
         &session,
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": "WORK-1", "text": "Which one?", "clientRequestId": "sweep-ambiguous"}),
     )
     .await;
@@ -151,7 +151,7 @@ async fn a_key_two_workspaces_share_is_refused_rather_than_guessed() {
         app,
         &codex,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": task_id.to_string()}),
     )
     .await;
@@ -220,7 +220,7 @@ async fn historical_aliases_cannot_hide_a_conflicting_task_key() {
         &setup.app,
         &token,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": "WORK-1"}),
     )
     .await;
@@ -232,7 +232,7 @@ async fn historical_aliases_cannot_hide_a_conflicting_task_key() {
         &setup.app,
         &token,
         &session,
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": "WORK-1", "text": "Wrong task?", "clientRequestId": "alias-ambiguity"}),
     )
     .await;
@@ -270,7 +270,7 @@ async fn a_workspace_you_left_stops_listing_its_archived_projects() {
             app,
             &codex,
             &session,
-            "projects_list",
+            "project_list",
             json!({"includeArchived": true}),
         )
         .await;

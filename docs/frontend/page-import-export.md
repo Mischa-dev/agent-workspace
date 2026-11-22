@@ -15,7 +15,7 @@ too.
   page is named after the document's title, else the file's name; a title
   another page has gets a number, such as "Plan (2)". The answer's
   `setAside` names what the file held that a page can't keep.
-- Agents write pages as Markdown with `page_write`; they don't need either
+- Agents write pages as Markdown with `page_create` and `page_update`; they don't need either
   route.
 
 The code is `apps/server/src/page_docs/docx.rs` (the conversion) and

@@ -116,7 +116,7 @@ async fn a_projects_tasks_read_as_its_built_in_collection() {
         "{names:?}"
     );
     let high = call(
-        "record_query",
+        "record_list",
         json!({
             "projectId": "WORK",
             "collection": "Tasks",
@@ -128,7 +128,7 @@ async fn a_projects_tasks_read_as_its_built_in_collection() {
     assert_eq!(high["value"]["total"], 1, "{high}");
     assert_eq!(high["value"]["records"][0]["title"], "Paint the lighthouse");
     let grouped = call(
-        "record_query",
+        "record_list",
         json!({"projectId": "WORK", "collection": "Tasks", "groupBy": "Status"}),
     )
     .await;
@@ -164,7 +164,7 @@ async fn a_projects_tasks_read_as_its_built_in_collection() {
     // A view of it is saved like any other; its name stays, and agents
     // change its records with the task tools.
     let viewed = call(
-        "collection_write",
+        "collection_update",
         json!({
             "projectId": "WORK",
             "collection": "Tasks",
@@ -174,13 +174,13 @@ async fn a_projects_tasks_read_as_its_built_in_collection() {
     .await;
     assert_eq!(viewed["outcome"], "ok", "{viewed}");
     let renamed = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Tasks", "name": "Chores"}),
     )
     .await;
     assert_eq!(renamed["outcome"], "conflict", "{renamed}");
     let written = call(
-        "record_write",
+        "record_create_many",
         json!({
             "projectId": "WORK",
             "collection": "Tasks",
@@ -233,20 +233,20 @@ async fn a_projects_tasks_read_as_its_built_in_collection() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     let agent_field = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Tasks", "fields": [{"name": "Effort", "type": "number"}]}),
     )
     .await;
     assert_eq!(agent_field["outcome"], "ok", "{agent_field}");
     let agent_status = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Tasks", "fields": [{"field": "Status", "name": "State"}]}),
     )
     .await;
     assert_eq!(agent_status["outcome"], "invalid_request", "{agent_status}");
     // A form adds tasks to it (T1.11).
     let form = call(
-        "bug_report_link_write",
+        "bug_report_link_create",
         json!({"projectId": "WORK", "name": "Task form", "collection": "Tasks",
                "form": {"fields": [{"field": "Priority"}, {"field": "Effort"}]}}),
     )
@@ -381,7 +381,7 @@ async fn a_tasks_record_changes_as_its_task() {
                 app,
                 &codex,
                 &session,
-                "label_write",
+                "label_create",
                 json!({"projectId": "WORK", "name": name}),
             )
             .await;

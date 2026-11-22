@@ -108,7 +108,7 @@ async fn every_old_link_reaches_the_store_and_leaves_it() {
     .expect("author");
     let page = id_of(
         &call(
-            "page_write",
+            "page_create",
             json!({"projectId": "WORK", "title": "Gate notes", "body": "Hinges."}),
         )
         .await,
@@ -152,10 +152,10 @@ async fn every_old_link_reaches_the_store_and_leaves_it() {
     let copy = id_of(&call("whiteboard_duplicate", json!({"whiteboardId": board})).await);
 
     // Through today's tools.
-    call("task_depend", json!({"taskId": gate, "blockedBy": [hinge]})).await;
-    call("task_relate", json!({"taskId": gate, "otherTaskId": paint})).await;
+    call("task_link", json!({"taskId": gate, "blockedBy": [hinge]})).await;
+    call("task_link", json!({"taskId": gate, "otherTaskId": paint})).await;
     call(
-        "task_relate",
+        "task_link",
         json!({"taskId": paint, "otherTaskId": hinge, "kind": "duplicates"}),
     )
     .await;
@@ -176,7 +176,7 @@ async fn every_old_link_reaches_the_store_and_leaves_it() {
     let url = format!("/projects/{work}/work-items/{hinge}");
     let mentioning = id_of(&say(format!("See {url} first.")).await);
     call(
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": paint, "text": format!("Waits on {url}"), "clientRequestId": "k3-12-comment"}),
     )
     .await;
@@ -191,12 +191,12 @@ async fn every_old_link_reaches_the_store_and_leaves_it() {
     .expect("comment")
     .to_string();
     call(
-        "collection_write",
+        "collection_create",
         json!({"projectId": "WORK", "name": "Suppliers", "fields": [{"name": "Fix", "type": "link", "target": "task"}]}),
     )
     .await;
     let written = call(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Suppliers", "records": [{"title": "Hinge Co", "fields": {"Fix": gate}}], "clientRequestId": "k3-12-record"}),
     )
     .await;
@@ -268,17 +268,17 @@ async fn every_old_link_reaches_the_store_and_leaves_it() {
 
     // Taking each away takes its link.
     call(
-        "task_depend",
+        "task_link",
         json!({"taskId": gate, "blockedBy": [hinge], "remove": true}),
     )
     .await;
     call(
-        "task_relate",
+        "task_link",
         json!({"taskId": gate, "otherTaskId": paint, "remove": true}),
     )
     .await;
     call(
-        "task_relate",
+        "task_link",
         json!({"taskId": paint, "otherTaskId": hinge, "kind": "duplicates", "remove": true}),
     )
     .await;
@@ -307,7 +307,7 @@ async fn every_old_link_reaches_the_store_and_leaves_it() {
     )
     .await;
     call(
-        "record_write",
+        "record_update_many",
         json!({"projectId": "WORK", "collection": "Suppliers", "records": [{"record": record_id, "expectedVersion": record["version"], "fields": {"Fix": null}}], "clientRequestId": "k3-12-record-clear"}),
     )
     .await;

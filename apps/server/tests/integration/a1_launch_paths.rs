@@ -185,7 +185,7 @@ async fn a_launch_to_a_runner_gives_it_a_run_its_reply_calls_move() {
         "Grouping entries",
     ] {
         let progress = runner_call(
-            "reply_progress",
+            "reply_progress_report",
             json!({"requestId": request_id, "generation": generation, "status": status}),
         )
         .await;
@@ -839,7 +839,7 @@ async fn every_route_gives_one_run_with_the_same_cause_and_title() {
         app,
         &token,
         &session,
-        "run_activity",
+        "run_activity_report",
         json!({"runId": run, "activities": [
             {"id": "note", "kind": "text_message", "payload": {"text": "Looking."}},
             {"id": "answer", "kind": "text_message",

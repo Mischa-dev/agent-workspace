@@ -1364,8 +1364,8 @@ async fn a_project_overrides_the_workspace_says_so_and_reset_falls_back() {
         app,
         &codex,
         &session,
-        "settings_get",
-        json!({"projectId": "WORK", "keys": ["run.model"]}),
+        "setting_list",
+        json!({"spaceId": "WORK", "keys": ["run.model"]}),
     )
     .await;
     assert_eq!(read["outcome"], "ok", "{read}");

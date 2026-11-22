@@ -177,7 +177,7 @@ async fn workspace_pages_reach_the_whole_workspace_and_nobody_else() {
         app,
         &token,
         &session,
-        "page_write",
+        "page_create",
         json!({"projectId": "workspace", "title": "Agent notes", "body": "Written with Projects off."}),
     )
     .await;

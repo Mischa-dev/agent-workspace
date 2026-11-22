@@ -127,7 +127,7 @@ async fn pages_sheets_and_boards_reach_rules_and_webhooks_that_may_see_them() {
     // A page, a sheet and a board, and one more page the rule doesn't name.
     let page = ok(
         call(
-            "page_write",
+            "page_create",
             json!({"projectId": "WORK", "title": "Roadmap", "body": "Secret plans."}),
         )
         .await,
@@ -140,7 +140,7 @@ async fn pages_sheets_and_boards_reach_rules_and_webhooks_that_may_see_them() {
         .to_owned();
     let other = ok(
         call(
-            "page_write",
+            "page_create",
             json!({"projectId": "WORK", "title": "Notes", "body": "Other text."}),
         )
         .await,
@@ -153,7 +153,7 @@ async fn pages_sheets_and_boards_reach_rules_and_webhooks_that_may_see_them() {
         .to_owned();
     let sheet = ok(
         call(
-            "sheet_write",
+            "sheet_create",
             json!({"projectId": "WORK", "name": "Budget",
                    "cells": [{"cell": "A1", "input": "Rent"}], "clientRequestId": "k35-sheet"}),
         )
@@ -178,8 +178,8 @@ async fn pages_sheets_and_boards_reach_rules_and_webhooks_that_may_see_them() {
     // A rule on each, a rule with task conditions refused, and webhooks for
     // the owner and for the outsider.
     let refused = call(
-        "automation_write",
-        json!({"projectId": "WORK", "operation": "create", "name": "Refused",
+        "automation_create",
+        json!({"projectId": "WORK", "name": "Refused",
                "trigger": {"kind": "page_changed", "pageId": page_id},
                "conditions": {"filters": {"priority": "high"}},
                "actions": [{"kind": "notify", "recipients": "owner", "message": "x"}]}),
@@ -202,8 +202,8 @@ async fn pages_sheets_and_boards_reach_rules_and_webhooks_that_may_see_them() {
     ] {
         ok(
             call(
-                "automation_write",
-                json!({"projectId": "WORK", "operation": "create", "name": "Watch",
+                "automation_create",
+                json!({"projectId": "WORK", "name": "Watch",
                        "trigger": trigger,
                        "actions": [{"kind": "notify", "recipients": "owner", "message": message}]}),
             )
@@ -238,7 +238,7 @@ async fn pages_sheets_and_boards_reach_rules_and_webhooks_that_may_see_them() {
     // An agent edits each one.
     ok(
         call(
-            "page_write",
+            "page_update",
             json!({"pageId": page_id, "body": "Secret plans, revised.",
                    "expectedVersion": page["value"]["page"]["version"].as_i64()
                        .or_else(|| page["value"]["version"].as_i64()).unwrap_or(1)}),
@@ -248,7 +248,7 @@ async fn pages_sheets_and_boards_reach_rules_and_webhooks_that_may_see_them() {
     );
     ok(
         call(
-            "page_write",
+            "page_update",
             json!({"pageId": other_id, "body": "Other text, revised.", "expectedVersion": 1}),
         )
         .await,
@@ -256,7 +256,7 @@ async fn pages_sheets_and_boards_reach_rules_and_webhooks_that_may_see_them() {
     );
     ok(
         call(
-            "sheet_write",
+            "sheet_update",
             json!({"projectId": "WORK", "sheet": "Budget",
                    "cells": [{"cell": "B1", "input": "1200"}], "clientRequestId": "k35-sheet-2"}),
         )
@@ -265,7 +265,7 @@ async fn pages_sheets_and_boards_reach_rules_and_webhooks_that_may_see_them() {
     );
     ok(
         call(
-            "whiteboard_edit",
+            "whiteboard_update_elements",
             json!({"whiteboardId": board_id,
                    "operations": [{"op": "add", "type": "rectangle", "id": "box", "x": 0, "y": 0}]}),
         )
@@ -275,7 +275,7 @@ async fn pages_sheets_and_boards_reach_rules_and_webhooks_that_may_see_them() {
     // A second board edit in the same session keeps no new version.
     ok(
         call(
-            "whiteboard_edit",
+            "whiteboard_update_elements",
             json!({"whiteboardId": board_id,
                    "operations": [{"op": "add", "type": "rectangle", "id": "box2", "x": 200, "y": 0}]}),
         )
@@ -428,7 +428,7 @@ async fn comments_and_proposals_reach_rules_and_sheet_cells_are_found() {
 
     let page = ok(
         call(
-            "page_write",
+            "page_create",
             json!({"projectId": "WORK", "title": "Roadmap", "body": "Plans."}),
         )
         .await,
@@ -441,7 +441,7 @@ async fn comments_and_proposals_reach_rules_and_sheet_cells_are_found() {
         .to_owned();
     ok(
         call(
-            "sheet_write",
+            "sheet_create",
             json!({"projectId": "WORK", "name": "Budget",
                    "cells": [{"cell": "A1", "input": "Quetzalcoatl"}], "clientRequestId": "c128-sheet"}),
         )
@@ -449,8 +449,8 @@ async fn comments_and_proposals_reach_rules_and_sheet_cells_are_found() {
         "sheet",
     );
     let refused = call(
-        "automation_write",
-        json!({"projectId": "WORK", "operation": "create", "name": "Odd",
+        "automation_create",
+        json!({"projectId": "WORK", "name": "Odd",
                "trigger": {"kind": "comment_posted", "thingKind": "dashboard"},
                "actions": [{"kind": "notify", "recipients": "owner", "message": "x"}]}),
     )
@@ -469,8 +469,8 @@ async fn comments_and_proposals_reach_rules_and_sheet_cells_are_found() {
     ] {
         ok(
             call(
-                "automation_write",
-                json!({"projectId": "WORK", "operation": "create", "name": "Watch",
+                "automation_create",
+                json!({"projectId": "WORK", "name": "Watch",
                        "trigger": trigger,
                        "actions": [{"kind": "notify", "recipients": "owner", "message": message}]}),
             )
@@ -527,7 +527,7 @@ async fn comments_and_proposals_reach_rules_and_sheet_cells_are_found() {
 
     // Search finds the word in the sheet's cell for a member, not for
     // someone outside the project.
-    let found = call("search", json!({"query": "Quetzalcoatl"})).await;
+    let found = call("workspace_search", json!({"query": "Quetzalcoatl"})).await;
     assert!(
         found.to_string().contains("Budget"),
         "the member finds the sheet: {found}"
@@ -538,7 +538,7 @@ async fn comments_and_proposals_reach_rules_and_sheet_cells_are_found() {
         app,
         &outsider_app,
         &outsider_session,
-        "search",
+        "workspace_search",
         json!({"query": "Quetzalcoatl"}),
     )
     .await;

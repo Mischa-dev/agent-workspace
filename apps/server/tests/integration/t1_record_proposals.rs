@@ -60,7 +60,7 @@ async fn a_suggested_record_change_is_accepted_from_its_card_and_can_be_put_back
     .expect("sol only suggests");
 
     ok(&as_codex(
-        "collection_write",
+        "collection_create",
         json!({"projectId": "WORK", "name": "Leads", "fields": [
             {"name": "Stage", "type": "single_choice", "options": [{"name": "New"}, {"name": "Won"}]},
             {"name": "Amount", "type": "number"},
@@ -68,7 +68,7 @@ async fn a_suggested_record_change_is_accepted_from_its_card_and_can_be_put_back
     )
     .await);
     let made = as_codex(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Leads", "clientRequestId": "acme",
                "records": [{"title": "Acme", "fields": {"Stage": "New", "Amount": 100}}]}),
     )
@@ -94,7 +94,7 @@ async fn a_suggested_record_change_is_accepted_from_its_card_and_can_be_put_back
     // Sol only suggests: writing directly is refused, and record_update
     // keeps the change as a proposal, leaving the record as it was.
     let direct = as_sol(
-        "record_write",
+        "record_update_many",
         json!({"projectId": "WORK", "collection": "Leads", "clientRequestId": "sol-1",
                "records": [{"record": record.to_string(), "fields": {"Amount": 1}}]}),
     )

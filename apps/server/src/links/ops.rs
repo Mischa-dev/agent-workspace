@@ -130,7 +130,7 @@ impl Operation for ThingLink {
     const DESCRIPTION: &'static str = "Link one thing to another in the same workspace: about \
         (it discusses or concerns the other), relates_to, or made_from. Both show the link from \
         their side (thing_open). For dependencies, relations and duplicates between two tasks use \
-        task_depend and task_relate.";
+        task_link.";
 
     type Input = ThingLinkInput;
     type Output = ThingLinkOutput;
@@ -141,7 +141,7 @@ impl Operation for ThingLink {
         if from_kind == "task" && to_kind == "task" && input.kind == HandLinkKind::RelatesTo {
             return Err(OpError::invalid(
                 "kind",
-                "Two tasks are related with task_relate, which keeps each task's history.",
+                "Two tasks are related with task_link, which keeps each task's history.",
             ));
         }
         let account = call.account_id();

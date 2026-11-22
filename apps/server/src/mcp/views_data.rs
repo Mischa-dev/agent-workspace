@@ -211,7 +211,7 @@ pub(crate) struct TemplateWriteArguments {
     /// true archives it (task_from_template can't use it, and schedules
     /// that make tasks from it pause), false restores it.
     pub archived: Option<bool>,
-    /// The version from template_list or an earlier template_write. Leave
+    /// The version from template_list or an earlier template_create or template_update. Leave
     /// it out to change the current one.
     pub expected_version: Option<i64>,
 }
@@ -494,7 +494,7 @@ pub(crate) struct RecurringWriteArguments {
     pub enabled: Option<bool>,
     /// true deletes the schedule; the tasks it made stay.
     pub delete: Option<bool>,
-    /// The version from template_list or an earlier recurring_write. Leave
+    /// The version from template_list or an earlier recurring_create or recurring_update. Leave
     /// it out to change the current one.
     pub expected_version: Option<i64>,
 }

@@ -164,7 +164,7 @@ async fn replies_quote_a_comment_on_the_same_task_and_tell_its_author() {
         app,
         &codex,
         &session,
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": task_a, "text": "Agreed", "clientRequestId": "c1", "replyToCommentId": elsewhere}),
     )
     .await;
@@ -173,7 +173,7 @@ async fn replies_quote_a_comment_on_the_same_task_and_tell_its_author() {
         app,
         &codex,
         &session,
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": task_b, "text": "Agreed", "clientRequestId": "c2", "replyToCommentId": elsewhere}),
     )
     .await;

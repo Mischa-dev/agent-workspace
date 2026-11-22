@@ -389,7 +389,7 @@ impl RateLimiters {
             .await
     }
 
-    /// One run report (run_open, run_update, run_activity and the like)
+    /// One run report (run_create, run_update, run_activity_report and the like)
     /// from `account_id`.
     pub async fn check_run_report(&self, account_id: Uuid) -> Result<(), AppError> {
         self.limits

@@ -693,12 +693,12 @@ async fn build_workspace(
     };
 
     call(
-        "label_write",
+        "label_create",
         json!({"projectId": "WORK", "name": format!("Launch{m}")}),
     )
     .await;
     call(
-        "field_write",
+        "field_create",
         json!({
             "projectId": "WORK",
             "name": format!("Risk{m}"),
@@ -708,7 +708,7 @@ async fn build_workspace(
     )
     .await;
     call(
-        "field_write",
+        "field_create",
         json!({"projectId": "WORK", "name": format!("Owner{m}"), "type": "person"}),
     )
     .await;
@@ -750,43 +750,43 @@ async fn build_workspace(
     let task = task_number(1).await;
     let subtask = task_number(2).await;
     let comment = call(
-        "task_comment",
+        "task_comment_create",
         json!({"workItemId": "WORK-1", "update": format!("Launch comment{m}"), "clientRequestId": "comment-1"}),
     )
     .await;
     let comment = Uuid::parse_str(&string_at(&comment, "/activityId")).expect("comment id");
     // An edit, so the comment has versions to read.
     call(
-        "task_comment_edit",
+        "task_comment_update",
         json!({"taskId": "WORK-1", "commentId": comment, "text": format!("Launch comment, corrected{m}")}),
     )
     .await;
     call(
-        "milestone_write",
+        "milestone_create",
         json!({"projectId": "WORK", "name": format!("Launch milestone{m}"), "addTasks": ["WORK-1"]}),
     )
     .await;
     let page = call(
-        "page_write",
+        "page_create",
         json!({"projectId": "WORK", "title": format!("Launch page{m}"), "body": format!("Launch notes{m}")}),
     )
     .await;
     let page = string_at(&page, "/value/id");
     call(
-        "page_write",
+        "page_update",
         json!({"pageId": page, "body": format!("Launch notes, second draft{m}"), "skillDescription": format!("Use when launching{m}"), "expectedVersion": 1}),
     )
     .await;
     // Someone has had the page open, so it has a live document. Its
     // generation is the page's ID, for write cases to name.
-    call("page_blocks", json!({"pageId": page})).await;
+    call("page_blocks_get", json!({"pageId": page})).await;
     sqlx::query("UPDATE project_page_documents SET generation = page_id WHERE page_id = $1")
         .bind(Uuid::parse_str(&page).expect("page id"))
         .execute(pool)
         .await
         .expect("page document generation");
     let page_thread = call(
-        "page_comment",
+        "page_comment_create",
         json!({"pageId": page, "text": format!("Launch page comment{m}")}),
     )
     .await;
@@ -797,7 +797,7 @@ async fn build_workspace(
     // page, a saved view, and a record that uses them, changed once so it
     // has history.
     let collection = call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": "WORK",
             "name": format!("Playtests{m}"),
@@ -836,7 +836,7 @@ async fn build_workspace(
         json!(format!("Falls through the floor{m}")),
     );
     let written = call(
-        "record_write",
+        "record_create_many",
         json!({
             "projectId": "WORK",
             "collection": collection,
@@ -847,7 +847,7 @@ async fn build_workspace(
     .await;
     let record = Uuid::parse_str(&string_at(&written, "/value/records/0/id")).expect("record id");
     call(
-        "record_write",
+        "record_update_many",
         json!({
             "projectId": "WORK",
             "collection": collection,
@@ -948,7 +948,7 @@ async fn build_workspace(
 
     // Sheets (AWD-54): a header row, a value and a formula over it.
     let sheet = call(
-        "sheet_write",
+        "sheet_create",
         json!({
             "projectId": "WORK",
             "name": format!("Budget{m}"),
@@ -1052,7 +1052,7 @@ async fn build_workspace(
             app,
             &agent_token,
             &agent_session,
-            "page_edit",
+            "page_update_blocks",
             json!({"pageId": page, "suggest": true, "edits": [{"op": "append", "markdown": format!("Launch suggestion {index}{m}")}]}),
         )
         .await;
@@ -1067,13 +1067,13 @@ async fn build_workspace(
     // A page only the owner's app edits, so its one change can be undone
     // whatever the other cases do to the launch page (C1.9).
     let undo_page = call(
-        "page_write",
+        "page_create",
         json!({"projectId": project, "title": format!("Undo notes{m}"), "body": "One"}),
     )
     .await;
     let undo_page = string_at(&undo_page, "/value/id");
     call(
-        "page_edit",
+        "page_update_blocks",
         json!({"pageId": undo_page, "edits": [{"op": "append", "markdown": format!("Two{m}")}]}),
     )
     .await;

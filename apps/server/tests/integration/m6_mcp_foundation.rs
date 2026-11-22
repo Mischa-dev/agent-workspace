@@ -435,7 +435,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
                 "id":3,
                 "method":"tools/call",
                 "params":{
-                    "name":"project_open",
+                    "name":"project_get",
                     "arguments":{"projectId":seed.project_id.to_string()}
                 }
             }),
@@ -453,8 +453,8 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
     );
 
     for (id, name, arguments, expected_outcome) in [
-        (4, "briefing", json!({}), "ok"),
-        (5, "task_open", json!({"taskId":"AW-1"}), "ok"),
+        (4, "briefing_get", json!({}), "ok"),
+        (5, "task_get", json!({"taskId":"AW-1"}), "ok"),
         (
             6,
             "task_list",
@@ -463,7 +463,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         ),
         (
             7,
-            "task_open",
+            "task_get",
             json!({"taskId":work_item_id.to_string()}),
             "ok",
         ),
@@ -590,11 +590,11 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         13,
-        "task_mark_blocked",
+        "task_update",
         json!({
             "workItemId":work_item_id.to_string(),
             "expectedVersion":2,
-            "reason":"Waiting for a bounded dependency",
+            "blockedReason":"Waiting for a bounded dependency",
             "clientRequestId":"m6-blocked-1"
         }),
     )
@@ -606,7 +606,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         14,
-        "task_comment",
+        "task_comment_create",
         json!({
             "workItemId":work_item_id.to_string(),
             "update":"Useful bounded progress update.",
@@ -666,12 +666,11 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         18,
-        "task_mark_ready_for_review",
+        "task_update",
         json!({
             "workItemId":work_item_id.to_string(),
             "expectedVersion":5,
-            "clientRequestId":"m6-review-1"
-        }),
+            "clientRequestId":"m6-review-1", "readyForReview": true }),
     )
     .await;
     assert_eq!(review.pointer("/version"), Some(&json!(6)));
@@ -681,7 +680,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         19,
-        "task_link_pull_request",
+        "task_link",
         json!({
             "workItemId":work_item_id.to_string(),
             "expectedVersion":6,
@@ -937,7 +936,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
                 "id":30,
                 "method":"tools/call",
                 "params":{
-                    "name":"project_open",
+                    "name":"project_get",
                     "arguments":{"projectId":seed.project_id.to_string()}
                 }
             }),
@@ -955,7 +954,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         &token,
         &session_id,
         31,
-        "task_comment",
+        "task_comment_create",
         json!({
             "workItemId":work_item_id.to_string(),
             "update":"This Viewer write must never be persisted.",
@@ -1372,7 +1371,7 @@ async fn bearer_lifecycle_and_streamable_http_are_project_scoped() {
         access_token,
         &oauth_session,
         20,
-        "task_comment",
+        "task_comment_create",
         json!({
             "workItemId":work_item_id.to_string(),
             "update":"OAuth-attributed useful update.",

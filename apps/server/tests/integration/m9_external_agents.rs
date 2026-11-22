@@ -472,7 +472,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &application,
         &first_token,
         &session_id,
-        "task_open",
+        "task_get",
         json!({"taskId":external_work_item_id.to_string()}),
     )
     .await;

@@ -485,7 +485,7 @@ pub(crate) struct RunDismissFailureArguments {
 
 /// Dismiss a failed run's notice for the caller, as the notice's Dismiss
 /// button does: it stops showing as needing attention for them. Read state
-/// only, like mark_read: the run and its failure stay.
+/// only, like conversation_mark_read: the run and its failure stay.
 pub(crate) async fn run_dismiss_failure(
     state: &AppState,
     principal: &McpPrincipal,

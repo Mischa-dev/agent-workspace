@@ -2,7 +2,7 @@
 //! sheet. Each runs the command its hand-written tool ran (`ops::wrapped`)
 //! as the caller the dispatcher checked. `sheet_read` became `sheet_get`
 //! and `sheet_write` became `sheet_create` and `sheet_update`; the old names
-//! stay as aliases (`ops::aliases`).
+//! are retired (`ops::retired`).
 
 use crate::{
     mcp::sheet_tools,

@@ -1461,8 +1461,8 @@ async fn every_status_change_says_what_changed() {
     assert_eq!(status, StatusCode::OK, "{moved}");
     // Marked ready for review, and the same through task_update.
     let ready = call(
-        "task_mark_ready_for_review",
-        json!({"workItemId": tasks[1], "expectedVersion": version(tasks[1]).await, "clientRequestId": "p12-ready"}),
+        "task_update",
+        json!({"workItemId": tasks[1], "expectedVersion": version(tasks[1]).await, "clientRequestId": "p12-ready", "readyForReview": true }),
     )
     .await;
     assert_eq!(ready["outcome"], "applied", "{ready}");
@@ -1473,8 +1473,8 @@ async fn every_status_change_says_what_changed() {
     .await;
     assert_eq!(updated["outcome"], "ok", "{updated}");
     let blocked = call(
-        "task_mark_blocked",
-        json!({"workItemId": tasks[3], "expectedVersion": version(tasks[3]).await, "reason": "Waiting on the design", "clientRequestId": "p12-blocked"}),
+        "task_update",
+        json!({"workItemId": tasks[3], "expectedVersion": version(tasks[3]).await, "blockedReason": "Waiting on the design", "clientRequestId": "p12-blocked"}),
     )
     .await;
     assert_eq!(blocked["outcome"], "applied", "{blocked}");

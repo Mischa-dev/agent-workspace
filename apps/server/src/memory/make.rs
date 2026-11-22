@@ -57,7 +57,7 @@ pub struct PageMakeInput {
     /// A page to take blocks from, with blocks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_id: Option<IdRef>,
-    /// The blocks to take, by id (page_blocks lists them).
+    /// The blocks to take, by id (page_blocks_get lists them).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocks: Vec<String>,
     /// With pageId: move the blocks rather than copy them. A link to the
@@ -507,7 +507,7 @@ async fn from_blocks(
     if wanted.is_empty() || wanted.len() > MAX_BLOCKS {
         return Err(OpError::invalid(
             "blocks",
-            "Name 1 to 200 blocks of the page, by id (page_blocks lists them).",
+            "Name 1 to 200 blocks of the page, by id (page_blocks_get lists them).",
         ));
     }
     let visible = sqlx::query_scalar::<_, bool>("SELECT subject_visible_to('page', $1, $2)")

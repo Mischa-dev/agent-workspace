@@ -95,19 +95,22 @@ Workspace OAuth and bearer endpoints; WorkOS Agent Auth is not required.
 ## Tools
 
 The full list, grouped by job, is in
-[docs/plans/agent-interface.md](../plans/agent-interface.md). There are 61.
-Read-only tools: `briefing`, `projects_list`, `project_open`,
+[docs/plans/agent-interface.md](../plans/agent-interface.md), and
+`tools/list` is always current. Most tools are operations, named
+`<thing>_<verb>` (`task_get`, `page_create`, `label_update`); the same
+operation is the web's route, the v2 API and an automation action.
+Read-only tools include `briefing_get`, `project_list`, `project_get`,
 `workflow_get`, `project_members`, `conversation_list`, `conversation_open`,
-`conversation_read`, `message_history`, `people_search`, `inbox_list`, `task_list`,
-`task_open`, `label_list`, `search`, `page_list`, `page_get`,
-`decision_list`, `repository_get`, `pull_request_get`, `approval_get` and
-`external_event_poll`.
+`conversation_read`, `message_history`, `people_search`, `inbox_list`,
+`task_list`, `task_get`, `label_list`, `workspace_search`, `page_list`,
+`page_get`, `decision_list`, `repository_get`, `pull_request_get`,
+`approval_get` and `external_event_poll`.
 
 Task writes keep the canonical command contract below: `task_create`,
-`task_update` (including status), `task_comment`, `task_mark_blocked`,
-`task_mark_ready_for_review` and `task_link_pull_request`. They accept the
-older `workItemId` argument name as well as `taskId`, as `task_criteria` and
-`task_link` do.
+`task_update` (including status, `blockedReason` and `readyForReview`),
+`task_comment_create` and `task_link` (dependencies, relations and pull
+requests). They accept the older `workItemId` argument name as well as
+`taskId`, as `task_criteria_update` does.
 
 Every non-commutative command requires `expectedVersion`; every command
 requires a stable `clientRequestId`. Exact completed-request replay succeeds
@@ -117,15 +120,83 @@ and a stable retry category. Invalid transitions, permission changes, archive,
 missing external links, idempotency payload mismatch, and transient failure
 remain distinct outcomes.
 
-Among the task tools, `task_create`, `task_create_many`, `task_comment`,
-`task_reorder`, `task_claim`, `task_release` and `task_link_pull_request` are
-marked non-destructive; `task_update`, `task_update_many`, `task_criteria`,
-`task_mark_blocked`, `task_mark_ready_for_review`, `task_link`, `task_move`,
-`label_write` and `field_write` are destructive. Only `task_link` and
-`task_link_pull_request` are open-world. The collection tools (AWD-90) follow
-the same rule: `collection_list`, `collection_describe` and `record_query`
-are read-only; `collection_write` and `record_write` are destructive and
-idempotent (a `clientRequestId` makes a retry safe).
+An operation answers with one envelope: `{outcome, value, requestId,
+replayed, replaySafe}`. `replayed` is true when a retry with the same
+`clientRequestId` answered with what the first call did.
+
+## Old tool names retired (K2.23)
+
+Tools that became operations kept their old names as aliases until the
+next deploy. From that deploy an old name is refused: the call answers
+`not_found`, says what to use instead, and lists the new names in
+`useInstead`; nothing runs, and the old name isn't in `tools/list`. A
+guard or allowlist written with an old name still matches the operations
+it ran. The old names, and what replaced them:
+
+| Old name | Use instead |
+| --- | --- |
+| `projects_list` | `project_list` |
+| `project_open` | `project_get` |
+| `task_open` | `task_get` |
+| `my_work` | `my_work_get` |
+| `dependency_graph` | `dependency_graph_get` |
+| `search` | `workspace_search` |
+| `page_write` | `page_create`, `page_update` |
+| `page_edit` | `page_update_blocks` |
+| `page_blocks` | `page_blocks_get` |
+| `page_comments` | `page_comment_list` |
+| `page_comment` | `page_comment_create` |
+| `page_suggestions` | `page_suggestion_list` |
+| `sheet_read` | `sheet_get` |
+| `sheet_write` | `sheet_create`, `sheet_update` |
+| `collection_describe` | `collection_get` |
+| `record_query` | `record_list` |
+| `view_write` | `view_create`, `view_update` |
+| `label_write` | `label_create`, `label_update` |
+| `field_write` | `field_create`, `field_update` |
+| `milestone_write` | `milestone_create`, `milestone_update` |
+| `template_write` | `template_create`, `template_update` |
+| `recurring_write` | `recurring_create`, `recurring_update` |
+| `automation_runs` | `automation_history` |
+| `whiteboard_edit` | `whiteboard_update_elements` |
+| `message_edit` | `message_update` |
+| `task_comment_edit` | `task_comment_update` |
+| `task_criteria` | `task_criteria_update` |
+| `task_comment` | `task_comment_create` |
+| `task_mark_blocked` | `task_update` |
+| `task_mark_ready_for_review` | `task_update` |
+| `task_watch` | `task_watch_set` |
+| `task_depend` | `task_link` |
+| `task_relate` | `task_link` |
+| `task_link_pull_request` | `task_link` |
+| `mark_read` | `conversation_mark_read` |
+| `conversation_members` | `conversation_members_update` |
+| `reply_progress` | `reply_progress_report` |
+| `briefing` | `briefing_get` |
+| `settings_get` | `setting_list` |
+| `settings_set` | `setting_update` |
+| `project_layout_set` | `layout_update` |
+| `run_open` | `run_create` |
+| `run_activity` | `run_activity_report` |
+| `run_result` | `run_result_report` |
+| `run_dismiss_failure` | `run_failure_hide` |
+| `agent_profile_write` | `agent_profile_set` |
+| `model_catalog_write` | `model_catalog_set` |
+| `run_steps` | `run_step_list` |
+| `run_usage` | `run_usage_list` |
+| `usage_windows` | `usage_window_list` |
+| `usage_batch` | `usage_batch_preview` |
+
+Most old names already answered with the operation's `outcome` and
+`value`, which the new names keep. `task_comment` and the two mark tools
+answered a task write with `"outcome": "applied"`, and their replacements
+answer `"ok"`; `page_write`, `sheet_write` and `record_write` marked a
+replay with `idempotentReplay` in the value, where the envelope says
+`replayed`.
+
+Tools that haven't become operations yet keep their names, among them
+`conversation_open`, `thing_open`, `project_member_set`, `ai_summarize`
+and `ai_analyze`.
 
 ## MCP Phase 2 changes (October 1, 2026)
 

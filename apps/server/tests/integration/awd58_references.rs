@@ -279,7 +279,7 @@ async fn a_record_lists_where_it_is_linked_from() {
         app,
         &codex,
         &session,
-        "collection_write",
+        "collection_create",
         json!({"projectId": "WORK", "name": "Playtest notes", "fields": [{"name": "Notes", "type": "text"}]}),
     )
     .await;
@@ -288,7 +288,7 @@ async fn a_record_lists_where_it_is_linked_from() {
         app,
         &codex,
         &session,
-        "record_write",
+        "record_create_many",
         json!({
             "projectId": "WORK",
             "collection": "Playtest notes",

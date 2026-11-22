@@ -125,7 +125,7 @@ test('blocks go out as they come, the final closes the request, tools show as st
     ],
   )
   assert.deepEqual(workspace.named('message_send').map((a) => [a.conversationId, a.text]), [[CONVERSATION, 'Also: one is blocked.']])
-  assert.deepEqual(workspace.named('reply_progress').map((a) => a.status), ['Working', 'Reading the board'])
+  assert.deepEqual(workspace.named('reply_progress_report').map((a) => a.status), ['Working', 'Reading the board'])
   assert.deepEqual(workspace.named('reply_release'), [])
   assert.equal(bridge.answering(CONVERSATION), null)
 })

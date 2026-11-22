@@ -33,7 +33,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     // In a project with no tasks yet (so no built-in Tasks collection), a
     // collection made to act like a task reads its tasks.
     let made = call(
-        "collection_write",
+        "collection_create",
         json!({"projectId": "WORK", "name": "Chores", "actsLikeTask": true}),
     )
     .await;
@@ -45,7 +45,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     .await;
     assert_eq!(chore["outcome"], "ok", "{chore}");
     let chores = call(
-        "record_query",
+        "record_list",
         json!({"projectId": "WORK", "collection": "Chores"}),
     )
     .await;
@@ -62,7 +62,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     assert_eq!(plain["outcome"], "ok", "{plain}");
 
     let made = call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": "WORK",
             "name": "Bugs",
@@ -72,7 +72,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     .await;
     assert_eq!(made["outcome"], "ok", "{made}");
     let written = call(
-        "record_write",
+        "record_create_many",
         json!({
             "projectId": "WORK",
             "collection": "Bugs",
@@ -88,13 +88,13 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
 
     // A collection with its own "Status" can't switch on until it's renamed.
     let clash = call(
-        "collection_write",
+        "collection_create",
         json!({"projectId": "WORK", "name": "Clash", "fields": [{"name": "Status", "type": "text"}]}),
     )
     .await;
     assert_eq!(clash["outcome"], "ok", "{clash}");
     let refused = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Clash", "actsLikeTask": true}),
     )
     .await;
@@ -103,7 +103,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     // Switching on: each record gets a task with its ID, a key from the
     // project's sequence and its values.
     let switched = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Bugs", "actsLikeTask": true}),
     )
     .await;
@@ -251,7 +251,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     }
 
     // task_open names the collection and its fields; task_update sets them.
-    let opened = call("task_open", json!({"taskId": crash.to_string()})).await;
+    let opened = call("task_get", json!({"taskId": crash.to_string()})).await;
     assert_eq!(opened["value"]["collection"], "Bugs", "{opened}");
     let fields = opened["value"]["fields"].as_array().expect("fields");
     assert_eq!(fields.len(), 1, "{opened}");
@@ -285,7 +285,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     assert_eq!(mixed["code"], "rejected", "{mixed}");
 
     // project_open lists the collection.
-    let project = call("project_open", json!({"projectId": "WORK"})).await;
+    let project = call("project_get", json!({"projectId": "WORK"})).await;
     assert_eq!(
         project["value"]["taskCollections"],
         json!(["Chores", "Bugs"]),
@@ -294,7 +294,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
 
     // A record written there is a task, made through the task rules (T1.11).
     let direct = call(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Bugs", "records": [{"title": "Written as a record"}], "clientRequestId": "as-record"}),
     )
     .await;
@@ -326,7 +326,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     let claimed = call("task_claim", json!({"taskId": crash.to_string()})).await;
     assert_eq!(claimed["outcome"], "ok", "{claimed}");
     let off = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Bugs", "actsLikeTask": false}),
     )
     .await;
@@ -340,7 +340,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
 
     // Switched off, its tasks are hidden and its records are plain records.
     let off = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Bugs", "actsLikeTask": false}),
     )
     .await;
@@ -368,7 +368,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
             .await
             .expect("version");
     let renamed = call(
-        "record_write",
+        "record_update_many",
         json!({"projectId": "WORK", "collection": "Bugs", "clientRequestId": "bugs-off-1",
                "records": [{"record": crash.to_string(), "title": "Crash on save, again",
                             "expectedVersion": version},
@@ -380,7 +380,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     // On again, nothing is lost: the old tasks come back with their keys,
     // and the record added meanwhile gets a task and a new key.
     let on = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Bugs", "actsLikeTask": true}),
     )
     .await;
@@ -420,20 +420,20 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     let (start, start_name, _) = others[0];
     let (kept, kept_name, _) = others[1];
     let unknown = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Bugs", "taskStatuses": ["Nope"]}),
     )
     .await;
     assert_eq!(unknown["outcome"], "invalid_request", "{unknown}");
     let outside = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Bugs",
                "taskStatuses": [kept_name], "startStatus": start_name}),
     )
     .await;
     assert_eq!(outside["outcome"], "conflict", "{outside}");
     let narrowed = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Bugs",
                "taskStatuses": [start_name, kept_name], "startStatus": start_name}),
     )
@@ -473,7 +473,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     )
     .await;
     assert_eq!(not_used["outcome"], "invalid_request", "{not_used}");
-    let opened = call("task_open", json!({"taskId": started_id.to_string()})).await;
+    let opened = call("task_get", json!({"taskId": started_id.to_string()})).await;
     let version = opened["value"]["task"]["version"].clone();
     let moved = call(
         "task_update",
@@ -497,7 +497,7 @@ async fn a_collection_that_acts_like_a_task_holds_tasks() {
     assert_eq!(plain_status, default_status.0);
     // [] uses them all again.
     let widened = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Bugs", "taskStatuses": [], "startStatus": ""}),
     )
     .await;

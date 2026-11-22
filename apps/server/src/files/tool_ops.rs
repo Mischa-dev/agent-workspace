@@ -99,7 +99,7 @@ tool_op!(FileUpload {
     title: "Upload file",
     description: "Upload a file (text or base64, up to 4 MiB) to a conversation, then send it by \
         passing the returned fileId in message_send's or reply_send's attachmentIds; or keep it \
-        on a task (taskId; forComment: true holds it for task_comment's attachmentIds), such as \
+        on a task (taskId; forComment: true holds it for task_comment_create's attachmentIds), such as \
         a run's output, report or screenshot, or on a record you can edit (thing). Larger files \
         go by file_upload_start.",
     emits: ["file.attached"],

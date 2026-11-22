@@ -3360,7 +3360,6 @@ async fn run_operation(
         // Every action derives its id from its run and step.
         unkeyed: crate::ops::Unkeyed::Refuse("clientRequestId"),
         preview: false,
-        renamed_from: None,
         defer_long: false,
     };
     let answer = crate::ops::dispatch(state, request, operation, input).await;

@@ -196,7 +196,7 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
         app,
         &codex,
         &session,
-        "label_write",
+        "label_create",
         json!({"projectId": "WORK", "name": "  Bug "}),
     )
     .await;
@@ -211,7 +211,7 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
         app,
         &codex,
         &session,
-        "label_write",
+        "label_create",
         json!({"projectId": "WORK", "name": "bug", "color": "red"}),
     )
     .await;
@@ -231,7 +231,7 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
         app,
         &codex,
         &session,
-        "label_write",
+        "label_create",
         json!({"projectId": "SECRET", "name": "Launch codename"}),
     )
     .await;
@@ -246,7 +246,7 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
         app,
         &mara_token,
         &mara_session,
-        "label_write",
+        "label_create",
         json!({"projectId": "WORK", "name": "Mobile", "color": "blue", "description": "Phone apps"}),
     )
     .await;
@@ -256,7 +256,7 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
         app,
         &mara_token,
         &mara_session,
-        "label_write",
+        "label_create",
         json!({"projectId": work, "name": "Design", "color": "#ABC"}),
     )
     .await;
@@ -265,7 +265,7 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
         app,
         &mara_token,
         &mara_session,
-        "label_write",
+        "label_create",
         json!({"projectId": "WORK", "name": "Odd", "color": "chartreuse"}),
     )
     .await;
@@ -278,7 +278,7 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
         app,
         &mara_token,
         &mara_session,
-        "label_write",
+        "label_update",
         json!({"projectId": "WORK", "label": "Mobile", "description": "Phone\u{2028}apps"}),
     )
     .await;
@@ -301,7 +301,7 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
         app,
         &mara_token,
         &mara_session,
-        "label_write",
+        "label_create",
         json!({"projectId": "WORK", "name": Uuid::now_v7().to_string()}),
     )
     .await;
@@ -310,7 +310,7 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
         app,
         &mara_token,
         &mara_session,
-        "label_write",
+        "label_update",
         json!({"projectId": "WORK", "label": "Bug"}),
     )
     .await;
@@ -322,7 +322,7 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
         app,
         &vic_token,
         &vic_session,
-        "label_write",
+        "label_create",
         json!({"projectId": "WORK", "name": "Viewer label"}),
     )
     .await;
@@ -346,7 +346,7 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
         app,
         &reader,
         &reader_session,
-        "label_write",
+        "label_create",
         json!({"projectId": "WORK", "name": "Read only"}),
     )
     .await;
@@ -372,7 +372,7 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
         app,
         &mara_token,
         &mara_session,
-        "label_write",
+        "label_update",
         json!({"projectId": "WORK", "label": secret_label, "name": "Leaked"}),
     )
     .await;
@@ -395,7 +395,7 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
         app,
         &mara_token,
         &mara_session,
-        "label_write",
+        "label_update",
         json!({"projectId": "WORK", "label": "Mobile", "name": "BUG"}),
     )
     .await;
@@ -405,7 +405,7 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
         app,
         &mara_token,
         &mara_session,
-        "label_write",
+        "label_update",
         json!({"projectId": "WORK", "label": "Mobile", "name": "Phone", "expectedVersion": 5}),
     )
     .await;
@@ -416,7 +416,7 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
         app,
         &mara_token,
         &mara_session,
-        "label_write",
+        "label_update",
         json!({"projectId": "WORK", "label": "mobile", "name": "MOBILE", "expectedVersion": 1}),
     )
     .await;
@@ -428,7 +428,7 @@ async fn labels_belong_to_one_project_and_only_members_change_them() {
         app,
         &mara_token,
         &mara_session,
-        "label_write",
+        "label_update",
         json!({"projectId": "WORK", "label": "Mobile", "color": "#0090FF", "expectedVersion": 1}),
     )
     .await;
@@ -483,7 +483,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
             app,
             &codex,
             &session,
-            "label_write",
+            "label_create",
             json!({"projectId": "WORK", "name": name}),
         )
         .await;
@@ -565,7 +565,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
         app,
         &codex,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": "WORK-1"}),
     )
     .await;
@@ -588,7 +588,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
         app,
         &codex,
         &session,
-        "project_open",
+        "project_get",
         json!({"projectId": "WORK"}),
     )
     .await;
@@ -638,7 +638,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
         app,
         &codex,
         &session,
-        "label_write",
+        "label_update",
         json!({"projectId": "WORK", "label": "Mobile", "archived": true}),
     )
     .await;
@@ -655,7 +655,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
         app,
         &codex,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": "WORK-1"}),
     )
     .await;
@@ -667,7 +667,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
         app,
         &codex,
         &session,
-        "project_open",
+        "project_get",
         json!({"projectId": "WORK"}),
     )
     .await;
@@ -701,7 +701,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
         app,
         &codex,
         &session,
-        "label_write",
+        "label_create",
         json!({"projectId": "WORK", "name": "mobile"}),
     )
     .await;
@@ -732,7 +732,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
         app,
         &codex,
         &session,
-        "label_write",
+        "label_update",
         json!({"projectId": "WORK", "label": "Mobile", "archived": false}),
     )
     .await;
@@ -742,7 +742,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
         app,
         &codex,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": "WORK-1"}),
     )
     .await;
@@ -754,7 +754,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
         app,
         &codex,
         &session,
-        "label_write",
+        "label_update",
         json!({"projectId": "WORK", "label": "Mobile", "archived": true}),
     )
     .await;
@@ -763,7 +763,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
         app,
         &codex,
         &session,
-        "label_write",
+        "label_update",
         json!({"projectId": "WORK", "label": "Bug", "name": "mobile"}),
     )
     .await;
@@ -772,7 +772,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
         app,
         &codex,
         &session,
-        "label_write",
+        "label_update",
         json!({"projectId": "WORK", "label": label_ids["Mobile"], "archived": false}),
     )
     .await;
@@ -787,7 +787,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
         app,
         &codex,
         &session,
-        "label_write",
+        "label_update",
         json!({"projectId": "WORK", "label": "Mobile", "archived": false}),
     )
     .await;
@@ -800,7 +800,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
         app,
         &codex,
         &session,
-        "label_write",
+        "label_update",
         json!({"projectId": "WORK", "label": "Mobile", "archived": false, "name": "Mobile app"}),
     )
     .await;
@@ -813,7 +813,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
         app,
         &codex,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": "WORK-1"}),
     )
     .await;
@@ -832,7 +832,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
             app,
             &codex,
             &session,
-            "label_write",
+            "label_create",
             json!({"projectId": "WORK", "name": name}),
         )
         .await;
@@ -862,7 +862,7 @@ async fn labels_on_tasks_show_everywhere_and_archiving_hides_them_until_restored
         app,
         &codex,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": "WORK-2"}),
     )
     .await;
@@ -894,7 +894,12 @@ async fn moving_a_task_carries_its_labels() {
     let write = |arguments: Value| {
         let (codex, session) = (codex.clone(), session.clone());
         async move {
-            let result = tool(app, &codex, &session, "label_write", arguments).await;
+            let name = if arguments.get("label").is_some() {
+                "label_update"
+            } else {
+                "label_create"
+            };
+            let result = tool(app, &codex, &session, name, arguments).await;
             assert_eq!(result["outcome"], "ok", "{result}");
             result
         }
@@ -951,7 +956,7 @@ async fn moving_a_task_carries_its_labels() {
         app,
         &codex,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": "OTHER-1"}),
     )
     .await;
@@ -1002,7 +1007,7 @@ async fn moving_a_task_carries_its_labels() {
         app,
         &codex,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": "OTHER-2"}),
     )
     .await;

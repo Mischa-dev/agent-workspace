@@ -276,7 +276,7 @@ async fn planning_tools_fill_the_gaps_agents_hit() {
 
     // A criterion added already checked, and the list's progress counts.
     let first = &loose[0];
-    let opened = call("task_open", json!({"taskId": first})).await;
+    let opened = call("task_get", json!({"taskId": first})).await;
     let version = opened["value"]["version"]
         .as_i64()
         .or_else(|| opened["value"]["task"]["version"].as_i64())
@@ -321,7 +321,7 @@ async fn planning_tools_fill_the_gaps_agents_hit() {
 
     // The graph narrows to a label, keeps what links to it, and names keys.
     let graph = call(
-        "dependency_graph",
+        "dependency_graph_get",
         json!({"projectId": "PLN", "label": "graph"}),
     )
     .await;
@@ -365,7 +365,7 @@ async fn planning_tools_fill_the_gaps_agents_hit() {
         .expect("parent")
         .to_owned();
     let graph = call(
-        "dependency_graph",
+        "dependency_graph_get",
         json!({"projectId": "PLN", "parentId": parent}),
     )
     .await;
@@ -377,7 +377,7 @@ async fn planning_tools_fill_the_gaps_agents_hit() {
         .collect::<Vec<_>>();
     assert_eq!(titles, ["Child a", "Child b"]);
     let unknown = call(
-        "dependency_graph",
+        "dependency_graph_get",
         json!({"projectId": "PLN", "label": "No such label"}),
     )
     .await;

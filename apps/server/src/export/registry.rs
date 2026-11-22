@@ -404,10 +404,6 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "the addresses a workspace had on this server; an import takes its own slug",
             ),
             (
-                "operation_alias_usage",
-                "daily counts of calls to old operation names, kept to retire them (K2); this server's own measure",
-            ),
-            (
                 "operation_tasks",
                 "long calls in flight and their answers for a week (K2.21); a call on this server, not the workspace's content",
             ),

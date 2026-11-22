@@ -26,7 +26,7 @@ use crate::{
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct UsageBatchArguments {
-    /// The provider account (usage_windows lists yours).
+    /// The provider account (usage_window_list lists yours).
     pub account_id: String,
     /// The window to size the batch for; defaults to the soonest to reset
     /// with capacity left.
@@ -78,7 +78,7 @@ pub(crate) struct UsageBatchValue {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct UsageBatchLaunchArguments {
     pub account_id: String,
-    /// Task IDs to launch (from usage_batch). Left out, the suggested batch
+    /// Task IDs to launch (from usage_batch_preview). Left out, the suggested batch
     /// as it stands now.
     #[serde(default)]
     pub task_ids: Option<Vec<String>>,

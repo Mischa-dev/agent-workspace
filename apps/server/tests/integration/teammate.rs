@@ -74,7 +74,7 @@ async fn page(world: &Workspace, agent: &Agent, title: &str) -> String {
     let made = tool(
         world,
         agent,
-        "page_write",
+        "page_create",
         json!({"projectId": world.project("WORK"), "title": title, "body": "First."}),
     )
     .await;
@@ -86,7 +86,7 @@ async fn edit(world: &Workspace, agent: &Agent, page: &str, version: i64) {
     let edited = tool(
         world,
         agent,
-        "page_write",
+        "page_update",
         json!({"pageId": page, "body": format!("Version {}.", version + 1), "expectedVersion": version}),
     )
     .await;
@@ -371,7 +371,7 @@ async fn guards_hold_tools_called_by_their_old_names() {
         json!({"name": "Hands off", "action": "deny"}),
     )
     .await;
-    let refused = tool(&world, rook, "page_write", write("Plan")).await;
+    let refused = tool(&world, rook, "page_create", write("Plan")).await;
     assert_ne!(refused["outcome"], "ok", "{refused}");
     assert!(refused.to_string().contains("Hands off"), "{refused}");
     assert_eq!(pages().await, 0);
@@ -389,7 +389,7 @@ async fn guards_hold_tools_called_by_their_old_names() {
                "operations": ["page_write"], "reviewers": [world.owner.actor]}),
     )
     .await;
-    let held = tool(&world, rook, "page_write", write("Plan")).await;
+    let held = tool(&world, rook, "page_create", write("Plan")).await;
     assert_eq!(held["value"]["status"], "pending_review", "{held}");
     assert_eq!(pages().await, 0);
     op(
@@ -398,10 +398,10 @@ async fn guards_hold_tools_called_by_their_old_names() {
         json!({"requestId": held["value"]["requestId"], "optionId": "allow"}),
     )
     .await;
-    let made = tool(&world, rook, "page_write", write("Plan")).await;
+    let made = tool(&world, rook, "page_create", write("Plan")).await;
     assert_eq!(made["outcome"], "ok", "{made}");
     assert_eq!(pages().await, 1);
-    let next = tool(&world, rook, "page_write", write("Plan")).await;
+    let next = tool(&world, rook, "page_create", write("Plan")).await;
     assert_eq!(next["value"]["status"], "pending_review", "{next}");
 }
 
@@ -507,7 +507,7 @@ async fn a_review_given_back_replaces_the_ask_a_retry_raised_meanwhile() {
     .await;
     for (title, second_answered) in [("Plan", false), ("Notes", true)] {
         let write = json!({"projectId": space, "title": title, "body": "Notes."});
-        let held = tool(&world, rook, "page_write", write.clone()).await;
+        let held = tool(&world, rook, "page_create", write.clone()).await;
         let first_request = held["value"]["requestId"]
             .as_str()
             .expect("request")
@@ -526,7 +526,7 @@ async fn a_review_given_back_replaces_the_ask_a_retry_raised_meanwhile() {
         .fetch_one(world.pool())
         .await
         .expect("the first call uses its review");
-        let again = tool(&world, rook, "page_write", write.clone()).await;
+        let again = tool(&world, rook, "page_create", write.clone()).await;
         assert_eq!(again["value"]["status"], "pending_review", "{again}");
         let second_request = again["value"]["requestId"]
             .as_str()
@@ -558,7 +558,7 @@ async fn a_review_given_back_replaces_the_ask_a_retry_raised_meanwhile() {
                 .fetch_one(world.pool())
                 .await
                 .expect("the second ask");
-        let made = tool(&world, rook, "page_write", write).await;
+        let made = tool(&world, rook, "page_create", write).await;
         let pages =
             sqlx::query_scalar::<_, i64>("SELECT count(*) FROM project_pages WHERE title = $1")
                 .bind(title)
@@ -615,7 +615,7 @@ async fn guards_on_records_collections_and_sheets_see_their_writes() {
         json!({"name": "Records stay put", "action": "deny", "targetKinds": ["record"]}),
     )
     .await;
-    for name in ["record_create_many", "record_write"] {
+    for name in ["record_create_many"] {
         let refused = tool(&world, rook, name, records.clone()).await;
         assert_ne!(refused["outcome"], "ok", "{name}: {refused}");
         assert!(
@@ -657,7 +657,10 @@ async fn guards_on_records_collections_and_sheets_see_their_writes() {
             "sheet_create",
             json!({"projectId": space, "name": "Budget"}),
         ),
-        ("sheet_write", json!({"projectId": space, "name": "Budget"})),
+        (
+            "sheet_create",
+            json!({"projectId": space, "name": "Budget"}),
+        ),
     ] {
         let refused = tool(&world, rook, name, arguments).await;
         assert_ne!(refused["outcome"], "ok", "{name}: {refused}");
@@ -847,7 +850,7 @@ async fn a_memory_page_change_is_reviewed_only_by_the_conversations_readers() {
     let written = tool(
         &world,
         rook,
-        "page_write",
+        "page_update",
         // A link to the page, as the tool takes it, is the page too.
         json!({"pageId": format!("https://example.test/pages/{page}"), "body": "Second.", "expectedVersion": 1}),
     )

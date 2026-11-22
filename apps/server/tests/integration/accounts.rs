@@ -497,7 +497,7 @@ async fn an_agent_made_at_workspace_level_starts_with_workspace_things_only() {
     .expect("managers");
     assert!(manages, "its maker manages it");
     let session = initialize(&world.app, &token).await.expect("agent MCP");
-    let projects = tool(&world.app, &token, &session, "projects_list", json!({})).await;
+    let projects = tool(&world.app, &token, &session, "project_list", json!({})).await;
     let work = world.project("WORK").to_owned();
     let ids = projects["value"]["projects"]
         .as_array()

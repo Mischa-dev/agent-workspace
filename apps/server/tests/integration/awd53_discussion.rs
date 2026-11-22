@@ -76,11 +76,11 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
 
     // The page is the owner's: Mara's edit is kept as a suggestion and the
     // page doesn't change.
-    let read = call("page_blocks", json!({"pageId": page})).await;
+    let read = call("page_blocks_get", json!({"pageId": page})).await;
     assert_eq!(read["outcome"], "ok", "{read}");
     let block = |position: usize| read["value"]["blocks"][position].clone();
     let edited = call(
-        "page_edit",
+        "page_update_blocks",
         json!({"pageId": page, "note": "Fix the risk", "edits": [{
             "op": "replace", "blockId": block(3)["id"], "hash": block(3)["hash"],
             "markdown": "- slow CI (fixed)"
@@ -101,7 +101,7 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
     // A whole new text from page_write is a suggestion too, of only the
     // blocks it changes.
     let rewritten = call(
-        "page_write",
+        "page_update",
         json!({"pageId": page, "body": BODY.replace("Ship it.", "Ship it on Friday.")}),
     )
     .await;
@@ -112,7 +112,7 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
         .as_str()
         .expect("suggestion")
         .to_owned();
-    let listed = call("page_suggestions", json!({"pageId": page})).await;
+    let listed = call("page_suggestion_list", json!({"pageId": page})).await;
     let edits = &listed["value"]["suggestions"][1]["edits"];
     assert_eq!(edits.as_array().map(Vec::len), Some(1), "{listed}");
     assert_eq!(edits[0]["op"], "replace", "{listed}");
@@ -137,7 +137,7 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
             .iter()
             .all(|proposal| proposal["thingKind"] == "page"
                 && proposal["thingId"] == page.as_str()
-                && proposal["operation"] == "page_edit"
+                && proposal["operation"] == "page_update_blocks"
                 && proposal["status"] == "pending"),
         "{mine}"
     );
@@ -236,13 +236,13 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
 
     // Mara's own page changes directly.
     let own = call(
-        "page_write",
+        "page_create",
         json!({"projectId": "WORK", "title": "Mara's notes", "body": "One"}),
     )
     .await;
     let own_page = own["value"]["id"].as_str().expect("page").to_owned();
     let appended = call(
-        "page_edit",
+        "page_update_blocks",
         json!({"pageId": own_page, "edits": [{"op": "append", "markdown": "Two"}]}),
     )
     .await;
@@ -301,16 +301,16 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
 
     // Comments: Mara quotes words in a block; quoting words that aren't
     // there is refused.
-    let reread = call("page_blocks", json!({"pageId": page})).await;
+    let reread = call("page_blocks_get", json!({"pageId": page})).await;
     let sketch = reread["value"]["blocks"][1]["id"].clone();
     let missing = call(
-        "page_comment",
+        "page_comment_create",
         json!({"pageId": page, "blockId": sketch, "quote": "we paint", "text": "Hm"}),
     )
     .await;
     assert_eq!(missing["outcome"], "invalid_request", "{missing}");
     let commented = call(
-        "page_comment",
+        "page_comment_create",
         json!({"pageId": page, "blockId": sketch, "quote": "we sketch", "text": "Sketch where?"}),
     )
     .await;
@@ -366,10 +366,10 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
     )
     .await;
     assert!(status.is_client_error(), "{status} {refused}");
-    let open = call("page_comments", json!({"pageId": page})).await;
+    let open = call("page_comment_list", json!({"pageId": page})).await;
     assert_eq!(open["value"]["threads"], json!([]), "{open}");
     let all = call(
-        "page_comments",
+        "page_comment_list",
         json!({"pageId": page, "includeResolved": true}),
     )
     .await;
@@ -384,7 +384,7 @@ async fn agents_suggest_on_other_peoples_pages_and_comments_follow_the_words() {
     // Mara replies, which reopens it. When the quoted words are edited
     // away, the thread stays, marked as no longer found.
     let reopened = call(
-        "page_comment",
+        "page_comment_create",
         json!({"pageId": page, "replyTo": thread, "text": "Thanks"}),
     )
     .await;
@@ -559,14 +559,14 @@ async fn a_change_a_comment_asked_for_shows_in_its_thread_with_undo() {
         let session = session.clone();
         async move { tool(app, &token, &session, name, arguments).await }
     };
-    let read = call("page_blocks", json!({"pageId": page})).await;
+    let read = call("page_blocks_get", json!({"pageId": page})).await;
     let risk = read["value"]["blocks"][3].clone();
     let edit = |thread: String| {
         let page = page.clone();
         let risk = risk.clone();
         async move {
             call(
-                "page_edit",
+                "page_update_blocks",
                 json!({"pageId": page, "threadId": thread, "edits": [{
                     "op": "replace", "blockId": risk["id"], "hash": risk["hash"],
                     "markdown": "- slow CI: builds take 40 minutes"

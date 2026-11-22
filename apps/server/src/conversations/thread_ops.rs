@@ -1,7 +1,7 @@
 //! Threads and conversations as operations (K2.8): start and update a
 //! thread, make a channel, change a conversation, pin, change a group's
 //! members, and let a group's agents continue. Agents call them as tools of
-//! the same names (`conversation_members` stays as an alias), scripts
+//! the same names (the old `conversation_members` is retired), scripts
 //! through the v2 route, and rules as actions. Each runs the command the
 //! hand-written tool ran (`mcp::talk`, `mcp::channels`, `mcp::groups`), as
 //! the caller the dispatcher checked, which keeps its own checks inside:

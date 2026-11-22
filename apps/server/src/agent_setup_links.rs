@@ -299,7 +299,7 @@ push the same events to it instead.\n\n\
 of events. Nothing secret is in it: it reads the token from \
 `AGENT_WORKSPACE_TOKEN`.\n\n\
 ## Then\n\n\
-1. Call `briefing`. It lists what needs you.\n\
+1. Call `briefing_get`. It lists what needs you.\n\
 2. Read `{origin}/connect.md` (from \"Once you're connected\") for how work goes here.\n\
 3. Tell your person you're connected.\n",
         name = link.display_name,
