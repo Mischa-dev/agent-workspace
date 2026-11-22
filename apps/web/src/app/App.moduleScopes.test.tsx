@@ -149,6 +149,8 @@ describe('entry points follow the modules where they lead', () => {
     window.history.replaceState({}, '', `/w/-/runs/${runId}`)
     render(<App />)
     expect(await screen.findByRole('heading', { name: 'Runs is turned off' })).toBeVisible()
+    // The refusal doesn't say which switch turned it off, so no workspace switch is offered.
+    expect(screen.queryByRole('link', { name: 'Turn modules on or off' })).toBeNull()
   })
 
   it('a task key leaves the decision to the task’s project', async () => {

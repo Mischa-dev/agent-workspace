@@ -58,7 +58,7 @@ export function ModuleGate({ children, waiting }: { children: ReactNode; waiting
     if (id && !shown && refusedAsOff(target.error, module)) {
       return (
         <Suspense fallback={waiting}>
-          <TurnedOffPage module={module} />
+          <TurnedOffPage module={module} scope="unknown" />
         </Suspense>
       )
     }
