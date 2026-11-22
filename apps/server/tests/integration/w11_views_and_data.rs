@@ -91,8 +91,19 @@ impl Client {
         self.send("POST", uri, Some(body)).await
     }
 
-    async fn patch(&self, uri: &str, body: Value) -> (StatusCode, Value) {
-        self.send("PATCH", uri, Some(body)).await
+    /// task_import in `project`: the import on success, else the envelope.
+    async fn import(
+        &self,
+        project: impl std::fmt::Display,
+        mut input: Value,
+    ) -> (StatusCode, Value) {
+        input["projectId"] = json!(project.to_string());
+        let (status, body) = self.post("/api/v2/ops/task_import", input).await;
+        if body["outcome"] == "ok" {
+            (status, body["value"]["import"].clone())
+        } else {
+            (status, body)
+        }
     }
 
     async fn send(&self, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
@@ -401,12 +412,12 @@ async fn a_recurring_task_runs_once_per_occurrence_and_pauses_when_its_owner_lea
     let Some(fixture) = fixture("recurring").await else {
         return;
     };
-    let base = format!("/api/v1/projects/{}", fixture.project_id);
     let (status, template) = fixture
         .member
         .post(
-            &format!("{base}/task-templates"),
+            "/api/v2/ops/template_create",
             json!({
+                "projectId": fixture.project_id,
                 "name": "Weekly review",
                 "title": "Review the week",
                 "labels": ["ritual"],
@@ -415,16 +426,20 @@ async fn a_recurring_task_runs_once_per_occurrence_and_pauses_when_its_owner_lea
             }),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{template}");
-    let template_id = template["id"].as_str().expect("template").to_owned();
+    assert_eq!(status, StatusCode::OK, "{template}");
+    let template_id = template["value"]["template"]["id"]
+        .as_str()
+        .expect("template")
+        .to_owned();
     let (status, recurring) = fixture
         .member
         .post(
-            &format!("{base}/recurring-tasks"),
-            json!({"templateId": template_id, "frequency": "weekly", "weekdays": [1, 4], "timezone": "Europe/Amsterdam"}),
+            "/api/v2/ops/recurring_create",
+            json!({"projectId": fixture.project_id, "template": template_id, "frequency": "weekly", "weekdays": [1, 4], "timezone": "Europe/Amsterdam"}),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{recurring}");
+    assert_eq!(status, StatusCode::OK, "{recurring}");
+    let recurring = recurring["value"]["recurring"].clone();
     let recurring_id = recurring["id"]
         .as_str()
         .expect("recurring")
@@ -517,12 +532,12 @@ async fn an_import_creates_each_row_once_and_exports_back() {
     let base = format!("/api/v1/projects/{}", fixture.project_id);
     let (status, import) = fixture
         .owner
-        .post(
-            &format!("{base}/imports"),
+        .import(
+            fixture.project_id,
             json!({"source": "csv", "text": LINEAR_CSV, "fileName": "linear.csv"}),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{import}");
+    assert_eq!(status, StatusCode::OK, "{import}");
     assert_eq!(import["preview"]["willCreate"], 2, "{import}");
     assert_eq!(import["preview"]["withoutTitle"], 1, "{import}");
     assert_eq!(import["mapping"]["title"], "Title");
@@ -531,27 +546,27 @@ async fn an_import_creates_each_row_once_and_exports_back() {
     // Changing the mapping reads the text again.
     let (status, remapped) = fixture
         .owner
-        .patch(
-            &format!("{base}/imports/{id}"),
-            json!({"expectedVersion": import["version"], "mapping": {"title": "Description", "externalId": "ID"}}),
+        .import(
+            fixture.project_id,
+            json!({"importId": id, "expectedVersion": import["version"], "mapping": {"title": "Description", "externalId": "ID"}}),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{remapped}");
     assert_eq!(remapped["preview"]["willCreate"], 2, "{remapped}");
     let (status, restored) = fixture
         .owner
-        .patch(
-            &format!("{base}/imports/{id}"),
-            json!({"expectedVersion": remapped["version"], "mapping": import["mapping"]}),
+        .import(
+            fixture.project_id,
+            json!({"importId": id, "expectedVersion": remapped["version"], "mapping": import["mapping"]}),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{restored}");
 
     let (status, committed) = fixture
         .owner
-        .post(
-            &format!("{base}/imports/{id}/commit"),
-            json!({"expectedVersion": restored["version"]}),
+        .import(
+            fixture.project_id,
+            json!({"importId": id, "expectedVersion": restored["version"], "commit": true}),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{committed}");
@@ -585,24 +600,24 @@ async fn an_import_creates_each_row_once_and_exports_back() {
     // The same file again: everything is already here.
     let (status, again) = fixture
         .owner
-        .post(
-            &format!("{base}/imports"),
+        .import(
+            fixture.project_id,
             json!({"source": "csv", "text": LINEAR_CSV}),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{again}");
+    assert_eq!(status, StatusCode::OK, "{again}");
     assert_eq!(again["preview"]["willCreate"], 0, "{again}");
     assert_eq!(again["preview"]["alreadyImported"], 2, "{again}");
 
     // Markdown: list items, subtasks and headings as milestones.
     let (status, markdown) = fixture
         .owner
-        .post(
-            &format!("{base}/imports"),
-            json!({"source": "markdown", "text": "# Beta\n- [ ] Invite testers #beta\n  - [ ] Write the email\n", "options": {"headingsAsMilestones": true, "createLabels": true, "createMilestones": true}}),
+        .import(
+            fixture.project_id,
+            json!({"source": "markdown", "text": "# Beta\n- [ ] Invite testers #beta\n  - [ ] Write the email\n", "headingsAsMilestones": true, "createLabels": true, "createMilestones": true}),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{markdown}");
+    assert_eq!(status, StatusCode::OK, "{markdown}");
     assert_eq!(
         markdown["preview"]["newMilestones"],
         json!(["Beta"]),
@@ -704,9 +719,9 @@ async fn a_github_import_stops_when_its_committer_loses_see_code() {
     assert_eq!(draft["repositoryName"], "Mischa-dev/w11-import", "{draft}");
     let (status, committed) = fixture
         .member
-        .post(
-            &format!("{base}/imports/{import}/commit"),
-            json!({"expectedVersion": draft["version"]}),
+        .import(
+            project,
+            json!({"importId": import, "expectedVersion": draft["version"], "commit": true}),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{committed}");
@@ -716,11 +731,12 @@ async fn a_github_import_stops_when_its_committer_loses_see_code() {
     let (status, role) = fixture
         .owner
         .post(
-            &format!("/api/v1/organizations/{}/roles", fixture.organization_id),
+            &format!("/api/v2/w/{}/ops/role_create", fixture.organization_id),
             json!({"name": "Task makers", "baseRole": "member", "permissions": ["tasks.view", "tasks.create", "tasks.edit"]}),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{role}");
+    assert_eq!(status, StatusCode::OK, "{role}");
+    let role = role["value"].clone();
     let version: i64 = sqlx::query_scalar(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -731,9 +747,9 @@ async fn a_github_import_stops_when_its_committer_loses_see_code() {
     .expect("membership version");
     let (status, changed) = fixture
         .owner
-        .patch(
-            &format!("{base}/members/{member}"),
-            json!({"roleId": role["id"], "expectedVersion": version}),
+        .post(
+            "/api/v2/ops/space_member_update",
+            json!({"spaceId": project, "account": member, "role": role["id"], "expectedVersion": version}),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
@@ -767,30 +783,29 @@ async fn a_new_project_starts_from_a_saved_setup() {
     let Some(fixture) = fixture("project_templates").await else {
         return;
     };
-    let base = format!("/api/v1/projects/{}", fixture.project_id);
     let (status, label) = fixture
         .owner
         .post(
-            &format!("{base}/labels"),
-            json!({"name": "Customer", "color": "#aa3366"}),
+            "/api/v2/ops/label_create",
+            json!({"projectId": fixture.project_id, "name": "Customer", "color": "#aa3366"}),
         )
         .await;
     assert!(status.is_success(), "{label}");
     let (status, template) = fixture
         .owner
         .post(
-            &format!("{base}/task-templates"),
-            json!({"name": "Bug report", "title": "Bug: ", "labels": ["Customer"]}),
+            "/api/v2/ops/template_create",
+            json!({"projectId": fixture.project_id, "name": "Bug report", "title": "Bug: ", "labels": ["Customer"]}),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{template}");
+    assert_eq!(status, StatusCode::OK, "{template}");
 
     // Only owners and admins can save a project's setup.
     let (status, _) = fixture
         .member
         .post(
-            &format!("{base}/save-as-template"),
-            json!({"name": "Member's setup"}),
+            "/api/v2/ops/project_template_create",
+            json!({"projectId": fixture.project_id, "name": "Member's setup"}),
         )
         .await;
     assert!(
@@ -800,12 +815,13 @@ async fn a_new_project_starts_from_a_saved_setup() {
     let (status, saved) = fixture
         .owner
         .post(
-            &format!("{base}/save-as-template"),
-            json!({"name": "Product setup", "description": "Statuses, labels and bug template"}),
+            "/api/v2/ops/project_template_create",
+            json!({"projectId": fixture.project_id, "name": "Product setup", "description": "Statuses, labels and bug template"}),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{saved}");
-    assert_eq!(saved["contains"]["taskTemplates"], 1, "{saved}");
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let saved = &saved["value"]["template"];
+    assert_eq!(saved["taskTemplates"], 1, "{saved}");
     let template_id = saved["id"].as_str().expect("template").to_owned();
 
     let (status, list) = fixture
@@ -822,11 +838,12 @@ async fn a_new_project_starts_from_a_saved_setup() {
     let (status, project) = fixture
         .owner
         .post(
-            "/api/v1/projects",
-            json!({"organizationId": fixture.organization_id, "key": "NEXT", "name": "Next product", "templateId": template_id}),
+            &format!("/api/v2/w/{}/ops/space_create", fixture.organization_id),
+            json!({"key": "NEXT", "name": "Next product", "templateId": template_id}),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{project}");
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project = project["value"].clone();
     let new_project = project["id"].as_str().expect("project id").to_owned();
     let (status, templates) = fixture
         .owner
@@ -862,20 +879,21 @@ async fn a_new_project_starts_from_a_saved_setup() {
     // An unknown or archived template refuses the project.
     let (status, _) = fixture
         .owner
-        .patch(
+        .post(
             &format!(
-                "/api/v1/organizations/{}/project-templates/{template_id}",
+                "/api/v2/w/{}/ops/project_template_update",
                 fixture.organization_id
             ),
-            json!({"expectedVersion": 1, "archived": true}),
+            json!({"projectId": "workspace", "template": template_id, "expectedVersion": 1,
+                "archived": true}),
         )
         .await;
     assert_eq!(status, StatusCode::OK);
     let (status, _) = fixture
         .owner
         .post(
-            "/api/v1/projects",
-            json!({"organizationId": fixture.organization_id, "key": "LATER", "name": "Later", "templateId": template_id}),
+            &format!("/api/v2/w/{}/ops/space_create", fixture.organization_id),
+            json!({"key": "LATER", "name": "Later", "templateId": template_id}),
         )
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);

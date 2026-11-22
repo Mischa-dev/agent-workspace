@@ -82,24 +82,24 @@ async fn account_lists_leave_out_a_workspace_where_their_module_is_off() {
         app,
         setup.browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", second),
             Some("create-BBB"),
-            json!({"organizationId": second, "key": "BBB", "name": "B work"}),
+            json!({"key": "BBB", "name": "B work"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{made}");
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let made = made["value"].clone();
     let there = made["id"].as_str().expect("project").to_owned();
     for (project, title) in [(&here, "A errand"), (&there, "B errand")] {
         let key = format!("awd75-{title}").replace(' ', "-");
-        let (status, made) = send(
+        let (status, made) = crate::support::tasks::send(
             app,
-            setup.browser.request(
-                "POST",
-                &format!("/api/v1/projects/{project}/work-items"),
-                Some(key.as_str()),
-                json!({"title": title, "assigneeActorId": owner}),
-            ),
+            &setup.browser,
+            "POST",
+            &format!("/api/v1/projects/{project}/work-items"),
+            Some(key.as_str()),
+            json!({"title": title, "assigneeActorId": owner}),
         )
         .await;
         assert!(status.is_success(), "{status}: {made}");
@@ -118,13 +118,13 @@ async fn account_lists_leave_out_a_workspace_where_their_module_is_off() {
         }
     };
     // Everything on: both workspaces' projects, tasks and agents.
-    let listed = each(&call("projects_list").await["value"]["projects"], "name");
+    let listed = each(&call("project_list").await["value"]["projects"], "name");
     assert!(
         listed.contains(&"A work".to_owned()) && listed.contains(&"B work".to_owned()),
         "{listed:?}"
     );
     let mine = each(
-        &call("my_work").await["value"]["assigned"]["items"],
+        &call("my_work_get").await["value"]["assigned"]["items"],
         "title",
     );
     assert!(
@@ -144,11 +144,11 @@ async fn account_lists_leave_out_a_workspace_where_their_module_is_off() {
         json!({"switches": {"projects": false, "tasks": false, "agents": false}}),
     )
     .await;
-    let listed = each(&call("projects_list").await["value"]["projects"], "name");
+    let listed = each(&call("project_list").await["value"]["projects"], "name");
     assert!(!listed.contains(&"A work".to_owned()), "{listed:?}");
     assert!(listed.contains(&"B work".to_owned()), "{listed:?}");
     let mine = each(
-        &call("my_work").await["value"]["assigned"]["items"],
+        &call("my_work_get").await["value"]["assigned"]["items"],
         "title",
     );
     assert_eq!(mine, ["B errand"]);
@@ -323,7 +323,7 @@ async fn an_agent_s_inbox_leaves_out_requests_where_channels_is_off() {
         "{inbox}"
     );
     assert!(!inbox.to_string().contains("release plan"), "{inbox}");
-    let briefing = asked("briefing").await;
+    let briefing = asked("briefing_get").await;
     assert_eq!(
         each(&briefing["value"]["replyRequests"], "replyConversationId"),
         vec![dm.clone()],

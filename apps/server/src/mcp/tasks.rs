@@ -128,7 +128,7 @@ pub(crate) struct TaskListArguments {
     /// 2026-09-30T14:00:00Z, or a span such as 24h or 7d.
     pub updated_since: Option<String>,
     /// true: only blocked tasks, whether marked blocked or waiting on an
-    /// unfinished task (task_depend). false: leave them out.
+    /// unfinished task (task_link). false: leave them out.
     pub blocked: Option<bool>,
     /// true: only tasks ready to start (not finished, not blocked, nothing
     /// unfinished blocking them). false: the rest.
@@ -177,7 +177,7 @@ pub(crate) struct TaskListArguments {
     /// fields.
     pub field_filters: Option<Vec<field_tools::FieldFilterArgument>>,
     /// Only the tasks of one collection that acts like a task, such as
-    /// "Bugs", by name or ID (project_open lists them); "Tasks" for plain
+    /// "Bugs", by name or ID (project_get lists them); "Tasks" for plain
     /// tasks. Needs projectId.
     pub collection: Option<String>,
 }
@@ -233,7 +233,7 @@ pub(crate) struct TaskSummary {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
     /// Its custom field values by field name (only those it has), as
-    /// task_open reads them.
+    /// task_get reads them.
     #[sqlx(skip)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fields: Option<serde_json::Map<String, serde_json::Value>>,
@@ -1294,7 +1294,7 @@ async fn filter_milestones(
     .await?;
     Ok(Err(if names.is_empty() {
         format!(
-            "{place} has no milestone called \"{}\", and no milestones yet. Create one with milestone_write.",
+            "{place} has no milestone called \"{}\", and no milestones yet. Create one with milestone_create.",
             echo(value)
         )
     } else {
@@ -1502,7 +1502,7 @@ async fn filter_labels(
                 echo(unknown)
             ),
             (None, Some(archived)) => format!(
-                "\"{}\" is archived. Restore it with label_write (archived: false) to filter by it.",
+                "\"{}\" is archived. Restore it with label_update (archived: false) to filter by it.",
                 echo(archived)
             ),
             (None, None) => "Name the labels to filter by.".to_owned(),
@@ -1729,7 +1729,7 @@ pub(crate) struct TaskOpenArguments {
     pub history_before: Option<String>,
 }
 
-/// What task_open's include asks for, checked before anything is read.
+/// What task_get's include asks for, checked before anything is read.
 struct HistoryRequest {
     limit: u16,
     before: Option<String>,
@@ -1802,7 +1802,7 @@ pub(crate) struct TaskDetail {
     /// and file_upload (taskId) adds one. Comments list their own.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<super::file_tools::FileSummary>,
-    /// Where to read how this project works: project_open or page_get.
+    /// Where to read how this project works: project_get or page_get.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guide_page_id: Option<String>,
     /// With include: ["history"], what happened to the task.
@@ -1831,7 +1831,7 @@ pub(crate) struct TaskDetail {
     /// What estimates count in this project: points or hours.
     #[serde(default)]
     pub estimate_unit: String,
-    /// Why it's marked blocked (task_mark_blocked), if it is.
+    /// Why it's marked blocked (task_update), if it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocked_reason: Option<String>,
     /// Tasks that must finish first, each with its status. Tasks in projects
@@ -1845,10 +1845,10 @@ pub(crate) struct TaskDetail {
     /// (counting blockers you can't see).
     #[serde(default)]
     pub ready: bool,
-    /// Related and duplicate tasks (task_relate).
+    /// Related and duplicate tasks (task_link).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub relations: Vec<planning::RelationRef>,
-    /// Who hears about its changes (task_watch).
+    /// Who hears about its changes (task_watch_set).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub watchers: Vec<planning::WatcherRef>,
     /// The project's custom fields with this task's values (null when it
@@ -1867,7 +1867,7 @@ pub(crate) struct MilestoneRef {
     pub target_date: Option<String>,
 }
 
-/// A task's planning fields, as task_open reads them.
+/// A task's planning fields, as task_get reads them.
 #[derive(Debug, FromRow)]
 struct PlanningRow {
     milestone_id: Option<Uuid>,
@@ -2004,9 +2004,7 @@ pub(crate) async fn task_open(
                    CASE WHEN conversation.kind = 'thread' THEN conversation.thread_status END AS status,
                    COALESCE(conversation.thread_outcome, '') AS text
             FROM (
-                SELECT conversation_id AS id FROM work_item_conversation_links WHERE work_item_id = $1
-                UNION
-                SELECT target_id FROM work_item_links
+                SELECT target_id AS id FROM task_links
                 WHERE work_item_id = $1 AND target_kind = 'conversation'
             ) linked
             JOIN conversations conversation ON conversation.id = linked.id
@@ -2030,7 +2028,7 @@ pub(crate) async fn task_open(
                    CASE WHEN message.removed_at IS NOT NULL THEN 'Message removed'
                         ELSE left(COALESCE(page.body, decision.detail, message.plain_text, ''), 400)
                    END AS text
-            FROM work_item_links link
+            FROM task_links link
             LEFT JOIN project_pages page
               ON link.target_kind = 'page' AND page.id = link.target_id AND page.archived_at IS NULL
              AND page.project_id = link.project_id
@@ -2213,7 +2211,7 @@ pub(crate) struct TaskCreateArguments {
     #[serde(rename = "type")]
     pub item_type: Option<String>,
     /// Labels by name or ID, at most 20. They must exist already; create one
-    /// with label_write.
+    /// with label_create.
     pub labels: Option<Vec<String>>,
     /// What done looks like, one criterion per entry, in order (at most 50).
     pub acceptance_criteria: Option<Vec<String>>,
@@ -2240,10 +2238,10 @@ pub(crate) struct TaskCreateArguments {
     pub estimate: Option<f64>,
     /// Custom field values by field name (see field_list), such as
     /// {"Risk": "High", "Owner": "@ana", "Shipped": true}. In a collection
-    /// that acts like a task, its own fields (see collection_describe).
+    /// that acts like a task, its own fields (see collection_get).
     pub fields: Option<serde_json::Map<String, serde_json::Value>>,
     /// Make it in a collection that acts like a task, such as "Bugs", by
-    /// name or ID (project_open lists them). Left out, it's a plain task.
+    /// name or ID (project_get lists them). Left out, it's a plain task.
     pub collection: Option<String>,
     /// Made from this message; the task links back to it.
     pub from_message_id: Option<String>,
@@ -2294,7 +2292,7 @@ pub(crate) async fn task_create(
             Err(_) => return writes::WriteResult::unavailable(),
         };
         if !project_is_chosen(principal) || in_messages_space || workspace_wide {
-            const PROJECT_MESSAGE: &str = "Say which project with projectId (see projects_list).";
+            const PROJECT_MESSAGE: &str = "Say which project with projectId (see project_list).";
             return writes::WriteResult::InvalidRequest {
                 field: "projectId".to_owned(),
                 retry_category: PROJECT_MESSAGE.to_owned(),
@@ -2380,7 +2378,7 @@ pub(crate) struct TaskUpdateArguments {
     // act in the task's own project.
     #[serde(rename = "taskId", alias = "workItemId")]
     pub task_id: String,
-    /// The version you last read (from task_open or task_list).
+    /// The version you last read (from task_get or task_list).
     pub expected_version: i64,
     pub title: Option<String>,
     pub description: Option<String>,
@@ -3170,8 +3168,8 @@ pub(crate) struct LinkValue {
 /// What a task_link call points at, found in the task's own project.
 #[derive(Clone, Debug)]
 enum LinkTarget {
-    /// A conversation, message, page or decision (work_item_links), or a
-    /// thread in the task's project (work_item_conversation_links).
+    /// A conversation, message, page or decision, or a thread in the
+    /// task's project (both in the link store).
     Record {
         kind: &'static str,
         id: Uuid,
@@ -3246,7 +3244,7 @@ pub(crate) async fn task_link(
     {
         return ToolResult::invalid(
             "expectedVersion",
-            "Pass the version you last read (from task_open or task_list), or leave it out.",
+            "Pass the version you last read (from task_get or task_list), or leave it out.",
         );
     }
     if target.is_empty() {
@@ -3416,7 +3414,25 @@ async fn task_link_inner(
     let Some(current) = lock_work_item(&mut transaction, project_id, task_id).await? else {
         return Ok(ToolResult::not_found("That task"));
     };
-    if current.archived {
+    let thread = match &target {
+        LinkTarget::Record {
+            kind: "conversation",
+            id,
+        } => {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (SELECT 1 FROM conversations WHERE project_id = $1 AND id = $2 AND kind = 'thread')",
+            )
+            .bind(project_id)
+            .bind(*id)
+            .fetch_one(&mut *transaction)
+            .await?
+        }
+        _ => false,
+    };
+    // An archived task takes no link changes, except unlinking a thread:
+    // the thread page offers Unlink on every task linked to it, archived
+    // ones included.
+    if current.archived && !(thread && request.remove) {
         return Ok(ToolResult::conflict(archived_task_message(&key)));
     }
     let stale = || ToolResult::conflict(version_conflict_message(&key, current.version));
@@ -3572,26 +3588,9 @@ async fn task_link_inner(
             {
                 return Ok(ToolResult::not_found(&format!("That {kind}")));
             }
-            let thread = kind == "conversation"
-                && sqlx::query_scalar::<_, bool>(
-                    "SELECT EXISTS (SELECT 1 FROM conversations WHERE project_id = $1 AND id = $2 AND kind = 'thread')",
-                )
-                .bind(project_id)
-                .bind(id)
-                .fetch_one(&mut *transaction)
-                .await?;
             let version = if thread {
                 // Threads in the task's own project use the link the web app
                 // shows, with the same version bump, activity and audit.
-                if request.remove {
-                    sqlx::query(
-                        "DELETE FROM work_item_links WHERE work_item_id = $1 AND target_kind = 'conversation' AND target_id = $2",
-                    )
-                    .bind(task_id)
-                    .bind(id)
-                    .execute(&mut *transaction)
-                    .await?;
-                }
                 match change_thread_link(
                     &mut transaction,
                     &actor,
@@ -3710,14 +3709,13 @@ async fn change_record_link(
     target_id: Uuid,
     link: bool,
 ) -> Result<Option<i64>, AppError> {
-    let linked = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM work_item_links WHERE work_item_id = $1 AND target_kind = $2 AND target_id = $3)",
-    )
-    .bind(current.id)
-    .bind(kind)
-    .bind(target_id)
-    .fetch_one(&mut **transaction)
-    .await?;
+    // In the link store a task is made from a message, and about the rest.
+    let link_kind = if kind == "message" {
+        "made_from"
+    } else {
+        "about"
+    };
+    let linked = crate::links::has_explicit(transaction, current.id, target_id, link_kind).await?;
     if linked == link {
         return Ok(Some(current.version));
     }
@@ -3725,28 +3723,16 @@ async fn change_record_link(
         return Ok(None);
     }
     if link {
-        sqlx::query(
-            r#"
-            INSERT INTO work_item_links (work_item_id, project_id, target_kind, target_id, created_by_actor_id)
-            VALUES ($1, $2, $3, $4, $5)
-            "#,
+        crate::links::put_checked(
+            transaction,
+            current.id,
+            target_id,
+            link_kind,
+            Some(actor.actor_id),
         )
-        .bind(current.id)
-        .bind(actor.project_id)
-        .bind(kind)
-        .bind(target_id)
-        .bind(actor.actor_id)
-        .execute(&mut **transaction)
         .await?;
     } else {
-        sqlx::query(
-            "DELETE FROM work_item_links WHERE work_item_id = $1 AND target_kind = $2 AND target_id = $3",
-        )
-        .bind(current.id)
-        .bind(kind)
-        .bind(target_id)
-        .execute(&mut **transaction)
-        .await?;
+        crate::links::drop_explicit(transaction, current.id, target_id, link_kind, false).await?;
     }
     let version =
         advance_version(transaction, actor.project_id, current.id, current.version).await?;

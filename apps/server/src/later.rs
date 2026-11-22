@@ -12,12 +12,7 @@
 //! an external event on its connections instead, since agents have no
 //! inbox of their own.
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    routing::{get, patch},
-};
+use axum::{Json, Router, extract::State, routing::get};
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
@@ -26,9 +21,9 @@ use uuid::Uuid;
 use crate::{
     AppState,
     addresses::{self, Addresses},
-    auth::{AuthenticatedActor, require_authenticated_write},
+    auth::AuthenticatedActor,
     conversations::TimelineEntryView,
-    error::{ApiJson, ApiPath, ApiQuery, AppError},
+    error::{ApiQuery, AppError},
     jobs::{self, JobError, JobRegistry, NewJob},
     notifications::{self, NewNotification, kind},
 };
@@ -1078,9 +1073,7 @@ async fn tell_agent(
 // HTTP
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/v1/later", get(list_http).post(save_http))
-        .route("/api/v1/later/{id}", patch(change_http).delete(remove_http))
+    Router::new().route("/api/v1/later", get(list_http))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1104,58 +1097,6 @@ async fn list_http(
         )
         .await?,
     ))
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ItemResponse {
-    item: SavedItemView,
-}
-
-async fn save_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiJson(request): ApiJson<SaveRequest>,
-) -> Result<(StatusCode, Json<ItemResponse>), AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let item = save(
-        &state,
-        Saver {
-            actor_id: principal.actor_id,
-            workspace_wide: true,
-            organization_id: None,
-            project_id: None,
-            within: None,
-            connection_id: None,
-        },
-        request,
-    )
-    .await?;
-    Ok((StatusCode::CREATED, Json(ItemResponse { item })))
-}
-
-async fn change_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<ChangeRequest>,
-) -> Result<Json<ItemResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let item = change(&state, principal.actor_id, id, request).await?;
-    Ok(Json(ItemResponse { item }))
-}
-
-async fn remove_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(id): ApiPath<Uuid>,
-) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    remove(&state.pool, principal.actor_id, id).await?;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]

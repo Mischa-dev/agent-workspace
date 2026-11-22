@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
+import { useWorkspaceId } from '../app/workspace'
 import { useShellPage } from '../shell/shellStore'
 import {
   Banner,
@@ -67,6 +68,7 @@ function useMinuteClock() {
 /** Saved messages and tasks, reminders, and messages scheduled to send. */
 export function LaterPage() {
   const queryClient = useQueryClient()
+  const workspaceId = useWorkspaceId()
   const [params, setParams] = useSearchParams()
   const tab: Tab = TABS.some((option) => option.value === params.get('view')) ? (params.get('view') as Tab) : 'open'
   const saved = useLater(tab === 'done' ? 'done' : 'open')
@@ -112,20 +114,20 @@ export function LaterPage() {
   const remind = (item: SavedItem, at: Date | null) =>
     void act(
       item.id,
-      () => changeSaved(item.id, { remindAt: at ? at.toISOString() : null }),
+      () => changeSaved(item.id, { remindAt: at ? at.toISOString() : null }, workspaceId),
       { done: at ? `Reminder set for ${atPhrase(at)}` : 'Reminder off', failed: at ? 'The reminder wasn’t set' : 'The reminder wasn’t turned off' },
-      () => changeSaved(item.id, { remindAt: item.remindAt && new Date(item.remindAt).getTime() > Date.now() ? item.remindAt : null }),
+      () => changeSaved(item.id, { remindAt: item.remindAt && new Date(item.remindAt).getTime() > Date.now() ? item.remindAt : null }, workspaceId),
     )
 
   const remove = (item: SavedItem) =>
-    void act(item.id, () => removeSaved(item.id), { done: 'Removed from Later', failed: 'It wasn’t removed' }, () =>
+    void act(item.id, () => removeSaved(item.id, workspaceId), { done: 'Removed from Later', failed: 'It wasn’t removed' }, () =>
       saveForLater({
         messageId: item.message?.id,
         workItemId: item.workItem?.id,
         note: item.note || undefined,
         // A reminder that already went off comes back without a time, rather than failing for being in the past.
         remindAt: item.remindAt && new Date(item.remindAt).getTime() > Date.now() ? item.remindAt : null,
-      }),
+      }, workspaceId),
     )
 
   const copyText = (item: ScheduledMessage) =>
@@ -182,9 +184,9 @@ export function LaterPage() {
               onDone={(item, done) =>
                 void act(
                   item.id,
-                  () => changeSaved(item.id, { done }),
+                  () => changeSaved(item.id, { done }, workspaceId),
                   { done: done ? 'Marked done' : 'Moved back to Saved', failed: done ? 'It wasn’t marked done' : 'It wasn’t moved back' },
-                  () => changeSaved(item.id, { done: !done }),
+                  () => changeSaved(item.id, { done: !done }, workspaceId),
                 )
               }
               onRemind={remind}
@@ -237,7 +239,7 @@ export function LaterPage() {
           noteLabel="Remind me to"
           onClose={closeNew}
           onPick={async (at, note) => {
-            await saveForLater({ note, remindAt: at.toISOString() })
+            await saveForLater({ note, remindAt: at.toISOString() }, workspaceId)
             invalidateLater(queryClient)
             showToast({ tone: 'success', title: `Reminder set for ${atPhrase(at)}`, description: note })
           }}
@@ -250,7 +252,7 @@ export function LaterPage() {
           initialAt={editing.item.remindAt ? new Date(editing.item.remindAt) : undefined}
           onClose={() => setEditing(null)}
           onPick={async (at) => {
-            await changeSaved(editing.item.id, { remindAt: at.toISOString() })
+            await changeSaved(editing.item.id, { remindAt: at.toISOString() }, workspaceId)
             invalidateLater(queryClient)
             showToast({ tone: 'success', title: `Reminder set for ${atPhrase(at)}` })
           }}

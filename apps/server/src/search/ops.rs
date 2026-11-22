@@ -93,7 +93,7 @@ impl Operation for SavedSearchList {
     const IDEMPOTENCY: Idempotency = Idempotency::None;
     const TITLE: &'static str = "List saved searches";
     const DESCRIPTION: &'static str = "Your own saved searches in this workspace, in order. Each \
-        is a query in the search grammar; run one with search.";
+        is a query in the search grammar; run one with workspace_search.";
 
     type Input = SavedSearchListInput;
     type Output = SavedSearches;
@@ -395,7 +395,7 @@ impl Operation for PlaceSearch {
     const DESCRIPTION: &'static str = "Find places in this workspace by name: channels, DMs and \
         groups, people, spaces, tasks by key (AWD-12) and pages by title, at most 20, best \
         matches first, each only where you can open it. For words inside messages and \
-        documents, use search.";
+        documents, use workspace_search.";
 
     type Input = PlaceSearchInput;
     type Output = PlaceSearchResults;

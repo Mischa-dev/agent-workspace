@@ -184,7 +184,6 @@ fn request(caller: Caller, request_id: Option<&str>) -> DispatchRequest {
         request_id: request_id.map(str::to_owned),
         unkeyed: Unkeyed::RunOnce,
         preview: false,
-        renamed_from: None,
         defer_long: false,
     }
 }

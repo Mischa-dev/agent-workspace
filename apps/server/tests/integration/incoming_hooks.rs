@@ -129,8 +129,8 @@ async fn a_signed_delivery_runs_its_rule_once_and_a_forged_one_never() {
     assert_eq!(stored, 0, "the secret was kept for a replay");
 
     let rule = call(
-        "automation_write",
-        json!({"projectId": "WORK", "operation": "create", "name": "On billing",
+        "automation_create",
+        json!({"projectId": "WORK", "name": "On billing",
                "trigger": {"kind": "incoming_hook", "hookId": hook},
                "actions": [{"kind": "notify", "recipients": "owner",
                             "message": "{{hook.name}} {{delivery.id}}: {{delivery.text}}"}]}),
@@ -139,8 +139,8 @@ async fn a_signed_delivery_runs_its_rule_once_and_a_forged_one_never() {
     assert_eq!(rule["outcome"], "ok", "{rule}");
     // A hook that isn't in the space can't be named.
     let unknown = call(
-        "automation_write",
-        json!({"projectId": "WORK", "operation": "create", "name": "Nowhere",
+        "automation_create",
+        json!({"projectId": "WORK", "name": "Nowhere",
                "trigger": {"kind": "incoming_hook", "hookId": Uuid::now_v7()},
                "actions": [{"kind": "notify", "recipients": "owner", "message": "x"}]}),
     )

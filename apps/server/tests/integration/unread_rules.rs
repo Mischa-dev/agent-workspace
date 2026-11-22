@@ -88,7 +88,7 @@ async fn reading_through_an_app_reads_notifications() {
         &setup.app,
         &token,
         &session,
-        "mark_read",
+        "conversation_mark_read",
         json!({"conversationId": general}),
     )
     .await;
@@ -424,7 +424,7 @@ async fn unread_follows_the_rules() {
     assert_eq!(item["muted"], true, "{item}");
 
     // R10: the briefing agrees with the web, conversation by conversation.
-    let briefing = tool(app, &token, &session, "briefing", json!({})).await;
+    let briefing = tool(app, &token, &session, "briefing_get", json!({})).await;
     assert_eq!(briefing["outcome"], "ok", "{briefing}");
     let unread = briefing["value"]["unread"].as_array().expect("unread");
     assert!(

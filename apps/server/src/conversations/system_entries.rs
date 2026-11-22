@@ -96,26 +96,21 @@ pub(crate) async fn task_made_from_message(
 ) -> Result<bool, AppError> {
     let conversation = sqlx::query_scalar::<_, Uuid>(
         r#"
-        INSERT INTO work_item_links (
-            work_item_id, project_id, target_kind, target_id, created_by_actor_id
-        )
-        SELECT $1, $2, 'message', message.id, $3
+        SELECT message.conversation_id
         FROM messages message
-        WHERE message.id = $4 AND message.project_id = $2
+        WHERE message.id = $3 AND message.project_id = $1
           AND message.removed_at IS NULL
-          AND conversation_visible_to(message.conversation_id, $3)
-        ON CONFLICT (work_item_id, target_kind, target_id)
-            DO UPDATE SET created_at = work_item_links.created_at
-        RETURNING (SELECT conversation_id FROM messages WHERE id = $4 -- visibility: checked in this statement
-        )
+          AND conversation_visible_to(message.conversation_id, $2)
         "#,
     )
-    .bind(task)
     .bind(space)
     .bind(actor)
     .bind(message)
     .fetch_optional(&mut **tx)
     .await?;
+    if conversation.is_some() {
+        crate::links::put_checked(tx, task, message, "made_from", Some(actor)).await?;
+    }
     let Some(conversation) = conversation else {
         return Ok(false);
     };
@@ -224,7 +219,7 @@ where
         FROM (
             SELECT link.target_id AS message_id, 'task' AS kind,
                    link.work_item_id AS id, link.created_at
-            FROM work_item_links link
+            FROM task_links link
             JOIN task_rows item ON item.id = link.work_item_id
             WHERE $3 AND link.target_kind = 'message' AND link.target_id = ANY($1)
             UNION ALL

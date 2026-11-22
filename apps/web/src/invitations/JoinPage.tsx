@@ -24,7 +24,7 @@ import {
 import { AuthLayout } from '../auth/AuthLayout'
 import { Banner, Button, ButtonLink, TextField } from '../ui'
 import '../auth/auth.css'
-import { spaceHref } from '../app/href'
+import { CURRENT_WORKSPACE, spaceHref, workspaceHref } from '../app/href'
 
 type JoinMode = 'new' | 'existing'
 
@@ -158,13 +158,13 @@ export function JoinPage() {
 
   /** A project invitation lands in that project when it can be told apart; otherwise Home. */
   const landing = async () => {
-    if (!invitation || invitation.kind === 'workspace' || !invitation.projectName) return '/home'
+    if (!invitation || invitation.kind === 'workspace' || !invitation.projectName) return workspaceHref(CURRENT_WORKSPACE)
     try {
       const { projects } = await queryClient.fetchQuery({ queryKey: queryKeys.projects, queryFn: () => listProjects() })
       const matches = projects.filter((project) => project.name === invitation.projectName && !project.archivedAt)
-      return matches.length === 1 ? spaceHref(matches[0].id) : '/home'
+      return matches.length === 1 ? spaceHref(matches[0].id) : workspaceHref(CURRENT_WORKSPACE)
     } catch {
-      return '/home'
+      return workspaceHref(CURRENT_WORKSPACE)
     }
   }
 
@@ -303,7 +303,7 @@ export function JoinPage() {
       )}
 
       {invalid ? (
-        <ButtonLink className="aw-auth__submit" to={signedIn ? '/home' : '/sign-in'} variant="primary">
+        <ButtonLink className="aw-auth__submit" to={signedIn ? workspaceHref(CURRENT_WORKSPACE) : '/sign-in'} variant="primary">
           {signedIn ? 'Go to Home' : 'Go to sign in'}
         </ButtonLink>
       ) : null}

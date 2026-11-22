@@ -6,6 +6,7 @@ import { ModuleGate } from '../modules/ModuleGate'
 import { reportError } from '../telemetry/reportErrors'
 import { Button, PageSkeleton, ToastViewport } from '../ui'
 import { AppErrorBoundary } from './AppErrorBoundary'
+import { CURRENT_WORKSPACE, workspaceHref } from './href'
 
 /** Around every route: the crash screen and the toasts. */
 export function RootLayout() {
@@ -41,7 +42,7 @@ export function RouteErrorPage() {
         <Button onClick={() => window.location.reload()} variant="primary">
           Reload workspace
         </Button>
-        <Button onClick={() => window.location.assign('/home')} variant="ghost">
+        <Button onClick={() => window.location.assign(workspaceHref(CURRENT_WORKSPACE))} variant="ghost">
           Go to Home
         </Button>
       </div>

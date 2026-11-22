@@ -1767,19 +1767,8 @@ pub async fn change_thread_link(
     if !thread {
         return Ok(ThreadLinkOutcome::ThreadNotFound);
     }
-    let linked = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1 FROM work_item_conversation_links
-            WHERE project_id = $1 AND work_item_id = $2 AND conversation_id = $3
-        )
-        "#,
-    )
-    .bind(actor.project_id)
-    .bind(current.id)
-    .bind(conversation_id)
-    .fetch_one(&mut **transaction)
-    .await?;
+    let linked =
+        crate::links::has_explicit(transaction, current.id, conversation_id, "about").await?;
     if linked == link {
         return Ok(ThreadLinkOutcome::Unchanged);
     }
@@ -1787,28 +1776,17 @@ pub async fn change_thread_link(
         return Ok(ThreadLinkOutcome::VersionConflict);
     }
     if link {
-        sqlx::query(
-            r#"
-            INSERT INTO work_item_conversation_links (
-                project_id, work_item_id, conversation_id, created_by_actor_id
-            ) VALUES ($1, $2, $3, $4)
-            "#,
+        crate::links::put_checked(
+            transaction,
+            current.id,
+            conversation_id,
+            "about",
+            Some(actor.actor_id),
         )
-        .bind(actor.project_id)
-        .bind(current.id)
-        .bind(conversation_id)
-        .bind(actor.actor_id)
-        .execute(&mut **transaction)
         .await?;
     } else {
-        sqlx::query(
-            "DELETE FROM work_item_conversation_links WHERE project_id = $1 AND work_item_id = $2 AND conversation_id = $3",
-        )
-        .bind(actor.project_id)
-        .bind(current.id)
-        .bind(conversation_id)
-        .execute(&mut **transaction)
-        .await?;
+        crate::links::drop_explicit(transaction, current.id, conversation_id, "about", false)
+            .await?;
     }
     let version =
         advance_version(transaction, actor.project_id, current.id, current.version).await?;
@@ -3386,7 +3364,7 @@ pub enum PullRequestLinkChange {
 }
 
 /// Links a pull request Agent Workspace knows about to a task in the same
-/// project, or unlinks it, for task_link and task_link_pull_request alike. A
+/// project, or unlinks it, for task_link. A
 /// link made here is explicit and confirmed, so the project's GitHub
 /// automation moves the task when the pull request opens or merges; a
 /// suggested link (from a branch name) becomes explicit. A change bumps the

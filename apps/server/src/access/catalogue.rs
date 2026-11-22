@@ -151,10 +151,9 @@ impl PermissionScope {
 #[derive(Clone, Copy, Debug)]
 pub struct PermissionInfo {
     pub permission: Permission,
-    /// Stable key, stored in custom roles: `tasks.edit`.
+    /// Stable key, stored in custom roles: `tasks.edit`. The module whose
+    /// manifest lists it owns it, and the Roles page groups it there (M1.3o).
     pub key: &'static str,
-    /// The module it belongs to, which the Roles page groups by.
-    pub module: &'static str,
     pub label: &'static str,
     /// A short "what this means".
     pub meaning: &'static str,
@@ -171,7 +170,6 @@ pub struct PermissionInfo {
 const fn permission(
     permission: Permission,
     key: &'static str,
-    module: &'static str,
     label: &'static str,
     meaning: &'static str,
     scope: PermissionScope,
@@ -180,7 +178,6 @@ const fn permission(
     PermissionInfo {
         permission,
         key,
-        module,
         label,
         meaning,
         scope,
@@ -218,7 +215,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         required(permission(
             Permission::ProjectsView,
             "projects.view",
-            "projects",
             "Open projects they're in",
             "See a project, its channels, tasks and pages, and get its updates.",
             PermissionScope::Project,
@@ -228,7 +224,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::ProjectsCreate,
         "projects.create",
-        "projects",
         "Create projects",
         "Start new projects in the workspace.",
         PermissionScope::Workspace,
@@ -240,7 +235,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::ProjectsManage,
             "projects.manage",
-            "projects",
             "Change and archive projects",
             "Rename a project, change its details, archive it or bring it back.",
             PermissionScope::Project,
@@ -250,7 +244,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::SpacesBrowse,
         "spaces.browse",
-        "projects",
         "Browse open projects",
         "Find and open projects that are open to the whole workspace without being in them. Guests don't.",
         PermissionScope::Workspace,
@@ -262,7 +255,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::TasksView,
             "tasks.view",
-            "tasks",
             "See tasks",
             "Read tasks, the board, milestones and views.",
             PermissionScope::Project,
@@ -275,7 +267,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::TasksComment,
             "tasks.comment",
-            "tasks",
             "Comment on tasks",
             "Write comments on tasks.",
             PermissionScope::Project,
@@ -288,7 +279,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::TasksSuggest,
             "tasks.suggest",
-            "tasks",
             "Suggest task changes",
             "Propose changes to tasks for someone who edits them to accept.",
             PermissionScope::Project,
@@ -301,7 +291,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::TasksEditOwn,
             "tasks.edit_own",
-            "tasks",
             "Edit their own tasks",
             "Change tasks they created.",
             PermissionScope::Project,
@@ -311,7 +300,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::TasksCreate,
         "tasks.create",
-        "tasks",
         "Create tasks",
         "Add tasks, import plans and use templates.",
         PermissionScope::Project,
@@ -323,7 +311,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::TasksEdit,
             "tasks.edit",
-            "tasks",
             "Edit tasks",
             "Change tasks: status, fields, comments, labels and dependencies.",
             PermissionScope::Project,
@@ -333,7 +320,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::TasksDelete,
         "tasks.delete",
-        "tasks",
         "Archive tasks",
         "Archive tasks, or bring archived ones back.",
         PermissionScope::Project,
@@ -342,7 +328,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::TasksWorkflow,
         "tasks.workflow",
-        "tasks",
         "Change the workflow",
         "Add, rename and reorder the statuses tasks move through, and the fields every task has.",
         PermissionScope::Project,
@@ -351,7 +336,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::ViewsShare,
         "views.share",
-        "tasks",
         "Share views",
         "Save views of tasks and records for everyone in the project.",
         PermissionScope::Project,
@@ -363,7 +347,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::DashboardsView,
             "dashboards.view",
-            "dashboards",
             "See dashboards",
             "Read the project's dashboards.",
             PermissionScope::Project,
@@ -376,7 +359,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::DashboardsEdit,
             "dashboards.edit",
-            "dashboards",
             "Edit dashboards",
             "Build and change the project's dashboards.",
             PermissionScope::Project,
@@ -389,7 +371,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::ChannelsPost,
             "channels.post",
-            "channels",
             "Post messages",
             "Write in channels and threads, and mention people and agents.",
             PermissionScope::Project,
@@ -399,7 +380,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::ChannelsCreate,
         "channels.create",
-        "channels",
         "Create channels",
         "Start channels, and archive or restore them.",
         PermissionScope::Project,
@@ -408,7 +388,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::ChannelsCreatePrivate,
         "channels.create_private",
-        "channels",
         "Create private channels",
         "Start channels only their members can find and read.",
         PermissionScope::Project,
@@ -417,7 +396,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::ChannelsBrowse,
         "channels.browse",
-        "channels",
         "Browse channels",
         "List the open channels of a project they haven't joined.",
         PermissionScope::Project,
@@ -426,7 +404,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::ChannelsModerate,
         "channels.moderate",
-        "channels",
         "Moderate",
         "Remove anyone's messages and comments.",
         PermissionScope::Project,
@@ -435,7 +412,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::ChannelsMentionEveryone,
         "channels.mention_everyone",
-        "channels",
         "Notify everyone",
         "Reach everyone in a large conversation with @everyone or @here.",
         PermissionScope::Project,
@@ -447,7 +423,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         required(permission(
             Permission::ConversationsSee,
             "conversations.see",
-            "channels",
             "Read conversations they can reach",
             "Read the channels and threads of projects they are in.",
             PermissionScope::Project,
@@ -457,7 +432,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::ConversationsMembers,
         "conversations.members",
-        "channels",
         "Change conversation members",
         "Add and remove people and agents in groups and private channels.",
         PermissionScope::Project,
@@ -466,7 +440,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::DirectStart,
         "direct.start",
-        "messages",
         "Start direct messages",
         "Start a direct message or group with someone they share the workspace with.",
         PermissionScope::Workspace,
@@ -475,7 +448,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::RepliesSteer,
         "replies.steer",
-        "channels",
         "Steer replies",
         "Stop or retry the reply an agent is writing in a conversation.",
         PermissionScope::Project,
@@ -487,7 +459,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::PagesEdit,
             "pages.edit",
-            "pages",
             "Edit pages and decisions",
             "Write pages and skills, and record decisions.",
             PermissionScope::Project,
@@ -500,7 +471,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         required(permission(
             Permission::PagesSee,
             "pages.see",
-            "pages",
             "Read pages",
             "Read pages, skills and decisions.",
             PermissionScope::Project,
@@ -513,7 +483,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::PagesComment,
             "pages.comment",
-            "pages",
             "Comment on pages",
             "Write comments on pages.",
             PermissionScope::Project,
@@ -526,7 +495,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::PagesSuggest,
             "pages.suggest",
-            "pages",
             "Suggest page changes",
             "Propose changes to pages for someone who edits them to accept.",
             PermissionScope::Project,
@@ -539,7 +507,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::PagesEditOwn,
             "pages.edit_own",
-            "pages",
             "Edit their own pages",
             "Change pages they created.",
             PermissionScope::Project,
@@ -552,7 +519,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::WhiteboardsEdit,
             "whiteboards.edit",
-            "whiteboards",
             "Draw on whiteboards",
             "Change a project's whiteboards. Anyone in the project can still look at them.",
             PermissionScope::Project,
@@ -565,7 +531,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::WhiteboardsComment,
             "whiteboards.comment",
-            "whiteboards",
             "Comment on whiteboards",
             "Write comments on whiteboards.",
             PermissionScope::Project,
@@ -578,7 +543,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::WhiteboardsSuggest,
             "whiteboards.suggest",
-            "whiteboards",
             "Suggest whiteboard changes",
             "Propose changes to whiteboards for someone who edits them to accept.",
             PermissionScope::Project,
@@ -591,7 +555,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::WhiteboardsEditOwn,
             "whiteboards.edit_own",
-            "whiteboards",
             "Draw on their own whiteboards",
             "Change whiteboards they created.",
             PermissionScope::Project,
@@ -604,7 +567,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::CollectionsEdit,
             "collections.edit",
-            "collections",
             "Edit records",
             "Add, change, archive and restore records in a project's collections. Anyone in the project can still read them.",
             PermissionScope::Project,
@@ -617,7 +579,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::CollectionsBuild,
             "collections.build",
-            "collections",
             "Build collections",
             "Create collections and change their fields and views.",
             PermissionScope::Project,
@@ -630,7 +591,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::CollectionsComment,
             "collections.comment",
-            "collections",
             "Comment on records",
             "Write comments on records.",
             PermissionScope::Project,
@@ -643,7 +603,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::CollectionsSuggest,
             "collections.suggest",
-            "collections",
             "Suggest record changes",
             "Propose changes to records for someone who edits them to accept.",
             PermissionScope::Project,
@@ -653,7 +612,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::DataConnect,
         "data.connect",
-        "collections",
         "Connect outside data",
         "Connect a collection to data kept somewhere else.",
         PermissionScope::Project,
@@ -662,7 +620,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::DataShare,
         "data.share",
-        "collections",
         "Share data outside",
         "Share a collection with people or services outside the workspace.",
         PermissionScope::Project,
@@ -674,7 +631,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::SheetsEdit,
             "sheets.edit",
-            "sheets",
             "Edit sheets",
             "Create sheets and change their cells and tabs. Anyone in the project can still read them.",
             PermissionScope::Project,
@@ -687,7 +643,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::SheetsComment,
             "sheets.comment",
-            "sheets",
             "Comment on sheets",
             "Write comments on sheets and their cells.",
             PermissionScope::Project,
@@ -700,7 +655,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::SheetsSuggest,
             "sheets.suggest",
-            "sheets",
             "Suggest sheet changes",
             "Propose changes to sheets for someone who edits them to accept.",
             PermissionScope::Project,
@@ -713,7 +667,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::SheetsEditOwn,
             "sheets.edit_own",
-            "sheets",
             "Edit their own sheets",
             "Change sheets they created.",
             PermissionScope::Project,
@@ -723,7 +676,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::RunsLaunch,
         "runs.launch",
-        "runs",
         "Launch runs",
         "Start agents working on tasks.",
         PermissionScope::Project,
@@ -732,7 +684,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::RunsApprove,
         "runs.approve",
-        "runs",
         "Answer approvals",
         "Approve or turn down what a run asks to do.",
         PermissionScope::Project,
@@ -741,7 +692,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::RunsInterrupt,
         "runs.interrupt",
-        "runs",
         "Stop runs",
         "Interrupt or cancel a run that's working.",
         PermissionScope::Project,
@@ -750,7 +700,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::RunsAccounts,
         "runs.accounts",
-        "runs",
         "Use run accounts",
         "Set up and use their own accounts and environments for runs.",
         PermissionScope::Project,
@@ -759,7 +708,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::RunsEnvironments,
         "runs.environments",
-        "runs",
         "Manage environments",
         "Set up and change the environments runs work in.",
         PermissionScope::Project,
@@ -769,7 +717,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::RunsReport,
         "runs.report",
-        "runs",
         "Report their own runs",
         "Open runs for their own work and report its steps, usage and results.",
         PermissionScope::Project,
@@ -778,7 +725,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::RequestsRaise,
         "requests.raise",
-        "runs",
         "Raise requests",
         "Ask someone for an approval or an answer from a run.",
         PermissionScope::Project,
@@ -787,7 +733,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::RequestsAnswer,
         "requests.answer",
-        "runs",
         "Answer requests",
         "Answer the questions and proposals people and agents raise.",
         PermissionScope::Project,
@@ -796,7 +741,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::RequestsAnswerSensitive,
         "requests.answer_sensitive",
-        "runs",
         "Answer sensitive requests",
         "Answer approvals and questions marked sensitive.",
         PermissionScope::Project,
@@ -808,7 +752,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::CodeView,
             "code.view",
-            "code",
             "See code",
             "See repositories and pull requests.",
             PermissionScope::Project,
@@ -818,7 +761,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::CodePublish,
         "code.publish",
-        "code",
         "Publish changes",
         "Push a run's work and open or refresh pull requests.",
         PermissionScope::Project,
@@ -830,7 +772,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::CodeManage,
             "code.manage",
-            "code",
             "Manage repositories",
             "Connect GitHub, add or archive repositories, and merge pull requests.",
             PermissionScope::Project,
@@ -843,7 +784,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
         permission(
             Permission::AgentsManage,
             "agents.manage",
-            "agents",
             "Manage agents",
             "Connect agents to a project and change or remove them.",
             PermissionScope::Project,
@@ -853,7 +793,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::AgentsCreate,
         "agents.create",
-        "agents",
         "Add agents",
         "Add new agents to the workspace.",
         PermissionScope::Workspace,
@@ -864,7 +803,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::AgentsManageAny,
         "agents.manage_any",
-        "agents",
         "Manage every agent the workspace owns",
         "Manage any agent or app the workspace owns, without being named as its manager.",
         PermissionScope::Workspace,
@@ -873,7 +811,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::HostsManage,
         "hosts.manage",
-        "agents",
         "Manage hosts",
         "Link machines and services that run agents for the workspace, choose which agents they run, and unlink them.",
         PermissionScope::Workspace,
@@ -882,7 +819,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::MembersView,
         "members.view",
-        "members",
         "See the member list",
         "See who's in a project and their roles.",
         PermissionScope::Both,
@@ -895,7 +831,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::DirectoryView,
         "directory.view",
-        "members",
         "See the workspace member directory",
         "See who's in the workspace on its Members page. Without it, only yourself.",
         PermissionScope::Workspace,
@@ -904,7 +839,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::MembersInvite,
         "members.invite",
-        "members",
         "Invite people",
         "Send and revoke invitations.",
         PermissionScope::Both,
@@ -913,7 +847,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::MembersManage,
         "members.manage",
-        "members",
         "Change roles and remove people",
         "Give people roles they hold themselves, and remove or bring people back.",
         PermissionScope::Both,
@@ -922,7 +855,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::MembersGroups,
         "members.groups",
-        "members",
         "Manage groups",
         "Make, change and archive groups, and choose who is in them.",
         PermissionScope::Workspace,
@@ -931,7 +863,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::RolesManage,
         "roles.manage",
-        "members",
         "Define roles",
         "Create, change and remove the workspace's roles.",
         PermissionScope::Workspace,
@@ -940,7 +871,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::SettingsManage,
         "settings.manage",
-        "settings",
         "Manage settings",
         "Change workspace and project settings, keys and layouts.",
         PermissionScope::Both,
@@ -949,7 +879,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::SettingsAudit,
         "settings.audit",
-        "settings",
         "Read the audit log",
         "See the workspace's audit log: who changed what, and when.",
         PermissionScope::Workspace,
@@ -958,7 +887,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::WebhooksManage,
         "webhooks.manage",
-        "settings",
         "Manage webhooks",
         "Set up, change and remove outgoing webhooks.",
         PermissionScope::Both,
@@ -967,7 +895,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::AutomationsManage,
         "automations.manage",
-        "settings",
         "Manage automations",
         "See and change every automation rule, not only their own.",
         PermissionScope::Project,
@@ -977,7 +904,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::ModulesBuild,
         "modules.build",
-        "settings",
         "Build modules",
         "Make and change built modules: bundles of collections, forms, automations and navigation.",
         PermissionScope::Both,
@@ -986,7 +912,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::ModulesManage,
         "modules.manage",
-        "settings",
         "Manage modules",
         "Switch built modules on and off, archive and restore them.",
         PermissionScope::Both,
@@ -997,7 +922,6 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::WorkspaceDelete,
         "workspace.delete",
-        "settings",
         "Delete the workspace",
         "Schedule the whole workspace for deletion, or cancel that within 14 days.",
         PermissionScope::Workspace,
@@ -1007,30 +931,11 @@ pub const PERMISSIONS: [PermissionInfo; 74] = [
     permission(
         Permission::WorkspaceExport,
         "workspace.export",
-        "settings",
         "Export the workspace",
         "Download the whole workspace as one archive: its spaces, conversations, tasks, pages, files and history, never secrets.",
         PermissionScope::Workspace,
         OWNERS,
     ),
-];
-
-/// The modules permissions are grouped by, in order, with their names.
-pub const PERMISSION_MODULES: [(&str, &str); 14] = [
-    ("projects", "Projects"),
-    ("tasks", "Tasks"),
-    ("channels", "Channels"),
-    ("messages", "Direct messages"),
-    ("pages", "Pages and decisions"),
-    ("whiteboards", "Whiteboards"),
-    ("collections", "Collections"),
-    ("dashboards", "Dashboards"),
-    ("sheets", "Sheets"),
-    ("runs", "Runs"),
-    ("code", "Code"),
-    ("agents", "Agents"),
-    ("members", "Members"),
-    ("settings", "Settings"),
 ];
 
 impl Permission {

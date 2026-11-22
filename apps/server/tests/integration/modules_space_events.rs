@@ -62,10 +62,10 @@ async fn a_module_off_in_one_space_stops_its_events_only() {
     let (status, body) = send(
         &world.app,
         world.owner.browser.request(
-            "PUT",
-            &format!("/api/v1/organizations/{}/modules", world.organization),
-            None,
-            json!({"switches": {"tasks": false}, "space": world.project("OTHER")}),
+            "POST",
+            &format!("/api/v2/w/{}/ops/workspace_update", world.organization),
+            Some("tasks-off-in-other"),
+            json!({"projectId": world.project("OTHER"), "modules": {"tasks": false}, "inProjectOnly": true}),
         ),
     )
     .await;

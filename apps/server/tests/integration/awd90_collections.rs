@@ -72,7 +72,7 @@ async fn a_thousand_records_page_filter_sort_and_group_on_the_server() {
     };
 
     let created = call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": "WORK",
             "name": "Playtests",
@@ -109,7 +109,7 @@ async fn a_thousand_records_page_filter_sort_and_group_on_the_server() {
             })
             .collect::<Vec<_>>();
         let written = call(
-            "record_write",
+            "record_create_many",
             json!({
                 "projectId": "WORK",
                 "collection": "Playtests",
@@ -123,7 +123,7 @@ async fn a_thousand_records_page_filter_sort_and_group_on_the_server() {
     }
     // A retry with the same clientRequestId adds nothing.
     let replay = call(
-        "record_write",
+        "record_create_many",
         json!({
             "projectId": "WORK",
             "collection": "Playtests",
@@ -135,7 +135,7 @@ async fn a_thousand_records_page_filter_sort_and_group_on_the_server() {
         }),
     )
     .await;
-    assert_eq!(replay["value"]["idempotentReplay"], true, "{replay}");
+    assert_eq!(replay["replayed"], true, "{replay}");
 
     // The High ones, highest score first, 150 a page: every one once, in
     // order, and never more than a page at a time.
@@ -155,7 +155,7 @@ async fn a_thousand_records_page_filter_sort_and_group_on_the_server() {
         if let Some(cursor) = &cursor {
             arguments["cursor"] = json!(cursor);
         }
-        let page = call("record_query", arguments).await;
+        let page = call("record_list", arguments).await;
         assert_eq!(page["outcome"], "ok", "{page}");
         assert_eq!(page["value"]["total"], 334, "{page}");
         let records = page["value"]["records"].as_array().expect("records");
@@ -182,17 +182,17 @@ async fn a_thousand_records_page_filter_sort_and_group_on_the_server() {
     assert_eq!(seen, expected);
 
     // A cursor reads back only with its own query.
-    let first = call("record_query", query.clone()).await;
+    let first = call("record_list", query.clone()).await;
     let next = first["value"]["nextCursor"].as_str().expect("cursor");
     let mut other = query.clone();
     other["sort"] = json!([{"field": "Score", "direction": "asc"}]);
     other["cursor"] = json!(next);
-    let refused = call("record_query", other).await;
+    let refused = call("record_list", other).await;
     assert_eq!(refused["outcome"], "invalid_request", "{refused}");
 
     // Group counts cover every record, in the options' order.
     let grouped = call(
-        "record_query",
+        "record_list",
         json!({"projectId": "WORK", "collection": "Playtests", "groupBy": "Severity", "limit": 5}),
     )
     .await;
@@ -204,7 +204,7 @@ async fn a_thousand_records_page_filter_sort_and_group_on_the_server() {
     assert_eq!(grouped["value"]["total"], 1000);
     assert_eq!(grouped["value"]["records"][0]["group"], "Low");
     let fixed = call(
-        "record_query",
+        "record_list",
         json!({
             "projectId": "WORK",
             "collection": "Playtests",
@@ -222,7 +222,7 @@ async fn a_thousand_records_page_filter_sort_and_group_on_the_server() {
     // Every word must be in the title (or a value); a number also finds
     // its record.
     let found = call(
-        "record_query",
+        "record_list",
         json!({"projectId": "WORK", "collection": "Playtests", "search": "level 42 crash", "limit": 200}),
     )
     .await;
@@ -236,13 +236,13 @@ async fn a_thousand_records_page_filter_sort_and_group_on_the_server() {
         );
     }
     let found = call(
-        "record_query",
+        "record_list",
         json!({"projectId": "WORK", "collection": "Playtests", "search": "level 4 nothing"}),
     )
     .await;
     assert_eq!(found["value"]["total"], 0, "{found}");
     let found = call(
-        "record_query",
+        "record_list",
         json!({"projectId": "WORK", "collection": "Playtests", "search": "#7"}),
     )
     .await;
@@ -250,7 +250,7 @@ async fn a_thousand_records_page_filter_sort_and_group_on_the_server() {
 
     // All or nothing: one bad record leaves the other unwritten.
     let refused = call(
-        "record_write",
+        "record_create_many",
         json!({
             "projectId": "WORK",
             "collection": "Playtests",
@@ -264,13 +264,13 @@ async fn a_thousand_records_page_filter_sort_and_group_on_the_server() {
     assert_eq!(refused["outcome"], "invalid_request", "{refused}");
     assert_eq!(refused["field"], "records[1].fields.Severity", "{refused}");
     let total = call(
-        "record_query",
+        "record_list",
         json!({"projectId": "WORK", "collection": "Playtests", "limit": 1}),
     )
     .await;
     assert_eq!(total["value"]["total"], 1000);
     let too_many = call(
-        "record_write",
+        "record_create_many",
         json!({
             "projectId": "WORK",
             "collection": "Playtests",
@@ -282,7 +282,7 @@ async fn a_thousand_records_page_filter_sort_and_group_on_the_server() {
 
     // A stale version is a conflict; history keeps before and after.
     let changed = call(
-        "record_write",
+        "record_update_many",
         json!({
             "projectId": "WORK",
             "collection": "Playtests",
@@ -292,7 +292,7 @@ async fn a_thousand_records_page_filter_sort_and_group_on_the_server() {
     .await;
     assert_eq!(changed["value"]["changed"], 1, "{changed}");
     let stale = call(
-        "record_write",
+        "record_update_many",
         json!({
             "projectId": "WORK",
             "collection": "Playtests",
@@ -302,7 +302,7 @@ async fn a_thousand_records_page_filter_sort_and_group_on_the_server() {
     .await;
     assert_eq!(stale["outcome"], "conflict", "{stale}");
     let same = call(
-        "record_write",
+        "record_update_many",
         json!({
             "projectId": "WORK",
             "collection": "Playtests",
@@ -312,7 +312,7 @@ async fn a_thousand_records_page_filter_sort_and_group_on_the_server() {
     .await;
     assert_eq!(same["value"]["unchanged"], 1, "{same}");
     let read = call(
-        "record_query",
+        "record_list",
         json!({"projectId": "WORK", "collection": "Playtests", "records": ["#1"], "includeHistory": true}),
     )
     .await;
@@ -365,7 +365,7 @@ async fn records_with_long_values_page_through_when_sorted_by_them() {
         async move { tool(app, &codex, &session, name, arguments).await }
     };
     let created = call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": "WORK",
             "name": "Notes",
@@ -389,7 +389,7 @@ async fn records_with_long_values_page_through_when_sorted_by_them() {
         })
         .collect::<Vec<_>>();
     let written = call(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Notes", "records": records, "clientRequestId": "long"}),
     )
     .await;
@@ -411,7 +411,7 @@ async fn records_with_long_values_page_through_when_sorted_by_them() {
             if let Some(cursor) = &cursor {
                 arguments["cursor"] = json!(cursor);
             }
-            let page = call("record_query", arguments).await;
+            let page = call("record_list", arguments).await;
             assert_eq!(page["outcome"], "ok", "{sort}: {page}");
             seen.extend(numbers(&page));
             assert!(seen.len() <= 3, "{sort}: {seen:?}");
@@ -443,7 +443,7 @@ async fn a_definition_from_an_old_version_conflicts_instead_of_overwriting() {
         async move { tool(app, &codex, &session, name, arguments).await }
     };
     let created = call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": "WORK",
             "name": "Builds",
@@ -458,7 +458,7 @@ async fn a_definition_from_an_old_version_conflicts_instead_of_overwriting() {
         .expect("version");
     // Someone else adds a field in between.
     let other = call(
-        "collection_write",
+        "collection_update",
         json!({
             "projectId": "WORK",
             "collection": "Builds",
@@ -490,11 +490,11 @@ async fn a_definition_from_an_old_version_conflicts_instead_of_overwriting() {
         for (key, value) in change.as_object().expect("change") {
             arguments[key] = value.clone();
         }
-        let stale = call("collection_write", arguments).await;
+        let stale = call("collection_update", arguments).await;
         assert_eq!(stale["outcome"], "conflict", "{change}: {stale}");
     }
     let described = call(
-        "collection_describe",
+        "collection_get",
         json!({"projectId": "WORK", "collection": "Builds"}),
     )
     .await;
@@ -513,7 +513,7 @@ async fn a_definition_from_an_old_version_conflicts_instead_of_overwriting() {
 
     // Writing what's there already changes nothing, so the old version passes.
     let same = call(
-        "collection_write",
+        "collection_update",
         json!({
             "projectId": "WORK",
             "collection": "Builds",
@@ -527,7 +527,7 @@ async fn a_definition_from_an_old_version_conflicts_instead_of_overwriting() {
     assert_eq!(same["value"]["changes"], json!([]), "{same}");
     // With the version it has now, the change lands.
     let fresh = call(
-        "collection_write",
+        "collection_update",
         json!({
             "projectId": "WORK",
             "collection": "Builds",
@@ -561,7 +561,7 @@ async fn a_definition_made_from_another_projects_description_comes_out_the_same(
         async move { tool(app, &codex, &session, name, arguments).await }
     };
     let created = call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": "WORK",
             "name": "Builds",
@@ -598,7 +598,7 @@ async fn a_definition_made_from_another_projects_description_comes_out_the_same(
     .await;
     assert_eq!(created["outcome"], "ok", "{created}");
     let described = call(
-        "collection_describe",
+        "collection_get",
         json!({"projectId": "WORK", "collection": "Builds"}),
     )
     .await;
@@ -613,10 +613,10 @@ async fn a_definition_made_from_another_projects_description_comes_out_the_same(
     // The description, as is, makes the same collection in SIDE.
     let mut arguments = definition.clone();
     arguments["projectId"] = json!("SIDE");
-    let copied = call("collection_write", arguments.clone()).await;
+    let copied = call("collection_create", arguments.clone()).await;
     assert_eq!(copied["outcome"], "ok", "{copied}");
     let side = call(
-        "collection_describe",
+        "collection_get",
         json!({"projectId": "SIDE", "collection": "Builds"}),
     )
     .await;
@@ -625,11 +625,11 @@ async fn a_definition_made_from_another_projects_description_comes_out_the_same(
     // Writing it again changes nothing; a change by name changes just that.
     arguments["collection"] = json!("Builds");
     arguments.as_object_mut().expect("arguments").remove("name");
-    let again = call("collection_write", arguments.clone()).await;
+    let again = call("collection_update", arguments.clone()).await;
     assert_eq!(again["outcome"], "ok", "{again}");
     assert_eq!(again["value"]["changes"], json!([]), "{again}");
     let renamed = call(
-        "collection_write",
+        "collection_update",
         json!({
             "projectId": "SIDE",
             "collection": "Builds",
@@ -649,7 +649,7 @@ async fn a_definition_made_from_another_projects_description_comes_out_the_same(
     );
     // A view that named Size still does, by its new name.
     let side = call(
-        "collection_describe",
+        "collection_get",
         json!({"projectId": "SIDE", "collection": "Builds"}),
     )
     .await;
@@ -659,7 +659,7 @@ async fn a_definition_made_from_another_projects_description_comes_out_the_same(
     );
     // A field's type never changes.
     let retyped = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "SIDE", "collection": "Builds", "fields": [{"name": "Crashes", "type": "text"}]}),
     )
     .await;
@@ -846,7 +846,7 @@ async fn viewers_read_and_only_builders_change_fields_and_views() {
         app,
         &mara_token,
         &session,
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Bugs", "records": [{"title": "Found by Mara", "fields": {"Severity": "Low"}}]}),
     )
     .await;
@@ -855,7 +855,7 @@ async fn viewers_read_and_only_builders_change_fields_and_views() {
         app,
         &mara_token,
         &session,
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Bugs", "fields": [{"name": "Mine", "type": "text"}]}),
     )
     .await;
@@ -900,7 +900,7 @@ async fn ids_from_another_project_never_match() {
     for key in ["WORK", "SIDE"] {
         let mut arguments = definition.clone();
         arguments["projectId"] = json!(key);
-        let created = call("collection_write", arguments).await;
+        let created = call("collection_create", arguments).await;
         assert_eq!(created["outcome"], "ok", "{created}");
         let task = call(
             "task_create",
@@ -909,13 +909,13 @@ async fn ids_from_another_project_never_match() {
         .await;
         assert_eq!(task["outcome"], "ok", "{task}");
         let page = call(
-            "page_write",
+            "page_create",
             json!({"projectId": key, "title": "Spec", "body": "What it does"}),
         )
         .await;
         let page = page["value"]["id"].as_str().expect("page").to_owned();
         let written = call(
-            "record_write",
+            "record_create_many",
             json!({
                 "projectId": key,
                 "collection": "Bugs",
@@ -925,7 +925,7 @@ async fn ids_from_another_project_never_match() {
         .await;
         assert_eq!(written["outcome"], "ok", "{written}");
         let described = call(
-            "collection_describe",
+            "collection_get",
             json!({"projectId": key, "collection": "Bugs"}),
         )
         .await;
@@ -1000,7 +1000,7 @@ async fn ids_from_another_project_never_match() {
         json!({"Spec": there["page"]}),
     ] {
         let refused = call(
-            "record_write",
+            "record_create_many",
             json!({"projectId": "WORK", "collection": "Bugs", "records": [{"title": "Elsewhere", "fields": fields}]}),
         )
         .await;
@@ -1021,7 +1021,7 @@ async fn ids_from_another_project_never_match() {
         ),
     ] {
         let refused = call(
-            "record_query",
+            "record_list",
             json!({"projectId": "WORK", "collection": "Bugs", "filters": [filter]}),
         )
         .await;
@@ -1040,17 +1040,17 @@ async fn ids_from_another_project_never_match() {
     ] {
         let mut arguments = arguments;
         arguments["projectId"] = json!("WORK");
-        let refused = call("record_query", arguments.clone()).await;
+        let refused = call("record_list", arguments.clone()).await;
         assert_eq!(refused["outcome"], outcome, "{arguments}: {refused}");
     }
     let refused = call(
-        "record_write",
+        "record_update_many",
         json!({"projectId": "WORK", "collection": "Bugs", "records": [{"record": there["record"], "title": "Mine"}]}),
     )
     .await;
     assert_eq!(refused["outcome"], "not_found", "{refused}");
     let refused = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Bugs", "views": [{"view": there["view"], "name": "Mine"}]}),
     )
     .await;
@@ -1058,7 +1058,7 @@ async fn ids_from_another_project_never_match() {
 
     // WORK's own still match, and nothing of SIDE's changed.
     let found = call(
-        "record_query",
+        "record_list",
         json!({
             "projectId": "WORK",
             "collection": "Bugs",

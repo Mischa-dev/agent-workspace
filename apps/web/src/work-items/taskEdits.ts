@@ -2,12 +2,12 @@ import { useMutation } from '@tanstack/react-query'
 
 import { isApiError } from '../api/errors'
 import { describeError } from '../ui'
-import { normalizeWorkItem, updateWorkItem } from './api'
+import { normalizeWorkItem, writeWorkItem } from './api'
 import type { PickResult } from './FieldPicker'
 import { bulkUpdateWorkItems } from './planningApi'
 import { useInvalidateWorkItems } from './planningHooks'
 import type { BulkChanges, BulkProblem, WorkItem, WorkItemCard, WorkItemPatch } from './types'
-import { inOrder, remember, type Undoable } from '../views/saveQueue'
+import { forget, inOrder, remember, type Undoable } from '../views/saveQueue'
 import { undoableTaskChange } from './taskUndo'
 
 /** The PATCH fields for a picker result. */
@@ -56,16 +56,19 @@ export function conflictCurrent(error: unknown): WorkItem | null {
 }
 
 export function bulkProblems(error: unknown): BulkProblem[] {
-  if (!isApiError(error) || error.code !== 'bulk_rejected') return []
-  const details = error.details
-  const problems = details && typeof details === 'object' && 'problems' in details ? (details as { problems: unknown }).problems : []
+  // task_update_many refuses the whole change as a conflict whose reason is
+  // "rejected", with one problem per task under details.current.
+  if (!isApiError(error) || error.code !== 'conflict') return []
+  const details = (error.details ?? {}) as { reason?: unknown; current?: { problems?: unknown } }
+  if (details.reason !== 'rejected') return []
+  const problems = details.current?.problems
   return (Array.isArray(problems) ? problems : []).flatMap((value) => {
     if (!value || typeof value !== 'object') return []
     const problem = value as Record<string, unknown>
     return [
       {
         id: typeof problem.id === 'string' ? problem.id : '',
-        key: typeof problem.key === 'string' ? problem.key : null,
+        key: typeof problem.task === 'string' ? problem.task : null,
         code: typeof problem.code === 'string' ? problem.code : '',
         message: typeof problem.message === 'string' ? problem.message : '',
       },
@@ -116,17 +119,40 @@ export function useApplyPick() {
             }
           : null
       if (targets.length === 1 || result.field === 'type') {
-        for (const target of targets) {
-          await inOrder(`task:${target.id}`, () =>
-            updateWorkItem({
-              projectId: target.projectId,
-              workItemId: target.id,
-              idempotencyKey: crypto.randomUUID(),
-              patch: { expectedVersion: target.version, ...patch },
-            }),
-          )
+        const saves = (async () => {
+          for (const target of targets) {
+            await inOrder(`task:${target.id}`, () =>
+              writeWorkItem({
+                projectId: target.projectId,
+                workItemId: target.id,
+                idempotencyKey: crypto.randomUUID(),
+                patch: { expectedVersion: target.version, ...patch },
+              }),
+            )
+          }
+        })()
+        // Undo can take it back from the moment it's made: it waits for the
+        // save itself and does nothing if the save failed (another editor's
+        // value that happens to match is never undone), and a failed save
+        // forgets it.
+        const afterSave: Undoable | null = undo && {
+          label: undo.label,
+          undo: async (client) => {
+            try {
+              await saves
+            } catch {
+              throw new Error('That change didn’t save, so there was nothing to undo.')
+            }
+            await undo.undo(client)
+          },
         }
-        if (undo) remember(undo)
+        if (afterSave) remember(afterSave)
+        try {
+          await saves
+        } catch (error) {
+          if (afterSave) forget(afterSave)
+          throw error
+        }
         return
       }
       const changes = pickToBulk(result)

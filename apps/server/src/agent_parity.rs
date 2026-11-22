@@ -40,76 +40,10 @@ mod tests {
 
     /// Every web write, in `MUTATING_ENTRY_POINTS` order.
     const WEB_WRITES: &[(MutationMethod, &str, Parity)] = &[
-        (Put, "/api/v1/settings/values/{key}", Tool("settings_set")),
-        (
-            Post,
-            "/api/v1/settings/values/{key}/reset",
-            Tool("settings_set"),
-        ),
-        (
-            Put,
-            "/api/v1/projects/{project_id}/layout",
-            Tool("project_layout_set"),
-        ),
-        (
-            Put,
-            "/api/v1/projects/{project_id}/layout/rules",
-            Tool("project_layout_set"),
-        ),
-        (
-            Put,
-            "/api/v1/organizations/{organization_id}/layout",
-            Tool("project_layout_set"),
-        ),
         (
             Put,
             "/api/v1/organizations/{organization_id}/layout/mine",
             Person("each person's own sidebar"),
-        ),
-        (
-            Put,
-            "/api/v1/organizations/{organization_id}/modules",
-            Tool("workspace_update"),
-        ),
-        (
-            Post,
-            "/api/v1/organizations/{organization_id}/layout/presets",
-            Tool("layout_preset_write"),
-        ),
-        (
-            Patch,
-            "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-            Tool("layout_preset_write"),
-        ),
-        (
-            Delete,
-            "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-            Tool("layout_preset_write"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/environments",
-            Tool("environment_create"),
-        ),
-        (
-            Put,
-            "/api/v1/projects/{project_id}/environments/{environment_id}",
-            Tool("environment_update"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/environments/{environment_id}/archive",
-            Tool("environment_archive"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/environments/{environment_id}/default",
-            Tool("environment_update"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/environments/{environment_id}/check",
-            Tool("environment_check"),
         ),
         (
             Post,
@@ -125,21 +59,6 @@ mod tests {
             Delete,
             "/api/v1/organizations/{organization_id}/harnesses/{harness_id}",
             Person("registers a program the host runs"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/agent-profiles",
-            Tool("agent_profile_write"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            Tool("agent_profile_write"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            Tool("agent_profile_write"),
         ),
         (
             Put,
@@ -204,16 +123,6 @@ mod tests {
             Person("a person's own account"),
         ),
         (
-            Post,
-            "/api/v1/projects/{project_id}/members",
-            Tool("space_member_add"),
-        ),
-        (
-            Patch,
-            "/api/v1/organizations/{organization_id}",
-            Tool("workspace_update"),
-        ),
-        (
             Patch,
             "/api/v1/organizations/{organization_id}/members/{actor_id}",
             Tool("role_assign"),
@@ -225,58 +134,8 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/organizations/{organization_id}/roles",
-            Tool("role_write"),
-        ),
-        (
-            Patch,
-            "/api/v1/organizations/{organization_id}/roles/{role_id}",
-            Tool("role_write"),
-        ),
-        (
-            Delete,
-            "/api/v1/organizations/{organization_id}/roles/{role_id}",
-            Tool("role_write"),
-        ),
-        (
-            Put,
-            "/api/v1/organizations/{organization_id}/members/{actor_id}/role",
-            Tool("role_assign"),
-        ),
-        (
-            Put,
-            "/api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
-            Tool("role_assign"),
-        ),
-        (
-            Post,
-            "/api/v1/organizations/{organization_id}/workspace-templates",
-            Tool("workspace_template_save"),
-        ),
-        (
-            Post,
-            "/api/v1/organizations/{organization_id}/workspace-templates/apply",
-            Tool("workspace_template_apply"),
-        ),
-        (
-            Delete,
-            "/api/v1/organizations/{organization_id}/workspace-templates/{template_id}",
-            Tool("workspace_template_save"),
-        ),
-        (
-            Post,
             "/api/v1/organizations/{organization_id}/leave",
             Person("a person's own account"),
-        ),
-        (
-            Post,
-            "/api/v1/organizations/{organization_id}/invitations",
-            Tool("invitation_write"),
-        ),
-        (
-            Post,
-            "/api/v1/workspace-invitations/{invitation_id}/revoke",
-            Tool("invitation_write"),
         ),
         (
             Post,
@@ -410,26 +269,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/bug-report-links",
-            Tool("bug_report_link_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/bug-report-links/{link_id}",
-            Tool("bug_report_link_update"),
-        ),
-        (
-            Delete,
-            "/api/v1/bug-report-links/{link_id}",
-            Tool("bug_report_link_update"),
-        ),
-        (
-            Post,
-            "/api/v1/bug-report-links/{link_id}/replace",
-            Tool("bug_report_link_update"),
-        ),
-        (
-            Post,
             "/api/v1/bug-reports/{token}",
             Plumbing("a public bug report form"),
         ),
@@ -443,16 +282,10 @@ mod tests {
             "/api/v1/threads/{id}/agent-runs",
             Tool("run_start, run_request"),
         ),
-        (Post, "/api/v1/agent-runs/{id}/interrupt", Tool("run_stop")),
         (
             Post,
             "/api/v1/agent-runs/{id}/retry",
             Tool("run_retry, run_request"),
-        ),
-        (
-            Post,
-            "/api/v1/agent-runs/{id}/acknowledge-failure",
-            Tool("run_dismiss_failure"),
         ),
         (
             Post,
@@ -533,36 +366,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
-            Tool("model_catalog_write"),
-        ),
-        (
-            Put,
-            "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-            Tool("model_catalog_write"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-            Tool("model_catalog_write"),
-        ),
-        (
-            Post,
-            "/api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
-            Tool("model_catalog_write"),
-        ),
-        (
-            Put,
-            "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-            Tool("model_catalog_write"),
-        ),
-        (
-            Delete,
-            "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-            Tool("model_catalog_write"),
-        ),
-        (
-            Post,
             "/api/v1/projects/{id}/channels",
             Tool("channel_create"),
         ),
@@ -596,11 +399,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/conversations/{id}/mark-unread",
-            Tool("conversation_mark_read"),
-        ),
-        (
-            Post,
             "/api/v1/conversations/{id}/messages",
             Tool("message_send"),
         ),
@@ -609,14 +407,13 @@ mod tests {
             "/api/v1/conversations/{id}/threads",
             Tool("thread_start"),
         ),
-        (Patch, "/api/v1/threads/{id}", Tool("thread_update")),
-        (Post, "/api/v1/projects/{id}/pages", Tool("page_write")),
+        (Post, "/api/v1/projects/{id}/pages", Tool("page_create")),
         (
             Post,
             "/api/v1/projects/{id}/pages/import",
-            Person("a file from the person's own computer; agents write the page with page_write"),
+            Person("a file from the person's own computer; agents write the page with page_create"),
         ),
-        (Patch, "/api/v1/pages/{id}", Tool("page_write")),
+        (Patch, "/api/v1/pages/{id}", Tool("page_update")),
         (
             Post,
             "/api/v1/pages/{id}/document/sync",
@@ -625,9 +422,13 @@ mod tests {
         (
             Post,
             "/api/v1/pages/{id}/document/updates",
-            Tool("page_edit"),
+            Tool("page_update_blocks"),
         ),
-        (Post, "/api/v1/pages/{id}/comments", Tool("page_comment")),
+        (
+            Post,
+            "/api/v1/pages/{id}/comments",
+            Tool("page_comment_create"),
+        ),
         (
             Patch,
             "/api/v1/pages/{id}/comments/{comment_id}",
@@ -643,8 +444,6 @@ mod tests {
             "/api/v1/pages/{id}/suggestions/{suggestion_id}/decision",
             Tool("page_suggestion_decide"),
         ),
-        (Post, "/api/v1/whiteboards", Tool("whiteboard_create")),
-        (Patch, "/api/v1/whiteboards/{id}", Tool("whiteboard_update")),
         (
             Delete,
             "/api/v1/whiteboards/{id}",
@@ -654,11 +453,6 @@ mod tests {
             Post,
             "/api/v1/whiteboard-trash/empty",
             Tool("whiteboard_trash_empty"),
-        ),
-        (
-            Post,
-            "/api/v1/whiteboards/{id}/duplicate",
-            Tool("whiteboard_duplicate"),
         ),
         (
             Post,
@@ -679,21 +473,6 @@ mod tests {
             Post,
             "/api/v1/whiteboards/{id}/revisions/{revision}/restore",
             Tool("whiteboard_update"),
-        ),
-        (
-            Post,
-            "/api/v1/whiteboards/{id}/links",
-            Tool("whiteboard_link"),
-        ),
-        (
-            Delete,
-            "/api/v1/whiteboards/{id}/links/{kind}/{target_id}",
-            Tool("whiteboard_link"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{id}/decisions",
-            Tool("decision_record"),
         ),
         (Post, "/api/v1/conversations/{id}/pins", Tool("pin_set")),
         (
@@ -724,17 +503,6 @@ mod tests {
             Tool("conversation_members_update"),
         ),
         (
-            Post,
-            "/api/v1/conversations/{id}/continue",
-            Tool("conversation_continue"),
-        ),
-        (
-            Post,
-            "/api/v1/reply-requests/{id}/retry",
-            Tool("reply_retry"),
-        ),
-        (Post, "/api/v1/reply-requests/{id}/stop", Tool("reply_stop")),
-        (
             Patch,
             "/api/v1/conversations/{id}/messages/{message_id}",
             Tool("message_update"),
@@ -759,7 +527,6 @@ mod tests {
             "/api/v1/things/{kind}/{id}/files",
             Tool("file_upload"),
         ),
-        (Delete, "/api/v1/files/{id}", Tool("file_delete")),
         (
             Delete,
             "/api/v1/conversations/{id}/messages/{message_id}/link-previews/{preview_id}",
@@ -775,7 +542,6 @@ mod tests {
             "/api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
             Tool("message_react"),
         ),
-        (Post, "/api/v1/inbox/update", Tool("notification_update")),
         (
             Put,
             "/api/v1/notification-settings/channels",
@@ -790,34 +556,6 @@ mod tests {
             Put,
             "/api/v1/conversations/{id}/notification-level",
             Person("a person's own notification preferences"),
-        ),
-        (Post, "/api/v1/later", Tool("later_save")),
-        (Patch, "/api/v1/later/{id}", Tool("later_update")),
-        (Delete, "/api/v1/later/{id}", Tool("later_update")),
-        (
-            Post,
-            "/api/v1/conversations/{id}/scheduled-messages",
-            Tool("message_schedule"),
-        ),
-        (
-            Patch,
-            "/api/v1/scheduled-messages/{id}",
-            Tool("scheduled_message_update"),
-        ),
-        (
-            Delete,
-            "/api/v1/scheduled-messages/{id}",
-            Tool("scheduled_message_update"),
-        ),
-        (
-            Post,
-            "/api/v1/scheduled-messages/{id}/send-now",
-            Tool("scheduled_message_update"),
-        ),
-        (
-            Post,
-            "/api/v1/messages/{id}/forward",
-            Tool("message_forward"),
         ),
         (
             Post,
@@ -881,26 +619,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/repositories",
-            Tool("repository_create"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/repositories/{repository_id}/prepare",
-            Tool("repository_prepare"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/repositories/{repository_id}/archive",
-            Tool("repository_archive"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/integrations/github/sync",
-            Tool("github_installation_link"),
-        ),
-        (
-            Post,
             "/api/v1/projects/{project_id}/integrations/github/connect",
             Person("installs the GitHub app as a person"),
         ),
@@ -908,31 +626,6 @@ mod tests {
             Post,
             "/api/v1/projects/{project_id}/integrations/github/repositories",
             Tool("repository_create"),
-        ),
-        (
-            Put,
-            "/api/v1/projects/{project_id}/integrations/github/automation",
-            Tool("github_automation_update"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
-            Tool("run_publish"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/agent-runs/{run_id}/pull-request",
-            Tool("pull_request_create"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
-            Tool("pull_request_refresh"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/merge",
-            Tool("pull_request_merge"),
         ),
         (
             Post,
@@ -961,21 +654,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/invitations",
-            Tool("invitation_write"),
-        ),
-        (
-            Post,
-            "/api/v1/project-invitations/{invitation_id}/revoke",
-            Tool("invitation_write"),
-        ),
-        (
-            Post,
-            "/api/v1/project-invitations/{invitation_id}/replace",
-            Tool("invitation_write"),
-        ),
-        (
-            Post,
             "/api/v1/project-invitations/resolve",
             Plumbing("accepting an invitation is signing up"),
         ),
@@ -988,11 +666,6 @@ mod tests {
             Post,
             "/api/v1/project-invitations/accept-existing",
             Plumbing("accepting an invitation is signing up"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/members/{actor_id}",
-            Tool("space_member_update"),
         ),
         (
             Post,
@@ -1051,6 +724,33 @@ mod tests {
         ),
         (
             Post,
+            "/api/v1/host/builtin/enrol",
+            Plumbing("the built-in host's own program enrolling with the code its operator wrote"),
+        ),
+        (
+            Put,
+            "/api/v1/host/builtin/harnesses",
+            Plumbing("the built-in host describing the harnesses it runs"),
+        ),
+        (
+            Post,
+            "/api/v1/connected-modules/token",
+            Plumbing("a connected module trading its one-time install code"),
+        ),
+        (
+            Post,
+            "/api/v1/modules/{module_id}/events",
+            Plumbing("a connected module sending in an event signed with its install's secret"),
+        ),
+        (
+            Post,
+            "/api/v1/modules/{module_id}/frames/redeem",
+            Plumbing(
+                "a connected module redeeming a framed panel's launch token, signed with its install's secret",
+            ),
+        ),
+        (
+            Post,
             "/api/v1/host/describe",
             Plumbing("a host describing itself with its own credential"),
         ),
@@ -1091,6 +791,11 @@ mod tests {
                 "a built-in assistant run asking for its next model turn, with its own credential",
             ),
         ),
+        (
+            Post,
+            "/api/v1/host/runs/{run_id}/stream",
+            Plumbing("a run's reply shown live as it arrives, with the run's own credential"),
+        ),
         (Post, "/oauth/register", Plumbing("OAuth")),
         (Post, "/oauth/authorize", Plumbing("OAuth")),
         (Post, "/connect/confirm", Plumbing("OAuth")),
@@ -1103,10 +808,6 @@ mod tests {
         ),
         (Post, "/api/v2/w/{workspace}/ops/{name}", Op),
         (Post, "/api/v2/ops/{name}", Op),
-        (Post, "/api/v1/projects", Tool("space_create")),
-        (Patch, "/api/v1/projects/{id}", Tool("space_update")),
-        (Post, "/api/v1/projects/{id}/archive", Tool("space_archive")),
-        (Post, "/api/v1/projects/{id}/restore", Tool("space_restore")),
         (
             Put,
             "/api/v1/projects/rail-order",
@@ -1124,31 +825,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/work-items",
-            Tool("task_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}",
-            Tool("task_update"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/archive",
-            Tool("task_update"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/move",
-            Tool("task_update"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
-            Tool("task_move"),
-        ),
-        (
-            Post,
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/work-with-worker",
             Tool("task_launch"),
         ),
@@ -1159,203 +835,53 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/launches/{launch_id}/cancel",
-            Tool("launch_cancel"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/automations",
-            Tool("automation_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/automations/{rule_id}",
-            Tool("automation_update"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/automations/{rule_id}",
-            Tool("automation_delete"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/automations/{rule_id}/run",
-            Tool("automation_run_start"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
-            Tool("task_restore"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
-            Tool("task_criteria_update"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
-            Tool("task_criteria_update"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
-            Tool("task_criteria_update"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
-            Tool("task_comment_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
-            Tool("task_comment_update"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
-            Tool("task_comment_delete"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
-            Tool("task_link"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
-            Tool("task_link"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-            Tool("task_link"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-            Tool("task_link"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}/primary",
-            Tool("task_link"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
-            Tool("task_link"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
-            Tool("task_link"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/bulk",
-            Tool("task_update_many"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
-            Tool("task_link"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
-            Tool("task_link"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/watch",
-            Tool("task_watch_set"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/work-items/{work_item_id}/release-claim",
-            Tool("task_release"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/labels",
-            Tool("label_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/labels/{label_id}",
-            Tool("label_update"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/fields",
-            Tool("field_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/fields/{field_id}",
-            Tool("field_update"),
-        ),
-        (
-            Post,
             "/api/v1/projects/{project_id}/collections",
-            Tool("collection_write"),
+            Tool("collection_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/collections/{collection_id}",
-            Tool("collection_write"),
+            Tool("collection_update"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/collections/{collection_id}/fields",
-            Tool("collection_write"),
+            Tool("collection_update"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/collections/{collection_id}/fields/{field_id}",
-            Tool("collection_write"),
+            Tool("collection_update"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/collections/{collection_id}/records",
-            Tool("record_write"),
+            Tool("record_create_many"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/collections/{collection_id}/records/{record_id}",
-            Tool("record_write"),
+            Tool("record_update_many"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/sheets",
-            Tool("sheet_write"),
+            Tool("sheet_create"),
         ),
         (
             Patch,
             "/api/v1/projects/{project_id}/sheets/{sheet_id}",
-            Tool("sheet_write"),
+            Tool("sheet_update"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/sheets/import",
-            Tool("sheet_write"),
+            Tool("sheet_create"),
         ),
         (
             Post,
             "/api/v1/projects/{project_id}/sheets/{sheet_id}/changes",
-            Tool("sheet_write"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/milestones",
-            Tool("milestone_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/milestones/{milestone_id}",
-            Tool("milestone_update"),
+            Tool("sheet_update"),
         ),
         (
             Post,
@@ -1419,63 +945,8 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{project_id}/task-templates",
-            Tool("template_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/task-templates/{template_id}",
-            Tool("template_update"),
-        ),
-        (
-            Post,
             "/api/v1/projects/{project_id}/task-templates/{template_id}/apply",
             Tool("task_from_template"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/imports",
-            Tool("task_import"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/imports/{import_id}",
-            Tool("task_import"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/imports/{import_id}/commit",
-            Tool("task_import"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/save-as-template",
-            Tool("project_template_write"),
-        ),
-        (
-            Patch,
-            "/api/v1/organizations/{organization_id}/project-templates/{template_id}",
-            Tool("project_template_write"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/recurring-tasks",
-            Tool("recurring_create"),
-        ),
-        (
-            Patch,
-            "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-            Tool("recurring_update"),
-        ),
-        (
-            Delete,
-            "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-            Tool("recurring_update"),
-        ),
-        (
-            Put,
-            "/api/v1/projects/{project_id}/work-item-workflow",
-            Tool("workflow_update"),
         ),
     ];
 
@@ -1544,5 +1015,40 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Hand-written web writes whose tool is already an operation: each is a
+    /// second edge for something the generated route does (K2.22). The
+    /// number only goes down; when you delete one, lower it.
+    const HAND_WRITTEN_OPERATION_ROUTES: usize = 53;
+
+    #[test]
+    fn hand_written_routes_for_operations_only_go_down() {
+        let operations = crate::ops::registry()
+            .entries()
+            .map(|entry| entry.meta.name)
+            .collect::<BTreeSet<_>>();
+        let duplicates = WEB_WRITES
+            .iter()
+            .filter(|(_, _, parity)| match parity {
+                Tool(names) => names.split(", ").all(|name| operations.contains(name)),
+                _ => false,
+            })
+            .map(|(method, path, _)| format!("{method:?} {path}"))
+            .collect::<Vec<_>>();
+        assert!(
+            duplicates.len() <= HAND_WRITTEN_OPERATION_ROUTES,
+            "{} hand-written web writes do what an operation does, more than the {} allowed. \
+             The web calls the operation's v2 route instead (K2.22): {duplicates:#?}",
+            duplicates.len(),
+            HAND_WRITTEN_OPERATION_ROUTES,
+        );
+        assert_eq!(
+            duplicates.len(),
+            HAND_WRITTEN_OPERATION_ROUTES,
+            "a hand-written route for an operation is gone: lower \
+             HAND_WRITTEN_OPERATION_ROUTES to {}",
+            duplicates.len(),
+        );
     }
 }

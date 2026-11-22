@@ -78,6 +78,10 @@ async fn destination(
 ) -> Result<(super::Destination, usize), OpError> {
     let permission = match place {
         Place::Conversation(_) => Perm::ChannelsPost,
+        // A file for a comment needs only what the comment does.
+        Place::Task {
+            for_comment: true, ..
+        } => Perm::TasksComment,
         Place::Task { .. } => Perm::TasksEdit,
     };
     let located = Located {
@@ -311,7 +315,7 @@ impl Operation for FileUploadFinish {
     const DESCRIPTION: &'static str = "After sending a file's bytes to the link file_upload_start \
         gave, make it a file: the server checks what arrived is the size (and SHA-256) declared, \
         and refuses and deletes it otherwise. A picture loses its location data first. Returns \
-        the file; pass its id in message_send's or task_comment's attachmentIds as with \
+        the file; pass its id in message_send's or task_comment_create's attachmentIds as with \
         file_upload. Calling it again returns the same file.";
 
     type Input = FileUploadFinishInput;

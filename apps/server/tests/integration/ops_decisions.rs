@@ -1,8 +1,8 @@
 //! K2.5: decisions as operations, the template slice. A retry with the same
 //! request id records one decision, from the web (its `Idempotency-Key`) and
 //! from MCP (`clientRequestId`); a decision from a private conversation the
-//! caller can't see is `not_found` on every edge; the v1 route answers with
-//! the same body as before it became a wrapper.
+//! caller can't see is `not_found` on every edge; the web's answer is the
+//! decision as the list shows it.
 
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -31,17 +31,20 @@ async fn decisions_are_recorded_once_and_stay_private() {
     let (_, mara) = create_agent(app, &setup.browser, &work, "Mara", "mara").await;
     let mara_session = initialize(app, &mara).await.expect("Mara MCP");
 
-    // The web app's route: the same body as before, recorded once per request id.
+    // The web app's call: the decision, recorded once per request id.
     let route = format!("/api/v1/projects/{work}/decisions");
-    let body = json!({"title": "Ship on Fridays", "detail": "Small changes only."});
+    let record = "/api/v2/ops/decision_record";
+    let body =
+        json!({"spaceId": work, "title": "Ship on Fridays", "detail": "Small changes only."});
     let (status, first) = send(
         app,
         setup
             .browser
-            .request("POST", &route, Some("web-d-1"), body.clone()),
+            .request("POST", record, Some("web-d-1"), body.clone()),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{first}");
+    let first = first["value"].clone();
     let mut fields = first
         .as_object()
         .expect("decision")
@@ -72,11 +75,11 @@ async fn decisions_are_recorded_once_and_stay_private() {
     assert_eq!(first["status"], "active");
     let (status, again) = send(
         app,
-        setup.browser.request("POST", &route, Some("web-d-1"), body),
+        setup.browser.request("POST", record, Some("web-d-1"), body),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{again}");
-    assert_eq!(again["id"], first["id"], "{again}");
+    assert_eq!(again["value"]["id"], first["id"], "{again}");
     assert_eq!(decisions_titled(&setup.pool, "Ship on Fridays").await, 1);
 
     // The list route reads through decision_list and still says who may record.
@@ -155,17 +158,6 @@ async fn decisions_are_recorded_once_and_stay_private() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
     assert_eq!(refused["outcome"], "not_found", "{refused}");
-    let (status, refused) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &route,
-            Some("web-private-2"),
-            json!({"sourceConversationId": private_dm, "title": "Zeppelin budget is capped"}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
     assert_eq!(
         decisions_titled(&setup.pool, "Zeppelin budget is capped").await,
         0

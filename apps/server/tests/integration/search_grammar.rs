@@ -159,16 +159,10 @@ async fn each_filter_narrows_and_none_widens() {
     )
     .await;
     assert!(status.is_success(), "pin: {body}");
-    let (status, body) = send(
-        app,
-        lena.browser.request(
-            "POST",
-            "/api/v1/later",
-            Some("grammar-save"),
-            json!({"messageId": reviewed}),
-        ),
-    )
-    .await;
+    let (status, body) = lena
+        .browser
+        .op(app, "later_save", json!({"messageId": reviewed}))
+        .await;
     assert!(status.is_success(), "save: {body}");
 
     let all = sorted(&[&planned, &reviewed, &whispered, &hidden]);
@@ -243,7 +237,7 @@ async fn each_filter_narrows_and_none_widens() {
         .call(
             app,
             Call::Tool {
-                name: "search",
+                name: "workspace_search",
                 arguments: json!({"query": format!("{word} in:#design from:@mara")}),
             },
         )
@@ -260,7 +254,7 @@ async fn each_filter_narrows_and_none_widens() {
         .call(
             app,
             Call::Tool {
-                name: "search",
+                name: "workspace_search",
                 arguments: json!({"query": format!("{word} is:urgent")}),
             },
         )

@@ -103,7 +103,7 @@ impl fmt::Display for EditError {
             Self::Target {
                 index,
                 needed: true,
-            } => write!(f, "edit {index} needs a block: its id from page_blocks"),
+            } => write!(f, "edit {index} needs a block: its id from page_blocks_get"),
             Self::Target {
                 index,
                 needed: false,
@@ -129,7 +129,7 @@ impl fmt::Display for EditError {
             ),
             Self::HashNeeded { index } => write!(
                 f,
-                "edit {index} needs the block's hash from page_blocks, so it can't undo a change you haven't seen"
+                "edit {index} needs the block's hash from page_blocks_get, so it can't undo a change you haven't seen"
             ),
             Self::HashMismatch { index, target } => write!(
                 f,

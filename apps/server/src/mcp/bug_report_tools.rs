@@ -16,7 +16,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     bug_reports::{self, CreateLink, UpdateLink},
-    collection_forms::{FormConfig, FormField},
+    collection_forms::{FormConfig, FormField, FormSection, FormSet, ShowIf},
     error::AppError,
     events::Caller,
 };
@@ -108,7 +108,7 @@ pub(crate) struct BugReportLinkWriteArguments {
     pub form: Option<FormWrite>,
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, schemars::JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct FormWrite {
     /// Shown above the fields: what the form is for.
@@ -124,6 +124,13 @@ pub(crate) struct FormWrite {
     /// before it pauses itself and tells its maker.
     #[serde(default)]
     pub daily_limit: Option<u32>,
+    /// Headings that split the questions into sections, each shown before
+    /// the question it names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<FormSectionWrite>,
+    /// Values every record the form makes gets, for fields it doesn't ask.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sets: Vec<FormSetWrite>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -133,6 +140,38 @@ pub(crate) struct FormFieldWrite {
     pub field: String,
     #[serde(default)]
     pub required: bool,
+    /// Ask it only when an earlier question's answer is one of these
+    /// values, or, with none listed, is given at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_if: Option<ShowIfWrite>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ShowIfWrite {
+    /// The earlier question's field, by name or ID.
+    pub field: String,
+    /// An option's name, or "Yes" or "No" for a checkbox.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub is_one_of: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct FormSectionWrite {
+    pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The question (its field, by name or ID) the section starts with.
+    pub before: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct FormSetWrite {
+    /// The field, by name or ID.
+    pub field: String,
+    pub value: Value,
 }
 
 /// A form as written, by the collection's field names, as it's stored.
@@ -149,19 +188,60 @@ async fn form_from_written(
         false,
     )
     .await?;
+    let resolve = |named: &str| {
+        crate::fields::find(&definitions, named)
+            .map(|field| field.id)
+            .ok_or_else(|| {
+                format!(
+                    "The collection has no field called \"{}\". Its fields: {}.",
+                    named.chars().take(80).collect::<String>(),
+                    crate::fields::active_names(&definitions)
+                )
+            })
+    };
     let mut fields = Vec::with_capacity(written.fields.len());
     for asked in &written.fields {
-        let Some(field) = crate::fields::find(&definitions, &asked.field) else {
-            return Ok(Err(format!(
-                "The collection has no field called \"{}\". Its fields: {}.",
-                asked.field.chars().take(80).collect::<String>(),
-                crate::fields::active_names(&definitions)
-            )));
+        let field = match resolve(&asked.field) {
+            Ok(field) => field,
+            Err(message) => return Ok(Err(message)),
+        };
+        let show_if = match &asked.show_if {
+            None => None,
+            Some(condition) => match resolve(&condition.field) {
+                Ok(field) => Some(ShowIf {
+                    field,
+                    is_one_of: condition.is_one_of.clone(),
+                }),
+                Err(message) => return Ok(Err(message)),
+            },
         };
         fields.push(FormField {
-            field: field.id,
+            field,
             required: asked.required,
-            show_if: None,
+            show_if,
+        });
+    }
+    let mut sections = Vec::with_capacity(written.sections.len());
+    for section in &written.sections {
+        let before = match resolve(&section.before) {
+            Ok(field) => field,
+            Err(message) => return Ok(Err(message)),
+        };
+        sections.push(FormSection {
+            title: section.title.clone(),
+            description: section.description.clone().unwrap_or_default(),
+            before,
+        });
+    }
+    let mut sets = Vec::with_capacity(written.sets.len());
+    for set in &written.sets {
+        let field = match resolve(&set.field) {
+            Ok(field) => field,
+            Err(message) => return Ok(Err(message)),
+        };
+        sets.push(FormSet {
+            field,
+            value: set.value.clone(),
         });
     }
     Ok(Ok(FormConfig {
@@ -169,7 +249,8 @@ async fn form_from_written(
         fields,
         thanks: written.thanks.clone().unwrap_or_default(),
         daily_limit: written.daily_limit,
-        ..Default::default()
+        sections,
+        sets,
     }))
 }
 
@@ -223,12 +304,7 @@ pub(crate) async fn bug_report_link_write(
                     else {
                         return Ok(ToolResult::not_found("That collection"));
                     };
-                    let written = arguments.form.clone().unwrap_or(FormWrite {
-                        intro: None,
-                        fields: Vec::new(),
-                        thanks: None,
-                        daily_limit: None,
-                    });
+                    let written = arguments.form.clone().unwrap_or_default();
                     let form = match form_from_written(state, project_id, collection.id, &written)
                         .await?
                     {

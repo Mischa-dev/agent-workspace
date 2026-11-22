@@ -17,6 +17,7 @@ use super::state::RunState;
 use crate::{
     AppState,
     error::AppError,
+    harness_catalog::Harnesses,
     ops::{Idempotency, OpCall, OpError, OpKind, Operation, Perm, Target, Targeted, refs::IdRef},
 };
 
@@ -157,7 +158,7 @@ const LINE_SELECT: &str = r#"
     LEFT JOIN github_pull_requests pull_request
       ON pull_request.id = pull_request_request.github_pull_request_id
     LEFT JOIN LATERAL (
-        SELECT link.work_item_id FROM work_item_conversation_links link
+        SELECT link.work_item_id FROM task_threads link
         WHERE link.project_id = run.space_id AND link.conversation_id = run.conversation_id
         ORDER BY link.created_at, link.work_item_id
         LIMIT 1
@@ -182,11 +183,11 @@ const LINE_SELECT: &str = r#"
       AND (run.space_id IS NULL OR actor_can_access_project($1, NULL, run.space_id))
 "#;
 
-fn named(state: &AppState, mut line: RunLine) -> RunLine {
+fn named(harnesses: &Harnesses, mut line: RunLine) -> RunLine {
     line.harness_name = line
         .harness
         .as_deref()
-        .map(|harness| crate::agent_sessions::harness_name(state, harness));
+        .map(|harness| harnesses.name(harness));
     line
 }
 
@@ -211,9 +212,17 @@ pub struct RunListQuery {
     /// The `nextCursor` of the previous page.
     pub cursor: Option<String>,
     pub limit: Option<i64>,
+    /// Spaces left out: those where Runs is off for the viewer. Never read
+    /// from a request.
+    #[serde(skip)]
+    pub without_spaces: Vec<Uuid>,
+    /// The agent connection calling, whose own limits on the spaces it
+    /// reaches apply too. Never read from a request.
+    #[serde(skip)]
+    pub connection_id: Option<Uuid>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RunList {
     pub runs: Vec<RunLine>,
@@ -287,6 +296,9 @@ pub async fn list(
           AND ($8::text IS NULL OR detail.config->>'harness' = $8)
           AND (NOT $9 OR run.requested_by_account_id = $1)
           AND ($10::timestamptz IS NULL OR (run.created_at, run.id) < ($10, $11))
+          AND (run.space_id IS NULL OR NOT (run.space_id = ANY($13)))
+          AND (run.space_id IS NULL OR $14::uuid IS NULL
+               OR actor_can_access_project($1, $14, run.space_id))
         ORDER BY run.created_at DESC, run.id DESC
         LIMIT $12
         "#
@@ -303,14 +315,17 @@ pub async fn list(
     .bind(cursor.map(|(time, _)| time))
     .bind(cursor.map(|(_, id)| id))
     .bind(limit + 1)
+    .bind(&query.without_spaces)
+    .bind(query.connection_id)
     .fetch_all(&mut *transaction)
     .await?;
+    let harnesses = Harnesses::visible_on(state, &mut transaction).await?;
     drop(transaction);
     let more = rows.len() > usize::try_from(limit).unwrap_or(0);
     let mut runs = rows
         .into_iter()
         .take(usize::try_from(limit).unwrap_or(0))
-        .map(|run| named(state, run))
+        .map(|run| named(&harnesses, run))
         .collect::<Vec<_>>();
     redact(state, viewer, &mut runs).await?;
     let next_cursor = more.then(|| runs.last().map(encode_cursor)).flatten();
@@ -321,6 +336,19 @@ pub async fn list(
 /// "see tasks", the task's title; without "see code", the branch and pull
 /// request (as `views::redact` does for the built-in run page).
 async fn redact(state: &AppState, viewer: Uuid, runs: &mut [RunLine]) -> Result<(), AppError> {
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    redact_on(&mut transaction, viewer, runs).await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// [`redact`] on a connection the caller holds, so a reader holding one
+/// takes no second.
+async fn redact_on(
+    connection: &mut PgConnection,
+    viewer: Uuid,
+    runs: &mut [RunLine],
+) -> Result<(), AppError> {
     let mut projects = runs
         .iter()
         .filter_map(|run| run.project_id)
@@ -331,9 +359,15 @@ async fn redact(state: &AppState, viewer: Uuid, runs: &mut [RunLine]) -> Result<
         (Vec::new(), Vec::new())
     } else {
         (
-            crate::search::projects_showing_tasks(&state.pool, viewer, &projects).await?,
-            crate::search::projects_allowing(
-                &state.pool,
+            crate::search::projects_allowing_on(
+                &mut *connection,
+                viewer,
+                &projects,
+                crate::policy::Permission::TasksView,
+            )
+            .await?,
+            crate::search::projects_allowing_on(
+                &mut *connection,
                 viewer,
                 &projects,
                 crate::policy::Permission::CodeView,
@@ -421,9 +455,17 @@ pub struct RunView {
     /// their checks and reviews, newest first.
     pub pull_requests: Vec<crate::code_host::pull_requests::PullRequest>,
     pub usage_by_model: Vec<ModelUsageLine>,
+    /// The files it changed in its repository, as its host last reported
+    /// them (`run_changes_report`), for a viewer who sees code; null before
+    /// the first report. The diff is read on its own.
+    pub files: Option<Vec<super::changes::ChangedFile>>,
+    /// The host couldn't report all of it (too many files, a diff too big
+    /// to keep, or changes it couldn't list), so `files` may be missing
+    /// some. False with no report.
+    pub changes_truncated: bool,
 }
 
-async fn visible_line(
+pub(crate) async fn visible_line(
     connection: &mut PgConnection,
     viewer: Uuid,
     run_id: Uuid,
@@ -556,9 +598,19 @@ pub async fn view(
     .bind(run_id)
     .fetch_all(&mut *connection)
     .await?;
-    let mut lines = vec![named(state, line)];
-    redact(state, viewer, &mut lines).await?;
+    let harnesses = Harnesses::visible_on(state, &mut *connection).await?;
+    let mut lines = vec![named(&harnesses, line)];
+    redact_on(&mut *connection, viewer, &mut lines).await?;
     let run = lines.remove(0);
+    let (files, changes_truncated) = if sees_code(&mut *connection, viewer, run.project_id).await? {
+        super::changes::get(&mut *connection, run_id)
+            .await?
+            .map_or((None, false), |changes| {
+                (Some(changes.files), changes.truncated)
+            })
+    } else {
+        (None, false)
+    };
     Ok(Some(RunView {
         hidden_activities: (total - i64::try_from(activities.len()).unwrap_or(0)).max(0),
         run,
@@ -568,7 +620,29 @@ pub async fn view(
         results,
         pull_requests,
         usage_by_model,
+        files,
+        changes_truncated,
     }))
+}
+
+/// Whether `viewer` sees the code of runs in `project` ("see code"): their
+/// branch, pull requests and changes.
+pub(crate) async fn sees_code(
+    connection: &mut PgConnection,
+    viewer: Uuid,
+    project: Option<Uuid>,
+) -> Result<bool, AppError> {
+    let Some(project) = project else {
+        return Ok(false);
+    };
+    Ok(crate::search::projects_allowing_on(
+        connection,
+        viewer,
+        &[project],
+        crate::policy::Permission::CodeView,
+    )
+    .await?
+    .contains(&project))
 }
 
 // ------------------------------------------------------------- operations
@@ -679,6 +753,127 @@ impl Operation for RunActivityList {
             activities,
             next_after_seq,
         })
+    }
+}
+
+// ----------------------------------------------------------- run_diff_get
+
+/// `run_diff_get`: what a run changed, as a diff, for any run.
+pub struct RunDiffGet;
+
+impl Operation for RunDiffGet {
+    const NAME: &'static str = "run_diff_get";
+    const KIND: OpKind = OpKind::Describe;
+    const MODULE: &'static str = "runs";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "Read a run's diff";
+    const DESCRIPTION: &'static str = "What a run changed against its base, as its host or agent \
+        last reported it: the files and the unified diff (empty, and truncated, when it was too \
+        big). unavailable when nothing was reported or you don't see the space's code.";
+
+    type Input = RunViewInput;
+    type Output = super::views::RunDiffView;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: RunViewInput,
+    ) -> Result<super::views::RunDiffView, OpError> {
+        super::views::run_diff(call.state, call.account_id(), input.run_id.id())
+            .await
+            .map_err(|error| match error {
+                AppError::NotFound(_) => OpError::not_found("That run"),
+                error => OpError::from(error),
+            })
+    }
+}
+
+// ---------------------------------------------------------- run_line_list
+
+/// `run_line_list`: the Runs page, every run whoever runs it.
+pub struct RunLineList;
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunLineListInput {
+    /// One space (its id or link); left out, every space you can open in
+    /// this workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_id: Option<IdRef>,
+    /// active, needs_you (waiting on an answer), not_responding, finished
+    /// or failed; every run when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Only runs this agent does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<IdRef>,
+    /// Only runs on this host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<IdRef>,
+    /// Only built-in runs on this harness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    /// Only runs you asked for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mine: Option<bool>,
+    /// The nextCursor of the previous page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    /// How many, newest first (default 50, at most 100).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u16>,
+}
+
+impl Targeted for RunLineListInput {
+    fn target(&self) -> Target {
+        match &self.space_id {
+            Some(space) => Target::Space(space.id()),
+            None => Target::Workspace(None),
+        }
+    }
+}
+
+impl Operation for RunLineList {
+    const NAME: &'static str = "run_line_list";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "runs";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const HELD_SPACE_BY_DEFAULT: bool = true;
+    const TITLE: &'static str = "List all runs";
+    const DESCRIPTION: &'static str = "Every run you can see in this workspace, newest first, \
+        whoever runs it (this server's host, a linked host, or an agent reporting its own): \
+        state, whether it is still reporting, its space, thread and task, agent, tokens and \
+        cost. Filter by space, status, agent, host, harness or runs you asked for; page with \
+        cursor. run_detail_get opens one.";
+
+    type Input = RunLineListInput;
+    type Output = RunList;
+
+    async fn run(call: &mut OpCall<'_>, input: RunLineListInput) -> Result<RunList, OpError> {
+        let viewer = call.account_id();
+        // Not spaces where Runs is off for the viewer (AWD-75), as
+        // run_usage_list leaves them out.
+        let without_spaces = crate::mcp::runs::projects_with_module_off(call.state, viewer, "runs")
+            .await
+            .map_err(OpError::from)?;
+        let query = RunListQuery {
+            organization_id: Some(call.ctx.workspace_id),
+            // The space named, or the one a space-held credential is held to.
+            project_id: call.ctx.space_id,
+            status: input.status,
+            agent_id: input.agent_id.map(|agent| agent.id()),
+            host_id: input.host_id.map(|host| host.id()),
+            harness: input.harness,
+            mine: input.mine,
+            cursor: input.cursor,
+            limit: input.limit.map(i64::from),
+            without_spaces,
+            connection_id: call.ctx.caller.connection_id,
+        };
+        list(call.state, viewer, &query)
+            .await
+            .map_err(OpError::from)
     }
 }
 

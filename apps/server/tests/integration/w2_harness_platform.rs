@@ -9,7 +9,7 @@ use agent_workspace_server::{
     auth::password,
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
-    git_runtime::expected_repository_mirror_path,
+    hosts::builtin::git::expected_repository_mirror_path,
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
@@ -328,30 +328,27 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
     wait_for_state(&pool, third, "blocked").await;
 
     // Only workspace admins edit the catalog, and hidden models can't be picked.
-    let model = format!(
-        "/api/v1/projects/{}/harnesses/demo/models/demo-small",
-        seed.project_id
-    );
-    let member_edit = send(
+    let workspace = seed.organization_id;
+    let small = |overrides: Value| {
+        json!({"projectId": seed.project_id, "harness": "demo", "model": "demo-small",
+            "overrides": overrides})
+    };
+    let refresh = json!({"projectId": "workspace", "harness": "demo", "refresh": true});
+    let member_edit = catalog_op(
         &application,
         member,
-        "PUT",
-        &model,
+        workspace,
         "member-hide",
-        json!({"hidden": true}),
+        small(json!({"hidden": true})),
     )
     .await;
     assert_eq!(member_edit.0, StatusCode::FORBIDDEN, "{}", member_edit.1);
-    let member_refresh = send(
+    let member_refresh = catalog_op(
         &application,
         member,
-        "POST",
-        &format!(
-            "/api/v1/projects/{}/harnesses/demo/catalog/refresh",
-            seed.project_id
-        ),
+        workspace,
         "member-refresh",
-        json!({}),
+        refresh.clone(),
     )
     .await;
     assert_eq!(
@@ -360,31 +357,29 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
         "{}",
         member_refresh.1
     );
-    // A workspace admin who only views this project may still refresh; here
-    // it stops at needing a signed-in account, not at permissions.
+    // A workspace admin who only views this project may still refresh the
+    // workspace's catalog; here it stops at needing a signed-in account, not
+    // at permissions.
     sqlx::query("UPDATE organization_memberships SET role = 'admin' WHERE actor_id = (SELECT DISTINCT actor_id FROM project_memberships WHERE handle = 'w2-member')")
         .execute(&pool)
         .await
         .expect("make member a workspace admin");
-    sqlx::query("UPDATE project_memberships SET role = 'viewer' WHERE handle = 'w2-member'")
+    sqlx::query("UPDATE project_memberships SET role = 'viewer' WHERE handle = 'w2-member' AND project_id = $1")
+        .bind(seed.project_id)
         .execute(&pool)
         .await
         .expect("make member a project viewer");
-    let admin_refresh = send(
+    let admin_refresh = catalog_op(
         &application,
         member,
-        "POST",
-        &format!(
-            "/api/v1/projects/{}/harnesses/demo/catalog/refresh",
-            seed.project_id
-        ),
+        workspace,
         "admin-viewer-refresh",
-        json!({}),
+        refresh.clone(),
     )
     .await;
     assert_eq!(admin_refresh.0, StatusCode::CONFLICT, "{}", admin_refresh.1);
     assert_eq!(
-        admin_refresh.2["error"]["code"], "execution_profile_required",
+        admin_refresh.2["code"], "execution_profile_required",
         "{}",
         admin_refresh.1
     );
@@ -392,15 +387,12 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
         .execute(&pool)
         .await
         .expect("restore member workspace role");
-    sqlx::query("UPDATE project_memberships SET role = 'member' WHERE handle = 'w2-member'")
+    sqlx::query("UPDATE project_memberships SET role = 'member' WHERE handle = 'w2-member' AND project_id = $1")
+        .bind(seed.project_id)
         .execute(&pool)
         .await
         .expect("restore member project role");
     // A refresh retried with the same key replays instead of listing again.
-    let refresh_path = format!(
-        "/api/v1/projects/{}/harnesses/demo/catalog/refresh",
-        seed.project_id
-    );
     let refreshed_at = || {
         sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
             "SELECT refreshed_at FROM harness_catalog_refreshes WHERE organization_id = $1 AND adapter_kind = 'demo'",
@@ -408,24 +400,22 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
         .bind(seed.organization_id)
         .fetch_one(&pool)
     };
-    let refreshed = send(
+    let refreshed = catalog_op(
         &application,
         owner,
-        "POST",
-        &refresh_path,
+        workspace,
         "owner-refresh",
-        json!({}),
+        refresh.clone(),
     )
     .await;
     assert_eq!(refreshed.0, StatusCode::OK, "{}", refreshed.1);
     let first_refresh = refreshed_at().await.expect("first refresh recorded");
-    let replayed = send(
+    let replayed = catalog_op(
         &application,
         owner,
-        "POST",
-        &refresh_path,
+        workspace,
         "owner-refresh",
-        json!({}),
+        refresh.clone(),
     )
     .await;
     assert_eq!(replayed.0, StatusCode::OK, "{}", replayed.1);
@@ -433,18 +423,17 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
         refreshed_at().await.expect("refresh still recorded"),
         first_refresh
     );
-    let inconsistent = send(
+    let inconsistent = catalog_op(
         &application,
         owner,
-        "PUT",
-        &model,
+        workspace,
         "owner-inconsistent",
-        json!({"reasoningLevels": ["low"], "defaultReasoning": "high"}),
+        small(json!({"reasoningLevels": ["low"], "defaultReasoning": "high"})),
     )
     .await;
     assert_eq!(
         inconsistent.0,
-        StatusCode::BAD_REQUEST,
+        StatusCode::UNPROCESSABLE_ENTITY,
         "{}",
         inconsistent.1
     );
@@ -465,17 +454,13 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
         ("demo-small", "default-small"),
         ("demo-large", "default-large"),
     ] {
-        let path = format!(
-            "/api/v1/projects/{}/harnesses/demo/models/{chosen}",
-            seed.project_id
-        );
-        let saved = send(
+        let saved = catalog_op(
             &application,
             owner,
-            "PUT",
-            &path,
+            workspace,
             key,
-            json!({"isDefault": true}),
+            json!({"projectId": seed.project_id, "harness": "demo", "model": chosen,
+                "overrides": {"isDefault": true}}),
         )
         .await;
         assert_eq!(saved.0, StatusCode::OK, "{}", saved.1);
@@ -488,13 +473,12 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
             .collect::<Vec<_>>();
         assert_eq!(defaults, vec![json!(chosen)]);
     }
-    let hidden = send(
+    let hidden = catalog_op(
         &application,
         owner,
-        "PUT",
-        &model,
+        workspace,
         "owner-hide",
-        json!({"hidden": true}),
+        small(json!({"hidden": true})),
     )
     .await;
     assert_eq!(hidden.0, StatusCode::OK, "{}", hidden.1);
@@ -534,38 +518,33 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
     let demo = demo_in(&listed.2);
     assert_eq!(demo["canEditCatalog"], false);
     assert_eq!(small_hidden(&demo), Some(json!(true)));
-    let workspace_model = format!("{workspace_catalog}/demo/models/demo-small");
-    for (method, path, key) in [
-        ("PUT", workspace_model.as_str(), "member-workspace-show"),
+    let workspace_small = |change: Value| {
+        let mut input = json!({"projectId": "workspace", "harness": "demo", "model": "demo-small"});
+        for (name, value) in change.as_object().expect("change") {
+            input[name] = value.clone();
+        }
+        input
+    };
+    for (input, key) in [
         (
-            "DELETE",
-            workspace_model.as_str(),
+            workspace_small(json!({"overrides": {"hidden": false}})),
+            "member-workspace-show",
+        ),
+        (
+            workspace_small(json!({"remove": true})),
             "member-workspace-remove",
         ),
-        (
-            "POST",
-            &format!("{workspace_catalog}/demo/refresh"),
-            "member-workspace-refresh",
-        ),
+        (refresh.clone(), "member-workspace-refresh"),
     ] {
-        let edit = send(
-            &application,
-            member,
-            method,
-            path,
-            key,
-            json!({"hidden": false}),
-        )
-        .await;
-        assert_eq!(edit.0, StatusCode::FORBIDDEN, "{method} {path}: {}", edit.1);
+        let edit = catalog_op(&application, member, workspace, key, input.clone()).await;
+        assert_eq!(edit.0, StatusCode::FORBIDDEN, "{input}: {}", edit.1);
     }
-    let shown = send(
+    let shown = catalog_op(
         &application,
         owner,
-        "PUT",
-        &workspace_model,
+        workspace,
         "owner-workspace-show",
-        json!({"hidden": false}),
+        workspace_small(json!({"overrides": {"hidden": false}})),
     )
     .await;
     assert_eq!(shown.0, StatusCode::OK, "{}", shown.1);
@@ -584,13 +563,12 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
         small_hidden(&demo_in(&project_listed.2)),
         Some(json!(false))
     );
-    let workspace_refresh = send(
+    let workspace_refresh = catalog_op(
         &application,
         owner,
-        "POST",
-        &format!("{workspace_catalog}/demo/refresh"),
+        workspace,
         "owner-workspace-refresh",
-        json!({}),
+        refresh.clone(),
     )
     .await;
     assert_eq!(
@@ -599,13 +577,13 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
         "{}",
         workspace_refresh.1
     );
-    let unknown_harness = send(
+    let unknown_harness = catalog_op(
         &application,
         owner,
-        "PUT",
-        &format!("{workspace_catalog}/not-a-harness/models/demo-small"),
+        workspace,
         "owner-workspace-unknown",
-        json!({"hidden": true}),
+        json!({"projectId": "workspace", "harness": "not-a-harness", "model": "demo-small",
+            "overrides": {"hidden": true}}),
     )
     .await;
     assert_eq!(
@@ -614,16 +592,12 @@ async fn accounts_run_concurrently_with_frozen_settings_and_stay_with_their_owne
         "{}",
         unknown_harness.1
     );
-    let elsewhere = send(
+    let elsewhere = catalog_op(
         &application,
         owner,
-        "PUT",
-        &format!(
-            "/api/v1/organizations/{}/model-catalog/demo/models/demo-small",
-            Uuid::now_v7()
-        ),
+        Uuid::now_v7(),
         "owner-elsewhere",
-        json!({"hidden": true}),
+        workspace_small(json!({"overrides": {"hidden": true}})),
     )
     .await;
     assert_eq!(elsewhere.0, StatusCode::NOT_FOUND, "{}", elsewhere.1);
@@ -876,6 +850,32 @@ async fn run_config(pool: &PgPool, run_id: Uuid) -> Value {
         .expect("read run config")
 }
 
+/// Edits the model catalog as the settings pages do: `model_catalog_set` in
+/// `workspace`, answering the harness it leaves (or the refusal).
+async fn catalog_op(
+    application: &axum::Router,
+    who: (&str, &str),
+    workspace: Uuid,
+    key: &str,
+    input: Value,
+) -> (StatusCode, String, Value) {
+    let (status, text, body) = send(
+        application,
+        who,
+        "POST",
+        &format!("/api/v2/w/{workspace}/ops/model_catalog_set"),
+        key,
+        input,
+    )
+    .await;
+    if body["outcome"] == "ok" {
+        let harness = body["value"]["harness"].clone();
+        (status, harness.to_string(), harness)
+    } else {
+        (status, text, body)
+    }
+}
+
 pub(super) async fn send(
     application: &axum::Router,
     (cookie, csrf): (&str, &str),
@@ -885,6 +885,14 @@ pub(super) async fn send(
     body: Value,
 ) -> (StatusCode, String, Value) {
     let key = key.replace(|character: char| !character.is_ascii_alphanumeric(), "-");
+    // The task writes moved to operations (K2.22).
+    if crate::support::tasks::op_for(method, path, &body).is_some() {
+        let browser = crate::support::tasks::browser(cookie, csrf);
+        let (status, value) =
+            crate::support::tasks::send(application, &browser, method, path, Some(&key), body)
+                .await;
+        return (status, value.to_string(), value);
+    }
     response_json(
         application
             .clone()
@@ -906,6 +914,33 @@ pub(super) async fn send(
             .expect("response"),
     )
     .await
+}
+
+/// Runs an operation (`POST /api/v2/ops/{name}`) the way [`send`] sends a
+/// request, answering the operation's value, or the whole envelope when it
+/// didn't succeed.
+pub(super) async fn send_op(
+    application: &axum::Router,
+    who: (&str, &str),
+    name: &str,
+    key: &str,
+    body: Value,
+) -> (StatusCode, String, Value) {
+    let (status, text, envelope) = send(
+        application,
+        who,
+        "POST",
+        &format!("/api/v2/ops/{name}"),
+        key,
+        body,
+    )
+    .await;
+    let value = if envelope["outcome"] == "ok" {
+        envelope["value"].clone()
+    } else {
+        envelope
+    };
+    (status, text, value)
 }
 
 pub(super) async fn send_get(

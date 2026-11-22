@@ -325,6 +325,22 @@ button.aw-convhead__title[aria-expanded="true"] {
   color: var(--content-fg);
 }
 
+/* The name opens the person's profile (C2.17). Kept here, not with the
+   profile dialog, whose styles load only once a dialog opens. */
+.aw-msg__author-button {
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.aw-msg__author-button:hover {
+  text-decoration: underline;
+}
+
 .aw-msg__time {
   font: var(--t-caption);
   color: var(--content-fg-muted);

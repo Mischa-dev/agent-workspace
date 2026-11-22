@@ -6,10 +6,9 @@
 //! Launch dialog treat it like Codex. Only its own workspace sees it.
 //!
 //! Workspace admins register and change harnesses; every member can see
-//! them. The registry is reloaded from the database after each change and
-//! every half minute, so every server process agrees.
-
-use std::{sync::Arc, time::Duration};
+//! them. The built-in host runs them (`hosts::builtin::custom`), reloading
+//! them from the database after each change and every half minute, so
+//! every server process agrees.
 
 use axum::{
     Json, Router,
@@ -28,15 +27,14 @@ use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
-    provider::{
-        command_line::{self, CommandAdapter, CommandSpec, RunnerAdapter},
+    harness::{
         manifest::{AdapterManifest, RunLocation},
-        registry::CustomAdapter,
+        registered,
     },
+    hosts::builtin::custom,
 };
 
 const MAX_HARNESSES: i64 = 50;
-const RELOAD_EVERY: Duration = Duration::from_secs(30);
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -77,91 +75,19 @@ fn command_of(row: &HarnessRow) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn adapter_for(state: &AppState, row: &HarnessRow) -> Result<CustomAdapter, String> {
-    let spec = |manifest| CommandSpec {
-        manifest,
-        command: command_of(row),
-        secret_names: row.secret_names.clone(),
-        allowed_dirs: state.config.command_harness_dirs.clone(),
-    };
-    let adapter: Arc<dyn crate::provider::adapter::HarnessAdapter> = match row.transport.as_str() {
-        "runner" => Arc::new(RunnerAdapter::new(command_line::build_manifest(
-            &row.kind,
-            &row.name,
-            &row.manifest,
-            RunLocation::Cloud,
-        )?)),
-        "acp" => Arc::new(crate::provider::acp::AcpAdapter::new(
-            spec(crate::provider::acp::build_manifest(
-                &row.kind,
-                &row.name,
-                &row.manifest,
-            )?),
-            state.config.codex_host_concurrency_limit,
-            state.supervisors.host_cell(),
-        )),
-        _ => Arc::new(CommandAdapter::new(
-            spec(command_line::build_manifest(
-                &row.kind,
-                &row.name,
-                &row.manifest,
-                RunLocation::LocalHost,
-            )?),
-            state.config.codex_host_concurrency_limit,
-            state.supervisors.host_cell(),
-        )),
-    };
-    Ok(CustomAdapter {
-        organization_id: row.organization_id,
-        enabled: row.enabled,
-        runner_actor_id: row.runner_actor_id,
-        adapter,
-    })
-}
-
-/// Loads every registered harness into the registry.
-pub async fn reload(state: &AppState) -> Result<(), AppError> {
-    // Every workspace's registered harnesses.
-    crate::tenancy::system("harnesses.reload", Box::pin(reload_here(state))).await
-}
-
-async fn reload_here(state: &AppState) -> Result<(), AppError> {
-    let rows = sqlx::query_as::<_, HarnessRow>(&format!(
-        "SELECT {COLUMNS} FROM custom_harnesses ORDER BY created_at"
-    ))
-    .fetch_all(crate::db::scoped(&state.pool))
-    .await?;
-    let adapters = rows
-        .iter()
-        .filter_map(|row| match adapter_for(state, row) {
-            Ok(adapter) => Some(adapter),
-            Err(_) => {
-                tracing::warn!(harness_id = %row.id, "a registered harness's manifest no longer loads");
-                None
-            }
-        })
-        .collect();
-    state.supervisors.replace_custom(adapters);
-    Ok(())
-}
-
-/// Keeps the registry in step with the database for the life of the server.
-pub fn spawn_reloader(state: AppState) {
-    tokio::spawn(async move {
-        loop {
-            // Every workspace's registered harnesses.
-            if let Err(error) = crate::tenancy::system("harnesses.reload", reload(&state)).await {
-                tracing::warn!(
-                    error_category = error.log_category(),
-                    "registered harnesses not reloaded"
-                );
-            }
-            tokio::select! {
-                () = tokio::time::sleep(RELOAD_EVERY) => {}
-                () = state.supervisors.shutdown_requested() => return,
-            }
-        }
-    });
+/// The manifest a registration gives its harness: what the host runs it by
+/// and what the server offers and checks launches against.
+pub fn manifest_of(
+    kind: &str,
+    name: &str,
+    transport: &str,
+    manifest: &Value,
+) -> Result<AdapterManifest, String> {
+    match transport {
+        "acp" => registered::acp_manifest(kind, name, manifest),
+        "runner" => registered::command_line_manifest(kind, name, manifest, RunLocation::Cloud),
+        _ => registered::command_line_manifest(kind, name, manifest, RunLocation::LocalHost),
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -204,9 +130,7 @@ pub struct RunnerChoice {
 }
 
 async fn view(state: &AppState, row: HarnessRow) -> Result<HarnessView, AppError> {
-    let resolved = adapter_for(state, &row)
-        .ok()
-        .map(|custom| custom.adapter.manifest().clone());
+    let resolved = manifest_of(&row.kind, &row.name, &row.transport, &row.manifest).ok();
     let runner_name = match row.runner_actor_id {
         Some(actor_id) => {
             sqlx::query_scalar::<_, String>(
@@ -398,7 +322,7 @@ async fn check(state: &AppState, row: &HarnessRow) -> Result<(), AppError> {
     valid_secret_names(&row.secret_names)?;
     match row.transport.as_str() {
         "command" | "acp" => {
-            command_line::validate_command(&command_of(row), &state.config.command_harness_dirs)
+            custom::validate_command(&command_of(row), &state.config.command_harness_dirs)
                 .map_err(|_| AppError::Validation("command"))?;
         }
         "runner" => {
@@ -409,7 +333,8 @@ async fn check(state: &AppState, row: &HarnessRow) -> Result<(), AppError> {
         }
         _ => return Err(AppError::Validation("transport")),
     }
-    adapter_for(state, row).map_err(|_| AppError::Validation("manifest"))?;
+    manifest_of(&row.kind, &row.name, &row.transport, &row.manifest)
+        .map_err(|_| AppError::Validation("manifest"))?;
     Ok(())
 }
 
@@ -417,24 +342,11 @@ async fn check(state: &AppState, row: &HarnessRow) -> Result<(), AppError> {
 fn explain(state: &AppState, row: &HarnessRow) -> Option<String> {
     if runs_program(&row.transport)
         && let Err(reason) =
-            command_line::validate_command(&command_of(row), &state.config.command_harness_dirs)
+            custom::validate_command(&command_of(row), &state.config.command_harness_dirs)
     {
         return Some(reason);
     }
-    match row.transport.as_str() {
-        "acp" => crate::provider::acp::build_manifest(&row.kind, &row.name, &row.manifest).err(),
-        "runner" => {
-            command_line::build_manifest(&row.kind, &row.name, &row.manifest, RunLocation::Cloud)
-                .err()
-        }
-        _ => command_line::build_manifest(
-            &row.kind,
-            &row.name,
-            &row.manifest,
-            RunLocation::LocalHost,
-        )
-        .err(),
-    }
+    manifest_of(&row.kind, &row.name, &row.transport, &row.manifest).err()
 }
 
 /// Whether a registration runs a program on this host: a command-line
@@ -513,42 +425,47 @@ async fn create(
         return Err(AppError::Conflict("harness", "name in use"));
     }
     // Kinds are unique across the server; another workspace may have
-    // taken this one.
+    // taken this one, and its row is hidden from this one, so the insert
+    // itself finds out (and the next suffix is tried).
     let base = row.kind.clone();
+    let mut inserted = false;
     for attempt in 0..20 {
         if attempt > 0 {
             row.kind = format!("{}_{}", base, attempt + 1);
         }
-        let taken = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM custom_harnesses WHERE kind = $1)",
+        if crate::harness_catalog::is_builtin(&mut transaction, &row.kind).await? {
+            continue;
+        }
+        inserted = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO custom_harnesses (
+                id, organization_id, kind, name, transport, manifest, command,
+                secret_names, runner_actor_id, created_by_actor_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (kind) DO NOTHING
+            RETURNING id
+            "#,
         )
+        .bind(row.id)
+        .bind(organization_id)
         .bind(&row.kind)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if !taken && state.supervisors.manifest(&row.kind).is_none() {
+        .bind(&row.name)
+        .bind(&row.transport)
+        .bind(&row.manifest)
+        .bind(&row.command)
+        .bind(&row.secret_names)
+        .bind(row.runner_actor_id)
+        .bind(principal.actor_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .is_some();
+        if inserted {
             break;
         }
     }
-    sqlx::query(
-        r#"
-        INSERT INTO custom_harnesses (
-            id, organization_id, kind, name, transport, manifest, command,
-            secret_names, runner_actor_id, created_by_actor_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        "#,
-    )
-    .bind(row.id)
-    .bind(organization_id)
-    .bind(&row.kind)
-    .bind(&row.name)
-    .bind(&row.transport)
-    .bind(&row.manifest)
-    .bind(&row.command)
-    .bind(&row.secret_names)
-    .bind(row.runner_actor_id)
-    .bind(principal.actor_id)
-    .execute(&mut *transaction)
-    .await?;
+    if !inserted {
+        return Err(AppError::Conflict("harness", "no free kind for this name"));
+    }
     crate::settings::audit(
         &mut transaction,
         &headers,
@@ -561,7 +478,7 @@ async fn create(
     )
     .await?;
     transaction.commit().await?;
-    reload(&state).await?;
+    custom::reload(&state).await?;
     let stored = load(&state, organization_id, row.id).await?;
     Ok((StatusCode::CREATED, Json(view(&state, stored).await?)).into_response())
 }
@@ -672,7 +589,7 @@ async fn update(
     )
     .await?;
     transaction.commit().await?;
-    reload(&state).await?;
+    custom::reload(&state).await?;
     let stored = load(&state, organization_id, harness_id).await?;
     Ok(Json(view(&state, stored).await?).into_response())
 }
@@ -718,7 +635,7 @@ async fn remove(
     )
     .await?;
     transaction.commit().await?;
-    reload(&state).await?;
+    custom::reload(&state).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

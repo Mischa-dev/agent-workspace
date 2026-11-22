@@ -157,9 +157,9 @@ test('a page embeds a task and a task list, as their module declares them', asyn
   const { id, href } = await newPage(context, page, `Embeds ${Date.now()}`)
   const { request, headers } = await writer(context, page)
   const title = `Embedded task ${Date.now()}`
-  const created = await request.post(`/api/v1/projects/${projectId}/work-items`, { headers: headers(`embed-task-${Date.now()}`), data: { title } })
+  const created = await request.post('/api/v2/ops/task_create', { headers: headers(`embed-task-${Date.now()}`), data: { projectId, title } })
   expect(created.ok(), await created.text()).toBe(true)
-  const task = (await created.json()) as { id: string }
+  const task = { id: ((await created.json()) as { value: { workItemId: string } }).value.workItemId }
   const current = (await (await request.get(`/api/v1/pages/${id}`)).json()) as { version: number; body: string }
   const saved = await request.patch(`/api/v1/pages/${id}`, {
     headers: headers(`embed-page-${Date.now()}`),

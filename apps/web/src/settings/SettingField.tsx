@@ -80,7 +80,7 @@ export function SettingField({
       onSaved?.()
     },
     onError: async (error) => {
-      if (isApiError(error) && (error.code === 'version_conflict' || error.status === 409)) {
+      if (isApiError(error) && (error.code === 'conflict' || error.code === 'version_conflict' || error.status === 409)) {
         await queryClient.invalidateQueries({ queryKey })
         setNotice({ tone: 'warning', text: 'Someone else changed this setting just now. The latest value is shown; make your change again if you still want it.' })
       } else {

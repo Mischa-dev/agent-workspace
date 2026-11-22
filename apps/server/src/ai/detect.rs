@@ -1122,7 +1122,7 @@ impl RunContext<'_> {
                    COALESCE(membership.display_name, 'Someone') AS author,
                    left(message.plain_text, 1200) AS text,
                    (
-                       SELECT link.work_item_id FROM work_item_links link
+                       SELECT link.work_item_id FROM task_links link
                        JOIN task_rows item ON item.id = link.work_item_id
                        WHERE link.project_id = $1
                          AND item.archived_at IS NULL

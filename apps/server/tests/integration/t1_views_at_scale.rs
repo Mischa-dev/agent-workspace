@@ -58,14 +58,13 @@ async fn ten_thousand_tasks_page_by_every_field_on_index_paths() {
     };
     let project = create_project(&setup, "SCALE", "Scale").await;
     let project_id = Uuid::parse_str(&project).expect("project");
-    let (status, seed) = send(
+    let (status, seed) = crate::support::tasks::send(
         &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{project}/work-items"),
-            Some("seed-task"),
-            json!({"title": "Seed task"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{project}/work-items"),
+        Some("seed-task"),
+        json!({"title": "Seed task"}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{seed}");
@@ -74,14 +73,15 @@ async fn ten_thousand_tasks_page_by_every_field_on_index_paths() {
         &setup.app,
         setup.browser.request(
             "POST",
-            &format!("/api/v1/projects/{project}/labels"),
+            "/api/v2/ops/label_create",
             Some("label-ops"),
-            json!({"name": "Ops"}),
+            json!({"projectId": project, "name": "Ops"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{label}");
-    let label_id = Uuid::parse_str(label["id"].as_str().expect("label id")).expect("label");
+    assert_eq!(status, StatusCode::OK, "{label}");
+    let label_id =
+        Uuid::parse_str(label["value"]["label"]["id"].as_str().expect("label id")).expect("label");
     let pool = &setup.pool;
     let milestone = Uuid::now_v7();
     sqlx::query(

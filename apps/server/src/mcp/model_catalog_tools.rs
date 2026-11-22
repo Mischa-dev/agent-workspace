@@ -11,14 +11,14 @@ use super::{
     McpPrincipal,
     common::{ToolResult, insert_audit, mark_via, parse_id, project_role},
 };
-use crate::{AppState, error::AppError, execution, provider::manifest::ModelOverrides, settings};
+use crate::{AppState, error::AppError, execution, harness::manifest::ModelOverrides, settings};
 
 const MANAGERS_ONLY: &str =
     "Changing the model lists takes a role that manages the workspace's settings.";
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ModelCatalogWriteArguments {
+pub(crate) struct ModelCatalogWriteArguments {
     /// A project in the workspace: its ID, link or key (such as "AWD").
     pub project_id: String,
     /// The harness whose model list to change, by kind (such as the
@@ -47,7 +47,7 @@ pub(super) struct ModelCatalogWriteArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ModelCatalogWriteValue {
+pub(crate) struct ModelCatalogWriteValue {
     /// "saved", "removed" or "refreshed".
     pub done: String,
     /// The harness with its manifest and the workspace's model list now.
@@ -119,7 +119,31 @@ fn change_of(
     Ok(Change::Save(model, Box::new(overrides)))
 }
 
-pub(super) async fn model_catalog_write(
+/// As an operation: a refresh by someone with no signed-in account for the
+/// harness keeps its own code (`execution_profile_required`), so the
+/// settings page can point them at their accounts.
+pub(crate) async fn model_catalog_set(
+    state: &AppState,
+    principal: &McpPrincipal,
+    arguments: ModelCatalogWriteArguments,
+) -> Result<ModelCatalogWriteValue, crate::ops::OpError> {
+    match model_catalog_write(state, principal, arguments).await {
+        ToolResult::Conflict { message } if message == SIGN_IN_FIRST => {
+            Err(crate::ops::OpError::Conflict {
+                reason: crate::ops::ConflictReason::State {
+                    code: "execution_profile_required",
+                },
+                message: SIGN_IN_FIRST.into(),
+                current: None,
+            })
+        }
+        result => crate::mcp::task_commands::tool_answer(result),
+    }
+}
+
+const SIGN_IN_FIRST: &str = "Sign in to an account for that harness first: a refresh lists its models through your own account.";
+
+pub(crate) async fn model_catalog_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ModelCatalogWriteArguments,
@@ -217,9 +241,7 @@ pub(super) async fn model_catalog_write(
             ToolResult::not_found("That harness in this workspace")
         }
         Err(AppError::NotFound("harness_model")) => ToolResult::not_found("That model"),
-        Err(AppError::ExecutionProfileRequired) => ToolResult::conflict(
-            "Sign in to an account for that harness first: a refresh lists its models through your own account.",
-        ),
+        Err(AppError::ExecutionProfileRequired) => ToolResult::conflict(SIGN_IN_FIRST),
         Err(error) => ToolResult::from_error(error, "model_catalog_write"),
     }
 }

@@ -36,6 +36,31 @@ use crate::{
 
 const OWNER_LOGIN: &str = "bug-report-owner";
 
+/// Makes or changes a link through its operation: the status, the body as
+/// text, and the operation's value (or the refusal).
+async fn link_op(
+    application: &axum::Router,
+    who: (&str, &str),
+    name: &str,
+    key: &str,
+    input: Value,
+) -> (StatusCode, String, Value) {
+    let (status, text, mut answer) = send(
+        application,
+        who,
+        "POST",
+        &format!("/api/v2/ops/{name}"),
+        key,
+        input,
+    )
+    .await;
+    if status.is_success() {
+        (status, text, answer["value"].take())
+    } else {
+        (status, text, answer)
+    }
+}
+
 /// Every log line written on this thread while it's held.
 #[derive(Clone, Default)]
 struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
@@ -180,16 +205,16 @@ async fn bug_report_links_make_tasks_as_their_maker_only() {
     let member = (member_cookie.as_str(), member_csrf.as_str());
     let links = format!("/api/v1/projects/{}/bug-report-links", seed.project_id);
 
-    let created = send(
+    let project = seed.project_id;
+    let created = link_op(
         &application,
         owner,
-        "POST",
-        &links,
+        "bug_report_link_create",
         "link",
-        json!({"name": "Ragdoll Rapture"}),
+        json!({"projectId": project, "name": "Ragdoll Rapture"}),
     )
     .await;
-    assert_eq!(created.0, StatusCode::CREATED, "{}", created.1);
+    assert_eq!(created.0, StatusCode::OK, "{}", created.1);
     let link_id = created.2["link"]["id"]
         .as_str()
         .expect("link id")
@@ -312,50 +337,50 @@ async fn bug_report_links_make_tasks_as_their_maker_only() {
     assert_eq!(listed.2["links"][0]["reportCount"], json!(3));
     assert_eq!(listed.2["links"][0]["canManage"], json!(false));
     assert!(!listed.1.contains("awbr_"));
-    let link_path = format!("/api/v1/bug-report-links/{link_id}");
-    let refused = send(
+    let change = |mut input: Value| {
+        input["projectId"] = json!(project);
+        input["linkId"] = json!(link_id);
+        input
+    };
+    let refused = link_op(
         &application,
         member,
-        "PATCH",
-        &link_path,
+        "bug_report_link_update",
         "member-pause",
-        json!({"state": "paused"}),
+        change(json!({"state": "paused"})),
     )
     .await;
     assert_eq!(refused.0, StatusCode::NOT_FOUND, "{}", refused.1);
 
     // Paused, it takes nothing.
-    let paused = send(
+    let paused = link_op(
         &application,
         owner,
-        "PATCH",
-        &link_path,
+        "bug_report_link_update",
         "pause",
-        json!({"state": "paused"}),
+        change(json!({"state": "paused"})),
     )
     .await;
     assert_eq!(paused.0, StatusCode::OK, "{}", paused.1);
     let (status, _, _) = report(&application, &path, "text/plain", "Paused report").await;
     assert_eq!(status, StatusCode::FORBIDDEN);
-    let resumed = send(
+    let resumed = link_op(
         &application,
         owner,
-        "PATCH",
-        &link_path,
+        "bug_report_link_update",
         "resume",
-        json!({"state": "active"}),
+        change(json!({"state": "active"})),
     )
     .await;
     assert_eq!(resumed.0, StatusCode::OK, "{}", resumed.1);
 
     // Replaced, the old link stops working and the new one works.
-    let replaced = send(
+    let replaced = link_op(
         &application,
         owner,
-        "POST",
-        &format!("{link_path}/replace"),
+        "bug_report_link_update",
         "replace",
-        json!({}),
+        change(json!({"replace": true})),
     )
     .await;
     assert_eq!(replaced.0, StatusCode::OK, "{}", replaced.1);
@@ -367,16 +392,15 @@ async fn bug_report_links_make_tasks_as_their_maker_only() {
     assert_eq!(status, StatusCode::CREATED);
 
     // A link whose maker left the project turns itself off.
-    let member_link = send(
+    let member_link = link_op(
         &application,
         member,
-        "POST",
-        &links,
+        "bug_report_link_create",
         "member-link",
-        json!({"name": "Website"}),
+        json!({"projectId": project, "name": "Website"}),
     )
     .await;
-    assert_eq!(member_link.0, StatusCode::CREATED, "{}", member_link.1);
+    assert_eq!(member_link.0, StatusCode::OK, "{}", member_link.1);
     let member_path = path_of(member_link.2["url"].as_str().expect("member url"));
     let (status, _, _) = report(&application, &member_path, "text/plain", "Works").await;
     assert_eq!(status, StatusCode::CREATED);

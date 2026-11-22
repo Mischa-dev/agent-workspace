@@ -30,29 +30,34 @@ test('a task moves to another project after a private preview and one confirmati
   const projects = (await (await request.get('/api/v1/projects')).json()) as { projects: Project[] }
   const home = projects.projects.find((project) => project.id === source)
   expect(home).toBeTruthy()
-  const madeTarget = await request.post('/api/v1/projects', {
+  const madeTarget = await request.post(`/api/v2/w/${home?.organizationId}/ops/space_create`, {
     headers: headers(`move-target-${run}`),
-    data: { organizationId: home?.organizationId, key: `MV${run}`, name: `Moved here ${run}` },
+    data: { key: `MV${run}`, name: `Moved here ${run}` },
   })
   expect(madeTarget.ok(), await madeTarget.text()).toBe(true)
-  const target = (await madeTarget.json()) as Project
+  const target = ((await madeTarget.json()) as { value: Project }).value
 
   // Notes fits the target's Notes; the target's Tier has no Gold.
   const field = async (projectId: string, body: Record<string, unknown>, key: string) => {
-    const made = await request.post(`/api/v1/projects/${projectId}/fields`, { headers: headers(key), data: body })
+    const made = await request.post('/api/v2/ops/field_create', { headers: headers(key), data: { projectId, ...body } })
     expect(made.ok(), await made.text()).toBe(true)
-    return (await made.json()) as Field
+    return ((await made.json()) as { value: { field: Field } }).value.field
   }
   await field(source, { name: `Notes ${run}`, type: 'text' }, `move-notes-src-${run}`)
   await field(source, { name: `Tier ${run}`, type: 'single_choice', options: [{ name: 'Gold' }] }, `move-tier-src-${run}`)
   const targetNotes = await field(target.id, { name: `Notes ${run}`, type: 'text' }, `move-notes-dst-${run}`)
   await field(target.id, { name: `Tier ${run}`, type: 'single_choice', options: [{ name: 'Silver' }] }, `move-tier-dst-${run}`)
-  const created = await request.post(`/api/v1/projects/${source}/work-items`, {
+  const created = await request.post('/api/v2/ops/task_create', {
     headers: headers(`move-task-${run}`),
-    data: { title: `Move me ${run}`, fieldValues: { [`Notes ${run}`]: 'carried words', [`Tier ${run}`]: 'Gold' } },
+    data: { projectId: source, title: `Move me ${run}`, fields: { [`Notes ${run}`]: 'carried words', [`Tier ${run}`]: 'Gold' } },
   })
   expect(created.ok(), await created.text()).toBe(true)
-  const task = (await created.json()) as { id: string; key: string; fieldValues: Record<string, unknown> }
+  const { workItemId } = ((await created.json()) as { value: { workItemId: string } }).value
+  const task = (await (await request.get(`/api/v1/projects/${source}/work-items/${workItemId}`)).json()) as {
+    id: string
+    key: string
+    fieldValues: Record<string, unknown>
+  }
 
   await page.goto(`/projects/${source}/work-items/${task.id}`)
   await page.getByRole('button', { name: 'Task actions' }).first().click()

@@ -66,10 +66,10 @@ async fn chat_only_workspace(name: &str, with_agent: bool) {
     let (status, switched) = send(
         &world.app,
         world.owner.browser.request(
-            "PUT",
-            &format!("/api/v1/organizations/{organization}/modules"),
-            None,
-            json!({ "switches": switches }),
+            "POST",
+            &format!("/api/v2/w/{organization}/ops/workspace_update"),
+            Some("chat-only-switches"),
+            json!({ "projectId": "workspace", "modules": switches }),
         ),
     )
     .await;
@@ -249,16 +249,10 @@ async fn chat_only_workspace(name: &str, with_agent: bool) {
             assert!(!title.contains(word), "the inbox says {word:?}: {item}");
         }
     }
-    let (status, saved) = send(
-        &world.app,
-        ben.browser.request(
-            "POST",
-            "/api/v1/later",
-            None,
-            json!({ "messageId": message }),
-        ),
-    )
-    .await;
+    let (status, saved) = ben
+        .browser
+        .op(&world.app, "later_save", json!({ "messageId": message }))
+        .await;
     assert!(status.is_success(), "{status} {saved}");
 
     // Someone new joins by link and can start a DM.

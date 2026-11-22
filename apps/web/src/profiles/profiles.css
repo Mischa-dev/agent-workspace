@@ -88,16 +88,3 @@
 .aw-profile-form__picture p {
   margin: 0;
 }
-
-.aw-msg__author-button {
-  padding: 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-}
-
-.aw-msg__author-button:hover {
-  text-decoration: underline;
-}

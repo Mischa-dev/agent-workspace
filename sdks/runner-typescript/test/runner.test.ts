@@ -66,15 +66,11 @@ test('a genuine push verifies; a tampered, stale, unsigned or wrongly keyed one 
   assert.equal(verifyPush({ secret, headers: new Headers(headers), body }).type, 'reply.requested')
 })
 
-test('the published fixtures verify: a standard push and an older typed one', () => {
+test('the published fixture verifies', () => {
   const standard = JSON.parse(fixture('webhook-standard.json')) as { secret: string; headers: Record<string, string>; body: string }
   const now = Number(standard.headers['webhook-timestamp'])
   const event = verifyPush({ secret: standard.secret, headers: standard.headers, body: standard.body, now })
   assert.equal(event.type, 'message.mentioned')
-  const typed = JSON.parse(fixture('webhook-typed_v1.json')) as typeof standard
-  const legacy = verifyPush({ secret: typed.secret, headers: typed.headers, body: typed.body, now })
-  assert.equal(legacy.type, 'reply.requested')
-  assert.deepEqual(legacy.data.thing, { kind: 'reply_request', id: '01a2b3c4-0000-7000-8000-0000000000f1' })
 })
 
 test('a test push is answered and claims nothing', () => {
@@ -183,7 +179,7 @@ test('a pushed request is claimed, worked and answered; Stop aborts it; follow-u
     reply_claim: (args) =>
       args.requestId === 'r1' ? claimFor('r1', '@bot fix it\nSettings: model=m1') : claimFor(String(args.requestId), 'also this', 'r1'),
     session_bind: () => ({ outcome: 'ok', value: { sessionId: 's', conversationId: 'thread-1', externalRef: 'x', state: 'active' } }),
-    reply_progress: () => ({ outcome: 'ok', value: { requestId: 'r1', status: 'claimed', leaseExpiresAt: 'later' } }),
+    reply_progress_report: () => ({ outcome: 'ok', value: { requestId: 'r1', status: 'claimed', leaseExpiresAt: 'later' } }),
     reply_send: () => ({ outcome: 'conflict', message: 'stopped' }),
   })
   let seen: RequestContext | undefined
@@ -227,7 +223,7 @@ test('a pushed request is claimed, worked and answered; Stop aborts it; follow-u
     externalRef: 'session-9',
     harness: 'custom',
   })
-  assert.deepEqual(calls.find((call) => call.name === 'reply_progress')?.arguments, { requestId: 'r1', generation: 3, status: 'Working' })
+  assert.deepEqual(calls.find((call) => call.name === 'reply_progress_report')?.arguments, { requestId: 'r1', generation: 3, status: 'Working' })
 })
 
 test('a launched request reports steps and results on its run; one without a run reports nothing', async () => {
@@ -330,9 +326,9 @@ test('the channel replies through reply_send, posts through message_send, and fe
     tools: {
       reply_send: () => ({ outcome: 'ok', value: { requestId: 'r1', status: 'answered', messageId: 'm1' } }),
       message_send: () => ({ outcome: 'ok', value: { messageId: 'm2' } }),
-      message_edit: () => ({ outcome: 'ok', value: {} }),
+      message_update: () => ({ outcome: 'ok', value: {} }),
       message_react: () => ({ outcome: 'ok', value: {} }),
-      reply_progress: () => ({ outcome: 'ok', value: {} }),
+      reply_progress_report: () => ({ outcome: 'ok', value: {} }),
       file_link_get: () => ({
         outcome: 'ok',
         value: { url: 'https://aw.example/files/f1', name: 'note.txt', contentType: 'text/plain', size: 5, expiresAt: 'soon' },
@@ -360,9 +356,9 @@ test('the channel replies through reply_send, posts through message_send, and fe
     [
       ['reply_send', { requestId: 'r1', generation: 2, text: 'done', clientRequestId: 'mine-1', attachmentIds: ['f9'] }],
       ['message_send', { conversationId: 'c', text: 'hello', clientRequestId: 'mine-2' }],
-      ['message_edit', { messageId: 'm2', text: 'hello again' }],
+      ['message_update', { messageId: 'm2', text: 'hello again' }],
       ['message_react', { messageId: 'm2', emoji: '👀', reacted: true }],
-      ['reply_progress', { requestId: 'r1', generation: 2, status: 'Reading' }],
+      ['reply_progress_report', { requestId: 'r1', generation: 2, status: 'Reading' }],
       ['file_link_get', { fileId: 'f1' }],
     ],
   )

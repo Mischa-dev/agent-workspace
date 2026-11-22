@@ -49,11 +49,9 @@ fn role<'a>(listed: &'a Value, key: &str) -> &'a Value {
 }
 
 async fn create_role(setup: &Setup, browser: &Browser, body: Value) -> (StatusCode, Value) {
-    send(
-        &setup.app,
-        browser.request("POST", &roles_path(setup), None, body),
-    )
-    .await
+    browser
+        .op_in(&setup.app, setup.organization_id, "role_create", body)
+        .await
 }
 
 async fn assign(
@@ -71,19 +69,7 @@ async fn assign(
     .fetch_one(&setup.pool)
     .await
     .expect("membership version");
-    send(
-        &setup.app,
-        browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{actor}/role",
-                setup.organization_id
-            ),
-            None,
-            json!({"roleId": role_id, "applyToProjects": apply, "expectedVersion": version}),
-        ),
-    )
-    .await
+    browser.op_in(&setup.app, setup.organization_id, "role_assign", json!({"account": actor, "role": role_id, "applyToProjects": apply, "expectedVersion": version})).await
 }
 
 async fn make_admin(setup: &Setup, actor: Uuid) {
@@ -175,7 +161,7 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
         json!({"name": "Contractor", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit", "channels.post"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{contractor}");
+    assert_eq!(status, StatusCode::OK, "{contractor}");
     // K1.9: closed under levels (editing tasks holds the levels below it,
     // posting holds seeing conversations), with the required keys.
     assert_eq!(
@@ -198,63 +184,47 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
         json!({"name": "Too much", "baseRole": "member", "permissions": ["code.manage"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{beyond}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{beyond}");
 
     // Changing a starting role's words keeps its permissions. (K1.10: its
     // permissions are data an owner may edit, the Owner role's aside:
     // `every_membership_names_a_role_row_and_starting_roles_are_data`.)
     let member = role(&listed, "member").clone();
-    let member_path = format!(
-        "{}/{}",
-        roles_path(&setup),
-        member["id"].as_str().expect("id")
-    );
-    let (status, renamed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &member_path,
-            None,
-            json!({"expectedVersion": member["version"], "description": "Does the work."}),
-        ),
-    )
-    .await;
+    let (status, renamed) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_update",
+            json!({"role": member["id"], "expectedVersion": member["version"], "description": "Does the work."}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{renamed}");
     assert_eq!(renamed["permissions"], member["permissions"]);
     let owner_role = role(&listed, "owner").clone();
-    let (status, refused) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!(
-                "{}/{}",
-                roles_path(&setup),
-                owner_role["id"].as_str().expect("id")
-            ),
-            None,
-            json!({"expectedVersion": owner_role["version"], "agentLimit": ["tasks.view"]}),
-        ),
-    )
-    .await;
+    let (status, refused) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_update",
+            json!({"role": owner_role["id"], "expectedVersion": owner_role["version"], "agentLimit": ["tasks.view"]}),
+        )
+        .await;
     assert_eq!(
         status,
-        StatusCode::BAD_REQUEST,
+        StatusCode::UNPROCESSABLE_ENTITY,
         "owners' apps aren't limited: {refused}"
     );
-    let (status, _) = send(
-        app,
-        setup.browser.request(
-            "DELETE",
-            &format!(
-                "{}/{}",
-                roles_path(&setup),
-                owner_role["id"].as_str().expect("id")
-            ),
-            None,
-            Value::Null,
-        ),
-    )
-    .await;
+    let (status, _) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_delete",
+            json!({"role": owner_role["id"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::CONFLICT, "built-in roles stay");
 
     // Admins make roles from Member or Viewer, never from Admin.
@@ -271,7 +241,7 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
         json!({"name": "Reviewer", "baseRole": "viewer", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{reviewer}");
+    assert_eq!(status, StatusCode::OK, "{reviewer}");
     // An admin holding a narrowed role can't hand out what it took away.
     let (status, narrowed) = create_role(
         &setup,
@@ -279,7 +249,7 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
         json!({"name": "Ops", "baseRole": "admin", "permissions": ["roles.manage", "members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{narrowed}");
+    assert_eq!(status, StatusCode::OK, "{narrowed}");
     let (status, assigned) = assign(&setup, &setup.browser, alex, &narrowed["id"], false).await;
     assert_eq!(status, StatusCode::OK, "{assigned}");
     let (status, refused) = create_role(
@@ -320,16 +290,13 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, refused) = send(
-        &setup.app,
-        alex_browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{bea}"),
-            Some("ops-promotes-bea"),
-            json!({"expectedVersion": version, "role": "member"}),
-        ),
-    )
-    .await;
+    let (status, refused) = alex_browser
+        .op(
+            &setup.app,
+            "space_member_update",
+            json!({"spaceId": work, "account": bea, "expectedVersion": version, "role": "member"}),
+        )
+        .await;
     assert_eq!(
         status,
         StatusCode::FORBIDDEN,
@@ -339,12 +306,9 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
         &setup.app,
         alex_browser.request(
             "POST",
-            &format!(
-                "/api/v1/organizations/{}/invitations",
-                setup.organization_id
-            ),
-            None,
-            json!({"role": "member", "expiresInHours": 24}),
+            &format!("/api/v2/w/{}/ops/invitation_create", setup.organization_id),
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"projectId": "workspace", "wholeWorkspace": true, "role": "member", "expiresInHours": 24}),
         ),
     )
     .await;
@@ -429,7 +393,7 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
     .await;
     assert_eq!(
         status,
-        StatusCode::BAD_REQUEST,
+        StatusCode::UNPROCESSABLE_ENTITY,
         "nobody changes their own role: {refused}"
     );
 
@@ -455,18 +419,15 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
     assert_eq!(owners, 1);
 
     // A role somebody holds can't go; once nobody does, it can.
-    let contractor_path = format!(
-        "{}/{}",
-        roles_path(&setup),
-        contractor["id"].as_str().expect("id")
-    );
-    let (status, _) = send(
-        app,
-        setup
-            .browser
-            .request("DELETE", &contractor_path, None, Value::Null),
-    )
-    .await;
+    let delete_contractor = || {
+        setup.browser.op_in(
+            app,
+            setup.organization_id,
+            "role_delete",
+            json!({"role": contractor["id"]}),
+        )
+    };
+    let (status, _) = delete_contractor().await;
     assert_eq!(status, StatusCode::CONFLICT);
     let (status, _) = assign(
         &setup,
@@ -477,14 +438,8 @@ async fn built_in_roles_stay_as_they_were_and_nobody_grants_more_than_they_hold(
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (status, _) = send(
-        app,
-        setup
-            .browser
-            .request("DELETE", &contractor_path, None, Value::Null),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = delete_contractor().await;
+    assert_eq!(status, StatusCode::OK);
 
     // Every change is in the audit log, with what it was before.
     let changed = sqlx::query_scalar::<_, Value>(
@@ -600,30 +555,25 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
     let listed = roles(&setup, &setup.browser).await;
 
     // Bea's apps may only read and comment, though Bea herself may do more.
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["tasks.view", "channels.post"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "permissions": ["tasks.view", "channels.post"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
 
     // In the web app, Bea creates tasks as before.
-    let (status, made) = send(
+    let (status, made) = crate::support::tasks::send(
         app,
-        bea_browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("bea-web-task"),
-            json!({"title": "Made in the browser"}),
-        ),
+        &bea_browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("bea-web-task"),
+        json!({"title": "Made in the browser"}),
     )
     .await;
     assert!(status.is_success(), "{status}: {made}");
@@ -634,7 +584,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
     let tools = listed_tools(app, &bea_app, &session).await;
     assert!(!tools.contains(&"task_create".to_owned()), "{tools:?}");
     assert!(tools.contains(&"task_list".to_owned()), "{tools:?}");
-    assert!(tools.contains(&"my_permissions".to_owned()), "{tools:?}");
+    assert!(tools.contains(&"permissions_get".to_owned()), "{tools:?}");
     let refused = tool(
         app,
         &bea_app,
@@ -648,13 +598,12 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         app,
         &bea_app,
         &session,
-        "my_permissions",
-        json!({"projectId": work}),
+        "permissions_get",
+        json!({"spaceId": work}),
     )
     .await;
     assert_eq!(mine["outcome"], "ok", "{mine}");
-    assert_eq!(mine["value"]["actingAs"], "person");
-    let may = keys(&mine["value"]["project"]["thisConnectionMay"]);
+    let may = keys(&mine["value"]["project"]["forApps"]);
     // K1.9: posting implies seeing conversations, and reading pages is
     // required, so a limit always includes them.
     assert_eq!(
@@ -722,31 +671,26 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
     assert_eq!(scripted, 0, "nothing the limit forbids happened");
 
     // A role's own limit applies the same way, to everyone holding it.
-    let (status, _) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": null}),
-        ),
-    )
-    .await;
+    let (status, _) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "lift": true}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK);
     let member = role(&listed, "member");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("{}/{}", roles_path(&setup), member["id"].as_str().expect("id")),
-            None,
-            json!({"expectedVersion": member["version"], "agentLimit": ["tasks.view", "tasks.create"]}),
-        ),
-    )
-    .await;
+    let (status, changed) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_update",
+            json!({"role": member["id"], "expectedVersion": member["version"], "agentLimit": ["tasks.view", "tasks.create"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     let made = tool(
         app,
@@ -779,7 +723,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         json!({"name": "Readers", "baseRole": "viewer", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{readers}");
+    assert_eq!(status, StatusCode::OK, "{readers}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -788,15 +732,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{mara}"),
-            Some("mara-readers"),
-            json!({"expectedVersion": version, "roleId": readers["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": work, "account": mara, "expectedVersion": version, "role": readers["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     assert_eq!(changed["role"], "viewer");
@@ -815,11 +751,11 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         app,
         &mara_token,
         &mara_session,
-        "my_permissions",
-        json!({"projectId": work}),
+        "permissions_get",
+        json!({"spaceId": work}),
     )
     .await;
-    assert_eq!(mine["value"]["actingAs"], "agent");
+    assert_eq!(mine["outcome"], "ok", "{mine}");
     assert_eq!(
         keys(&mine["value"]["project"]["permissions"]),
         [
@@ -831,7 +767,14 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
     );
     // Without "see tasks", search and overviews leave tasks out.
     let search = json!({"query": "Allowed", "kinds": ["tasks"], "projectId": work});
-    let found = tool(app, &mara_token, &mara_session, "search", search.clone()).await;
+    let found = tool(
+        app,
+        &mara_token,
+        &mara_session,
+        "workspace_search",
+        search.clone(),
+    )
+    .await;
     assert_eq!(
         found["value"]["results"].as_array().map(Vec::len),
         Some(1),
@@ -848,13 +791,13 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         .execute(&setup.pool)
         .await
         .expect("Readers see nothing");
-    let found = tool(app, &mara_token, &mara_session, "search", search).await;
+    let found = tool(app, &mara_token, &mara_session, "workspace_search", search).await;
     assert_eq!(found["value"]["results"], json!([]), "{found}");
     let opened = tool(
         app,
         &mara_token,
         &mara_session,
-        "project_open",
+        "project_get",
         json!({"projectId": work}),
     )
     .await;
@@ -866,8 +809,8 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         app,
         &mara_token,
         &mara_session,
-        "role_write",
-        json!({"projectId": work, "name": "Mine", "baseRole": "member", "permissions": ["tasks.edit"]}),
+        "role_create",
+        json!({"name": "Mine", "baseRole": "member", "permissions": ["tasks.edit"]}),
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
@@ -876,7 +819,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         &bea_app,
         &session,
         "role_assign",
-        json!({"projectId": work, "person": "@bea", "role": "admin"}),
+        json!({"account": "@bea", "role": "admin"}),
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
@@ -885,8 +828,8 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         app,
         &bea_app,
         &session,
-        "role_assign",
-        json!({"projectId": work, "person": "@bea", "agentLimit": ["tasks.view", "tasks.edit"]}),
+        "app_limit_set",
+        json!({"permissions": ["tasks.view", "tasks.edit"]}),
     )
     .await;
     assert_eq!(own_cap["outcome"], "ok", "{own_cap}");
@@ -894,8 +837,8 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         app,
         &bea_app,
         &session,
-        "role_assign",
-        json!({"projectId": work, "person": "@bea", "agentLimit": null}),
+        "app_limit_set",
+        json!({"lift": true}),
     )
     .await;
     assert_eq!(lifted["outcome"], "permission_denied", "{lifted}");
@@ -905,8 +848,8 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         app,
         &owner_app,
         &owner_session,
-        "role_write",
-        json!({"projectId": work, "name": "Helpers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
+        "role_create",
+        json!({"name": "Helpers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
     )
     .await;
     assert_eq!(written["outcome"], "ok", "{written}");
@@ -915,7 +858,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         &owner_app,
         &owner_session,
         "role_assign",
-        json!({"projectId": work, "person": "@bea", "role": "Helpers", "applyToProjects": true}),
+        json!({"account": "@bea", "role": "Helpers", "applyToProjects": true}),
     )
     .await;
     assert_eq!(given["outcome"], "ok", "{given}");
@@ -924,7 +867,7 @@ async fn apps_and_agents_do_only_what_their_role_and_limit_allow_everywhere() {
         "SELECT channel FROM audit_events WHERE action = 'role.created' AND target_id = $1",
     )
     .bind(
-        written["value"]["role"]["id"]
+        written["value"]["id"]
             .as_str()
             .expect("id")
             .parse::<Uuid>()
@@ -983,7 +926,7 @@ async fn people_arrive_where_their_role_says() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{lead}");
+    assert_eq!(status, StatusCode::OK, "{lead}");
     assert_eq!(lead["defaults"]["channels"], json!(["Leads", "secret"]));
     let (status, refused) = create_role(
         &setup,
@@ -991,21 +934,19 @@ async fn people_arrive_where_their_role_says() {
         json!({"name": "Odd", "baseRole": "member", "permissions": [], "defaults": {"pinnedViews": ["everything"]}}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
 
     // Cara signs in through another project first.
     let elsewhere = create_project(&setup, "ELSE", "Elsewhere").await;
     let (cara, _) = add_person(&setup, &[&elsewhere], "cara").await;
-    let (status, added) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/members"),
-            None,
-            json!({"actorId": cara, "role": "member", "roleId": lead["id"]}),
-        ),
-    )
-    .await;
+    let (status, added) = setup
+        .browser
+        .op(
+            app,
+            "space_member_add",
+            json!({"spaceId": work, "account": cara, "role": "member", "role": lead["id"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{added}");
     assert_eq!(added["roleId"], lead["id"]);
     let joined = sqlx::query_scalar::<_, Uuid>(
@@ -1050,7 +991,7 @@ async fn creating_from_a_template_needs_create_tasks_in_that_project() {
         json!({"name": "Editors", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{editors}");
+    assert_eq!(status, StatusCode::OK, "{editors}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -1059,31 +1000,20 @@ async fn creating_from_a_template_needs_create_tasks_in_that_project() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{beta}/members/{tom}"),
-            Some("tom-editors"),
-            json!({"expectedVersion": version, "roleId": editors["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": beta, "account": tom, "expectedVersion": version, "role": editors["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
 
     for project in [&alpha, &beta] {
-        let key = format!("template-{project}");
-        let (status, template) = send(
-            app,
-            setup.browser.request(
-                "POST",
-                &format!("/api/v1/projects/{project}/task-templates"),
-                Some(&key),
-                json!({"name": "Weekly", "title": "From the template"}),
-            ),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED, "{template}");
+        let (status, template) = setup
+            .browser
+            .op(
+                app,
+                "template_create",
+                json!({"projectId": project, "name": "Weekly", "title": "From the template"}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{template}");
     }
 
     let session = initialize(app, &tom_token).await.expect("Tom");
@@ -1131,7 +1061,7 @@ async fn a_narrowed_project_admin_role_does_not_make_a_workspace_admin() {
         json!({"name": "Project lead", "baseRole": "admin", "permissions": ["tasks.view", "tasks.edit"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{lead}");
+    assert_eq!(status, StatusCode::OK, "{lead}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -1140,15 +1070,7 @@ async fn a_narrowed_project_admin_role_does_not_make_a_workspace_admin() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{bea}"),
-            Some("bea-lead"),
-            json!({"expectedVersion": version, "roleId": lead["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": work, "account": bea, "expectedVersion": version, "role": lead["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     assert_eq!(changed["role"], "admin");
@@ -1177,14 +1099,13 @@ async fn task_files_follow_who_can_see_tasks() {
     let work = create_project(&setup, "WORK", "Work").await;
     let work_id = work.parse::<Uuid>().expect("project");
     let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
-    let (status, made) = send(
+    let (status, made) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("files-task"),
-            json!({"title": "With a file"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("files-task"),
+        json!({"title": "With a file"}),
     )
     .await;
     assert!(status.is_success(), "{status}: {made}");
@@ -1200,7 +1121,7 @@ async fn task_files_follow_who_can_see_tasks() {
         json!({"name": "Task editors", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{editors}");
+    assert_eq!(status, StatusCode::OK, "{editors}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -1209,15 +1130,7 @@ async fn task_files_follow_who_can_see_tasks() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{tom}"),
-            Some("tom-task-editors"),
-            json!({"expectedVersion": version, "roleId": editors["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": work, "account": tom, "expectedVersion": version, "role": editors["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     let session = initialize(app, &tom_token).await.expect("Tom");
@@ -1281,19 +1194,15 @@ async fn task_files_follow_who_can_see_tasks() {
     )
     .await;
     assert_eq!(opened["value"]["text"], "task notes", "{opened}");
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["channels.post"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "permissions": ["channels.post"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let refused = tool(
         app,
@@ -1317,7 +1226,7 @@ async fn task_files_follow_who_can_see_tasks() {
         json!({"name": "No tasks", "baseRole": "viewer", "permissions": []}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    assert_eq!(status, StatusCode::OK, "{blind}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -1326,15 +1235,7 @@ async fn task_files_follow_who_can_see_tasks() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{bea}"),
-            Some("bea-no-tasks"),
-            json!({"expectedVersion": version, "roleId": blind["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": work, "account": bea, "expectedVersion": version, "role": blind["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     assert_eq!(
@@ -1366,7 +1267,7 @@ async fn a_narrowed_admin_cannot_bring_back_more_than_they_hold() {
         json!({"name": "Ops", "baseRole": "admin", "permissions": ["members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{narrowed}");
+    assert_eq!(status, StatusCode::OK, "{narrowed}");
     let narrowed_id = narrowed["id"]
         .as_str()
         .expect("id")
@@ -1392,17 +1293,13 @@ async fn a_narrowed_admin_cannot_bring_back_more_than_they_hold() {
 
     // Alex can't bring Bea back without a role change: Member holds more
     // than Ops.
-    let (version, _) = project_membership(&setup, project, bea).await;
-    let (status, refused) = send(
-        app,
-        alex_browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{bea}"),
-            Some("ops-brings-bea-back"),
-            json!({"expectedVersion": version, "enabled": true}),
-        ),
-    )
-    .await;
+    let (status, refused) = alex_browser
+        .op(
+            app,
+            "space_member_add",
+            json!({"spaceId": work, "account": bea}),
+        )
+        .await;
     assert_eq!(
         status,
         StatusCode::FORBIDDEN,
@@ -1414,16 +1311,14 @@ async fn a_narrowed_admin_cannot_bring_back_more_than_they_hold() {
     );
 
     // The owner, who holds everything, can.
-    let (status, back) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{bea}"),
-            Some("owner-brings-bea-back"),
-            json!({"expectedVersion": version, "enabled": true}),
-        ),
-    )
-    .await;
+    let (status, back) = setup
+        .browser
+        .op(
+            app,
+            "space_member_add",
+            json!({"spaceId": work, "account": bea}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{back}");
     assert!(
         project_membership(&setup, project, bea).await.1,
@@ -1441,14 +1336,13 @@ async fn file_search_leaves_out_task_files_where_tasks_are_hidden() {
     let app = &setup.app;
     let work = create_project(&setup, "WORK", "Work").await;
     let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
-    let (status, made) = send(
+    let (status, made) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("file-search-task"),
-            json!({"title": "Quarterly plan"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("file-search-task"),
+        json!({"title": "Quarterly plan"}),
     )
     .await;
     assert!(status.is_success(), "{status}: {made}");
@@ -1502,27 +1396,37 @@ async fn file_search_leaves_out_task_files_where_tasks_are_hidden() {
     // Bea's app finds both until her agent limit leaves out "see tasks".
     let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
     let bea_session = initialize(app, &bea_app).await.expect("Bea's app");
-    let found = tool(app, &bea_app, &bea_session, "search", search.clone()).await;
+    let found = tool(
+        app,
+        &bea_app,
+        &bea_session,
+        "workspace_search",
+        search.clone(),
+    )
+    .await;
     assert_eq!(
         names(&found),
         ["budget-channel.txt", "budget-task.txt"],
         "{found}"
     );
-    let (status, limit) = send(
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "permissions": ["channels.post"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{limit}");
+    let found = tool(
         app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["channels.post"]}),
-        ),
+        &bea_app,
+        &bea_session,
+        "workspace_search",
+        search.clone(),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{limit}");
-    let found = tool(app, &bea_app, &bea_session, "search", search.clone()).await;
     assert_eq!(names(&found), ["budget-channel.txt"], "{found}");
     assert!(!found.to_string().contains("Quarterly plan"), "{found}");
 
@@ -1533,7 +1437,7 @@ async fn file_search_leaves_out_task_files_where_tasks_are_hidden() {
         json!({"name": "Posters", "baseRole": "member", "permissions": ["channels.post"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{posters}");
+    assert_eq!(status, StatusCode::OK, "{posters}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -1542,18 +1446,10 @@ async fn file_search_leaves_out_task_files_where_tasks_are_hidden() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{tom}"),
-            Some("tom-posters"),
-            json!({"expectedVersion": version, "roleId": posters["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": work, "account": tom, "expectedVersion": version, "role": posters["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
-    let found = tool(app, &tom_token, &session, "search", search).await;
+    let found = tool(app, &tom_token, &session, "workspace_search", search).await;
     assert_eq!(names(&found), ["budget-channel.txt"], "{found}");
     assert!(!found.to_string().contains("Quarterly plan"), "{found}");
 }
@@ -1574,6 +1470,8 @@ async fn project_membership(setup: &Setup, project: Uuid, actor: Uuid) -> (i64, 
 fn invitation_token(issued: &Value) -> String {
     issued["invitationUrl"]
         .as_str()
+        .or_else(|| issued["joinUrl"].as_str())
+        .or_else(|| issued["value"]["joinUrl"].as_str())
         .unwrap_or_else(|| panic!("invitation URL: {issued}"))
         .split_once("#token=")
         .expect("token fragment")
@@ -1606,30 +1504,25 @@ async fn invitations_and_agents_stay_within_what_the_giver_holds_now() {
 
     // As a plain admin, Alex invites a Member to the workspace and the project.
     let mut tokens = Vec::new();
-    for (path, resolve) in [
+    for (path, key, body, resolve, made) in [
         (
-            format!(
-                "/api/v1/organizations/{}/invitations",
-                setup.organization_id
-            ),
+            format!("/api/v2/w/{}/ops/invitation_create", setup.organization_id),
+            Some("alex-invites-to-the-workspace"),
+            json!({"projectId": "workspace", "wholeWorkspace": true, "role": "member",
+                "expiresInHours": 24}),
             "/api/v1/workspace-invitations/resolve",
+            StatusCode::OK,
         ),
         (
-            format!("/api/v1/projects/{work}/invitations"),
+            "/api/v2/ops/invitation_create".to_owned(),
+            Some("alex-invites-to-work"),
+            json!({"projectId": work, "role": "member", "expiresInHours": 24}),
             "/api/v1/project-invitations/resolve",
+            StatusCode::OK,
         ),
     ] {
-        let (status, issued) = send(
-            app,
-            alex_browser.request(
-                "POST",
-                &path,
-                None,
-                json!({"role": "member", "expiresInHours": 24}),
-            ),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED, "{path}: {issued}");
+        let (status, issued) = send(app, alex_browser.request("POST", &path, key, body)).await;
+        assert_eq!(status, made, "{path}: {issued}");
         let token = invitation_token(&issued);
         let (status, resolved) = send(
             app,
@@ -1642,18 +1535,19 @@ async fn invitations_and_agents_stay_within_what_the_giver_holds_now() {
         tokens.push((resolve, token));
     }
     // The owner invites a Member to the project too, and adds an agent.
-    let (status, owners) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/invitations"),
-            None,
-            json!({"role": "member", "expiresInHours": 24}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{owners}");
-    let owners_invitation = owners["id"].as_str().expect("invitation").to_owned();
+    let (status, owners) = setup
+        .browser
+        .op(
+            app,
+            "invitation_create",
+            json!({"projectId": work, "role": "member", "expiresInHours": 24}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{owners}");
+    let owners_invitation = owners["invitation"]["id"]
+        .as_str()
+        .expect("invitation")
+        .to_owned();
     let (mara, _) = create_agent(app, &setup.browser, &work, "Mara", "mara").await;
     let (connection_id, version, _) = agent_connection(&setup, mara).await;
     let (status, disabled) = send(
@@ -1675,7 +1569,7 @@ async fn invitations_and_agents_stay_within_what_the_giver_holds_now() {
         json!({"name": "Ops", "baseRole": "admin", "permissions": ["agents.manage", "members.invite", "members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{ops}");
+    assert_eq!(status, StatusCode::OK, "{ops}");
     let (status, assigned) = assign(&setup, &setup.browser, alex, &ops["id"], false).await;
     assert_eq!(status, StatusCode::OK, "{assigned}");
     sqlx::query(
@@ -1710,9 +1604,9 @@ async fn invitations_and_agents_stay_within_what_the_giver_holds_now() {
         app,
         alex_browser.request(
             "POST",
-            &format!("/api/v1/project-invitations/{owners_invitation}/replace"),
-            None,
-            json!({"expectedVersion": 1, "expiresInHours": 48}),
+            "/api/v2/ops/invitation_update",
+            Some("alex-replaces-owners"),
+            json!({"projectId": work, "invitation": owners_invitation, "replace": true, "expectedVersion": 1, "expiresInHours": 48}),
         ),
     )
     .await;
@@ -1759,7 +1653,7 @@ async fn agent_connection(setup: &Setup, agent: Uuid) -> (Uuid, i64, String) {
 
 /// A task made by the owner in `project`, by its title; returns its ID.
 async fn owner_task(setup: &Setup, project: &str, title: &str) -> Uuid {
-    let (status, made) = send(
+    let (status, made) = crate::support::tasks::send_built(
         &setup.app,
         setup.browser.request(
             "POST",
@@ -1878,7 +1772,7 @@ async fn reads_naming_tasks_or_repositories_follow_the_role_and_limit() {
         app,
         &bea_app,
         &session,
-        "project_open",
+        "project_get",
         json!({"projectId": work}),
     )
     .await;
@@ -1922,7 +1816,7 @@ async fn reads_naming_tasks_or_repositories_follow_the_role_and_limit() {
         json!({"name": "No tasks", "baseRole": "viewer", "permissions": []}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    assert_eq!(status, StatusCode::OK, "{blind}");
     let other_id = other.parse::<Uuid>().expect("project");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
@@ -1932,15 +1826,7 @@ async fn reads_naming_tasks_or_repositories_follow_the_role_and_limit() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{other}/members/{bea}"),
-            Some("bea-other-no-tasks"),
-            json!({"expectedVersion": version, "roleId": blind["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": other, "account": bea, "expectedVersion": version, "role": blind["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     let found = tool(app, &bea_app, &session, "task_list", both).await;
@@ -1970,19 +1856,15 @@ async fn reads_naming_tasks_or_repositories_follow_the_role_and_limit() {
 
     // Her app's limit leaves out "see tasks" and "see code": Work's task,
     // its notification and the repository go too.
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["channels.post"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "permissions": ["channels.post"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let later = tool(app, &bea_app, &session, "later_list", json!({})).await;
     assert_eq!(listed(&later, "items").len(), 0, "{later}");
@@ -1992,7 +1874,7 @@ async fn reads_naming_tasks_or_repositories_follow_the_role_and_limit() {
         app,
         &bea_app,
         &session,
-        "project_open",
+        "project_get",
         json!({"projectId": work}),
     )
     .await;
@@ -2097,13 +1979,13 @@ async fn an_app_moderates_only_within_its_agent_limit() {
         app,
         &owner_app,
         &owner_session,
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": task, "text": "The owner's note", "clientRequestId": "owner-note"}),
     )
     .await;
-    assert_eq!(commented["outcome"], "applied", "{commented}");
+    assert_eq!(commented["outcome"], "ok", "{commented}");
     // The comment's ID is the write's activityId; resultId is its audit record.
-    let comment = commented["activityId"]
+    let comment = commented["value"]["activityId"]
         .as_str()
         .unwrap_or_else(|| panic!("comment id: {commented}"))
         .parse::<Uuid>()
@@ -2117,19 +1999,15 @@ async fn an_app_moderates_only_within_its_agent_limit() {
     };
 
     // Bea's app may see and edit tasks, but not moderate.
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["tasks.view", "tasks.edit"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "permissions": ["tasks.view", "tasks.edit"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
     let session = initialize(app, &bea_app).await.expect("Bea's app");
@@ -2149,19 +2027,15 @@ async fn an_app_moderates_only_within_its_agent_limit() {
     );
 
     // With the limit lifted, Bea's admin role moderates through it.
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": null}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "lift": true}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let deleted = tool(app, &bea_app, &session, "task_comment_delete", delete).await;
     assert_eq!(deleted["outcome"], "ok", "{deleted}");
@@ -2232,7 +2106,7 @@ async fn task_chips_name_the_task_only_for_readers_who_see_tasks() {
         json!({"name": "No tasks", "baseRole": "viewer", "permissions": []}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    assert_eq!(status, StatusCode::OK, "{blind}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -2241,15 +2115,7 @@ async fn task_chips_name_the_task_only_for_readers_who_see_tasks() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{bea}"),
-            Some("bea-chips-no-tasks"),
-            json!({"expectedVersion": version, "roleId": blind["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": work, "account": bea, "expectedVersion": version, "role": blind["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     let chips = timeline_chips(&setup, &bea_browser, &channel).await;
@@ -2263,19 +2129,15 @@ async fn task_chips_name_the_task_only_for_readers_who_see_tasks() {
 
     // Cal's app, limited away from "see tasks", reads the channel without
     // the task's title; Cal in the browser still sees it.
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{cal}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["channels.post"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": cal, "permissions": ["channels.post"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let cal_app = connect_app(app, &cal_browser, "Cal's app", "full").await;
     let session = initialize(app, &cal_app).await.expect("Cal's app");
@@ -2352,14 +2214,7 @@ async fn a_tasks_linked_code_needs_see_code() {
     assert_eq!(count(&item["linkedRepositories"]), 1, "{item}");
     let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
     let session = initialize(app, &bea_app).await.expect("Bea's app");
-    let opened = tool(
-        app,
-        &bea_app,
-        &session,
-        "task_open",
-        json!({"taskId": task}),
-    )
-    .await;
+    let opened = tool(app, &bea_app, &session, "task_get", json!({"taskId": task})).await;
     assert_eq!(opened["outcome"], "ok", "{opened}");
     assert_eq!(
         count(&opened["value"]["task"]["linkedRepositories"]),
@@ -2368,28 +2223,17 @@ async fn a_tasks_linked_code_needs_see_code() {
     );
 
     // Her app's limit leaves out "see code": the task, without its code.
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["tasks.view"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "permissions": ["tasks.view"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
-    let opened = tool(
-        app,
-        &bea_app,
-        &session,
-        "task_open",
-        json!({"taskId": task}),
-    )
-    .await;
+    let opened = tool(app, &bea_app, &session, "task_get", json!({"taskId": task})).await;
     assert_eq!(opened["outcome"], "ok", "{opened}");
     assert_eq!(
         opened["value"]["task"]["title"], "Linked to code",
@@ -2409,7 +2253,7 @@ async fn a_tasks_linked_code_needs_see_code() {
         json!({"name": "Tasks only", "baseRole": "viewer", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{tasks_only}");
+    assert_eq!(status, StatusCode::OK, "{tasks_only}");
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
     )
@@ -2418,15 +2262,7 @@ async fn a_tasks_linked_code_needs_see_code() {
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    let (status, changed) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{bea}"),
-            Some("bea-tasks-only"),
-            json!({"expectedVersion": version, "roleId": tasks_only["id"]}),
-        ),
-    )
+    let (status, changed) = setup.browser.op(app, "space_member_update", json!({"spaceId": work, "account": bea, "expectedVersion": version, "role": tasks_only["id"]}))
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     let (status, item) = send(app, browser_task(&bea_browser)).await;
@@ -2442,7 +2278,7 @@ async fn set_project_role(
     project: &str,
     actor: Uuid,
     key: &str,
-    mut body: Value,
+    body: Value,
 ) -> (StatusCode, Value) {
     let version = sqlx::query_scalar::<_, i64>(
         "SELECT version FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
@@ -2452,14 +2288,18 @@ async fn set_project_role(
     .fetch_one(&setup.pool)
     .await
     .expect("version");
-    body["expectedVersion"] = json!(version);
+    let role = body
+        .get("roleId")
+        .or_else(|| body.get("role"))
+        .cloned()
+        .expect("a role");
     send(
         &setup.app,
         setup.browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{project}/members/{actor}"),
+            "POST",
+            "/api/v2/ops/space_member_update",
             Some(key),
-            body,
+            json!({"spaceId": project, "account": actor, "role": role, "expectedVersion": version}),
         ),
     )
     .await
@@ -2469,19 +2309,15 @@ async fn set_project_role(
 /// role under its levels (editing tasks implies seeing them), but not a
 /// limit, so a limit is how a caller ends up changing tasks it can't see.
 async fn limit_apps(setup: &Setup, actor: Uuid, permissions: &[&str]) {
-    let (status, limit) = send(
-        &setup.app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{actor}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({ "permissions": permissions }),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            &setup.app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": actor, "permissions": permissions}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
 }
 
@@ -2515,12 +2351,10 @@ async fn a_project_role_never_makes_a_workspace_role() {
         json!({"name": "Project manager", "baseRole": "admin", "permissions": ["members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{manager}");
-    let invitations = format!(
-        "/api/v1/organizations/{}/invitations",
-        setup.organization_id
-    );
-    let invite = json!({"role": "member", "expiresInHours": 24});
+    assert_eq!(status, StatusCode::OK, "{manager}");
+    let invitations = format!("/api/v2/w/{}/ops/invitation_create", setup.organization_id);
+    let invite = json!({"projectId": "workspace", "wholeWorkspace": true, "role": "member",
+        "expiresInHours": 24});
 
     let (status, changed) = set_project_role(
         &setup,
@@ -2534,24 +2368,32 @@ async fn a_project_role_never_makes_a_workspace_role() {
     assert_eq!(workspace_role(&setup, bea).await, "member");
     let (status, refused) = send(
         app,
-        bea_browser.request("POST", &invitations, None, invite.clone()),
+        bea_browser.request("POST", &invitations, Some("bea-invites"), invite.clone()),
     )
     .await;
     assert!(
         !status.is_success(),
         "a custom project admin invited to the workspace: {refused}"
     );
+    assert_eq!(
+        refused["outcome"], "permission_denied",
+        "refused for access, not a bad call: {refused}"
+    );
 
     let (status, changed) =
         set_project_role(&setup, &work, cal, "cal-admin", json!({"role": "admin"})).await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     assert_eq!(workspace_role(&setup, cal).await, "member");
-    let (status, refused) =
-        send(app, cal_browser.request("POST", &invitations, None, invite)).await;
+    let (status, refused) = send(
+        app,
+        cal_browser.request("POST", &invitations, Some("cal-invites"), invite),
+    )
+    .await;
     assert!(
         !status.is_success(),
         "a project admin invited to the workspace: {refused}"
     );
+    assert_eq!(refused["outcome"], "permission_denied", "{refused}");
 }
 
 const OAUTH_REDIRECT: &str = "http://127.0.0.1:49152/callback";
@@ -2649,7 +2491,7 @@ async fn a_narrowed_admin_cannot_connect_an_app_as_a_stronger_agent() {
         json!({"name": "Ops", "baseRole": "admin", "permissions": ["agents.manage", "members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{ops}");
+    assert_eq!(status, StatusCode::OK, "{ops}");
     let (status, assigned) = assign(&setup, &setup.browser, alex, &ops["id"], false).await;
     assert_eq!(status, StatusCode::OK, "{assigned}");
     sqlx::query("UPDATE project_memberships SET role = 'admin', role_id = $3 WHERE project_id = $1 AND actor_id = $2")
@@ -2691,7 +2533,7 @@ async fn connecting_an_app_as_an_agent_stays_within_the_project_role() {
         json!({"name": "Agent keepers in Work", "baseRole": "admin", "permissions": ["agents.manage", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{keepers}");
+    assert_eq!(status, StatusCode::OK, "{keepers}");
     let set_alex = |role_id: Option<Uuid>| {
         let pool = setup.pool.clone();
         async move {
@@ -2869,20 +2711,18 @@ async fn a_custom_admin_invitation_does_not_make_a_workspace_admin() {
         json!({"name": "Project manager", "baseRole": "admin", "permissions": ["members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{manager}");
+    assert_eq!(status, StatusCode::OK, "{manager}");
     let mut tokens = Vec::new();
     for _ in 0..2 {
-        let (status, issued) = send(
-            app,
-            setup.browser.request(
-                "POST",
-                &format!("/api/v1/projects/{work}/invitations"),
-                None,
-                json!({"role": "admin", "roleId": manager["id"], "expiresInHours": 24}),
-            ),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED, "{issued}");
+        let (status, issued) = setup
+            .browser
+            .op(
+                app,
+                "invitation_create",
+                json!({"projectId": work, "role": manager["id"], "expiresInHours": 24}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{issued}");
         tokens.push(invitation_token(&issued));
     }
 
@@ -2961,17 +2801,14 @@ async fn a_project_invitation_lapses_when_its_issuer_loses_invite_in_the_project
     .execute(&setup.pool)
     .await
     .expect("alex is a project admin");
-    let (status, issued) = send(
-        app,
-        alex_browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/invitations"),
-            None,
-            json!({"role": "member", "expiresInHours": 24}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{issued}");
+    let (status, issued) = alex_browser
+        .op(
+            app,
+            "invitation_create",
+            json!({"projectId": work, "role": "member", "expiresInHours": 24}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{issued}");
     let token = invitation_token(&issued);
     let resolve = |token: &str| {
         setup.browser.request(
@@ -2991,7 +2828,7 @@ async fn a_project_invitation_lapses_when_its_issuer_loses_invite_in_the_project
         json!({"name": "No inviting", "baseRole": "admin", "permissions": ["members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{narrowed}");
+    assert_eq!(status, StatusCode::OK, "{narrowed}");
     sqlx::query(
         "UPDATE project_memberships SET role_id = $3 WHERE project_id = $1 AND actor_id = $2",
     )
@@ -3066,7 +2903,7 @@ async fn linked_tasks_in_another_project_follow_see_tasks_there() {
     let (status, item) = send(app, detail(&bea_browser)).await;
     assert_eq!(status, StatusCode::OK, "{item}");
     assert!(item.to_string().contains("Hidden blocker"), "{item}");
-    let opened = tool(app, &bea_app, &session, "task_open", open.clone()).await;
+    let opened = tool(app, &bea_app, &session, "task_get", open.clone()).await;
     assert_eq!(opened["outcome"], "ok", "{opened}");
     assert!(opened.to_string().contains("Hidden blocker"), "{opened}");
 
@@ -3077,7 +2914,7 @@ async fn linked_tasks_in_another_project_follow_see_tasks_there() {
         json!({"name": "No tasks", "baseRole": "viewer", "permissions": []}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    assert_eq!(status, StatusCode::OK, "{blind}");
     let (status, changed) = set_project_role(
         &setup,
         &other,
@@ -3090,7 +2927,7 @@ async fn linked_tasks_in_another_project_follow_see_tasks_there() {
     let (status, item) = send(app, detail(&bea_browser)).await;
     assert_eq!(status, StatusCode::OK, "{item}");
     assert!(!item.to_string().contains("Hidden blocker"), "{item}");
-    let opened = tool(app, &bea_app, &session, "task_open", open).await;
+    let opened = tool(app, &bea_app, &session, "task_get", open).await;
     assert_eq!(opened["outcome"], "ok", "{opened}");
     assert!(!opened.to_string().contains("Hidden blocker"), "{opened}");
 }
@@ -3106,20 +2943,15 @@ async fn the_built_in_viewer_cannot_be_the_workspace_default() {
     let listed = roles(&setup, &setup.browser).await;
     assert_eq!(role(&listed, "member")["isDefault"], true);
     let viewer = role(&listed, "viewer");
-    let (status, refused) = send(
-        &setup.app,
-        setup.browser.request(
-            "PATCH",
-            &format!(
-                "{}/{}",
-                roles_path(&setup),
-                viewer["id"].as_str().expect("id")
-            ),
-            None,
-            json!({"expectedVersion": viewer["version"], "isDefault": true}),
-        ),
-    )
-    .await;
+    let (status, refused) = setup
+        .browser
+        .op_in(
+            &setup.app,
+            setup.organization_id,
+            "role_update",
+            json!({"role": viewer["id"], "expectedVersion": viewer["version"], "isDefault": true}),
+        )
+        .await;
     assert!(!status.is_success(), "{status}: {refused}");
     let listed = roles(&setup, &setup.browser).await;
     assert_eq!(role(&listed, "member")["isDefault"], true, "{listed}");
@@ -3142,7 +2974,7 @@ async fn the_audit_log_follows_read_the_audit_log() {
         json!({"name": "Settings keeper", "baseRole": "admin", "permissions": ["members.view", "settings.manage"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{keeper}");
+    assert_eq!(status, StatusCode::OK, "{keeper}");
     assert!(!keys(&keeper["permissions"]).contains(&"settings.audit".to_owned()));
     let (status, assigned) = assign(&setup, &setup.browser, bea, &keeper["id"], false).await;
     assert_eq!(status, StatusCode::OK, "{assigned}");
@@ -3184,14 +3016,14 @@ async fn a_write_token_follows_any_write_permission() {
         json!({"name": "Page writers", "baseRole": "member", "permissions": ["tasks.view", "pages.edit"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{writers}");
+    assert_eq!(status, StatusCode::OK, "{writers}");
     let (status, readers) = create_role(
         &setup,
         &setup.browser,
         json!({"name": "Readers", "baseRole": "viewer", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{readers}");
+    assert_eq!(status, StatusCode::OK, "{readers}");
     for (actor, role, key) in [
         (bea, &writers, "bea-writers"),
         (cal, &readers, "cal-readers"),
@@ -3218,7 +3050,7 @@ async fn a_write_token_follows_any_write_permission() {
     let (status, page) = public_call(
         app,
         &token,
-        "page_write",
+        "page_create",
         json!({"projectId": work, "title": "Written by the token", "body": "Hello"}),
     )
     .await;
@@ -3237,7 +3069,7 @@ async fn a_write_token_follows_any_write_permission() {
         json!({"taskId": task, "title": "Renamed by the token", "expectedVersion": 1}),
     )
     .await;
-    assert_ne!(refused["outcome"], "applied", "{refused}");
+    assert_ne!(refused["outcome"], "ok", "{refused}");
     let renamed = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM task_rows WHERE title = 'Renamed by the token'",
     )
@@ -3283,7 +3115,7 @@ async fn archiving_without_see_tasks_reveals_no_task() {
         json!({"name": "Archivers", "baseRole": "member", "permissions": ["tasks.delete"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{archivers}");
+    assert_eq!(status, StatusCode::OK, "{archivers}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -3302,7 +3134,7 @@ async fn archiving_without_see_tasks_reveals_no_task() {
         )
     };
 
-    let (status, archived) = send(
+    let (status, archived) = crate::support::tasks::send_built(
         app,
         act(
             &bea_browser,
@@ -3318,13 +3150,15 @@ async fn archiving_without_see_tasks_reveals_no_task() {
         "{archived}"
     );
     let stale = task_version(&setup, project, task).await - 1;
-    let (status, conflict) = send(app, act(&bea_browser, "restore", "bea-stale", stale)).await;
+    let (status, conflict) =
+        crate::support::tasks::send_built(app, act(&bea_browser, "restore", "bea-stale", stale))
+            .await;
     assert!(!status.is_success(), "{status}: {conflict}");
     assert!(
         !conflict.to_string().contains("Secret archive plan"),
         "{conflict}"
     );
-    let (status, restored) = send(
+    let (status, restored) = crate::support::tasks::send_built(
         app,
         act(
             &bea_browser,
@@ -3339,7 +3173,7 @@ async fn archiving_without_see_tasks_reveals_no_task() {
         !restored.to_string().contains("Secret archive plan"),
         "{restored}"
     );
-    let (status, unchanged) = send(
+    let (status, unchanged) = crate::support::tasks::send_built(
         app,
         act(
             &bea_browser,
@@ -3356,7 +3190,7 @@ async fn archiving_without_see_tasks_reveals_no_task() {
     );
 
     // The owner sees tasks: the whole task comes back.
-    let (status, archived) = send(
+    let (status, archived) = crate::support::tasks::send_built(
         app,
         act(
             &setup.browser,
@@ -3390,7 +3224,7 @@ async fn a_rule_run_by_hand_shows_only_tasks_its_maker_sees() {
         json!({"name": "Editors", "baseRole": "member", "permissions": ["tasks.edit"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{editors}");
+    assert_eq!(status, StatusCode::OK, "{editors}");
     assert!(
         keys(&editors["permissions"]).contains(&"tasks.view".to_owned()),
         "editing implies seeing: {editors}"
@@ -3404,30 +3238,29 @@ async fn a_rule_run_by_hand_shows_only_tasks_its_maker_sees() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
-    let (status, rule) = send(
-        app,
-        bea_browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/automations"),
-            None,
+    let (status, rule) = bea_browser
+        .op(
+            app,
+            "automation_create",
             json!({
+                "projectId": work,
                 "name": "Tell me",
                 "trigger": {"kind": "task_created"},
                 "actions": [{"kind": "notify", "recipients": "owner", "message": "Task: {{task.title}}"}],
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_success(), "{status}: {rule}");
     let rule_id = rule["id"].as_str().expect("rule").to_owned();
-    let run_path = format!("/api/v1/projects/{work}/automations/{rule_id}/run");
 
     // Her role edits tasks, so it sees them: her run tells her the title.
-    let (status, run) = send(
-        app,
-        bea_browser.request("POST", &run_path, None, json!({"workItemId": task})),
-    )
-    .await;
+    let (status, run) = bea_browser
+        .op(
+            app,
+            "automation_run_start",
+            json!({"projectId": work, "ruleId": rule_id, "taskId": task}),
+        )
+        .await;
     assert!(status.is_success(), "{status}: {run}");
     assert_eq!(run["state"], "succeeded", "{run}");
     assert_eq!(notified_of(&setup, bea, "Secret rule plan").await, 1);
@@ -3445,46 +3278,40 @@ async fn a_browser_rule_run_through_an_app_keeps_to_the_apps_limit() {
     let work = create_project(&setup, "WORK", "Work").await;
     let (bea, bea_browser) = add_person(&setup, &[&work], "bea").await;
     let task = owner_task(&setup, &work, "Secret app plan").await;
-    let (status, rule) = send(
-        app,
-        bea_browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/automations"),
-            None,
+    let (status, rule) = bea_browser
+        .op(
+            app,
+            "automation_create",
             json!({
+                "projectId": work,
                 "name": "Tell me",
                 "trigger": {"kind": "task_created"},
                 "actions": [{"kind": "notify", "recipients": "owner", "message": "Task: {{task.title}}"}],
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_success(), "{status}: {rule}");
     let rule_id = rule["id"].as_str().expect("rule").to_owned();
     let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
     let session = initialize(app, &bea_app).await.expect("Bea's app");
     // Her apps may change tasks but not see them.
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["tasks.edit"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "permissions": ["tasks.edit"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
 
     let ran = tool(
         app,
         &bea_app,
         &session,
-        "automation_write",
-        json!({"projectId": work, "operation": "run", "ruleId": rule_id, "taskId": task}),
+        "automation_run_start",
+        json!({"projectId": work, "ruleId": rule_id, "taskId": task}),
     )
     .await;
     assert_eq!(ran["outcome"], "ok", "{ran}");
@@ -3492,16 +3319,13 @@ async fn a_browser_rule_run_through_an_app_keeps_to_the_apps_limit() {
     assert!(!ran.to_string().contains("Secret app plan"), "{ran}");
     assert_eq!(notified_of(&setup, bea, "Secret app plan").await, 0);
 
-    let (status, run) = send(
-        app,
-        bea_browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/automations/{rule_id}/run"),
-            None,
-            json!({"workItemId": task}),
-        ),
-    )
-    .await;
+    let (status, run) = bea_browser
+        .op(
+            app,
+            "automation_run_start",
+            json!({"projectId": work, "ruleId": rule_id, "taskId": task}),
+        )
+        .await;
     assert!(status.is_success(), "{status}: {run}");
     assert_eq!(run["state"], "succeeded", "{run}");
     assert_eq!(notified_of(&setup, bea, "Secret app plan").await, 1);
@@ -3527,14 +3351,14 @@ async fn applying_a_role_to_projects_skips_those_the_caller_cant_manage() {
         json!({"name": "No members", "baseRole": "admin", "permissions": ["tasks.view", "members.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{no_members}");
+    assert_eq!(status, StatusCode::OK, "{no_members}");
     let (status, helpers) = create_role(
         &setup,
         &setup.browser,
         json!({"name": "Helpers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{helpers}");
+    assert_eq!(status, StatusCode::OK, "{helpers}");
     // Alex manages members in Open (built-in admin) but not in Shut.
     sqlx::query(
         "UPDATE project_memberships SET role = 'admin' WHERE project_id = $1 AND actor_id = $2",
@@ -3604,7 +3428,7 @@ async fn a_former_owner_without_post_messages_cant_send_direct_messages() {
         json!({"name": "Quiet", "baseRole": "member", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{quiet}");
+    assert_eq!(status, StatusCode::OK, "{quiet}");
 
     // The owner opens Messages and a DM with Bea while still the owner.
     direct_space(&setup).await;
@@ -3711,7 +3535,7 @@ async fn cancelling_a_launch_without_see_tasks_reveals_no_task() {
         json!({"name": "Launchers", "baseRole": "member", "permissions": ["runs.launch"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    assert_eq!(status, StatusCode::OK, "{blind}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -3725,15 +3549,17 @@ async fn cancelling_a_launch_without_see_tasks_reveals_no_task() {
         app,
         bea_browser.request(
             "POST",
-            &format!("/api/v1/projects/{work}/launches/{}/cancel", launches[0]),
+            "/api/v2/ops/launch_cancel",
             Some("bea-cancel-blind"),
-            json!({}),
+            json!({"launchId": launches[0]}),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{cancelled}");
+    let cancelled = cancelled["value"].clone();
     assert_eq!(cancelled["state"], "cancelled", "{cancelled}");
-    assert!(cancelled["workItem"].is_null(), "{cancelled}");
+    assert!(cancelled["task"].is_null(), "{cancelled}");
+    assert!(cancelled["taskTitle"].is_null(), "{cancelled}");
     assert!(
         !cancelled.to_string().contains("Secret launch plan"),
         "{cancelled}"
@@ -3746,7 +3572,7 @@ async fn cancelling_a_launch_without_see_tasks_reveals_no_task() {
         json!({"name": "Seeing launchers", "baseRole": "member", "permissions": ["tasks.view", "runs.launch"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{seeing}");
+    assert_eq!(status, StatusCode::OK, "{seeing}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -3760,15 +3586,15 @@ async fn cancelling_a_launch_without_see_tasks_reveals_no_task() {
         app,
         bea_browser.request(
             "POST",
-            &format!("/api/v1/projects/{work}/launches/{}/cancel", launches[1]),
+            "/api/v2/ops/launch_cancel",
             Some("bea-cancel-seeing"),
-            json!({}),
+            json!({"launchId": launches[1]}),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{cancelled}");
     assert_eq!(
-        cancelled["workItem"]["title"], "Secret launch plan",
+        cancelled["value"]["taskTitle"], "Secret launch plan",
         "{cancelled}"
     );
 }
@@ -3791,7 +3617,7 @@ async fn an_invite_only_admin_sees_which_roles_they_may_invite_to() {
         json!({"name": "Editors", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
     ] {
         let (status, role) = create_role(&setup, &setup.browser, body).await;
-        assert_eq!(status, StatusCode::CREATED, "{role}");
+        assert_eq!(status, StatusCode::OK, "{role}");
         created.push(role);
     }
     let (status, assigned) = assign(&setup, &setup.browser, alex, &created[0]["id"], false).await;
@@ -3847,7 +3673,7 @@ async fn rotating_an_agent_checks_the_role_it_holds() {
         json!({"name": "Agent keepers", "baseRole": "admin", "permissions": ["agents.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{keepers}");
+    assert_eq!(status, StatusCode::OK, "{keepers}");
     let (status, assigned) = assign(&setup, &setup.browser, alex, &keepers["id"], false).await;
     assert_eq!(status, StatusCode::OK, "{assigned}");
     sqlx::query(
@@ -3877,7 +3703,7 @@ async fn rotating_an_agent_checks_the_role_it_holds() {
         json!({"name": "Quiet agents", "baseRole": "member", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{quiet}");
+    assert_eq!(status, StatusCode::OK, "{quiet}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -3925,7 +3751,7 @@ async fn agents_are_given_only_what_the_giver_holds_in_the_project() {
         json!({"name": "Agent keepers here", "baseRole": "admin", "permissions": ["agents.manage", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{keepers}");
+    assert_eq!(status, StatusCode::OK, "{keepers}");
     sqlx::query(
         "UPDATE project_memberships SET role = 'admin', role_id = $3 WHERE project_id = $1 AND actor_id = $2",
     )
@@ -3983,7 +3809,7 @@ async fn agents_are_given_only_what_the_giver_holds_in_the_project() {
         json!({"name": "Reading agents", "baseRole": "member", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{readers}");
+    assert_eq!(status, StatusCode::OK, "{readers}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -4038,7 +3864,7 @@ async fn project_roles_are_given_only_within_the_givers_project_role() {
         json!({"name": "Member keepers here", "baseRole": "admin", "permissions": ["members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{keepers}");
+    assert_eq!(status, StatusCode::OK, "{keepers}");
     sqlx::query(
         "UPDATE project_memberships SET role = 'admin', role_id = $3 WHERE project_id = $1 AND actor_id = $2",
     )
@@ -4054,20 +3880,20 @@ async fn project_roles_are_given_only_within_the_givers_project_role() {
         json!({"name": "Workers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit", "code.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{workers}");
+    assert_eq!(status, StatusCode::OK, "{workers}");
     let (status, readers) = create_role(
         &setup,
         &setup.browser,
         json!({"name": "Readers", "baseRole": "member", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{readers}");
+    assert_eq!(status, StatusCode::OK, "{readers}");
     let give = |role: &Value, version: i64, key: &str| {
         alex_browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/members/{bea}"),
+            "POST",
+            "/api/v2/ops/space_member_update",
             Some(key),
-            json!({"roleId": role["id"], "expectedVersion": version}),
+            json!({"spaceId": work, "account": bea, "role": role["id"], "expectedVersion": version}),
         )
     };
 
@@ -4114,7 +3940,7 @@ async fn applying_a_role_to_projects_stays_within_the_callers_project_role() {
         json!({"name": "Member keepers in Work", "baseRole": "admin", "permissions": ["members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{keepers}");
+    assert_eq!(status, StatusCode::OK, "{keepers}");
     sqlx::query(
         "UPDATE project_memberships SET role = 'admin', role_id = $3 WHERE project_id = $1 AND actor_id = $2",
     )
@@ -4130,14 +3956,14 @@ async fn applying_a_role_to_projects_stays_within_the_callers_project_role() {
         json!({"name": "Workers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit", "code.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{workers}");
+    assert_eq!(status, StatusCode::OK, "{workers}");
     let (status, readers) = create_role(
         &setup,
         &setup.browser,
         json!({"name": "Readers", "baseRole": "member", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{readers}");
+    assert_eq!(status, StatusCode::OK, "{readers}");
 
     // More than Alex holds in Work: the workspace role changes, Work doesn't.
     let (status, assigned) = assign(&setup, &alex_browser, bea, &workers["id"], true).await;
@@ -4186,17 +4012,14 @@ async fn a_project_invitation_lapses_when_its_issuers_project_role_narrows_below
     .execute(&setup.pool)
     .await
     .expect("alex is a project admin");
-    let (status, issued) = send(
-        app,
-        alex_browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/invitations"),
-            None,
-            json!({"role": "member", "expiresInHours": 24}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{issued}");
+    let (status, issued) = alex_browser
+        .op(
+            app,
+            "invitation_create",
+            json!({"projectId": work, "role": "member", "expiresInHours": 24}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{issued}");
     let token = invitation_token(&issued);
     let resolve = |token: &str| {
         setup.browser.request(
@@ -4216,7 +4039,7 @@ async fn a_project_invitation_lapses_when_its_issuers_project_role_narrows_below
         json!({"name": "Inviters only", "baseRole": "admin", "permissions": ["members.invite", "members.manage", "members.view", "tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{narrowed}");
+    assert_eq!(status, StatusCode::OK, "{narrowed}");
     sqlx::query(
         "UPDATE project_memberships SET role_id = $3 WHERE project_id = $1 AND actor_id = $2",
     )
@@ -4270,7 +4093,7 @@ async fn working_with_a_worker_needs_see_tasks() {
         json!({"name": "Blind doers", "baseRole": "member", "permissions": ["runs.launch", "channels.post"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{doers}");
+    assert_eq!(status, StatusCode::OK, "{doers}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -4346,7 +4169,7 @@ async fn managing_a_repository_needs_see_code() {
         json!({"name": "Code keepers", "baseRole": "admin", "permissions": ["code.manage"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{managers}");
+    assert_eq!(status, StatusCode::OK, "{managers}");
     assert!(
         keys(&managers["permissions"]).contains(&"code.view".to_owned()),
         "managing code implies seeing it: {managers}"
@@ -4357,7 +4180,7 @@ async fn managing_a_repository_needs_see_code() {
         json!({"name": "Blind code keepers", "baseRole": "admin", "permissions": ["tasks.view"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{keepers}");
+    assert_eq!(status, StatusCode::OK, "{keepers}");
     sqlx::query(
         "UPDATE project_memberships SET role = 'admin', role_id = $3 WHERE project_id = $1 AND actor_id = $2",
     )
@@ -4380,7 +4203,11 @@ async fn managing_a_repository_needs_see_code() {
         .await
         .expect("repository version");
     for (path, key, body) in [
-        (format!("{base}/prepare"), "bea-prepare", json!({})),
+        (
+            "/api/v2/ops/repository_prepare".to_owned(),
+            "bea-prepare",
+            json!({"projectId": work, "repository": repository}),
+        ),
         (
             format!("{base}/archive"),
             "bea-archive",
@@ -4428,7 +4255,7 @@ async fn comment_references_show_titles_only_with_see_tasks() {
         json!({"name": "Commenters", "baseRole": "member", "permissions": ["tasks.edit", "channels.post"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{editors}");
+    assert_eq!(status, StatusCode::OK, "{editors}");
     assert!(
         keys(&editors["permissions"]).contains(&"tasks.view".to_owned()),
         "editing implies seeing: {editors}"
@@ -4448,40 +4275,59 @@ async fn comment_references_show_titles_only_with_see_tasks() {
             {"type": "work_item_ref", "workItemId": secret}
         ]})
     };
-    let comments = format!("/api/v1/projects/{work}/work-items/{on}/comments");
     let (status, posted) = send(
         app,
         bea_browser.request(
             "POST",
-            &comments,
+            "/api/v2/ops/task_comment_create",
             Some("bea-comment"),
-            json!({"content": content("See ")}),
+            json!({"taskId": on, "content": content("See ")}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{posted}");
-    let reference = &posted["comment"]["referencedWorkItems"][0];
-    assert_eq!(reference["title"], "Secret referenced task", "{posted}");
-    assert_ne!(reference["statusCategory"], "", "{posted}");
-    let comment_id = posted["comment"]["id"]
+    assert_eq!(status, StatusCode::OK, "{posted}");
+    let comment_id = posted["value"]["resultId"]
         .as_str()
         .expect("comment")
         .to_owned();
+    let timeline = format!("/api/v1/projects/{work}/work-items/{on}/timeline");
+    let shown = |timeline: &Value| {
+        timeline["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .find(|entry| entry["comment"]["id"] == comment_id.as_str())
+            .map(|entry| entry["comment"]["referencedWorkItems"][0].clone())
+            .unwrap_or_else(|| panic!("{timeline}"))
+    };
+    let (status, read) = send(
+        app,
+        bea_browser.request("GET", &timeline, None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    let reference = shown(&read);
+    assert_eq!(reference["title"], "Secret referenced task", "{read}");
+    assert_ne!(reference["statusCategory"], "", "{read}");
     let (status, edited) = send(
         app,
         bea_browser.request(
-            "PATCH",
-            &format!("{comments}/{comment_id}"),
-            None,
-            json!({"content": content("Also see "), "expectedRevision": 1}),
+            "POST",
+            "/api/v2/ops/task_comment_update",
+            Some("bea-comment-edit"),
+            json!({"taskId": on, "commentId": comment_id, "content": content("Also see "), "expectedRevision": 1}),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{edited}");
-    assert_eq!(
-        edited["comment"]["referencedWorkItems"][0]["title"], "Secret referenced task",
-        "{edited}"
-    );
+    let (status, read) = send(
+        app,
+        bea_browser.request("GET", &timeline, None, Value::Null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert!(read.to_string().contains("Also see"), "{read}");
+    assert_eq!(shown(&read)["title"], "Secret referenced task", "{read}");
 }
 
 /// AI suggestions are about tasks, so seeing one takes "see tasks" in its
@@ -4592,10 +4438,10 @@ async fn ai_suggestions_need_see_tasks() {
     );
 }
 
-/// A bulk change returns its cards the way a single task's change does:
-/// someone who may archive tasks but not see them gets each card's id,
-/// key, version, type and status, not its title, assignee or other
-/// contents; with "see tasks" the whole card comes back.
+/// A bulk change only reaches tasks the caller sees: someone who may
+/// archive tasks but not see them is told the task wasn't found, with
+/// nothing of it in the answer; with "see tasks" the change goes through
+/// and answers with each task's id, key and version.
 #[tokio::test]
 async fn bulk_changes_without_see_tasks_reveal_no_task() {
     let Some(setup) = setup("awd74_bulk_cards").await else {
@@ -4619,7 +4465,7 @@ async fn bulk_changes_without_see_tasks_reveal_no_task() {
         json!({"name": "Archivers", "baseRole": "member", "permissions": ["tasks.delete"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{archivers}");
+    assert_eq!(status, StatusCode::OK, "{archivers}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -4631,26 +4477,12 @@ async fn bulk_changes_without_see_tasks_reveal_no_task() {
     assert_eq!(status, StatusCode::OK, "{changed}");
     let bulk = format!("/api/v1/projects/{work}/work-items/bulk");
 
-    // Restoring a task that's already active changes nothing and returns
-    // its card: without "see tasks", only what identifies it.
+    // Without "see tasks", the task isn't there for them.
     let version = task_version(&setup, project, task).await;
-    let (status, restored) = send(
-        app,
-        bea_browser.request(
-            "POST",
-            &bulk,
-            Some("bea-bulk-blind"),
-            json!({"items": [{"id": task, "expectedVersion": version}], "changes": {"archived": false}}),
-        ),
-    )
+    let (status, restored) = crate::support::tasks::send(app, &bea_browser, "POST", &bulk, Some("bea-bulk-blind"), json!({"items": [{"id": task, "expectedVersion": version}], "changes": {"archived": false}}))
     .await;
-    assert_eq!(status, StatusCode::OK, "{restored}");
-    let card = &restored["items"][0];
-    assert_eq!(card["id"], task.to_string(), "{restored}");
-    assert!(card["key"].is_string(), "{restored}");
-    assert!(card["status"]["id"].is_string(), "{restored}");
-    assert_eq!(card["title"], "", "{restored}");
-    assert!(card["assignee"].is_null(), "{restored}");
+    assert_eq!(status, StatusCode::CONFLICT, "{restored}");
+    assert_eq!(restored["code"], "rejected", "{restored}");
     assert!(
         !restored.to_string().contains("Secret bulk plan"),
         "{restored}"
@@ -4663,7 +4495,7 @@ async fn bulk_changes_without_see_tasks_reveal_no_task() {
         json!({"name": "Seeing archivers", "baseRole": "member", "permissions": ["tasks.view", "tasks.delete"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{seeing}");
+    assert_eq!(status, StatusCode::OK, "{seeing}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -4674,22 +4506,11 @@ async fn bulk_changes_without_see_tasks_reveal_no_task() {
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
     let version = task_version(&setup, project, task).await;
-    let (status, restored) = send(
-        app,
-        bea_browser.request(
-            "POST",
-            &bulk,
-            Some("bea-bulk-seeing"),
-            json!({"items": [{"id": task, "expectedVersion": version}], "changes": {"archived": false}}),
-        ),
-    )
+    let (status, restored) = crate::support::tasks::send(app, &bea_browser, "POST", &bulk, Some("bea-bulk-seeing"), json!({"items": [{"id": task, "expectedVersion": version}], "changes": {"archived": false}}))
     .await;
     assert_eq!(status, StatusCode::OK, "{restored}");
-    assert_eq!(
-        restored["items"][0]["title"], "Secret bulk plan",
-        "{restored}"
-    );
-    assert!(restored["items"][0]["assignee"].is_object(), "{restored}");
+    assert_eq!(restored["tasks"][0]["id"], task.to_string(), "{restored}");
+    assert!(restored["tasks"][0]["key"].is_string(), "{restored}");
 }
 
 /// Moving a task again returns where it went, under its current title
@@ -4736,7 +4557,7 @@ async fn a_repeated_move_shows_the_title_only_where_tasks_are_seen() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    assert_eq!(status, StatusCode::OK, "{blind}");
     let (status, changed) = set_project_role(
         &setup,
         &dest,
@@ -4767,7 +4588,7 @@ async fn a_repeated_move_shows_the_title_only_where_tasks_are_seen() {
         json!({"name": "Seeing creators", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit", "tasks.create"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{seeing}");
+    assert_eq!(status, StatusCode::OK, "{seeing}");
     let (status, changed) = set_project_role(
         &setup,
         &dest,
@@ -4838,7 +4659,7 @@ async fn board_links_show_task_titles_only_where_tasks_are_seen() {
         json!({"name": "No tasks", "baseRole": "viewer", "permissions": []}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    assert_eq!(status, StatusCode::OK, "{blind}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -4948,7 +4769,7 @@ async fn github_imports_follow_see_code() {
         json!({"name": "Importers", "baseRole": "member", "permissions": ["tasks.view", "tasks.create", "tasks.edit"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{importers}");
+    assert_eq!(status, StatusCode::OK, "{importers}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -5028,27 +4849,21 @@ async fn github_imports_follow_see_code() {
     assert!(!one.to_string().contains("import-repo"), "{one}");
     assert!(!one.to_string().contains("Secret issue seven"), "{one}");
     let version = one["version"].clone();
-    let (status, changed) = send(
-        app,
-        bea_browser.request(
-            "PATCH",
-            &path,
-            Some("bea-import-cancel"),
-            json!({"expectedVersion": version, "cancel": true}),
-        ),
-    )
-    .await;
+    let (status, changed) = bea_browser
+        .op(
+            app,
+            "task_import",
+            json!({"projectId": work, "importId": import_id, "expectedVersion": version, "cancel": true}),
+        )
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{changed}");
-    let (status, committed) = send(
-        app,
-        bea_browser.request(
-            "POST",
-            &format!("{path}/commit"),
-            Some("bea-import-commit"),
-            json!({"expectedVersion": version}),
-        ),
-    )
-    .await;
+    let (status, committed) = bea_browser
+        .op(
+            app,
+            "task_import",
+            json!({"projectId": work, "importId": import_id, "expectedVersion": version, "commit": true}),
+        )
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{committed}");
     let state: String = sqlx::query_scalar("SELECT status FROM task_imports WHERE id = $1")
         .bind(import_id)
@@ -5059,18 +4874,15 @@ async fn github_imports_follow_see_code() {
 
     // Markdown and CSV need no code, and keep no repository they're passed,
     // nor show one an older import stored.
-    let (status, markdown) = send(
-        app,
-        bea_browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/imports"),
-            Some("bea-markdown-import"),
-            json!({"source": "markdown", "text": "- Plain task", "repositoryId": repository}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{markdown}");
-    let markdown_id = markdown["id"]
+    let (status, markdown) = bea_browser
+        .op(
+            app,
+            "task_import",
+            json!({"projectId": work, "source": "markdown", "text": "- Plain task", "repositoryId": repository}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{markdown}");
+    let markdown_id = markdown["import"]["id"]
         .as_str()
         .expect("markdown import")
         .parse::<Uuid>()
@@ -5103,19 +4915,15 @@ async fn github_imports_follow_see_code() {
 
     // Cal sees code as a person, but their app's limit leaves it out.
     let (cal, cal_browser) = add_person(&setup, &[&work], "cal").await;
-    let (status, limit) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{cal}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": ["tasks.view", "tasks.create", "tasks.edit"]}),
-        ),
-    )
-    .await;
+    let (status, limit) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": cal, "permissions": ["tasks.view", "tasks.create", "tasks.edit"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{limit}");
     let cal_app = connect_app(app, &cal_browser, "Cal's app", "full").await;
     let cal_session = initialize(app, &cal_app).await.expect("Cal's app");
@@ -5206,7 +5014,7 @@ async fn the_workspace_member_directory_follows_directory_view() {
         json!({"name": "Helpers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{helpers}");
+    assert_eq!(status, StatusCode::OK, "{helpers}");
     assert!(
         !keys(&helpers["permissions"]).contains(&"directory.view".to_owned()),
         "{helpers}"
@@ -5224,7 +5032,7 @@ async fn the_workspace_member_directory_follows_directory_view() {
         json!({"name": "Managers", "baseRole": "admin", "permissions": ["members.manage"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{managers}");
+    assert_eq!(status, StatusCode::OK, "{managers}");
     let (status, assigned) = assign(&setup, &setup.browser, alex, &managers["id"], false).await;
     assert_eq!(status, StatusCode::OK, "{assigned}");
     let (status, narrowed) = send(app, directory(&alex_browser)).await;
@@ -5233,16 +5041,15 @@ async fn the_workspace_member_directory_follows_directory_view() {
     assert!(!narrowed.to_string().contains("\"bea\""), "{narrowed}");
 
     // The owner gives Helpers the directory: Cal sees everyone again.
-    let (status, given) = send(
-        app,
-        setup.browser.request(
-            "PATCH",
-            &format!("{}/{}", roles_path(&setup), helpers["id"].as_str().expect("id")),
-            None,
-            json!({"expectedVersion": helpers["version"], "permissions": ["tasks.view", "tasks.edit", "directory.view"]}),
-        ),
-    )
-    .await;
+    let (status, given) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "role_update",
+            json!({"role": helpers["id"], "expectedVersion": helpers["version"], "permissions": ["tasks.view", "tasks.edit", "directory.view"]}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{given}");
     let (status, everyone) = send(app, directory(&cal_browser)).await;
     assert_eq!(status, StatusCode::OK, "{everyone}");
@@ -5319,14 +5126,11 @@ async fn redelivering_through_an_app_keeps_to_its_limit() {
         .expect("stored delivery")
     };
     let limit = |permissions: Value| {
-        setup.browser.request(
-            "PUT",
-            &format!(
-                "/api/v1/organizations/{}/members/{bea}/agent-limit",
-                setup.organization_id
-            ),
-            None,
-            json!({"permissions": permissions}),
+        setup.browser.op_in(
+            app,
+            setup.organization_id,
+            "app_limit_set",
+            json!({"account": bea, "permissions": permissions}),
         )
     };
     let bea_app = connect_app(app, &bea_browser, "Bea's app", "full").await;
@@ -5334,7 +5138,7 @@ async fn redelivering_through_an_app_keeps_to_its_limit() {
     let redeliver = json!({"connectionId": webhook, "eventPosition": position});
 
     // Her app may change tasks but not see them: no resending.
-    let (status, limited) = send(app, limit(json!(["tasks.edit", "channels.post"]))).await;
+    let (status, limited) = limit(json!(["tasks.edit", "channels.post"])).await;
     assert_eq!(status, StatusCode::OK, "{limited}");
     let refused = tool(
         app,
@@ -5348,11 +5152,7 @@ async fn redelivering_through_an_app_keeps_to_its_limit() {
     assert_eq!(stored(setup.pool.clone()).await, "delivered");
 
     // With "see tasks", it's queued.
-    let (status, limited) = send(
-        app,
-        limit(json!(["tasks.view", "tasks.edit", "channels.post"])),
-    )
-    .await;
+    let (status, limited) = limit(json!(["tasks.view", "tasks.edit", "channels.post"])).await;
     assert_eq!(status, StatusCode::OK, "{limited}");
     let queued = tool(app, &bea_app, &session, "connection_redeliver", redeliver).await;
     assert_eq!(queued["outcome"], "ok", "{queued}");
@@ -5449,7 +5249,7 @@ async fn moving_a_task_needs_its_contents_and_code_to_be_seen() {
                     body["agentLimit"] = limit;
                 }
                 let (status, role) = create_role(setup, &setup.browser, body).await;
-                assert_eq!(status, StatusCode::CREATED, "{role}");
+                assert_eq!(status, StatusCode::OK, "{role}");
                 let (status, changed) =
                     set_project_role(setup, &work, bea, key, json!({"roleId": role["id"]})).await;
                 assert_eq!(status, StatusCode::OK, "{changed}");
@@ -5519,6 +5319,51 @@ async fn moving_a_task_needs_its_contents_and_code_to_be_seen() {
         in_target("move-repo").await > 0,
         "the owner's note names it"
     );
+
+    // Through the web, archiving and seeing tasks here and creating them
+    // there is enough: no "edit tasks" in either project.
+    set_work_role(
+        "Web movers",
+        json!(["tasks.view", "tasks.delete"]),
+        Value::Null,
+        "bea-web-movers",
+    )
+    .await;
+    let (status, creators) = create_role(
+        &setup,
+        &setup.browser,
+        json!({"name": "Creators", "baseRole": "member", "permissions": ["tasks.view", "tasks.create"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{creators}");
+    let (status, changed) = set_project_role(
+        &setup,
+        &dest,
+        bea,
+        "bea-dest-creators",
+        json!({"roleId": creators["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    let web = linked_task("Moved through the web").await;
+    let (status, done) = crate::support::tasks::send(
+        app,
+        &bea_browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items/{web}/project-move"),
+        None,
+        json!({"targetProjectId": dest}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let arrived = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM task_rows WHERE project_id = $1 AND title = 'Moved through the web'",
+    )
+    .bind(target)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("moved");
+    assert_eq!(arrived, 1, "{done}");
 }
 
 /// Changing a task's links (task_relate, task_depend) answers with the task
@@ -5542,11 +5387,11 @@ async fn link_changes_name_the_task_only_where_tasks_are_seen() {
     let owner_session = initialize(app, &owner_app).await.expect("owner app");
     for (name, arguments) in [
         (
-            "task_relate",
+            "task_link",
             json!({"taskId": task.to_string(), "otherTaskId": third.to_string()}),
         ),
         (
-            "task_depend",
+            "task_link",
             json!({"taskId": task.to_string(), "blockedBy": [third.to_string()]}),
         ),
     ] {
@@ -5557,17 +5402,18 @@ async fn link_changes_name_the_task_only_where_tasks_are_seen() {
     let session = initialize(app, &bea_app).await.expect("Bea's app");
     let calls = [
         (
-            "task_relate",
+            "task_link",
             json!({"taskId": task.to_string(), "otherTaskId": other.to_string(), "remove": true}),
         ),
         (
-            "task_depend",
+            "task_link",
             json!({"taskId": task.to_string(), "blockedBy": [other.to_string()], "remove": true}),
         ),
     ];
 
     // As a plain Member, Bea sees the task.
     for (name, arguments) in calls.clone() {
+        let depends = arguments.get("blockedBy").is_some();
         let seen = tool(app, &bea_app, &session, name, arguments).await;
         assert_eq!(seen["outcome"], "ok", "{name}: {seen}");
         let changed = &seen["value"]["task"];
@@ -5575,7 +5421,8 @@ async fn link_changes_name_the_task_only_where_tasks_are_seen() {
         assert!(changed["status"].is_string(), "{name}: {seen}");
         assert!(changed["statusGroup"].is_string(), "{name}: {seen}");
         assert_eq!(changed["finished"], false, "{name}: {seen}");
-        if name == "task_depend" {
+        // A dependency change answers whether the task is ready now.
+        if depends {
             assert!(seen["value"]["ready"].is_boolean(), "{name}: {seen}");
         }
         assert!(
@@ -5597,7 +5444,7 @@ async fn link_changes_name_the_task_only_where_tasks_are_seen() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{editors}");
+    assert_eq!(status, StatusCode::OK, "{editors}");
     let (status, changed) = set_project_role(
         &setup,
         &work,
@@ -5652,11 +5499,11 @@ async fn link_changes_list_linked_tasks_only_where_the_app_sees_them() {
     let owner_session = initialize(app, &owner_app).await.expect("owner app");
     for (name, arguments) in [
         (
-            "task_relate",
+            "task_link",
             json!({"taskId": task.to_string(), "otherTaskId": elsewhere.to_string()}),
         ),
         (
-            "task_depend",
+            "task_link",
             json!({"taskId": task.to_string(), "blockedBy": [elsewhere.to_string()]}),
         ),
     ] {
@@ -5667,11 +5514,11 @@ async fn link_changes_list_linked_tasks_only_where_the_app_sees_them() {
     let session = initialize(app, &bea_app).await.expect("Bea's app");
     let calls = [
         (
-            "task_relate",
+            "task_link",
             json!({"taskId": task.to_string(), "otherTaskId": spare.to_string(), "remove": true}),
         ),
         (
-            "task_depend",
+            "task_link",
             json!({"taskId": task.to_string(), "blocks": [spare.to_string()], "remove": true}),
         ),
     ];
@@ -5698,7 +5545,7 @@ async fn link_changes_list_linked_tasks_only_where_the_app_sees_them() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{limited}");
+    assert_eq!(status, StatusCode::OK, "{limited}");
     let (status, changed) = set_project_role(
         &setup,
         &other_project,
@@ -5736,7 +5583,7 @@ async fn link_changes_list_linked_tasks_only_where_the_app_sees_them() {
         json!({"name": "Blind elsewhere", "baseRole": "viewer", "permissions": []}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{blind}");
+    assert_eq!(status, StatusCode::OK, "{blind}");
     let (status, changed) = set_project_role(
         &setup,
         &other_project,
@@ -5831,7 +5678,11 @@ async fn catalogue_matches_sql_and_role_allows_holds_to_the_role() {
             };
             (
                 info.key.to_owned(),
-                info.module.to_owned(),
+                // Grouped by the module whose manifest claims it (M1.3o).
+                agent_workspace_server::modules::registry::Registry::global()
+                    .module_of_permission(info.key)
+                    .map(|module| module.id.clone())
+                    .unwrap_or_default(),
                 scope.to_owned(),
                 info.required,
                 default_for,
@@ -5877,16 +5728,15 @@ async fn catalogue_matches_sql_and_role_allows_holds_to_the_role() {
     assert!(!allows("member", None, "no.such_key").await);
 
     // A custom role: its list, within its base, plus what every role holds.
-    let (status, body) = send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &roles_path(&setup),
-            None,
+    let (status, body) = setup
+        .browser
+        .op_in(
+            &setup.app,
+            setup.organization_id,
+            "role_create",
             json!({"name": "Reader", "baseRole": "viewer", "permissions": ["tasks.view"]}),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(status.is_success(), "{body}");
     let reader = body["role"]["id"]
         .as_str()
@@ -6100,35 +5950,31 @@ async fn every_membership_names_a_role_row_and_starting_roles_are_data() {
             .fetch_one(pool)
             .await
             .expect("owner version");
-    let (status, refused) = send(
-        &world.app,
-        world.owner.browser.request(
-            "PATCH",
-            &format!(
-                "/api/v1/organizations/{organization}/roles/{}",
-                ids["owner"]
-            ),
-            None,
-            json!({"permissions": ["projects.view"], "expectedVersion": owner_version}),
-        ),
-    )
-    .await;
+    let (status, refused) = world
+        .owner
+        .browser
+        .op_in(
+            &world.app,
+            organization,
+            "role_update",
+            json!({"role": ids["owner"], "permissions": ["projects.view"], "expectedVersion": owner_version}),
+        )
+        .await;
     assert!(!status.is_success(), "{status}: {refused}");
     assert!(
-        refused["error"]["message"]
+        refused["message"]
             .as_str()
             .is_some_and(|message| message.contains("Owner")),
         "{refused}"
     );
     // A task Lena may archive, before the edit.
-    let (status, made) = send(
+    let (status, made) = crate::support::tasks::send(
         &world.app,
-        world.owner.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("k110-task"),
-            json!({"title": "Kept"}),
-        ),
+        &world.owner.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("k110-task"),
+        json!({"title": "Kept"}),
     )
     .await;
     assert!(status.is_success(), "{status}: {made}");
@@ -6168,19 +6014,16 @@ async fn every_membership_names_a_role_row_and_starting_roles_are_data() {
             .fetch_one(pool)
             .await
             .expect("member version");
-    let (status, edited) = send(
-        &world.app,
-        world.owner.browser.request(
-            "PATCH",
-            &format!(
-                "/api/v1/organizations/{organization}/roles/{}",
-                ids["member"]
-            ),
-            None,
-            json!({"permissions": narrowed, "expectedVersion": member_version}),
-        ),
-    )
-    .await;
+    let (status, edited) = world
+        .owner
+        .browser
+        .op_in(
+            &world.app,
+            organization,
+            "role_update",
+            json!({"role": ids["member"], "permissions": narrowed, "expectedVersion": member_version}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{edited}");
     let (customized, effective) = sqlx::query_as::<_, (bool, Vec<String>)>(
         "SELECT customized, effective_permissions FROM workspace_roles WHERE id = $1",
@@ -6199,14 +6042,13 @@ async fn every_membership_names_a_role_row_and_starting_roles_are_data() {
         1,
         "only herself without the directory"
     );
-    let (status, archived) = send(
+    let (status, archived) = crate::support::tasks::send(
         &world.app,
-        lena.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items/{task}/archive"),
-            Some("k110-archive"),
-            json!({"expectedVersion": 1}),
-        ),
+        &lena.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items/{task}/archive"),
+        Some("k110-archive"),
+        json!({"expectedVersion": 1}),
     )
     .await;
     assert!(
@@ -6214,14 +6056,13 @@ async fn every_membership_names_a_role_row_and_starting_roles_are_data() {
         "{status}: {archived}"
     );
     // The owner, holding everything, still archives it.
-    let (status, archived) = send(
+    let (status, archived) = crate::support::tasks::send(
         &world.app,
-        world.owner.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items/{task}/archive"),
-            Some("k110-owner-archive"),
-            json!({"expectedVersion": 1}),
-        ),
+        &world.owner.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items/{task}/archive"),
+        Some("k110-owner-archive"),
+        json!({"expectedVersion": 1}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{archived}");
@@ -6277,7 +6118,7 @@ async fn suggesting_is_a_role_not_an_account_kind() {
                 app,
                 &token,
                 &session,
-                "page_edit",
+                "page_update_blocks",
                 json!({"pageId": page, "edits": [{"op": "append", "markdown": text}]}),
             )
             .await
@@ -6378,21 +6219,20 @@ async fn suggesting_is_a_role_not_an_account_kind() {
     }
 
     // An owner picks the role new agents get.
-    let (status, written) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            "/api/v1/settings/values/access.default_agent_role_id",
-            None,
+    let (status, written) = setup
+        .browser
+        .op_in(
+            app,
+            setup.organization_id,
+            "setting_update",
             json!({
+                "key": "access.default_agent_role_id",
                 "scope": "workspace",
-                "organizationId": setup.organization_id,
                 "value": suggests,
                 "expectedVersion": 0,
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{written}");
     let (vale, _) = create_agent(app, &setup.browser, &space, "Vale", "vale").await;
     assert_eq!(workspace_role(vale).await, "member-suggests");
@@ -6427,8 +6267,8 @@ async fn an_agent_made_admin_does_what_an_admin_does() {
         app,
         &rook_token,
         &session,
-        "role_write",
-        json!({"projectId": work, "name": "Helpers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
+        "role_create",
+        json!({"name": "Helpers", "baseRole": "member", "permissions": ["tasks.view", "tasks.edit"]}),
     )
     .await;
     assert_eq!(written["outcome"], "ok", "{written}");
@@ -6437,7 +6277,7 @@ async fn an_agent_made_admin_does_what_an_admin_does() {
         &rook_token,
         &session,
         "role_assign",
-        json!({"projectId": work, "person": "@rook", "role": "owner"}),
+        json!({"account": "@rook", "role": "owner"}),
     )
     .await;
     assert_ne!(ownership["outcome"], "ok", "{ownership}");
@@ -6457,7 +6297,7 @@ async fn an_agent_made_admin_does_what_an_admin_does() {
 /// "moderate channels", held by admins, whatever kind of account holds it.
 #[tokio::test]
 async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
-    let Some(setup) = setup("k116_task_comments").await else {
+    let Some((setup, _root)) = with_data_root("k116_task_comments").await else {
         return;
     };
     let app = &setup.app;
@@ -6469,7 +6309,7 @@ async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
         json!({"name": "Commenters", "baseRole": "member", "permissions": ["tasks.view", "tasks.comment"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{commenters}");
+    assert_eq!(status, StatusCode::OK, "{commenters}");
     let (alex, alex_browser) = add_person(&setup, &[&work], "alex").await;
     let (mara, mara_token) = create_agent(app, &setup.browser, &work, "Mara", "mara").await;
     for (who, actor) in [("alex", alex), ("mara", mara)] {
@@ -6489,24 +6329,68 @@ async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
         app,
         alex_browser.request(
             "POST",
-            &format!("/api/v1/projects/{work}/work-items/{task}/comments"),
+            "/api/v2/ops/task_comment_create",
             Some("k116-alex-comment"),
-            json!({"content": text("Looks good")}),
+            json!({"taskId": task, "content": text("Looks good")}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{said}");
-    let (status, refused) = send(
+    assert_eq!(status, StatusCode::OK, "{said}");
+    let (status, refused) = crate::support::tasks::send(
         app,
-        alex_browser.request(
-            "PATCH",
-            &format!("/api/v1/projects/{work}/work-items/{task}"),
-            Some("k116-alex-edit"),
-            json!({"title": "Renamed", "expectedVersion": 1}),
-        ),
+        &alex_browser,
+        "PATCH",
+        &format!("/api/v1/projects/{work}/work-items/{task}"),
+        Some("k116-alex-edit"),
+        json!({"title": "Renamed", "expectedVersion": 1}),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    // Commenting is enough to fix his own comment.
+    let (status, fixed) = send(
+        app,
+        alex_browser.request(
+            "POST",
+            "/api/v2/ops/task_comment_update",
+            Some("k116-alex-fix"),
+            json!({"taskId": task, "commentId": said["value"]["resultId"], "content": text("Looks great")}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{fixed}");
+    // And to attach a file to a comment, though not to the task itself.
+    let upload = |purpose: &str| {
+        Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/projects/{work}/work-items/{task}/files?name=note.txt{purpose}"
+            ))
+            .header("origin", "http://127.0.0.1:3100")
+            .header("cookie", &alex_browser.cookie)
+            .header("x-csrf-token", &alex_browser.csrf)
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(Body::from("Alex's note"))
+            .expect("upload")
+    };
+    let (status, attached) = send(app, upload("&for=comment")).await;
+    assert_eq!(status, StatusCode::CREATED, "{attached}");
+    let (status, refused) = send(app, upload("")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    // A direct upload asks the same: this server has no direct store, so a
+    // start Alex may make answers that, and one Alex may not make is refused.
+    let start = |for_comment: bool| {
+        alex_browser.op(
+            app,
+            "file_upload_start",
+            json!({"taskId": task, "forComment": for_comment, "name": "shot.png",
+                   "size": 5, "sha256": "0".repeat(64)}),
+        )
+    };
+    let (_, started) = start(true).await;
+    assert_eq!(started["code"], "direct_upload_unavailable", "{started}");
+    let (status, refused) = start(false).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(refused["details"]["permission"], "tasks.edit", "{refused}");
 
     // Mara comments through her tools.
     let mara_session = initialize(app, &mara_token).await.expect("Mara MCP");
@@ -6514,21 +6398,20 @@ async fn commenting_follows_comment_on_tasks_and_moderating_follows_the_role() {
         app,
         &mara_token,
         &mara_session,
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": task, "text": "On it", "clientRequestId": "k116-mara"}),
     )
     .await;
-    assert_eq!(commented["outcome"], "applied", "{commented}");
-    let mara_comment = commented["activityId"]
+    assert_eq!(commented["outcome"], "ok", "{commented}");
+    let mara_comment = commented["value"]["activityId"]
         .as_str()
         .expect("comment id")
         .to_owned();
 
     // An agent holding Admin removes someone else's comment; Mara, without
     // "moderate channels", can't remove Alex's.
-    let alex_comment = said["comment"]["id"]
+    let alex_comment = said["value"]["resultId"]
         .as_str()
-        .or_else(|| said["id"].as_str())
         .unwrap_or_else(|| panic!("comment id: {said}"))
         .to_owned();
     let denied = tool(
@@ -6590,7 +6473,7 @@ async fn a_page_save_suggests_or_edits_as_the_role_says() {
         json!({"name": "Suggester", "baseRole": "member", "permissions": ["pages.suggest"]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{suggester}");
+    assert_eq!(status, StatusCode::OK, "{suggester}");
     let (status, changed) = set_project_role(
         &setup,
         &work,

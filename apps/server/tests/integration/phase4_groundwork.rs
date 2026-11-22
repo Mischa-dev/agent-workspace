@@ -193,6 +193,24 @@ async fn a_pull_request_from_a_private_thread_stays_private() {
     assert_eq!(hidden, missing);
     let public = mara_call("pull_request_get", json!({"identifier": open_url})).await;
     assert_eq!(public["outcome"], "ok", "{public}");
+    // A link works through the web's and the v2 API's edge too, not only
+    // MCP's.
+    let (status, through_web) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/pull_request_get", setup.organization_id),
+            None,
+            json!({"identifier": private_url}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{through_web}");
+    assert_eq!(
+        through_web["value"]["id"],
+        private.to_string(),
+        "{through_web}"
+    );
 
     // task_link: nobody links a PR they can't see.
     let created = call(
@@ -224,13 +242,13 @@ async fn a_pull_request_from_a_private_thread_stays_private() {
 
     // task_open lists only the linked PRs the reader can see, and the
     // owner can't be tricked into a link that names the hidden one either.
-    let mara_opens = mara_call("task_open", json!({"taskId": "REPO-1"})).await;
+    let mara_opens = mara_call("task_get", json!({"taskId": "REPO-1"})).await;
     assert_eq!(mara_opens["outcome"], "ok", "{mara_opens}");
     let text = mara_opens.to_string();
     assert!(text.contains(&open_url), "{mara_opens}");
     assert!(!text.contains(&private_url), "{mara_opens}");
     assert!(!text.contains(&private.to_string()), "{mara_opens}");
-    let owner_opens = call("task_open", json!({"taskId": "REPO-1"})).await;
+    let owner_opens = call("task_get", json!({"taskId": "REPO-1"})).await;
     assert!(
         owner_opens.to_string().contains(&private_url),
         "{owner_opens}"
@@ -339,7 +357,7 @@ async fn a_moved_task_does_not_name_private_links_in_the_target_project() {
         app,
         &mara_token,
         &mara_session,
-        "task_open",
+        "task_get",
         json!({"taskId": new_key}),
     )
     .await;

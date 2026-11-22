@@ -106,14 +106,12 @@ async fn the_assistant_is_offered_with_a_model_and_answers_a_dm_with_its_tools()
         .expect("count");
 
     // A provider and its key: ready, and one step adds it.
-    let (status, body) = send(
+    let (status, body) = op(
         &app,
-        owner.browser.request(
-            "PUT",
-            "/api/v1/settings/values/ai.provider",
-            None,
-            json!({"scope": "workspace", "organizationId": organization, "value": "fake"}),
-        ),
+        &world,
+        owner,
+        "setting_update",
+        json!({"key": "ai.provider", "scope": "workspace", "value": "fake"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");

@@ -10,8 +10,8 @@ use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
-    git_runtime::expected_repository_mirror_path,
-    harness_host::ServerHost,
+    hosts::builtin::git::expected_repository_mirror_path,
+    hosts::builtin::harness_host::ServerHost,
     jobs::{self, WorkerOptions},
     launch,
     provider::{SupervisorRegistry, host::HarnessHost},
@@ -29,8 +29,25 @@ use uuid::Uuid;
 use crate::{
     agent_interface::{Browser, connect_app, initialize, tool},
     m3_scheduler_http::{create_test_mirror, integration_pool, schema_pool, uuid_field},
-    w2_harness_platform::{MEMBER_LOGIN, insert_member, login, send, send_get},
+    w2_harness_platform::{MEMBER_LOGIN, insert_member, login, send, send_get, send_op},
 };
+
+/// agent_profile_set answered the way the old profile routes did: the
+/// agent as it is now, or a removal's outcome.
+async fn profile_set(
+    application: &axum::Router,
+    who: (&str, &str),
+    key: &str,
+    body: Value,
+) -> (StatusCode, String, Value) {
+    let (status, text, value) = send_op(application, who, "agent_profile_set", key, body).await;
+    let shaped = match value["done"].as_str() {
+        Some(outcome @ ("deleted" | "hidden")) => json!({ "outcome": outcome }),
+        Some(_) => value["profile"].clone(),
+        None => value,
+    };
+    (status, text, shaped)
+}
 
 const OWNER_LOGIN: &str = "w12-harness-owner";
 const PASSWORD: &str = "correct horse battery staple";
@@ -163,13 +180,11 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
 
     // Only managers make agents.
     let profiles = format!("{project}/agent-profiles");
-    let refused = send(
+    let refused = profile_set(
         &application,
         member,
-        "POST",
-        &profiles,
         "member-reviewer",
-        json!({"template": "reviewer"}),
+        json!({"projectId": seed.project_id, "template": "reviewer"}),
     )
     .await;
     assert!(
@@ -183,13 +198,11 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
     assert_eq!(listed.2["ready"], true);
     assert_eq!(listed.2["templates"].as_array().map(Vec::len), Some(3));
 
-    let reviewer = send(
+    let reviewer = profile_set(
         &application,
         owner,
-        "POST",
-        &profiles,
         "reviewer",
-        json!({"template": "reviewer"}),
+        json!({"projectId": seed.project_id, "template": "reviewer"}),
     )
     .await;
     assert_eq!(reviewer.0, StatusCode::OK, "{}", reviewer.1);
@@ -229,13 +242,11 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         .expect("the profile agent is a member of the workspace");
     assert_eq!(role, "member");
     assert!(owned && listed_account && managed && in_own_space);
-    let second = send(
+    let second = profile_set(
         &application,
         owner,
-        "POST",
-        &profiles,
         "reviewer-again",
-        json!({"template": "reviewer"}),
+        json!({"projectId": seed.project_id, "template": "reviewer"}),
     )
     .await;
     assert_eq!(second.0, StatusCode::OK, "{}", second.1);
@@ -243,13 +254,11 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         second.2["handle"], "reviewer-2",
         "a taken handle gets a number"
     );
-    let unknown = send(
+    let unknown = profile_set(
         &application,
         owner,
-        "POST",
-        &profiles,
         "unknown-harness",
-        json!({"name": "Ghost", "harness": "x_not_registered"}),
+        json!({"projectId": seed.project_id, "name": "Ghost", "harness": "x_not_registered"}),
     )
     .await;
     assert!(
@@ -318,16 +327,25 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         "{agent}"
     );
     assert_eq!(agent["runId"], json!(run_id));
-    let run = send_get(
+    let run = send_op(
         &application,
         member,
-        &format!("/api/v1/agent-runs/{run_id}"),
+        "run_step_list",
+        "w12-run-steps",
+        json!({"runId": run_id}),
     )
     .await;
     assert_eq!(run.0, StatusCode::OK, "{}", run.1);
-    assert_eq!(run.2["agentProfileId"], json!(profile_id));
-    assert_eq!(run.2["agentName"], "Reviewer");
-    let runs = send_get(&application, member, "/api/v1/runs?status=active").await;
+    assert_eq!(run.2["run"]["agentProfileId"], json!(profile_id));
+    assert_eq!(run.2["run"]["agentName"], "Reviewer");
+    let runs = send_op(
+        &application,
+        member,
+        "run_line_list",
+        "w12-run-lines",
+        json!({"status": "active"}),
+    )
+    .await;
     assert!(
         runs.2["runs"]
             .as_array()
@@ -367,9 +385,19 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
     .execute(&pool)
     .await
     .expect("usage without an account");
-    let usage = send_get(&application, member, "/api/v1/runs/usage?groupBy=account").await;
+    let usage = send_op(
+        &application,
+        member,
+        "run_usage_list",
+        "w12-usage",
+        json!({"groupBy": "account"}),
+    )
+    .await;
     assert_eq!(usage.0, StatusCode::OK, "{}", usage.1);
-    let rows = usage.2["rows"].as_array().cloned().unwrap_or_default();
+    let rows = usage.2["usage"]["rows"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     let none = rows
         .iter()
         .find(|row| row["key"] == "none")
@@ -383,16 +411,135 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         usage.1
     );
 
+    // Someone in two workspaces sees each one's usage only in it.
+    let member_actor =
+        sqlx::query_scalar::<_, Uuid>("SELECT actor_id FROM users WHERE login_name = $1")
+            .bind(MEMBER_LOGIN)
+            .fetch_one(&pool)
+            .await
+            .expect("the member's account");
+    let elsewhere = Uuid::now_v7();
+    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Elsewhere', $2)")
+        .bind(elsewhere)
+        .bind(format!("elsewhere-{}", elsewhere.simple()))
+        .execute(&pool)
+        .await
+        .expect("a second workspace");
+    sqlx::query(
+        "INSERT INTO organization_memberships (organization_id, actor_id, role) VALUES ($1, $2, 'member')",
+    )
+    .bind(elsewhere)
+    .bind(member_actor)
+    .execute(&pool)
+    .await
+    .expect("the member joins it");
+    let mut transaction = pool.begin().await.expect("begin");
+    let elsewhere_space = agent_workspace_server::spaces::manage::create(
+        &mut transaction,
+        agent_workspace_server::spaces::manage::NewSpace {
+            workspace_id: elsewhere,
+            kind: agent_workspace_server::spaces::SpaceKind::Project,
+            key: "ELS",
+            name: "Elsewhere",
+            description: "",
+            visibility: agent_workspace_server::spaces::SpaceVisibility::Members,
+            icon: None,
+            owner: agent_workspace_server::spaces::manage::Owner {
+                account_id: member_actor,
+                display_name: "Member",
+                login_name: MEMBER_LOGIN,
+            },
+        },
+    )
+    .await
+    .expect("a space elsewhere, with the member in it");
+    transaction.commit().await.expect("commit the space");
+    let elsewhere_run = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO runs (id, workspace_id, space_id, account_id, title, cause_kind, state)
+        VALUES ($1, $2, $3, $4, 'A run elsewhere', 'manual', 'working')
+        "#,
+    )
+    .bind(elsewhere_run)
+    .bind(elsewhere)
+    .bind(elsewhere_space)
+    .bind(member_actor)
+    .execute(&pool)
+    .await
+    .expect("a run elsewhere");
+    sqlx::query(
+        r#"
+        INSERT INTO run_usage (
+            run_id, model, attribution, workspace_id, space_id, account_id,
+            usage_date, input_tokens, output_tokens, confidence
+        )
+        VALUES ($1, 'w12-elsewhere', 'reported', $2, $3, $4, current_date, 7777, 7, 'exact')
+        "#,
+    )
+    .bind(elsewhere_run)
+    .bind(elsewhere)
+    .bind(elsewhere_space)
+    .bind(member_actor)
+    .execute(&pool)
+    .await
+    .expect("usage elsewhere");
+    let models = |usage: &Value| -> Vec<String> {
+        usage["rows"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|row| row["key"].as_str().map(str::to_owned))
+            .collect()
+    };
+    let here = send(
+        &application,
+        member,
+        "POST",
+        &format!("/api/v2/w/{}/ops/run_usage_list", seed.organization_id),
+        "w12-usage-here",
+        json!({"groupBy": "model"}),
+    )
+    .await;
+    assert_eq!(here.0, StatusCode::OK, "{}", here.1);
+    let here = models(&here.2["value"]["usage"]);
+    assert!(
+        here.iter().any(|model| model == "w12-no-account"),
+        "{here:?}"
+    );
+    assert!(
+        !here.iter().any(|model| model == "w12-elsewhere"),
+        "{here:?}"
+    );
+    let there = send(
+        &application,
+        member,
+        "POST",
+        &format!("/api/v2/w/{elsewhere}/ops/run_usage_list"),
+        "w12-usage-there",
+        json!({"groupBy": "model"}),
+    )
+    .await;
+    assert_eq!(there.0, StatusCode::OK, "{}", there.1);
+    let there = models(&there.2["value"]["usage"]);
+    assert_eq!(
+        there,
+        vec!["w12-elsewhere".to_owned()],
+        "only that workspace's usage"
+    );
+
     // An automation launches as the agent; another project's agent, or one
     // that doesn't exist, is refused when the rule is saved.
-    let automations = format!("{project}/automations");
+    let automation_create = "/api/v2/ops/automation_create".to_owned();
     let unknown = send(
         &application,
         owner,
         "POST",
-        &automations,
+        &automation_create,
         "rule-unknown-agent",
         json!({
+            "projectId": seed.project_id,
             "name": "Review new tasks",
             "trigger": {"kind": "task_created"},
             "actions": [{"kind": "launch", "agentProfileId": Uuid::now_v7()}],
@@ -404,16 +551,18 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         &application,
         owner,
         "POST",
-        &automations,
+        &automation_create,
         "rule-reviewer",
         json!({
+            "projectId": seed.project_id,
             "name": "Review new tasks",
             "trigger": {"kind": "task_created"},
             "actions": [{"kind": "launch", "agentProfileId": profile_id}],
         }),
     )
     .await;
-    assert_eq!(rule.0, StatusCode::CREATED, "{}", rule.1);
+    assert_eq!(rule.0, StatusCode::OK, "{}", rule.1);
+    let rule = rule.2["value"].clone();
     let task = send(
         &application,
         owner,
@@ -447,10 +596,15 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
     let rule_off = send(
         &application,
         owner,
-        "PATCH",
-        &format!("{automations}/{}", uuid_field(&rule.2, "id")),
+        "POST",
+        "/api/v2/ops/automation_update",
         "rule-off",
-        json!({"expectedVersion": rule.2["version"], "enabled": false}),
+        json!({
+            "projectId": seed.project_id,
+            "ruleId": uuid_field(&rule, "id"),
+            "expectedVersion": rule["version"],
+            "enabled": false,
+        }),
     )
     .await;
     assert_eq!(rule_off.0, StatusCode::OK, "{}", rule_off.1);
@@ -541,34 +695,28 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
     set_limit(None).await;
 
     // Turning it off frees the handle and stops tags.
-    let off = send(
+    let off = profile_set(
         &application,
         owner,
-        "PATCH",
-        &format!("{profiles}/{profile_id}"),
         "reviewer-off",
-        json!({"enabled": false, "version": reviewer.2["version"]}),
+        json!({"projectId": seed.project_id, "profile": profile_id, "enabled": false, "expectedVersion": reviewer.2["version"]}),
     )
     .await;
     assert_eq!(off.0, StatusCode::OK, "{}", off.1);
     assert_eq!(off.2["enabled"], false);
-    let stale = send(
+    let stale = profile_set(
         &application,
         owner,
-        "PATCH",
-        &format!("{profiles}/{profile_id}"),
         "reviewer-stale",
-        json!({"name": "Old", "version": reviewer.2["version"]}),
+        json!({"projectId": seed.project_id, "profile": profile_id, "name": "Old", "expectedVersion": reviewer.2["version"]}),
     )
     .await;
     assert_eq!(stale.0, StatusCode::CONFLICT, "{}", stale.1);
-    let renamed = send(
+    let renamed = profile_set(
         &application,
         owner,
-        "PATCH",
-        &format!("{profiles}/{}", uuid_field(&second.2, "id")),
         "second-takes-handle",
-        json!({"handle": "reviewer", "version": second.2["version"]}),
+        json!({"projectId": seed.project_id, "profile": uuid_field(&second.2, "id"), "handle": "reviewer", "expectedVersion": second.2["version"]}),
     )
     .await;
     assert_eq!(renamed.0, StatusCode::OK, "{}", renamed.1);
@@ -699,24 +847,20 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
     // Deleting an agent: only managers may; one that's working is refused;
     // one that never did anything goes for good, and one with runs is
     // hidden so they keep its name.
-    let planner = send(
+    let planner = profile_set(
         &application,
         owner,
-        "POST",
-        &profiles,
         "planner",
-        json!({"template": "planner"}),
+        json!({"projectId": seed.project_id, "template": "planner"}),
     )
     .await;
     assert_eq!(planner.0, StatusCode::OK, "{}", planner.1);
-    let planner_path = format!("{profiles}/{}", uuid_field(&planner.2, "id"));
-    let refused = send(
+    let planner_path = uuid_field(&planner.2, "id");
+    let refused = profile_set(
         &application,
         member,
-        "DELETE",
-        &planner_path,
         "member-delete",
-        json!(null),
+        json!({"projectId": seed.project_id, "profile": planner_path, "remove": true}),
     )
     .await;
     assert!(
@@ -724,13 +868,11 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         "a member deleted an agent: {}",
         refused.0
     );
-    let deleted = send(
+    let deleted = profile_set(
         &application,
         owner,
-        "DELETE",
-        &planner_path,
         "planner-delete",
-        json!(null),
+        json!({"projectId": seed.project_id, "profile": planner_path, "remove": true}),
     )
     .await;
     assert_eq!(deleted.0, StatusCode::OK, "{}", deleted.1);
@@ -741,14 +883,12 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         .await
         .expect("planner actor");
     assert_eq!(left, 0, "a deleted agent left its actor behind");
-    let reviewer_path = format!("{profiles}/{profile_id}");
-    let busy = send(
+    let reviewer_path = profile_id;
+    let busy = profile_set(
         &application,
         owner,
-        "DELETE",
-        &reviewer_path,
         "reviewer-busy",
-        json!(null),
+        json!({"projectId": seed.project_id, "profile": reviewer_path, "remove": true}),
     )
     .await;
     assert_eq!(busy.0, StatusCode::CONFLICT, "{}", busy.1);
@@ -757,13 +897,11 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         .execute(&pool)
         .await
         .expect("finish the reviewer's runs");
-    let hidden = send(
+    let hidden = profile_set(
         &application,
         owner,
-        "DELETE",
-        &reviewer_path,
         "reviewer-delete",
-        json!(null),
+        json!({"projectId": seed.project_id, "profile": reviewer_path, "remove": true}),
     )
     .await;
     assert_eq!(hidden.0, StatusCode::OK, "{}", hidden.1);
@@ -778,15 +916,17 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
         "a hidden agent is still listed: {}",
         listed.1
     );
-    let run = send_get(
+    let run = send_op(
         &application,
         member,
-        &format!("/api/v1/agent-runs/{run_id}"),
+        "run_step_list",
+        "w12-past-run",
+        json!({"runId": run_id}),
     )
     .await;
     assert_eq!(run.0, StatusCode::OK, "{}", run.1);
     assert_eq!(
-        run.2["agentName"], "Reviewer",
+        run.2["run"]["agentName"], "Reviewer",
         "a past run lost its agent's name"
     );
 
@@ -809,6 +949,21 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
             .fetch_one(&pool)
             .await
             .expect("spare home");
+    // Its home is the host's, made when the host first reaches it.
+    let signed_out = send(
+        &application,
+        owner,
+        "POST",
+        &format!("{accounts}/{spare_id}/logout"),
+        "spare-logout",
+        json!({}),
+    )
+    .await;
+    assert!(
+        signed_out.0.is_success(),
+        "sign the spare out: {}",
+        signed_out.1
+    );
     assert!(std::path::Path::new(&spare_home).exists());
     let refused = send(
         &application,

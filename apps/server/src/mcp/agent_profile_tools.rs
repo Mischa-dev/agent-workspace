@@ -24,9 +24,9 @@ use crate::{
 const MANAGERS_ONLY: &str =
     "Only someone whose role manages the project's settings makes or changes its agents.";
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct AgentProfileWriteArguments {
+pub(crate) struct AgentProfileWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// An agent to change or remove, by ID or @handle (agent_profile_list).
@@ -62,7 +62,7 @@ pub(super) struct AgentProfileWriteArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct AgentProfileWriteValue {
+pub(crate) struct AgentProfileWriteValue {
     /// "made", "changed", "deleted" or "hidden".
     pub done: String,
     /// The agent as it is now, unless it was removed.
@@ -119,7 +119,7 @@ fn nullable<T>(
     }
 }
 
-pub(super) async fn agent_profile_write(
+pub(crate) async fn agent_profile_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: AgentProfileWriteArguments,
@@ -252,7 +252,7 @@ pub(super) async fn agent_profile_write(
             None
         } else {
             let view =
-                agent_profiles::load(&mut *transaction, state, project_id, profile_id).await?;
+                agent_profiles::load(&mut transaction, state, project_id, profile_id).await?;
             Some(serde_json::to_value(view).unwrap_or(Value::Null))
         };
         transaction.commit().await?;

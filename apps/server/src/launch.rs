@@ -13,7 +13,7 @@ use axum::{
     Json, Router,
     extract::State,
     http::{HeaderMap, StatusCode},
-    routing::{get, post},
+    routing::get,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -21,18 +21,22 @@ use serde_json::{Map, Value, json};
 use sqlx::{FromRow, PgConnection, PgExecutor, Postgres, Transaction};
 use uuid::Uuid;
 
+use agent_workspace_host_protocol::account::{AccountAnswer, AccountAsk, AccountQuestion};
+
+use crate::harness_catalog::Harnesses;
+use crate::hosts::builtin::accounts::Asked;
 use crate::{
     AppState,
     addresses::{Place, Target},
     auth::{AuthenticatedActor, require_authenticated_write},
     environments::{self, EnvironmentRow, EnvironmentView},
     error::{ApiJson, ApiPath, ApiQuery, AppError},
+    harness::{manifest::AdapterManifest, run_config::RunConfig},
     hosts::builtin::http::{RunActor, StartRunRequest},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     jobs::{self, JobRegistry, NewJob},
     memory,
     policy::{Action, ActorKind},
-    provider::{manifest::AdapterManifest, run_config::RunConfig},
     settings,
 };
 
@@ -58,10 +62,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/projects/{project_id}/launches",
             get(list_launches).post(create_launches),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/launches/{launch_id}/cancel",
-            post(cancel_launch),
         )
 }
 
@@ -236,7 +236,7 @@ pub(crate) async fn task_fields(
     let pages = sqlx::query_as::<_, (Uuid, String)>(
         r#"
         SELECT page.id, page.title
-        FROM work_item_links link
+        FROM task_links link
         JOIN project_pages page
           ON page.id = link.target_id AND page.project_id = link.project_id
         WHERE link.project_id = $1 AND link.work_item_id = $2
@@ -889,7 +889,7 @@ fn launch_view_select() -> String {
 }
 
 fn launch_view(
-    state: &AppState,
+    harnesses: &Harnesses,
     row: LaunchViewRow,
     viewer_id: Uuid,
     can_manage: bool,
@@ -897,7 +897,7 @@ fn launch_view(
     let harness_name = row
         .harness
         .as_deref()
-        .map(|harness| crate::agent_sessions::harness_name(state, harness));
+        .map(|harness| harnesses.name(harness));
     LaunchView {
         can_cancel: row.state == "queued" && (row.requested_by_actor_id == viewer_id || can_manage),
         id: row.id,
@@ -971,10 +971,11 @@ async fn views_by_id(
     .bind(ids)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
+    let harnesses = Harnesses::visible(state).await?;
     Ok(rows
         .into_iter()
         .map(|row| {
-            let mut view = launch_view(state, row, caller.actor_id, manage);
+            let mut view = launch_view(&harnesses, row, caller.actor_id, manage);
             if !sees_tasks {
                 view.work_item = None;
             }
@@ -1035,11 +1036,14 @@ pub(crate) struct LaunchAccount {
 }
 
 impl LaunchAccount {
-    fn handle(&self) -> crate::provider::AccountHandle {
-        crate::provider::AccountHandle {
-            id: self.id,
-            home: std::path::PathBuf::from(&self.home_path),
+    /// A question for the built-in host about this account.
+    fn ask(&self, question: AccountQuestion) -> AccountAsk {
+        AccountAsk {
+            account_id: self.id,
+            harness: self.adapter_kind.clone(),
+            home: self.home_path.clone(),
             max_concurrent_runs: u16::try_from(self.max_concurrent_runs).unwrap_or(1),
+            question,
         }
     }
 }
@@ -1122,26 +1126,32 @@ async fn thread_busy(
     crate::hosts::builtin::thread_busy(executor, conversation_id).await
 }
 
-/// When the account's usage window resets, from the harness.
+/// When the account's usage window resets, as its harness says through the
+/// built-in host.
 async fn window_reset(
     state: &AppState,
+    workspace_id: Uuid,
     account: &LaunchAccount,
 ) -> Result<Option<DateTime<Utc>>, AppError> {
-    let Ok(mut session) = state
-        .supervisors
-        .acquire_control(&account.adapter_kind, account.handle())
-        .await
+    let asked = crate::hosts::builtin::accounts::ask(
+        state,
+        workspace_id,
+        account.ask(AccountQuestion::Status),
+    )
+    .await?;
+    let Asked::Answered(AccountAnswer::Status {
+        rate_limits: Some(limits),
+        ..
+    }) = asked
     else {
         return Ok(None);
     };
-    let limits = session.read_rate_limits().await.ok();
-    let windows = limits
+    let window = [limits.primary, limits.secondary]
         .into_iter()
-        .flat_map(|limits| [limits.primary, limits.secondary])
         .flatten()
         .filter(|window| window.resets_at.is_some())
         .max_by_key(|window| window.used_percent);
-    Ok(windows
+    Ok(window
         .and_then(|window| window.resets_at)
         .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0)))
 }
@@ -1185,7 +1195,7 @@ struct HarnessPlan {
     runner_name: Option<String>,
     kind: String,
     display_name: String,
-    runs_on: crate::provider::manifest::RunLocation,
+    runs_on: crate::harness::manifest::RunLocation,
     max_attempts: u8,
     models: Vec<ModelChoice>,
 }
@@ -1268,11 +1278,12 @@ async fn plan_for(
         .or_else(|| environment.map(|environment| environment.harness.clone()))
         .or_else(|| defaults.harness.clone());
     let mut harnesses = Vec::new();
-    for manifest in state.supervisors.manifests_in(defaults.organization_id) {
+    let known = Harnesses::of(state, defaults.organization_id).await?;
+    for manifest in known.manifests() {
         let catalog =
-            crate::provider::catalog::run_catalog(&state.pool, defaults.organization_id, &manifest)
+            crate::model_catalog::run_catalog(&state.pool, defaults.organization_id, manifest)
                 .await?;
-        let runner = state.supervisors.runner_for(&manifest.kind);
+        let runner = known.runner_for(&manifest.kind);
         let runner_name = match runner {
             Some(actor_id) => {
                 sqlx::query_scalar::<_, String>(
@@ -1333,7 +1344,7 @@ async fn plan_for(
         "harness",
         harness
             .as_deref()
-            .map(|harness| crate::agent_sessions::harness_name(state, harness))
+            .map(|harness| known.name(harness))
             .unwrap_or_default(),
     );
     fields.insert(
@@ -1599,9 +1610,9 @@ pub(crate) async fn launch_tasks(
             .map(|environment| environment.harness.clone())
     });
     if let Some(harness) = &harness
-        && state
-            .supervisors
-            .manifest_in(defaults.organization_id, harness)
+        && Harnesses::of(state, defaults.organization_id)
+            .await?
+            .manifest(harness)
             .is_none()
     {
         return Err(AppError::Validation("harness"));
@@ -1619,7 +1630,7 @@ pub(crate) async fn launch_tasks(
             .await?
             .ok_or(AppError::ExecutionProfileRequired)?;
             Some(
-                window_reset(state, &account)
+                window_reset(state, defaults.organization_id, &account)
                     .await?
                     .ok_or(AppError::Invalid(
                         "that account doesn't say when its usage resets; pick a time instead",
@@ -1808,7 +1819,7 @@ async fn reusable_thread(
     Ok(sqlx::query_scalar::<_, Uuid>(&format!(
         r#"
         SELECT conversation.id
-        FROM work_item_conversation_links link
+        FROM task_threads link
         JOIN conversations conversation
           ON conversation.project_id = link.project_id
          AND conversation.id = link.conversation_id
@@ -1872,7 +1883,7 @@ async fn task_thread(
         FROM conversations channel
         LEFT JOIN LATERAL (
             SELECT max(link.created_at) AS linked_at
-            FROM work_item_conversation_links link
+            FROM task_threads link
             JOIN conversations thread
               ON thread.id = link.conversation_id AND thread.parent_channel_id = channel.id
             WHERE link.project_id = $1 AND link.work_item_id = $2
@@ -2040,9 +2051,10 @@ async fn start_launch(
                 .as_ref()
                 .map(|environment| environment.harness.clone())
         });
-    let manifest = harness
-        .as_deref()
-        .and_then(|harness| state.supervisors.manifest(harness));
+    let known = Harnesses::visible(state).await?;
+    // Its settings, even when its registration was switched off after the
+    // launch was queued: the launch still runs as it was asked for.
+    let manifest = harness.as_deref().and_then(|harness| known.known(harness));
     let mut options = Map::new();
     if let (Some(environment), Some(manifest)) = (&environment, &manifest) {
         options = environment_options(environment, manifest);
@@ -2081,7 +2093,7 @@ async fn start_launch(
                 "harness",
                 harness
                     .as_deref()
-                    .map(|harness| crate::agent_sessions::harness_name(state, harness))
+                    .map(|harness| known.name(harness))
                     .unwrap_or_default(),
             );
             fields.insert(
@@ -2099,7 +2111,7 @@ async fn start_launch(
         return Err(AppError::Validation("prompt"));
     }
     let prompt = match &profile {
-        Some(profile) => profile.prompt(manifest.as_deref(), &prompt),
+        Some(profile) => profile.prompt(manifest, &prompt),
         None => prompt,
     };
     // A1.13: one path. The agent that does the work is the one the launch
@@ -2139,7 +2151,7 @@ async fn start_launch(
     let runner = launch.agent_account_id.or_else(|| {
         harness
             .as_deref()
-            .and_then(|harness| state.supervisors.runner_for(harness))
+            .and_then(|harness| known.runner_for(harness))
     });
     if let Some(runner) = runner {
         return hand_off(
@@ -2531,6 +2543,13 @@ async fn drain_here(state: &AppState) -> Result<usize, AppError> {
     )
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
+    // One catalog for the pass: which harnesses hand off to a runner, and
+    // what each is called.
+    let catalog = if due.is_empty() {
+        Harnesses::default()
+    } else {
+        Harnesses::visible(state).await?
+    };
     let mut started = 0;
     for queued in due {
         let launch = load_launch(&state.pool, queued.id).await?;
@@ -2672,11 +2691,11 @@ async fn drain_here(state: &AppState) -> Result<usize, AppError> {
             }
         };
         // A connected runner needs no account here: the task goes to it.
-        if harness
-            .as_deref()
-            .and_then(|harness| state.supervisors.runner_for(harness))
-            .is_some()
-        {
+        let runner = match harness.as_deref() {
+            Some(harness) => catalog.runner_for(harness),
+            None => None,
+        };
+        if runner.is_some() {
             let caller = LaunchCaller {
                 actor_id: queued.requested_by_actor_id,
                 actor_kind: kind,
@@ -2710,7 +2729,7 @@ async fn drain_here(state: &AppState) -> Result<usize, AppError> {
                         queued.actor_name,
                         harness
                             .as_deref()
-                            .map(|harness| crate::agent_sessions::harness_name(state, harness))
+                            .map(|harness| catalog.name(harness))
                             .unwrap_or_else(|| "this project's runs".to_owned())
                     ),
                 )
@@ -2825,8 +2844,9 @@ pub(crate) async fn list_for(
     // The launched task's key and title only for someone whose role (and an
     // app's limit) lets them see tasks here; the launch itself stays listed.
     let sees_tasks = sees_tasks(state, caller, project_id).await?;
+    let harnesses = Harnesses::visible(state).await?;
     let view = |row| {
-        let mut view = launch_view(state, row, caller.actor_id, manage);
+        let mut view = launch_view(&harnesses, row, caller.actor_id, manage);
         if !sees_tasks {
             view.work_item = None;
         }
@@ -2846,10 +2866,6 @@ async fn list_launches(
     let caller = LaunchCaller::browser(&principal, &HeaderMap::new())?;
     Ok(Json(list_for(&state, &caller, project_id).await?))
 }
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct EmptyRequest {}
 
 pub(crate) async fn cancel(
     state: &AppState,
@@ -2903,18 +2919,6 @@ pub(crate) async fn cancel(
         .await?
         .pop()
         .ok_or(AppError::NotFound("launch"))
-}
-
-async fn cancel_launch(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, launch_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(_request): ApiJson<EmptyRequest>,
-) -> Result<Json<LaunchView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = LaunchCaller::browser(&principal, &headers)?;
-    Ok(Json(cancel(&state, &caller, project_id, launch_id).await?))
 }
 
 // ---------------------------------------------------------------------------
@@ -3152,7 +3156,7 @@ async fn launch_from_tag(state: &AppState, payload: TagPayload) -> Result<(), Ap
         VALUES (
             $1, $2, $3, $4, $5, $6, 'tag', $7, $8, 'now',
             (SELECT COALESCE(max(position), 0) + 1 FROM launches WHERE project_id = $3),
-            (SELECT link.work_item_id FROM work_item_conversation_links link
+            (SELECT link.work_item_id FROM task_threads link
              WHERE link.project_id = $3 AND link.conversation_id = $4
              ORDER BY link.created_at LIMIT 1),
             $9, $10, $11

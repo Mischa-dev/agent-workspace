@@ -219,7 +219,13 @@ impl Operation for GuardWrite {
                         OpError::invalid("action", "Say what it does: deny or review.")
                     })?;
                 let operations = match input.operations {
-                    Some(values) => words("operations", values, 50)?,
+                    // An old name stands for the operations it now runs
+                    // (`page_write` is `page_create` and `page_update`).
+                    Some(values) => words(
+                        "operations",
+                        canonical_names(words("operations", values, 50)?),
+                        50,
+                    )?,
                     None => existing
                         .map(|guard| guard.operations.clone())
                         .unwrap_or_default(),
@@ -404,4 +410,27 @@ impl Operation for GuardList {
             .map_err(AppError::from)?,
         })
     }
+}
+
+/// Operation names with each retired old name replaced by the operations
+/// that took it over, in order and without repeats, so a guard matches what
+/// runs.
+fn canonical_names(names: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(names.len());
+    for name in names {
+        let expanded = match crate::ops::retired::find(&name) {
+            Some(old) => old
+                .use_instead
+                .iter()
+                .map(|run| (*run).to_owned())
+                .collect(),
+            None => vec![name],
+        };
+        for name in expanded {
+            if !out.contains(&name) {
+                out.push(name);
+            }
+        }
+    }
+    out
 }

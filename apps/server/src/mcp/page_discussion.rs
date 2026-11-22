@@ -82,9 +82,9 @@ fn page_url(state: &AppState, project_id: Uuid, page_id: Uuid) -> String {
 // ---------------------------------------------------------------------------
 // page_comments
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PageCommentsArguments {
+pub(crate) struct PageCommentsArguments {
     pub page_id: String,
     /// Include resolved threads (default false).
     pub include_resolved: Option<bool>,
@@ -92,7 +92,7 @@ pub(super) struct PageCommentsArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PageCommentsValue {
+pub(crate) struct PageCommentsValue {
     pub page_id: String,
     pub threads: Vec<ThreadLine>,
     pub url: String,
@@ -100,11 +100,11 @@ pub(super) struct PageCommentsValue {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ThreadLine {
-    /// The thread's id; reply with page_comment (replyTo), resolve with
+pub(crate) struct ThreadLine {
+    /// The thread's id; reply with page_comment_create (replyTo), resolve with
     /// page_comment_update.
     pub id: String,
-    /// The block it's about (an id from page_blocks); none for the whole
+    /// The block it's about (an id from page_blocks_get); none for the whole
     /// page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_id: Option<String>,
@@ -121,7 +121,7 @@ pub(super) struct ThreadLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CommentLine {
+pub(crate) struct CommentLine {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
@@ -160,7 +160,7 @@ fn thread_line(thread: ThreadView) -> ThreadLine {
     }
 }
 
-pub(super) async fn page_comments(
+pub(crate) async fn page_comments(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PageCommentsArguments,
@@ -196,13 +196,13 @@ pub(super) async fn page_comments(
 // ---------------------------------------------------------------------------
 // page_comment
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PageCommentArguments {
+pub(crate) struct PageCommentArguments {
     pub page_id: String,
     /// The comment, in Markdown (up to 10,000 characters).
     pub text: String,
-    /// Start a thread about one block: its id from page_blocks. Leave it
+    /// Start a thread about one block: its id from page_blocks_get. Leave it
     /// out to comment on the whole page.
     pub block_id: Option<String>,
     /// With blockId: the exact words in that block the comment is about.
@@ -216,13 +216,13 @@ pub(super) struct PageCommentArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PageCommentValue {
+pub(crate) struct PageCommentValue {
     pub comment_id: String,
     pub thread_id: String,
     pub url: String,
 }
 
-pub(super) async fn page_comment(
+pub(crate) async fn page_comment(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PageCommentArguments,
@@ -309,9 +309,9 @@ pub(super) async fn page_comment(
 // ---------------------------------------------------------------------------
 // page_comment_update
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PageCommentUpdateArguments {
+pub(crate) struct PageCommentUpdateArguments {
     pub page_id: String,
     /// The comment (for resolve, any comment in the thread).
     pub comment_id: String,
@@ -325,13 +325,13 @@ pub(super) struct PageCommentUpdateArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PageCommentUpdateValue {
+pub(crate) struct PageCommentUpdateValue {
     pub comment_id: String,
     pub thread_id: String,
     pub url: String,
 }
 
-pub(super) async fn page_comment_update(
+pub(crate) async fn page_comment_update(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PageCommentUpdateArguments,
@@ -418,9 +418,9 @@ pub(super) async fn page_comment_update(
 // ---------------------------------------------------------------------------
 // page_suggestions
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PageSuggestionsArguments {
+pub(crate) struct PageSuggestionsArguments {
     pub page_id: String,
     /// Also list the latest decided ones (accepted, rejected, withdrawn).
     pub include_decided: Option<bool>,
@@ -428,7 +428,7 @@ pub(super) struct PageSuggestionsArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PageSuggestionsValue {
+pub(crate) struct PageSuggestionsValue {
     pub page_id: String,
     pub suggestions: Vec<SuggestionLine>,
     pub url: String,
@@ -436,7 +436,7 @@ pub(super) struct PageSuggestionsValue {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SuggestionLine {
+pub(crate) struct SuggestionLine {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
@@ -458,7 +458,7 @@ pub(super) struct SuggestionLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SuggestedEdit {
+pub(crate) struct SuggestedEdit {
     /// replace, insertBefore, insertAfter, delete or append.
     pub op: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -471,7 +471,7 @@ pub(super) struct SuggestedEdit {
     pub before: Option<String>,
 }
 
-pub(super) async fn page_suggestions(
+pub(crate) async fn page_suggestions(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PageSuggestionsArguments,
@@ -529,9 +529,9 @@ pub(super) async fn page_suggestions(
 // ---------------------------------------------------------------------------
 // page_suggestion_decide
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct PageSuggestionDecideArguments {
+pub(crate) struct PageSuggestionDecideArguments {
     pub page_id: String,
     pub suggestion_id: String,
     /// accept or reject (on a page you made), or withdraw (your own
@@ -541,7 +541,7 @@ pub(super) struct PageSuggestionDecideArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PageSuggestionDecideValue {
+pub(crate) struct PageSuggestionDecideValue {
     pub suggestion_id: String,
     /// accepted, rejected or withdrawn.
     pub status: String,
@@ -550,7 +550,7 @@ pub(super) struct PageSuggestionDecideValue {
     pub url: String,
 }
 
-pub(super) async fn page_suggestion_decide(
+pub(crate) async fn page_suggestion_decide(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: PageSuggestionDecideArguments,
@@ -622,12 +622,12 @@ pub(super) async fn page_suggestion_decide(
             Err(Refusal::Archived) => {
                 return Ok(ToolResult::invalid(
                     "pageId",
-                    "That page is archived. Bring it back with page_write (archived: false) first.",
+                    "That page is archived. Bring it back with page_update (archived: false) first.",
                 ));
             }
             Err(Refusal::Stale(why)) => {
                 return Ok(ToolResult::conflict(format!(
-                    "{why} The suggestion no longer fits the page; reject it, or (if it's yours) withdraw it and suggest again from page_blocks."
+                    "{why} The suggestion no longer fits the page; reject it, or (if it's yours) withdraw it and suggest again from page_blocks_get."
                 )));
             }
         };

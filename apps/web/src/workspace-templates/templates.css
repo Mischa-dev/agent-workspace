@@ -3,7 +3,7 @@
 .aw-templates {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
-  gap: var(--space-3);
+  gap: var(--space-5) var(--space-4);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -65,4 +65,38 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+
+/* The two ways to start: headings above the cards, not lookalikes of them. */
+.aw-templates__section {
+  margin: 0;
+  font: var(--t-caption-strong);
+  color: var(--content-fg-muted);
+}
+
+.aw-templates__section:not(:first-child) {
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--content-border);
+}
+
+.aw-templates__more > summary {
+  width: fit-content;
+  border-radius: var(--radius-sm);
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+  cursor: pointer;
+}
+
+.aw-templates__more > summary:hover {
+  color: var(--content-fg);
+}
+
+.aw-templates__more > summary:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.aw-templates__more[open] > summary {
+  margin-bottom: var(--space-1);
 }

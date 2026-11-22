@@ -174,7 +174,7 @@ pub struct AgentRunUpdatedPayload {
 /// A1: a run changed, whoever runs it (the stopgap until K3's log carries
 /// `run.*` events). IDs and the state only; `change` names what happened
 /// (`opened`, `updated`, `activity`, `finished`, `liveness_changed`,
-/// `result_added`, `usage_updated`, `cancel`).
+/// `result_added`, `usage_updated`, `changes_reported`, `cancel`).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunChangedPayload {
@@ -444,6 +444,43 @@ pub struct WorkspaceThemesChangedPayload {
     pub theme_id: Uuid,
 }
 
+/// A built module was made, changed, switched or archived (M1.6), or a
+/// connected module installed, re-read, approved or revoked (M1.13). Ids
+/// only, delivered in the module's space, or for a workspace-wide one the
+/// workspace's own space (`whole_workspace`); module lists read again.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModuleChangedPayload {
+    pub workspace_id: Uuid,
+    pub project_id: Uuid,
+    pub module_id: Uuid,
+    pub change: ModuleChange,
+    pub whole_workspace: bool,
+}
+
+/// What happened to a module, which names its event.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModuleChange {
+    Created,
+    Updated,
+    Switched,
+    Removed,
+    Connected,
+}
+
+impl ModuleChange {
+    pub const fn event_type(self) -> &'static str {
+        match self {
+            Self::Created => "module.created",
+            Self::Updated => "module.updated",
+            Self::Switched => "module.switched",
+            Self::Removed => "module.removed",
+            Self::Connected => "module.connected",
+        }
+    }
+}
+
 /// Someone's sidebar sections changed (C2.9). Their id only, delivered to
 /// them alone; their other tabs read their sidebar again over HTTP.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -532,6 +569,7 @@ pub enum OutboxEventPayload {
     NotificationKeywordsChanged(NotificationKeywordsChangedPayload),
     ThemeChanged(ThemeChangedPayload),
     WorkspaceThemesChanged(WorkspaceThemesChangedPayload),
+    ModuleChanged(ModuleChangedPayload),
     SidebarChanged(SidebarChangedPayload),
     SavedSearchesChanged(SavedSearchesChangedPayload),
     FollowsChanged(FollowsChangedPayload),
@@ -575,6 +613,7 @@ impl OutboxEventPayload {
             Self::NotificationKeywordsChanged(_) => "notification_keywords.changed",
             Self::ThemeChanged(_) => "theme.changed",
             Self::WorkspaceThemesChanged(_) => "workspace_themes.changed",
+            Self::ModuleChanged(payload) => payload.change.event_type(),
             Self::SidebarChanged(_) => "sidebar.changed",
             Self::SavedSearchesChanged(_) => "saved_searches.changed",
             Self::FollowsChanged(_) => "follows.changed",
@@ -621,6 +660,7 @@ impl OutboxEventPayload {
             | Self::NotificationKeywordsChanged(_)
             | Self::ThemeChanged(_)
             | Self::WorkspaceThemesChanged(_)
+            | Self::ModuleChanged(_)
             | Self::SidebarChanged(_)
             | Self::SavedSearchesChanged(_)
             | Self::FollowsChanged(_)
@@ -687,6 +727,7 @@ impl OutboxEventPayload {
             Self::ProjectModulesUpdated(_)
             | Self::CustomEmojiChanged(_)
             | Self::WorkspaceThemesChanged(_)
+            | Self::ModuleChanged(_)
             | Self::GuardsChanged(_)
             | Self::BudgetsChanged(_) => OutboxResourceKind::Project,
             Self::WorkspaceLifecycleChanged(_) => OutboxResourceKind::Project,
@@ -731,6 +772,7 @@ impl OutboxEventPayload {
             Self::NotificationKeywordsChanged(payload) => payload.actor_id,
             Self::ThemeChanged(payload) => payload.actor_id,
             Self::WorkspaceThemesChanged(payload) => payload.project_id,
+            Self::ModuleChanged(payload) => payload.project_id,
             Self::SidebarChanged(payload) => payload.actor_id,
             Self::SavedSearchesChanged(payload) => payload.actor_id,
             Self::FollowsChanged(payload) => payload.actor_id,
@@ -881,6 +923,7 @@ impl OutboxEventPayload {
             Self::NotificationKeywordsChanged(payload) => serde_json::to_value(payload),
             Self::ThemeChanged(payload) => serde_json::to_value(payload),
             Self::WorkspaceThemesChanged(payload) => serde_json::to_value(payload),
+            Self::ModuleChanged(payload) => serde_json::to_value(payload),
             Self::SidebarChanged(payload) => serde_json::to_value(payload),
             Self::SavedSearchesChanged(payload) => serde_json::to_value(payload),
             Self::FollowsChanged(payload) => serde_json::to_value(payload),
@@ -992,6 +1035,15 @@ impl OutboxEventPayload {
             "workspace_themes.changed" => Self::WorkspaceThemesChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),
+            "module.created" | "module.updated" | "module.switched" | "module.removed"
+            | "module.connected" => {
+                let payload: ModuleChangedPayload = serde_json::from_value(value)
+                    .map_err(|_| OutboxEventError::MalformedPayload)?;
+                if payload.change.event_type() != event_type {
+                    return Err(OutboxEventError::MetadataMismatch);
+                }
+                Self::ModuleChanged(payload)
+            }
             "sidebar.changed" => Self::SidebarChanged(
                 serde_json::from_value(value).map_err(|_| OutboxEventError::MalformedPayload)?,
             ),

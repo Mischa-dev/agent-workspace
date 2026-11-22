@@ -4,6 +4,8 @@ import path from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 
 import { seededValue, storageStatePath } from './environment'
+import { at } from './addresses'
+import { workspaceHref } from '../src/app/href'
 
 // W1.29, phone navigation at 390 px: every bottom-bar destination opens,
 // the back button closes a drawer before it leaves the page, and no
@@ -64,7 +66,7 @@ async function sideways(page: Page) {
 test('every bottom-bar destination opens', async ({ page }) => {
   // Visit the seeded space first, so its tabs have a space to open.
   await page.goto(`/projects/${seededValue('E2E_PROJECT_ID')}`)
-  await page.goto('/home')
+  await page.goto(at('/home'))
   const bar = page.getByRole('navigation', { name: 'Main' })
   await expect(bar).toBeVisible()
   const names = (await bar.getByRole('link').allInnerTexts()).map((text) => text.split('\n')[0].trim())
@@ -87,15 +89,20 @@ test('every bottom-bar destination opens', async ({ page }) => {
           : await tab.getAttribute('aria-current'),
       )
       .toMatch(/^(chat|page)$/)
-    if (!(await bar.isVisible())) await page.goto('/home')
+    if (!(await bar.isVisible())) await page.goto(at('/home'))
   }
 })
 
 test('back closes the navigation drawer before it leaves the page', async ({ page }) => {
-  await page.goto('/inbox')
-  await page.goto('/home')
+  await page.goto(at('/inbox'))
+  // `-` (the workspace used last) becomes its slug.
+  await expect(page).toHaveURL(/\/w\/(?!-\/)[^/]+\/inbox$/)
+  const slug = new URL(page.url()).pathname.split('/')[2]
+  await page.goto(workspaceHref(slug))
   await page.getByRole('button', { name: /open navigation/i }).first().click()
   await expect(page.locator('.aw-shell')).toHaveAttribute('data-drawer', 'nav')
+  // The back-button handling loads after the first paint: wait for the drawer's history entry.
+  await expect.poll(() => page.evaluate(() => (window.history.state as { awSheet?: string } | null)?.awSheet ?? null)).not.toBeNull()
   await page.goBack()
   await expect(page.locator('.aw-shell')).not.toHaveAttribute('data-drawer', 'nav')
   await expect(page).toHaveURL(/\/home$/)
@@ -105,7 +112,7 @@ test('no registered page scrolls sideways at 390 px', async ({ page }) => {
   test.setTimeout(240_000)
   const found: string[] = []
   for (const address of registeredPaths()) {
-    await page.goto(address)
+    await page.goto(at(address))
     await page.waitForLoadState('networkidle')
     for (const element of await sideways(page)) found.push(`${address}: ${element}`)
   }

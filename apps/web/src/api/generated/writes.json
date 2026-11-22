@@ -41,6 +41,11 @@
   },
   {
     "kind": "change",
+    "name": "agent_profile_set",
+    "title": "Change an agent"
+  },
+  {
+    "kind": "change",
     "name": "agent_ref_decide",
     "title": "Decide on an agent's proposed rebind"
   },
@@ -73,6 +78,11 @@
     "kind": "change",
     "name": "app_consent_set",
     "title": "Let an app hear a conversation"
+  },
+  {
+    "kind": "change",
+    "name": "app_limit_set",
+    "title": "Set app limit"
   },
   {
     "kind": "create",
@@ -141,6 +151,16 @@
   },
   {
     "kind": "create",
+    "name": "collection_create",
+    "title": "Create collection"
+  },
+  {
+    "kind": "change",
+    "name": "collection_update",
+    "title": "Update collection"
+  },
+  {
+    "kind": "create",
     "name": "comment_create",
     "title": "Comment"
   },
@@ -148,6 +168,36 @@
     "kind": "change",
     "name": "comment_thread_update",
     "title": "Resolve comment thread"
+  },
+  {
+    "kind": "change",
+    "name": "connected_module_approve",
+    "title": "Approve a connected module's scopes"
+  },
+  {
+    "kind": "create",
+    "name": "connected_module_install",
+    "title": "Install a connected module"
+  },
+  {
+    "kind": "change",
+    "name": "connected_module_refresh",
+    "title": "Re-read a connected module's manifest"
+  },
+  {
+    "kind": "change",
+    "name": "connected_module_revoke",
+    "title": "Revoke a connected module"
+  },
+  {
+    "kind": "change",
+    "name": "connected_module_run",
+    "title": "Run a connected module's operation"
+  },
+  {
+    "kind": "change",
+    "name": "connected_module_test",
+    "title": "Check a file source"
   },
   {
     "kind": "create",
@@ -355,6 +405,16 @@
     "title": "Update field"
   },
   {
+    "kind": "change",
+    "name": "file_delete",
+    "title": "Remove file"
+  },
+  {
+    "kind": "create",
+    "name": "file_upload",
+    "title": "Upload file"
+  },
+  {
     "kind": "create",
     "name": "file_upload_finish",
     "title": "Finish a direct upload"
@@ -476,6 +536,16 @@
   },
   {
     "kind": "create",
+    "name": "invitation_create",
+    "title": "Invite"
+  },
+  {
+    "kind": "change",
+    "name": "invitation_update",
+    "title": "Revoke or replace invitation"
+  },
+  {
+    "kind": "create",
     "name": "invite_link_create",
     "title": "Make an invitation link"
   },
@@ -493,6 +563,36 @@
     "kind": "change",
     "name": "label_update",
     "title": "Update label"
+  },
+  {
+    "kind": "create",
+    "name": "later_save",
+    "title": "Save for later"
+  },
+  {
+    "kind": "change",
+    "name": "later_update",
+    "title": "Update Later item"
+  },
+  {
+    "kind": "change",
+    "name": "launch_cancel",
+    "title": "Cancel launch"
+  },
+  {
+    "kind": "create",
+    "name": "layout_preset_create",
+    "title": "Save layout preset"
+  },
+  {
+    "kind": "change",
+    "name": "layout_preset_update",
+    "title": "Update layout preset"
+  },
+  {
+    "kind": "change",
+    "name": "layout_update",
+    "title": "Set layout"
   },
   {
     "kind": "change",
@@ -556,6 +656,11 @@
   },
   {
     "kind": "change",
+    "name": "model_catalog_set",
+    "title": "Change model list"
+  },
+  {
+    "kind": "change",
     "name": "module_archive",
     "title": "Archive a module"
   },
@@ -563,6 +668,16 @@
     "kind": "create",
     "name": "module_create",
     "title": "Build a module"
+  },
+  {
+    "kind": "change",
+    "name": "module_frame_check",
+    "title": "Finish a connected module's frame"
+  },
+  {
+    "kind": "change",
+    "name": "module_panel_press",
+    "title": "Act in a connected module's panel"
   },
   {
     "kind": "change",
@@ -595,6 +710,11 @@
     "title": "Set keyword alerts"
   },
   {
+    "kind": "change",
+    "name": "notification_update",
+    "title": "Update notifications"
+  },
+  {
     "kind": "create",
     "name": "package_install",
     "title": "Install a package"
@@ -603,6 +723,26 @@
     "kind": "change",
     "name": "package_remove",
     "title": "Remove a package"
+  },
+  {
+    "kind": "change",
+    "name": "package_upgrade",
+    "title": "Upgrade a package"
+  },
+  {
+    "kind": "create",
+    "name": "page_comment_create",
+    "title": "Comment on page"
+  },
+  {
+    "kind": "change",
+    "name": "page_comment_update",
+    "title": "Update page comment"
+  },
+  {
+    "kind": "create",
+    "name": "page_create",
+    "title": "Create page"
   },
   {
     "kind": "create",
@@ -618,6 +758,21 @@
     "kind": "change",
     "name": "page_move",
     "title": "Move a page to another space"
+  },
+  {
+    "kind": "change",
+    "name": "page_suggestion_decide",
+    "title": "Decide suggested edit"
+  },
+  {
+    "kind": "change",
+    "name": "page_update",
+    "title": "Update page"
+  },
+  {
+    "kind": "change",
+    "name": "page_update_blocks",
+    "title": "Edit page blocks"
   },
   {
     "kind": "create",
@@ -643,6 +798,16 @@
     "kind": "change",
     "name": "project_status_set",
     "title": "Set a project's status"
+  },
+  {
+    "kind": "create",
+    "name": "project_template_create",
+    "title": "Save space template"
+  },
+  {
+    "kind": "change",
+    "name": "project_template_update",
+    "title": "Update space template"
   },
   {
     "kind": "create",
@@ -676,6 +841,11 @@
   },
   {
     "kind": "create",
+    "name": "record_create_many",
+    "title": "Add records"
+  },
+  {
+    "kind": "create",
     "name": "record_template_create",
     "title": "Create a record template"
   },
@@ -688,6 +858,11 @@
     "kind": "change",
     "name": "record_update",
     "title": "Update a record"
+  },
+  {
+    "kind": "change",
+    "name": "record_update_many",
+    "title": "Update records"
   },
   {
     "kind": "create",
@@ -780,6 +955,26 @@
     "title": "Answer a request"
   },
   {
+    "kind": "change",
+    "name": "role_assign",
+    "title": "Assign role"
+  },
+  {
+    "kind": "create",
+    "name": "role_create",
+    "title": "Create role"
+  },
+  {
+    "kind": "change",
+    "name": "role_delete",
+    "title": "Delete role"
+  },
+  {
+    "kind": "change",
+    "name": "role_update",
+    "title": "Update role"
+  },
+  {
     "kind": "create",
     "name": "run_activity_report",
     "title": "Report run activity"
@@ -791,8 +986,18 @@
   },
   {
     "kind": "create",
+    "name": "run_changes_report",
+    "title": "Report a run's changes"
+  },
+  {
+    "kind": "create",
     "name": "run_create",
     "title": "Open a run"
+  },
+  {
+    "kind": "change",
+    "name": "run_failure_hide",
+    "title": "Dismiss run failure"
   },
   {
     "kind": "change",
@@ -800,9 +1005,29 @@
     "title": "Mark a run not started"
   },
   {
+    "kind": "change",
+    "name": "run_publish",
+    "title": "Publish run branch"
+  },
+  {
     "kind": "create",
     "name": "run_result_report",
     "title": "Report run results"
+  },
+  {
+    "kind": "change",
+    "name": "run_retry",
+    "title": "Retry run"
+  },
+  {
+    "kind": "create",
+    "name": "run_start",
+    "title": "Start a run"
+  },
+  {
+    "kind": "change",
+    "name": "run_stop",
+    "title": "Stop run"
   },
   {
     "kind": "change",
@@ -836,8 +1061,18 @@
   },
   {
     "kind": "change",
+    "name": "setting_update",
+    "title": "Update setting"
+  },
+  {
+    "kind": "change",
     "name": "sheet_chart_set",
     "title": "Chart a sheet range"
+  },
+  {
+    "kind": "create",
+    "name": "sheet_create",
+    "title": "Create sheet"
   },
   {
     "kind": "change",
@@ -848,6 +1083,11 @@
     "kind": "change",
     "name": "sheet_row_add",
     "title": "Add a sheet row"
+  },
+  {
+    "kind": "change",
+    "name": "sheet_update",
+    "title": "Update sheet"
   },
   {
     "kind": "create",
@@ -985,6 +1225,11 @@
     "title": "Import tasks"
   },
   {
+    "kind": "create",
+    "name": "task_launch",
+    "title": "Launch tasks"
+  },
+  {
     "kind": "change",
     "name": "task_link",
     "title": "Link task"
@@ -1081,6 +1326,11 @@
   },
   {
     "kind": "create",
+    "name": "thing_upsert",
+    "title": "Add or change a connected thing"
+  },
+  {
+    "kind": "create",
     "name": "thread_start",
     "title": "Start thread"
   },
@@ -1103,6 +1353,11 @@
     "kind": "change",
     "name": "triage_rule_set",
     "title": "Write a triage rule"
+  },
+  {
+    "kind": "create",
+    "name": "usage_batch_launch",
+    "title": "Launch batch"
   },
   {
     "kind": "create",
@@ -1171,6 +1426,11 @@
   },
   {
     "kind": "change",
+    "name": "workflow_update",
+    "title": "Update workflow"
+  },
+  {
+    "kind": "change",
     "name": "workspace_delete",
     "title": "Delete workspace"
   },
@@ -1206,7 +1466,22 @@
   },
   {
     "kind": "change",
+    "name": "workspace_template_apply",
+    "title": "Use workspace template"
+  },
+  {
+    "kind": "create",
+    "name": "workspace_template_save",
+    "title": "Save workspace template"
+  },
+  {
+    "kind": "change",
     "name": "workspace_theme_set",
     "title": "Offer theme to the workspace"
+  },
+  {
+    "kind": "change",
+    "name": "workspace_update",
+    "title": "Change workspace"
   }
 ]

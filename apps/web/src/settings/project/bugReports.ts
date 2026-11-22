@@ -1,4 +1,5 @@
 import { requestJson } from '../../api/client'
+import { callOp } from '../../api/ops'
 
 /**
  * Bug report links: a secret URL per project that other apps POST bug
@@ -44,26 +45,47 @@ export type FormSettings = {
 export type BugReportLinkList = { links: BugReportLink[]; canCreate: boolean }
 export type BugReportLinkWithUrl = { link: BugReportLink; url: string; formUrl?: string }
 
-const json = <T>(path: string, method: string, body: unknown = {}) =>
-  requestJson<T>(path, { method, json: body, idempotencyKey: crypto.randomUUID() })
-
-const linkPath = (linkId: string) => `/api/v1/bug-report-links/${encodeURIComponent(linkId)}`
+type LinkRef = Pick<BugReportLink, 'id' | 'projectId'>
 
 export const listBugReportLinks = (projectId: string) =>
   requestJson<BugReportLinkList>(`/api/v1/projects/${encodeURIComponent(projectId)}/bug-report-links`)
 
-export const createBugReportLink = (projectId: string, name: string) =>
-  json<BugReportLinkWithUrl>(`/api/v1/projects/${encodeURIComponent(projectId)}/bug-report-links`, 'POST', { name })
+/**
+ * A link's address is shown once: a retried request that the server had
+ * already done answers without it. Say so rather than offer a missing URL.
+ */
+function withUrl(value: unknown): BugReportLinkWithUrl {
+  const answer = value as BugReportLinkWithUrl
+  if (!answer.url) {
+    throw new Error("Its address didn't arrive. Replace the link from the list to get a new one.")
+  }
+  return answer
+}
 
-export const createCollectionForm = (projectId: string, collectionId: string, name: string, form: FormSettings) =>
-  json<BugReportLinkWithUrl>(`/api/v1/projects/${encodeURIComponent(projectId)}/bug-report-links`, 'POST', { name, collectionId, form })
+export const createBugReportLink = async (projectId: string, name: string) =>
+  withUrl(await callOp('bug_report_link_create', { projectId, name }))
 
-export const updateBugReportLink = (linkId: string, change: { name?: string; state?: 'active' | 'paused'; form?: FormSettings }) =>
-  json<BugReportLink>(linkPath(linkId), 'PATCH', change)
+export const createCollectionForm = async (projectId: string, collectionId: string, name: string, form: FormSettings) =>
+  withUrl(await callOp('bug_report_link_create', { projectId, name, collection: collectionId, form }))
 
-export const replaceBugReportLink = (linkId: string) => json<BugReportLinkWithUrl>(`${linkPath(linkId)}/replace`, 'POST')
+export const updateBugReportLink = async (
+  link: LinkRef,
+  change: { name?: string; state?: 'active' | 'paused'; form?: FormSettings },
+) =>
+  (await callOp('bug_report_link_update', {
+    projectId: link.projectId,
+    linkId: link.id,
+    name: change.name,
+    state: change.state,
+    form: change.form,
+  })) as BugReportLink
 
-export const deleteBugReportLink = (linkId: string) => requestJson<void>(linkPath(linkId), { method: 'DELETE' })
+export const replaceBugReportLink = async (link: LinkRef) =>
+  withUrl(await callOp('bug_report_link_update', { projectId: link.projectId, linkId: link.id, replace: true }))
+
+export const deleteBugReportLink = async (link: LinkRef) => {
+  await callOp('bug_report_link_update', { projectId: link.projectId, linkId: link.id, delete: true })
+}
 
 export type SnippetKind = 'agent' | 'curl' | 'javascript' | 'python'
 

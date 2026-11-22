@@ -16,6 +16,8 @@ x-app-environment: &app-environment
   AGENT_WORKSPACE_DATA_ROOT: /var/lib/agent-workspace
   AGENT_WORKSPACE_SECRETS_KEY_PATH: /var/lib/agent-workspace-keys/keyring
   AGENT_WORKSPACE_PROFILE: ${AW_PROFILE:-standard}
+  # The `host` service calls the server by its service name.
+  AGENT_WORKSPACE_MCP_HOSTS: app,app:3100
 
 services:
   db:
@@ -45,9 +47,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    # Until the host program is its own image (A1.17), runs use the
-    # built-in host inside the server.
-    environment: *app-environment
+    # Runs use the built-in host inside the server unless the `host`
+    # profile below runs it as its own program (AW_BUILTIN_HOST=off).
+    environment:
+      <<: *app-environment
+      AGENT_WORKSPACE_BUILTIN_HOST: ${AW_BUILTIN_HOST:-on}
     secrets: [db_app_url]
     volumes:
       - data:/var/lib/agent-workspace
@@ -60,6 +64,31 @@ services:
       timeout: 6s
       start_period: 120s
       retries: 3
+    restart: unless-stopped
+
+  # The built-in host as its own program (A1.17), so restarting the server
+  # leaves running agents alone: set AW_BUILTIN_HOST=off in .env, then
+  # `docker compose --profile host up -d`. The server writes a one-time code
+  # into the shared data folder as it starts; the host enrols with it once
+  # and keeps its token there.
+  host:
+    profiles: [host]
+    image: ${AW_IMAGE:-agent-workspace}:${AW_VERSION:-latest}
+    depends_on:
+      app:
+        condition: service_healthy
+    command: ["agent-workspace-host"]
+    environment:
+      <<: *app-environment
+      AGENT_WORKSPACE_HOST_SERVER_URL: http://app:3100
+      # The image's health check asks SERVER_ADDR; the host serves only
+      # its health there.
+      AGENT_WORKSPACE_SERVER_ADDR: 0.0.0.0:3101
+      AGENT_WORKSPACE_HEALTH_ADDR: 0.0.0.0:3101
+    secrets: [db_app_url]
+    volumes:
+      - data:/var/lib/agent-workspace
+      - keys:/var/lib/agent-workspace-keys
     restart: unless-stopped
 
   # `docker compose --profile backup up -d`: a set every day at 03:30 UTC

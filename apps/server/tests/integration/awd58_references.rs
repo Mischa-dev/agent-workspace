@@ -45,16 +45,22 @@ async fn referenced_in(
 }
 
 async fn create(setup: &Setup, path: &str, key: &str, body: Value) -> String {
-    let (status, created) = send(
-        &setup.app,
-        setup.browser.request("POST", path, Some(key), body),
-    )
-    .await;
+    // The task writes moved to operations (K2.22).
+    let (status, created) = if crate::support::tasks::op_for("POST", path, &body).is_some() {
+        crate::support::tasks::send(&setup.app, &setup.browser, "POST", path, Some(key), body).await
+    } else {
+        send(
+            &setup.app,
+            setup.browser.request("POST", path, Some(key), body),
+        )
+        .await
+    };
     assert!(status.is_success(), "{created}");
     created["id"]
         .as_str()
         .or_else(|| created["comment"]["id"].as_str())
         .or_else(|| created["page"]["id"].as_str())
+        .or_else(|| created["value"]["resultId"].as_str())
         .unwrap_or_else(|| panic!("{created}"))
         .to_owned()
 }
@@ -132,9 +138,9 @@ async fn links_written_anywhere_show_where_the_reader_can_see_them() {
     .await;
     let comment = create(
         &setup,
-        &format!("/api/v1/projects/{work}/work-items/{commented}/comments"),
+        "/api/v2/ops/task_comment_create",
         "awd58-comment",
-        json!({"content": {"version": 1, "nodes": [
+        json!({"taskId": commented, "content": {"version": 1, "nodes": [
             {"type": "text", "text": "Waiting on "},
             {"type": "work_item_ref", "workItemId": task}
         ]}}),
@@ -273,7 +279,7 @@ async fn a_record_lists_where_it_is_linked_from() {
         app,
         &codex,
         &session,
-        "collection_write",
+        "collection_create",
         json!({"projectId": "WORK", "name": "Playtest notes", "fields": [{"name": "Notes", "type": "text"}]}),
     )
     .await;
@@ -282,7 +288,7 @@ async fn a_record_lists_where_it_is_linked_from() {
         app,
         &codex,
         &session,
-        "record_write",
+        "record_create_many",
         json!({
             "projectId": "WORK",
             "collection": "Playtest notes",
@@ -367,9 +373,9 @@ async fn a_record_lists_where_it_is_linked_from() {
     .await;
     create(
         &setup,
-        &format!("/api/v1/projects/{work}/work-items/{commented}/comments"),
+        "/api/v2/ops/task_comment_create",
         "awd112-comment",
-        json!({"content": {"version": 1, "nodes": [{"type": "text", "text": format!("Like {link}")}]}}),
+        json!({"taskId": commented, "content": {"version": 1, "nodes": [{"type": "text", "text": format!("Like {link}")}]}}),
     )
     .await;
 

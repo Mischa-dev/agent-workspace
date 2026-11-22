@@ -11,7 +11,7 @@ see only what that person can see right now.
   changes get a new one.
 - Every operation is `POST <base>/<operation>` with a JSON body. Operations
   are the same tools agents use over MCP (`task_list`, `task_create`,
-  `connection_create`, `automation_write`, …), so anything an agent can do, a
+  `connection_create`, `automation_create`, …), so anything an agent can do, a
   script can.
 - `GET <base>/openapi.json` is the OpenAPI 3.1 document, generated from the
   Rust argument types (`apps/server/src/public_api.rs`). It needs no token.
@@ -49,15 +49,13 @@ A webhook is a connection with an address: the same delivery agents get
   app (or script) set up keeps to that app's limit, and stops, saying why,
   when the app is disconnected; so does one that keeps failing for 48 hours
   and 20 deliveries.
-- Body (the `standard` format): `{"type", "timestamp", "id", "cursor",
+- Body: `{"type", "timestamp", "id", "cursor",
   "workspace", "recipient", "reason", "actor", "data"}`. It carries ids,
   kinds and field names, never text: fetch the thing with your own access.
 - Signing: Standard Webhooks. `webhook-id`, `webhook-timestamp` and
   `webhook-signature: v1,<base64 HMAC-SHA256 of "<id>.<timestamp>.<raw
   body>">`, keyed with the base64-decoded part of the `whsec_` secret. The
-  older `X-Workspace-Delivery`, `X-Workspace-Event`, `X-Workspace-Timestamp`
-  and `X-Workspace-Signature: sha256=<hex HMAC of "<timestamp>.<body>">` (keyed
-  with the whole secret) headers are sent too. The secret is shown once at creation or rotation and
+  secret is shown once at creation or rotation and
   stored encrypted. The id is the same on every retry and on a redelivery,
   so a receiver can drop repeats.
 - Targets pass the same address checks as agent wakeups: https, no private
@@ -68,7 +66,8 @@ A webhook is a connection with an address: the same delivery agents get
 ## Automation rules
 
 Settings › Project › Automation rules, or the `automation_list`,
-`automation_write` and `automation_runs` tools.
+`automation_create`, `automation_update`, `automation_delete`,
+`automation_run_start` and `automation_history` tools.
 
 - Triggers: `task_created`, `task_matches` (fires when a task enters the
   conditions, not on every change), `run_finished` (optionally by outcome),

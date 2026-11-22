@@ -211,7 +211,7 @@ pub(crate) struct TemplateWriteArguments {
     /// true archives it (task_from_template can't use it, and schedules
     /// that make tasks from it pause), false restores it.
     pub archived: Option<bool>,
-    /// The version from template_list or an earlier template_write. Leave
+    /// The version from template_list or an earlier template_create or template_update. Leave
     /// it out to change the current one.
     pub expected_version: Option<i64>,
 }
@@ -494,7 +494,7 @@ pub(crate) struct RecurringWriteArguments {
     pub enabled: Option<bool>,
     /// true deletes the schedule; the tasks it made stay.
     pub delete: Option<bool>,
-    /// The version from template_list or an earlier recurring_write. Leave
+    /// The version from template_list or an earlier recurring_create or recurring_update. Leave
     /// it out to change the current one.
     pub expected_version: Option<i64>,
 }
@@ -1007,12 +1007,27 @@ pub(crate) struct TaskImportArguments {
     pub repository_id: Option<String>,
     /// For github: "open" (the default) or "all".
     pub github_state: Option<String>,
+    /// The uploaded file's name, shown with the import.
+    pub file_name: Option<String>,
     /// Markdown headings become milestones.
     pub headings_as_milestones: Option<bool>,
+    /// Create labels the project doesn't have yet (default true).
+    pub create_labels: Option<bool>,
+    /// Create milestones the project doesn't have yet (default true).
+    pub create_milestones: Option<bool>,
+    /// Rows, by place in the preview, to leave out.
+    pub excluded_rows: Option<Vec<usize>>,
     /// For csv: which column fills each task field, such as
     /// {"title": "Summary", "externalId": "Issue key"}. Columns are matched
-    /// by name automatically when left out.
+    /// by name automatically when left out. With importId, maps a draft's
+    /// columns again.
     pub mapping: Option<BTreeMap<String, String>>,
+    /// With importId: the version you read; the call is refused if the
+    /// import changed since.
+    pub expected_version: Option<i64>,
+    /// With importId: stop the import. A draft is dropped; one already
+    /// creating tasks stops after the chunk it's on, keeping what it made.
+    pub cancel: Option<bool>,
     /// false (the default): only preview what would be created. true:
     /// create the tasks. Rows already imported from the same source are
     /// skipped either way.
@@ -1043,7 +1058,7 @@ pub(crate) async fn task_import(
         (None, Some(source)) => Some(CreateImportRequest {
             source: source.clone(),
             text: arguments.text.clone(),
-            file_name: None,
+            file_name: arguments.file_name.clone(),
             repository_id: match arguments.repository_id.as_deref().map(parse_id) {
                 None => None,
                 Some(Some(id)) => Some(id),
@@ -1053,10 +1068,10 @@ pub(crate) async fn task_import(
             },
             options: Some(ImportOptions {
                 headings_as_milestones: arguments.headings_as_milestones.unwrap_or(false),
-                create_labels: true,
-                create_milestones: true,
+                create_labels: arguments.create_labels.unwrap_or(true),
+                create_milestones: arguments.create_milestones.unwrap_or(true),
                 github_state: arguments.github_state.clone(),
-                excluded_rows: Vec::new(),
+                excluded_rows: arguments.excluded_rows.clone().unwrap_or_default(),
             }),
             mapping: arguments.mapping.clone(),
         }),
@@ -1093,9 +1108,25 @@ pub(crate) async fn task_import(
             },
             _ => return Err(AppError::Internal("import arguments")),
         };
+        let mut expected_version = arguments.expected_version;
+        if arguments.import_id.is_some() {
+            if let Some(refusal) =
+                change_import(&mut transaction, project_id, import_id, principal, &arguments)
+                    .await?
+            {
+                return Ok(refusal);
+            }
+            // A change moved the version on; the commit that follows it is
+            // part of the same call.
+            if changes_import(&arguments) {
+                expected_version = None;
+            }
+        }
         let mut committed = false;
-        if arguments.commit.unwrap_or(false) {
-            match imports::queue_commit(&mut transaction, &actor, import_id, None).await? {
+        if arguments.commit.unwrap_or(false) && !arguments.cancel.unwrap_or(false) {
+            match imports::queue_commit(&mut transaction, &actor, import_id, expected_version)
+                .await?
+            {
                 Ok(()) => committed = true,
                 Err(CommitRefusal::NotFound) => return Ok(ToolResult::not_found("That import")),
                 Err(CommitRefusal::NotDraft(status)) if status == "fetching" => {
@@ -1106,8 +1137,10 @@ pub(crate) async fn task_import(
                 Err(CommitRefusal::NotDraft(status)) => {
                     return Ok(ToolResult::conflict(format!("This import is already {status}.")));
                 }
-                Err(CommitRefusal::VersionConflict(_)) => {
-                    return Ok(ToolResult::conflict("The import changed; read it again."));
+                Err(CommitRefusal::VersionConflict(current)) => {
+                    return Ok(ToolResult::conflict(format!(
+                        "The import changed (now version {current}); read it again."
+                    )));
                 }
                 Err(CommitRefusal::Empty) => {
                     return Ok(ToolResult::invalid("text", "There's nothing to import."));
@@ -1132,6 +1165,86 @@ pub(crate) async fn task_import(
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "task_import"))
+}
+
+/// Whether a call naming an import changes it (maps its columns, changes
+/// its options, or stops it) before anything else.
+fn changes_import(arguments: &TaskImportArguments) -> bool {
+    arguments.cancel.unwrap_or(false)
+        || arguments.mapping.is_some()
+        || arguments.headings_as_milestones.is_some()
+        || arguments.create_labels.is_some()
+        || arguments.create_milestones.is_some()
+        || arguments.excluded_rows.is_some()
+}
+
+/// Applies what a call naming an import changes; a refusal to answer with.
+async fn change_import(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    project_id: Uuid,
+    import_id: Uuid,
+    principal: &McpPrincipal,
+    arguments: &TaskImportArguments,
+) -> Result<Option<ToolResult<TaskImportValue>>, AppError> {
+    if !changes_import(arguments) {
+        return Ok(None);
+    }
+    let options = if arguments.headings_as_milestones.is_some()
+        || arguments.create_labels.is_some()
+        || arguments.create_milestones.is_some()
+        || arguments.excluded_rows.is_some()
+    {
+        let Some(mut options) = imports::options_of(transaction, project_id, import_id).await?
+        else {
+            return Ok(Some(ToolResult::not_found("That import")));
+        };
+        if let Some(value) = arguments.headings_as_milestones {
+            options.headings_as_milestones = value;
+        }
+        if let Some(value) = arguments.create_labels {
+            options.create_labels = value;
+        }
+        if let Some(value) = arguments.create_milestones {
+            options.create_milestones = value;
+        }
+        if let Some(rows) = &arguments.excluded_rows {
+            options.excluded_rows = rows.clone();
+        }
+        Some(options)
+    } else {
+        None
+    };
+    let change = imports::ImportChange {
+        expected_version: arguments.expected_version,
+        mapping: arguments.mapping.clone(),
+        options,
+        cancel: arguments.cancel.unwrap_or(false),
+    };
+    use imports::ChangeRefusal as Refused;
+    Ok(
+        match imports::change_import(
+            transaction,
+            project_id,
+            import_id,
+            principal.actor_id,
+            change,
+        )
+        .await?
+        {
+            Ok(()) => None,
+            Err(Refused::NotFound) => Some(ToolResult::not_found("That import")),
+            Err(Refused::VersionConflict(current)) => Some(ToolResult::conflict(format!(
+                "The import changed (now version {current}); read it again."
+            ))),
+            Err(Refused::Finished(status)) => Some(ToolResult::conflict(format!(
+                "This import is already {status}."
+            ))),
+            Err(Refused::NotDraft(status)) => Some(ToolResult::conflict(format!(
+                "This import is already {status}; only one that hasn't started can change."
+            ))),
+            Err(Refused::Invalid((field, message))) => Some(ToolResult::invalid(field, message)),
+        },
+    )
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]

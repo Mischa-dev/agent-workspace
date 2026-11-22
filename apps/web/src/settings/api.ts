@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
+import { callOp } from '../api/ops'
 
 /** Where a value is stored. */
 export type SettingScope = 'workspace' | 'project' | 'user'
@@ -102,32 +103,32 @@ export async function getSettingsRegistry() {
   return (response.settings ?? []).map(normalizeDefinition).filter((definition) => definition.key)
 }
 
-export function getEffectiveSettings(target: SettingsTarget) {
-  const query =
-    target.scope === 'project'
-      ? `projectId=${encodeURIComponent(target.projectId)}`
-      : `organizationId=${encodeURIComponent(target.organizationId)}`
-  return requestJson<EffectiveSettings>(`/api/v1/settings/effective?${query}`)
+// The operations (K2.17) answer with these shapes; the generated types say
+// `string` where these name the scopes and sources.
+function where(target: SettingsTarget) {
+  return target.scope === 'project' ? { spaceId: target.projectId } : {}
 }
 
-function targetBody(target: SettingsTarget) {
-  return target.scope === 'project'
-    ? { scope: 'project' as const, organizationId: target.organizationId, projectId: target.projectId }
-    : { scope: 'workspace' as const, organizationId: target.organizationId }
+export async function getEffectiveSettings(target: SettingsTarget) {
+  return (await callOp('setting_list', where(target), {
+    workspaceId: target.organizationId,
+  })) as unknown as EffectiveSettings
 }
 
-export function setSettingValue(target: SettingsTarget, key: string, value: unknown, expectedVersion: number) {
-  return requestJson<{ setting: ResolvedSetting }>(`/api/v1/settings/values/${encodeURIComponent(key)}`, {
-    method: 'PUT',
-    json: { ...targetBody(target), value, expectedVersion },
-  })
+export async function setSettingValue(target: SettingsTarget, key: string, value: unknown, expectedVersion: number) {
+  return (await callOp(
+    'setting_update',
+    { ...where(target), scope: target.scope, key, value, expectedVersion },
+    { workspaceId: target.organizationId },
+  )) as unknown as { setting: ResolvedSetting }
 }
 
-export function resetSettingValue(target: SettingsTarget, key: string, expectedVersion: number) {
-  return requestJson<{ setting: ResolvedSetting }>(`/api/v1/settings/values/${encodeURIComponent(key)}/reset`, {
-    method: 'POST',
-    json: { ...targetBody(target), expectedVersion },
-  })
+export async function resetSettingValue(target: SettingsTarget, key: string, expectedVersion: number) {
+  return (await callOp(
+    'setting_update',
+    { ...where(target), scope: target.scope, key, reset: true, expectedVersion },
+    { workspaceId: target.organizationId },
+  )) as unknown as { setting: ResolvedSetting }
 }
 
 export function useSettingsRegistry(enabled = true) {

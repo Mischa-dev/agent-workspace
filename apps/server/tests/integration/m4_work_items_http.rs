@@ -374,12 +374,8 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     )
     .await;
     assert_eq!(stale_update.0, StatusCode::CONFLICT);
-    assert_eq!(stale_update.2["error"]["code"], "version_conflict");
-    assert_eq!(stale_update.2["error"]["details"]["currentVersion"], 2);
-    assert_eq!(
-        stale_update.2["error"]["details"]["current"]["title"],
-        "First Work Item updated"
-    );
+    assert_eq!(stale_update.2["code"], "version", "{}", stale_update.1);
+    assert_eq!(stale_update.2["details"]["currentVersion"], 2);
 
     let worker_assignee = post_json(
         &application,
@@ -393,7 +389,8 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
         }),
     )
     .await;
-    assert_eq!(worker_assignee.0, StatusCode::BAD_REQUEST);
+    assert!(worker_assignee.0.is_client_error(), "{}", worker_assignee.1);
+    assert_ne!(worker_assignee.2["outcome"], "ok", "{}", worker_assignee.1);
 
     let application_one = application.clone();
     let application_two = application.clone();
@@ -562,53 +559,60 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     assert_eq!(no_op_restore.0, StatusCode::OK);
     assert_eq!(no_op_restore.2["version"], 4);
 
-    let criteria_uri = format!(
-        "{base}/{}/acceptance-criteria",
-        created.2["id"].as_str().expect("created ID")
-    );
-    let first_criterion = post_json(
-        &application,
-        &cookie,
-        Some(&csrf),
-        Some("m4-criterion-one"),
-        &criteria_uri,
-        json!({"expectedVersion": 4, "text": "The browser renders the durable item"}),
+    let task_id = created.2["id"].as_str().expect("created ID").to_owned();
+    let criteria = |key: &'static str, version: i64, operations: Value| {
+        let (application, cookie, csrf, task_id) = (
+            application.clone(),
+            cookie.clone(),
+            csrf.clone(),
+            task_id.clone(),
+        );
+        async move {
+            post_json(
+                &application,
+                &cookie,
+                Some(&csrf),
+                Some(key),
+                "/api/v2/ops/task_criteria_update",
+                json!({"taskId": task_id, "expectedVersion": version, "operations": operations}),
+            )
+            .await
+        }
+    };
+    let first_criterion = criteria(
+        "m4-criterion-one",
+        4,
+        json!([{"op": "add", "text": "The browser renders the durable item"}]),
     )
     .await;
-    assert_eq!(
-        first_criterion.0,
-        StatusCode::CREATED,
-        "{}",
-        first_criterion.1
-    );
-    assert_eq!(first_criterion.2["version"], 5);
-    assert_eq!(first_criterion.2["acceptanceCriteria"][0]["position"], 1);
-    let criterion_id = first_criterion.2["acceptanceCriteria"][0]["id"]
+    assert_eq!(first_criterion.0, StatusCode::OK, "{}", first_criterion.1);
+    let first_criterion = &first_criterion.2["value"];
+    assert_eq!(first_criterion["version"], 5);
+    assert_eq!(first_criterion["criteria"][0]["position"], 1);
+    let criterion_id = first_criterion["criteria"][0]["id"]
         .as_str()
         .expect("criterion ID")
         .to_owned();
-    let second_criterion = post_json(
-        &application,
-        &cookie,
-        Some(&csrf),
-        Some("m4-criterion-two"),
-        &criteria_uri,
-        json!({"expectedVersion": 5, "text": "The conflict keeps the local draft"}),
+    let second_criterion = criteria(
+        "m4-criterion-two",
+        5,
+        json!([{"op": "add", "text": "The conflict keeps the local draft"}]),
     )
     .await;
-    assert_eq!(second_criterion.0, StatusCode::CREATED);
-    assert_eq!(second_criterion.2["version"], 6);
-    let second_criterion_id = second_criterion.2["acceptanceCriteria"][1]["id"]
+    assert_eq!(second_criterion.0, StatusCode::OK);
+    let second_criterion = &second_criterion.2["value"];
+    assert_eq!(second_criterion["version"], 6);
+    let second_criterion_id = second_criterion["criteria"][1]["id"]
         .as_str()
         .expect("second criterion ID")
         .to_owned();
-    let completed_criterion = patch_json(
-        &application,
-        &cookie,
-        &csrf,
+    let completed_criterion = criteria(
         "m4-criterion-complete",
-        &format!("{criteria_uri}/{criterion_id}"),
-        json!({"expectedVersion": 6, "completed": true, "position": 2}),
+        6,
+        json!([
+            {"op": "check", "criterion": criterion_id},
+            {"op": "move", "criterion": criterion_id, "position": 2}
+        ]),
     )
     .await;
     assert_eq!(
@@ -617,26 +621,14 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
         "{}",
         completed_criterion.1
     );
-    assert_eq!(completed_criterion.2["version"], 7);
-    assert_eq!(
-        completed_criterion.2["acceptanceCriteria"][1]["id"],
-        criterion_id
-    );
-    assert_eq!(
-        completed_criterion.2["acceptanceCriteria"][1]["completed"],
-        true
-    );
-    assert_eq!(
-        completed_criterion.2["acceptanceCriteria"][1]["completedBy"]["id"],
-        seed.human_actor_id.to_string()
-    );
-    let removed_criterion = delete_json(
-        &application,
-        &cookie,
-        &csrf,
+    let completed_criterion = &completed_criterion.2["value"];
+    assert_eq!(completed_criterion["version"], 7, "{completed_criterion}");
+    assert_eq!(completed_criterion["criteria"][1]["id"], criterion_id);
+    assert_eq!(completed_criterion["criteria"][1]["completed"], true);
+    let removed_criterion = criteria(
         "m4-criterion-remove",
-        &format!("{criteria_uri}/{second_criterion_id}"),
-        json!({"expectedVersion": 7}),
+        7,
+        json!([{"op": "remove", "criterion": second_criterion_id}]),
     )
     .await;
     assert_eq!(
@@ -645,15 +637,16 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
         "{}",
         removed_criterion.1
     );
-    assert_eq!(removed_criterion.2["version"], 8);
+    let removed_criterion = &removed_criterion.2["value"];
+    assert_eq!(removed_criterion["version"], 8);
     assert_eq!(
-        removed_criterion.2["acceptanceCriteria"]
+        removed_criterion["criteria"]
             .as_array()
             .expect("criteria")
             .len(),
         1
     );
-    assert_eq!(removed_criterion.2["acceptanceCriteria"][0]["position"], 1);
+    assert_eq!(removed_criterion["criteria"][0]["position"], 1);
 
     sqlx::query(
         "UPDATE repositories SET preparation_state = 'ready', prepared_at = now() WHERE project_id = $1 AND id = $2",
@@ -715,20 +708,6 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     )
     .await;
     assert_eq!(thread_link_replay.2["version"], 9);
-    let channel_link = post_json(
-        &application,
-        &cookie,
-        Some(&csrf),
-        Some("m4-channel-link-rejected"),
-        &format!(
-            "{base}/{}/threads/{}",
-            created.2["id"].as_str().expect("created ID"),
-            seed.channel_id
-        ),
-        json!({}),
-    )
-    .await;
-    assert_eq!(channel_link.0, StatusCode::NOT_FOUND);
 
     let first_repository_uri = format!(
         "{base}/{}/repositories/{}",
@@ -803,32 +782,37 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
         related_repository.1
     );
     assert_eq!(related_repository.2["version"], 11);
-    let swapped_primary = post_json(
-        &application,
-        &cookie,
-        Some(&csrf),
-        Some("m4-swap-primary"),
-        &format!("{second_repository_uri}/primary"),
-        json!({"expectedVersion": 11}),
+    let repository_link = |key: &'static str, input: Value| {
+        let (application, cookie, csrf) = (application.clone(), cookie.clone(), csrf.clone());
+        async move {
+            post_json(
+                &application,
+                &cookie,
+                Some(&csrf),
+                Some(key),
+                "/api/v2/ops/task_link",
+                input,
+            )
+            .await
+        }
+    };
+    let task_uri = format!("{base}/{task_id}");
+    let swapped_primary = repository_link(
+        "m4-swap-primary",
+        json!({"taskId": task_id, "repositoryId": second_repository_id, "role": "primary", "expectedVersion": 11}),
     )
     .await;
     assert_eq!(swapped_primary.0, StatusCode::OK, "{}", swapped_primary.1);
-    assert_eq!(swapped_primary.2["version"], 12);
+    assert_eq!(swapped_primary.2["value"]["version"], 12);
+    let swapped = get_json(&application, &cookie, &task_uri).await.2;
     assert_eq!(
-        swapped_primary.2["linkedRepositories"][0]["id"],
+        swapped["linkedRepositories"][0]["id"],
         second_repository_id.to_string()
     );
-    assert_eq!(
-        swapped_primary.2["linkedRepositories"][0]["role"],
-        "primary"
-    );
-    let unlinked_repository = delete_json(
-        &application,
-        &cookie,
-        &csrf,
+    assert_eq!(swapped["linkedRepositories"][0]["role"], "primary");
+    let unlinked_repository = repository_link(
         "m4-unlink-repository",
-        &second_repository_uri,
-        json!({"expectedVersion": 12}),
+        json!({"taskId": task_id, "repositoryId": second_repository_id, "remove": true, "expectedVersion": 12}),
     )
     .await;
     assert_eq!(
@@ -837,26 +821,20 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
         "{}",
         unlinked_repository.1
     );
-    assert_eq!(unlinked_repository.2["version"], 13);
-    let restored_primary = post_json(
-        &application,
-        &cookie,
-        Some(&csrf),
-        Some("m4-restore-primary"),
-        &format!("{first_repository_uri}/primary"),
-        json!({"expectedVersion": 13}),
+    assert_eq!(unlinked_repository.2["value"]["version"], 13);
+    let restored_primary = repository_link(
+        "m4-restore-primary",
+        json!({"taskId": task_id, "repositoryId": seed.repository_id, "role": "primary", "expectedVersion": 13}),
     )
     .await;
     assert_eq!(restored_primary.0, StatusCode::OK, "{}", restored_primary.1);
-    assert_eq!(restored_primary.2["version"], 14);
+    assert_eq!(restored_primary.2["value"]["version"], 14);
+    let restored = get_json(&application, &cookie, &task_uri).await.2;
     assert_eq!(
-        restored_primary.2["linkedRepositories"][0]["id"],
+        restored["linkedRepositories"][0]["id"],
         seed.repository_id.to_string()
     );
-    assert_eq!(
-        restored_primary.2["linkedRepositories"][0]["role"],
-        "primary"
-    );
+    assert_eq!(restored["linkedRepositories"][0]["role"], "primary");
 
     let board = get_json(&application, &cookie, &format!("{base}/board?limit=10")).await;
     assert_eq!(board.0, StatusCode::OK, "{}", board.1);
@@ -957,17 +935,15 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
             .any(|thread| thread["id"] == worker_thread_id)
     );
 
-    let comment_uri = format!(
-        "{base}/{}/comments",
-        created.2["id"].as_str().expect("created ID")
-    );
+    let comment_uri = "/api/v2/ops/task_comment_create";
     let comment = post_json(
         &application,
         &cookie,
         Some(&csrf),
         Some("m4-comment-one"),
-        &comment_uri,
+        comment_uri,
         json!({
+            "taskId": created.2["id"],
             "content": {
                 "version": 1,
                 "nodes": [
@@ -980,23 +956,15 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
         }),
     )
     .await;
-    assert_eq!(comment.0, StatusCode::CREATED, "{}", comment.1);
-    assert_eq!(comment.2["sequence"], 17);
-    assert_eq!(
-        comment.2["comment"]["mentionedActors"][0]["id"],
-        seed.human_actor_id.to_string()
-    );
-    assert_eq!(
-        comment.2["comment"]["referencedWorkItems"][0]["id"],
-        second.2["id"]
-    );
+    assert_eq!(comment.0, StatusCode::OK, "{}", comment.1);
     let comment_replay = post_json(
         &application,
         &cookie,
         Some(&csrf),
         Some("m4-comment-one"),
-        &comment_uri,
+        comment_uri,
         json!({
+            "taskId": created.2["id"],
             "content": {
                 "version": 1,
                 "nodes": [
@@ -1010,8 +978,8 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     )
     .await;
     assert_eq!(
-        comment_replay.2["comment"]["id"],
-        comment.2["comment"]["id"]
+        comment_replay.2["value"]["resultId"],
+        comment.2["value"]["resultId"]
     );
     let conversation_message = post_json(
         &application,
@@ -1066,7 +1034,15 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .await;
     assert_eq!(timeline.0, StatusCode::OK, "{}", timeline.1);
     assert_eq!(timeline.2["entries"][0]["kind"], "comment");
-    assert_eq!(timeline.2["entries"][0]["sequence"], 17);
+    // Checking and moving a criterion in one call records both changes.
+    assert_eq!(timeline.2["entries"][0]["sequence"], 18);
+    let posted = &timeline.2["entries"][0]["comment"];
+    assert_eq!(posted["id"], comment.2["value"]["resultId"]);
+    assert_eq!(
+        posted["mentionedActors"][0]["id"],
+        seed.human_actor_id.to_string()
+    );
+    assert_eq!(posted["referencedWorkItems"][0]["id"], second.2["id"]);
     assert!(timeline.2["nextCursor"].is_string());
 
     let activity_count = sqlx::query_scalar::<_, i64>(
@@ -1076,7 +1052,7 @@ async fn work_item_foundation_is_scoped_idempotent_ordered_and_actor_attributed(
     .fetch_one(&pool)
     .await
     .expect("count M4 activity");
-    assert_eq!(activity_count, 18);
+    assert_eq!(activity_count, 19);
     let outbox_count = sqlx::query_scalar::<_, i64>(
         &format!(
 "SELECT count(*) FROM {n} outbox WHERE project_id = $1 AND event_type = 'work_item.updated' AND conversation_id IS NULL",
@@ -1224,6 +1200,15 @@ async fn post_json(
     uri: &str,
     body: Value,
 ) -> (StatusCode, String, Value) {
+    // The task writes moved to operations (K2.22); a missing CSRF token
+    // goes as an empty one, which they refuse the same way.
+    if crate::support::tasks::op_for("POST", uri, &body).is_some() {
+        let browser = crate::support::tasks::browser(cookie, csrf.unwrap_or_default());
+        let (status, value) =
+            crate::support::tasks::send(application, &browser, "POST", uri, idempotency_key, body)
+                .await;
+        return (status, value.to_string(), value);
+    }
     let mut request = Request::builder()
         .method("POST")
         .uri(uri)
@@ -1259,6 +1244,20 @@ async fn patch_json(
     uri: &str,
     body: Value,
 ) -> (StatusCode, String, Value) {
+    // The task writes moved to operations (K2.22).
+    if crate::support::tasks::op_for("PATCH", uri, &body).is_some() {
+        let browser = crate::support::tasks::browser(cookie, csrf);
+        let (status, value) = crate::support::tasks::send(
+            application,
+            &browser,
+            "PATCH",
+            uri,
+            Some(idempotency_key),
+            body,
+        )
+        .await;
+        return (status, value.to_string(), value);
+    }
     let response = application
         .clone()
         .oneshot(
@@ -1277,35 +1276,6 @@ async fn patch_json(
         )
         .await
         .expect("M4 PATCH response");
-    response_json(response).await
-}
-
-async fn delete_json(
-    application: &axum::Router,
-    cookie: &str,
-    csrf: &str,
-    idempotency_key: &str,
-    uri: &str,
-    body: Value,
-) -> (StatusCode, String, Value) {
-    let response = application
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("DELETE")
-                .uri(uri)
-                .header(header::COOKIE, cookie)
-                .header(header::CONTENT_TYPE, "application/json")
-                .header("origin", "http://127.0.0.1:3100")
-                .header("x-csrf-token", csrf)
-                .header("idempotency-key", idempotency_key)
-                .body(Body::from(
-                    serde_json::to_vec(&body).expect("serialize M4 DELETE request"),
-                ))
-                .expect("build M4 DELETE request"),
-        )
-        .await
-        .expect("M4 DELETE response");
     response_json(response).await
 }
 

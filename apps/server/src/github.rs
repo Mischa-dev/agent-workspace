@@ -34,13 +34,7 @@ use crate::{
     auth::{AuthenticatedActor, require_authenticated_write},
     config::{GITHUB_API_VERSION, GitHubConfig},
     error::{ApiJson, ApiPath, AppError},
-    git_runtime::{
-        PublishPush, expected_repository_mirror_path, inspect_publishable_worktree,
-        managed_worktree_path, push_publishable_commit,
-    },
-    idempotency::{
-        IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve, resource_bound_scope,
-    },
+    hosts::builtin::repositories::{Publication, PublicationCheck},
     outbox,
     policy::{Action, Permission, RoleGrant},
     work_item_commands::{self, AuditAttribution, CommandActor, record_audit_for},
@@ -76,28 +70,8 @@ pub fn router() -> Router<AppState> {
             get(github_status),
         )
         .route(
-            "/api/v1/projects/{project_id}/integrations/github/sync",
-            post(sync_installation),
-        )
-        .route(
             "/api/v1/projects/{project_id}/integrations/github/automation",
-            get(github_automation_settings).put(update_github_automation_settings),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
-            post(publish_agent_run),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/agent-runs/{run_id}/pull-request",
-            post(create_pull_request),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
-            post(refresh_pull_request),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/merge",
-            post(merge_pull_request),
+            get(github_automation_settings),
         )
 }
 
@@ -267,14 +241,6 @@ pub(crate) struct GitHubAutomationSettingsView {
     pub updated_at: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct UpdateGitHubAutomationSettingsRequest {
-    expected_version: i64,
-    pull_request_open_enabled: bool,
-    pull_request_merge_enabled: bool,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PublishJobView {
@@ -284,16 +250,6 @@ pub(crate) struct PublishJobView {
     pub intended_commit: String,
     pub state: String,
     pub failure_category: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CreatePullRequestRequest {
-    title: String,
-    #[serde(default)]
-    body: String,
-    #[serde(default)]
-    work_item_ids: Vec<Uuid>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, FromRow)]
@@ -411,7 +367,6 @@ struct PublishCandidate {
     repository_id: Uuid,
     repository_workspace_id: Uuid,
     run_state: String,
-    mirror_path: String,
     worktree_path: String,
     branch_name: String,
     base_commit: String,
@@ -420,6 +375,7 @@ struct PublishCandidate {
 #[derive(Debug, FromRow)]
 struct ClaimedPublishJob {
     job_id: Uuid,
+    workspace_id: Uuid,
     project_id: Uuid,
     repository_id: Uuid,
     repository_workspace_id: Uuid,
@@ -435,7 +391,6 @@ struct ClaimedPublishJob {
     owner: String,
     repository_name: String,
     clone_url: String,
-    mirror_path: String,
     worktree_path: String,
     branch_name: String,
     base_commit: String,
@@ -443,13 +398,6 @@ struct ClaimedPublishJob {
     repository_available: bool,
     workspace_available: bool,
     run_terminal: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SyncInstallationRequest {
-    installation_id: u64,
-    repository_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1307,89 +1255,6 @@ async fn github_automation_settings(
     Ok(Json(settings))
 }
 
-async fn update_github_automation_settings(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<UpdateGitHubAutomationSettingsRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    if request.expected_version < 1 {
-        return Err(AppError::Validation("expectedVersion"));
-    }
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let scope = resource_bound_scope("projects", project_id, "github_automation")?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::GithubIntegrationManage,
-    )
-    .await?;
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let settings: GitHubAutomationSettingsView = replay.decode()?;
-            transaction.commit().await?;
-            return Ok((replay.status(), Json(settings)).into_response());
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let settings = set_automation_in(
-        &mut transaction,
-        project_id,
-        Some(request.expected_version),
-        Some(request.pull_request_open_enabled),
-        Some(request.pull_request_merge_enabled),
-    )
-    .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO audit_events (
-            id, actor_id, project_id, session_id, authentication_class,
-            action, target_kind, target_id, outcome, request_id, metadata
-        ) VALUES (
-            $1, $2, $3, $4, 'password_session',
-            'github.automation_settings_update', 'project', $3,
-            'succeeded', $5,
-            jsonb_build_object(
-                'pull_request_open_enabled', $6::boolean,
-                'pull_request_merge_enabled', $7::boolean,
-                'version', $8::bigint
-            )
-        )
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(principal.actor_id)
-    .bind(project_id)
-    .bind(principal.session_id)
-    .bind(
-        headers
-            .get(crate::REQUEST_ID_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .filter(|value| value.len() <= 128),
-    )
-    .bind(settings.pull_request_open_enabled)
-    .bind(settings.pull_request_merge_enabled)
-    .bind(settings.version)
-    .execute(&mut *transaction)
-    .await?;
-    complete(&mut transaction, &reservation, StatusCode::OK, &settings).await?;
-    transaction.commit().await?;
-    Ok((StatusCode::OK, Json(settings)).into_response())
-}
-
 /// Turns the project's pull request automation on or off, for a caller
 /// already allowed to manage its GitHub integration. A switch left out keeps
 /// its setting; without `expected_version`, the current one. Not audited here.
@@ -1458,7 +1323,6 @@ pub(crate) struct SyncedInstallation {
     pub transaction: Transaction<'static, Postgres>,
     pub installation_id: Uuid,
     pub repository_count: usize,
-    pub role: RoleGrant,
 }
 
 /// Links (or re-checks) the project's GitHub App installation and the
@@ -1488,7 +1352,7 @@ pub(crate) async fn sync_installation_as(
         .ok_or(AppError::Conflict("github_integration", "not_configured"))?;
 
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let role = require_project_access_as(
+    require_project_access_as(
         &mut transaction,
         actor_id,
         project_id,
@@ -1628,71 +1492,7 @@ pub(crate) async fn sync_installation_as(
         transaction,
         installation_id: stored_installation_id,
         repository_count: repositories.len(),
-        role,
     })
-}
-
-async fn sync_installation(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<SyncInstallationRequest>,
-) -> Result<Json<GitHubStatusResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let SyncedInstallation {
-        mut transaction,
-        installation_id,
-        repository_count,
-        role,
-    } = sync_installation_as(
-        &state,
-        principal.actor_id,
-        project_id,
-        request.installation_id,
-        &request.repository_ids,
-    )
-    .await?;
-    let request_id = headers
-        .get(crate::REQUEST_ID_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| value.len() <= 128);
-    sqlx::query(
-        r#"
-        INSERT INTO audit_events (
-            id, actor_id, project_id, session_id, authentication_class,
-            action, target_kind, target_id, outcome, request_id, metadata
-        ) VALUES (
-            $1, $2, $3, $4, 'password_session',
-            'github.installation_sync', 'github_installation', $5,
-            'succeeded', $6, jsonb_build_object('repository_count', $7::integer)
-        )
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(principal.actor_id)
-    .bind(project_id)
-    .bind(principal.session_id)
-    .bind(installation_id)
-    .bind(request_id)
-    .bind(i32::try_from(repository_count).map_err(|_| AppError::Internal("repository count"))?)
-    .execute(&mut *transaction)
-    .await?;
-    let installation_row = load_installation(&mut transaction, project_id)
-        .await?
-        .ok_or(AppError::Internal("persisted GitHub installation"))?;
-    let repository_rows =
-        load_installation_repositories(&mut transaction, project_id, installation_row.id).await?;
-    transaction.commit().await?;
-
-    Ok(Json(GitHubStatusResponse {
-        configured: true,
-        api_version: GITHUB_API_VERSION,
-        installation: Some(installation_view(installation_row, repository_rows)),
-        capabilities: GitHubCapabilities {
-            manage: role_allows_manage(role),
-        },
-    }))
 }
 
 /// What a publish, pull request or refresh request queued: a new job, or
@@ -1702,29 +1502,80 @@ pub(crate) struct Queued<T> {
     pub new: bool,
 }
 
-/// Queues pushing a finished run's branch to GitHub, for a caller allowed to
-/// publish in the project who can see the run's thread. Not audited here;
-/// the caller commits and then calls `kick_jobs`.
-pub(crate) async fn queue_publish_in(
+/// The built-in host's look at a finished run's branch, taken before the
+/// publication is queued: a question to the host waits for its answer, so
+/// it is asked outside any transaction (rule 14), and the queueing checks
+/// the run's workspace is still the one looked at.
+pub(crate) struct Inspected {
+    repository_workspace_id: Uuid,
+    worktree_path: String,
+    branch_name: String,
+    base_commit: String,
+    head_commit: String,
+}
+
+/// Ask the built-in host whether a finished run's branch can be published,
+/// and at which commit, for a caller who can see the run's thread.
+pub(crate) async fn inspect_for_publish(
     state: &AppState,
-    transaction: &mut Transaction<'_, Postgres>,
     actor_id: Uuid,
     project_id: Uuid,
     run_id: Uuid,
-) -> Result<Queued<PublishJobView>, AppError> {
-    // The worktree is inspected here, and it is on the built-in host's
-    // disk: another instance can't see it (K5.3).
-    if state.supervisors.host_lease_lost().is_cancelled() {
-        return Err(AppError::Conflict(
-            "repository_workspace",
-            "this server doesn't hold the run's worktree; try again",
-        ));
+) -> Result<Inspected, AppError> {
+    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+    let candidate = publish_candidate(&mut transaction, actor_id, project_id, run_id).await?;
+    if !matches!(
+        candidate.run_state.as_str(),
+        "completed" | "failed" | "canceled" | "interrupted"
+    ) {
+        return Err(AppError::Conflict("agent_run", "not_terminal"));
     }
-    let candidate = sqlx::query_as::<_, PublishCandidate>(
+    let workspace_id =
+        crate::hosts::builtin::repositories::workspace_of_space(&mut transaction, project_id)
+            .await?;
+    transaction.commit().await?;
+    let head_commit = match (Publication {
+        workspace_id,
+        repository_id: candidate.repository_id,
+        repository_workspace_id: candidate.repository_workspace_id,
+        worktree_path: &candidate.worktree_path,
+        branch: &candidate.branch_name,
+        base_commit: &candidate.base_commit,
+    })
+    .check(state)
+    .await?
+    {
+        PublicationCheck::At(commit) => commit,
+        PublicationCheck::Refused(error) => return Err(error),
+        PublicationCheck::Moved => {
+            return Err(AppError::Conflict(
+                "repository_workspace",
+                "stored runtime path mismatch",
+            ));
+        }
+    };
+    Ok(Inspected {
+        repository_workspace_id: candidate.repository_workspace_id,
+        worktree_path: candidate.worktree_path,
+        branch_name: candidate.branch_name,
+        base_commit: candidate.base_commit,
+        head_commit,
+    })
+}
+
+/// A finished run's workspace and worktree, locked for sharing, when the
+/// caller can see the run's thread.
+async fn publish_candidate(
+    connection: &mut sqlx::PgConnection,
+    actor_id: Uuid,
+    project_id: Uuid,
+    run_id: Uuid,
+) -> Result<PublishCandidate, AppError> {
+    sqlx::query_as::<_, PublishCandidate>(
         r#"
         SELECT run.id AS agent_run_id, run.conversation_id,
                run.repository_id, workspace.id AS repository_workspace_id,
-               run.state AS run_state, repository.mirror_path,
+               run.state AS run_state,
                worktree.path AS worktree_path, workspace.branch_name,
                workspace.base_commit
         FROM agent_runs run
@@ -1752,9 +1603,33 @@ pub(crate) async fn queue_publish_in(
     .bind(project_id)
     .bind(run_id)
     .bind(actor_id)
-    .fetch_optional(&mut **transaction)
+    .fetch_optional(&mut *connection)
     .await?
-    .ok_or(AppError::NotFound("agent_run"))?;
+    .ok_or(AppError::NotFound("agent_run"))
+}
+
+/// Queues pushing a finished run's branch to GitHub, for a caller allowed to
+/// publish in the project who can see the run's thread, at the commit the
+/// host found ([`inspect_for_publish`]). Not audited here; the caller
+/// commits and then calls `kick_jobs`.
+pub(crate) async fn queue_publish_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    project_id: Uuid,
+    run_id: Uuid,
+    inspected: Inspected,
+) -> Result<Queued<PublishJobView>, AppError> {
+    let candidate = publish_candidate(transaction, actor_id, project_id, run_id).await?;
+    if candidate.repository_workspace_id != inspected.repository_workspace_id
+        || candidate.worktree_path != inspected.worktree_path
+        || candidate.branch_name != inspected.branch_name
+        || candidate.base_commit != inspected.base_commit
+    {
+        return Err(AppError::Conflict(
+            "repository_workspace",
+            "the run's workspace changed while it was checked; try again",
+        ));
+    }
     if !matches!(
         candidate.run_state.as_str(),
         "completed" | "failed" | "canceled" | "interrupted"
@@ -1803,33 +1678,7 @@ pub(crate) async fn queue_publish_in(
         "github_installation",
         "repository_unavailable",
     ))?;
-    let expected_mirror =
-        expected_repository_mirror_path(&state.config.data_root, candidate.repository_id)?;
-    let expected_worktree = managed_worktree_path(
-        &state.config.data_root,
-        candidate.repository_id,
-        candidate.repository_workspace_id,
-    )?;
-    if Path::new(&candidate.mirror_path) != expected_mirror
-        || Path::new(&candidate.worktree_path) != expected_worktree
-    {
-        return Err(AppError::Conflict(
-            "repository_workspace",
-            "stored runtime path mismatch",
-        ));
-    }
-    let branch_name = candidate.branch_name.clone();
-    let base_commit = candidate.base_commit.clone();
-    let inspection = tokio::task::spawn_blocking(move || {
-        inspect_publishable_worktree(
-            &expected_mirror,
-            &expected_worktree,
-            &branch_name,
-            &base_commit,
-        )
-    })
-    .await
-    .map_err(|_| AppError::Internal("join Git publication inspection"))??;
+    let head_commit = inspected.head_commit;
     sqlx::query(
         "UPDATE git_worktrees SET state = 'ready', dirty = false, last_inspected_at = now(), updated_at = now() WHERE repository_workspace_id = $1",
     )
@@ -1854,7 +1703,7 @@ pub(crate) async fn queue_publish_in(
     )
     .bind(project_id)
     .bind(candidate.repository_workspace_id)
-    .bind(&inspection.head_commit)
+    .bind(&head_commit)
     .fetch_optional(&mut **transaction)
     .await?
     {
@@ -1869,7 +1718,7 @@ pub(crate) async fn queue_publish_in(
         job_id,
         agent_run_id: candidate.agent_run_id,
         repository_workspace_id: candidate.repository_workspace_id,
-        intended_commit: inspection.head_commit,
+        intended_commit: head_commit,
         state: "queued".to_owned(),
         failure_category: None,
     };
@@ -1903,94 +1752,6 @@ pub(crate) async fn queue_publish_in(
     )
     .await?;
     Ok(Queued { view, new: true })
-}
-
-async fn publish_agent_run(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, run_id)): ApiPath<(Uuid, Uuid)>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    if state.config.github.is_none() {
-        return Err(AppError::Conflict("github_integration", "not_configured"));
-    }
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let scope = resource_bound_scope("agent_runs", run_id, "publish")?;
-    let request_hash = RequestHash::for_value(&json!({ "agentRunId": run_id }))?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::RepositoryPublish,
-    )
-    .await?;
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let view: PublishJobView = replay.decode()?;
-            transaction.commit().await?;
-            return Ok((replay.status(), Json(view)).into_response());
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let Queued { view, new } = queue_publish_in(
-        &state,
-        &mut transaction,
-        principal.actor_id,
-        project_id,
-        run_id,
-    )
-    .await?;
-    if !new {
-        let status = if view.state == "completed" {
-            StatusCode::OK
-        } else {
-            StatusCode::ACCEPTED
-        };
-        complete(&mut transaction, &reservation, status, &view).await?;
-        transaction.commit().await?;
-        return Ok((status, Json(view)).into_response());
-    }
-    let request_id = headers
-        .get(crate::REQUEST_ID_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| value.len() <= 128);
-    sqlx::query(
-        r#"
-        INSERT INTO audit_events (
-            id, actor_id, project_id, session_id, authentication_class,
-            action, target_kind, target_id, outcome, request_id, metadata
-        ) VALUES (
-            $1, $2, $3, $4, 'password_session',
-            'github.workspace_publish_queued', 'github_job', $5,
-            'succeeded', $6,
-            jsonb_build_object('agent_run_id', $7::uuid, 'repository_workspace_id', $8::uuid)
-        )
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(principal.actor_id)
-    .bind(project_id)
-    .bind(principal.session_id)
-    .bind(view.job_id)
-    .bind(request_id)
-    .bind(view.agent_run_id)
-    .bind(view.repository_workspace_id)
-    .execute(&mut *transaction)
-    .await?;
-    complete(&mut transaction, &reservation, StatusCode::ACCEPTED, &view).await?;
-    transaction.commit().await?;
-    kick_jobs(state);
-    Ok((StatusCode::ACCEPTED, Json(view)).into_response())
 }
 
 /// A pull request's title (trimmed), body and tasks, as GitHub and the app
@@ -2175,100 +1936,6 @@ pub(crate) async fn queue_pull_request_in(
     Ok(Queued { view, new: true })
 }
 
-async fn create_pull_request(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, run_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(mut request): ApiJson<CreatePullRequestRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    if state.config.github.is_none() {
-        return Err(AppError::Conflict("github_integration", "not_configured"));
-    }
-    request.title =
-        checked_pull_request_input(&request.title, &request.body, &request.work_item_ids)?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let scope = resource_bound_scope("agent_runs", run_id, "pull_request")?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::PullRequestCreate,
-    )
-    .await?;
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let view: PullRequestRequestView = replay.decode()?;
-            transaction.commit().await?;
-            return Ok((replay.status(), Json(view)).into_response());
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let Queued { view, new } = queue_pull_request_in(
-        &mut transaction,
-        principal.actor_id,
-        project_id,
-        run_id,
-        &request.title,
-        &request.body,
-        &request.work_item_ids,
-    )
-    .await?;
-    if !new {
-        let status = if view.state == "completed" {
-            StatusCode::OK
-        } else {
-            StatusCode::ACCEPTED
-        };
-        complete(&mut transaction, &reservation, status, &view).await?;
-        transaction.commit().await?;
-        return Ok((status, Json(view)).into_response());
-    }
-    sqlx::query(
-        r#"
-        INSERT INTO audit_events (
-            id, actor_id, project_id, session_id, authentication_class,
-            action, target_kind, target_id, outcome, request_id, metadata
-        ) VALUES (
-            $1, $2, $3, $4, 'password_session',
-            'github.pull_request_queued', 'github_pull_request_request', $5,
-            'succeeded', $6,
-            jsonb_build_object('agent_run_id', $7::uuid, 'repository_workspace_id', $8::uuid)
-        )
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(principal.actor_id)
-    .bind(project_id)
-    .bind(principal.session_id)
-    .bind(view.request_id)
-    .bind(
-        headers
-            .get(crate::REQUEST_ID_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .filter(|value| value.len() <= 128),
-    )
-    .bind(run_id)
-    .bind(view.repository_workspace_id)
-    .execute(&mut *transaction)
-    .await?;
-    complete(&mut transaction, &reservation, StatusCode::ACCEPTED, &view).await?;
-    transaction.commit().await?;
-    kick_jobs(state);
-    Ok((StatusCode::ACCEPTED, Json(view)).into_response())
-}
-
 /// Queues reading a pull request's checks and review from GitHub again,
 /// for a caller allowed to refresh pull requests in the project who can see
 /// this one. The caller commits and then calls `kick_jobs`.
@@ -2354,56 +2021,6 @@ pub(crate) async fn queue_refresh_in(
     Ok(Queued { view, new: true })
 }
 
-async fn refresh_pull_request(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, pull_request_id)): ApiPath<(Uuid, Uuid)>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    if state.config.github.is_none() {
-        return Err(AppError::Conflict("github_integration", "not_configured"));
-    }
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let scope = resource_bound_scope("github_pull_requests", pull_request_id, "refresh")?;
-    let request_hash = RequestHash::for_value(&json!({}))?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    require_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::PullRequestRefresh,
-    )
-    .await?;
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let view: PullRequestRefreshView = replay.decode()?;
-            transaction.commit().await?;
-            return Ok((replay.status(), Json(view)).into_response());
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let Queued { view, .. } = queue_refresh_in(
-        &mut transaction,
-        principal.actor_id,
-        project_id,
-        pull_request_id,
-    )
-    .await?;
-    complete(&mut transaction, &reservation, StatusCode::ACCEPTED, &view).await?;
-    transaction.commit().await?;
-    kick_jobs(state);
-    Ok((StatusCode::ACCEPTED, Json(view)).into_response())
-}
-
 pub(crate) async fn drain_jobs(state: &AppState) -> Result<(), AppError> {
     // GitHub's job queue holds jobs of every workspace.
     crate::tenancy::system("github.jobs", Box::pin(drain_jobs_here(state))).await
@@ -2414,14 +2031,9 @@ async fn drain_jobs_here(state: &AppState) -> Result<(), AppError> {
         // Each job keeps renewing its lease while it works: a publish alone
         // can take minutes (a token, two ref reads and a push), far past one
         // lease, and an expired lease lets another worker run it again.
-        // A publication reads the run's worktree, which is on the built-in
-        // host's disk: only the instance holding it takes one (K5.3).
-        let host_here = !state.supervisors.host_lease_lost().is_cancelled();
-        if let Some(job) = if host_here {
-            claim_publish_job(state).await?
-        } else {
-            None
-        } {
+        // A publication's git work is the built-in host's, asked of it, so
+        // any instance may take one.
+        if let Some(job) = claim_publish_job(state).await? {
             let job_id = job.job_id;
             match while_leased(
                 state,
@@ -2620,14 +2232,14 @@ async fn claim_publish_job(state: &AppState) -> Result<Option<ClaimedPublishJob>
     let claim_id = Uuid::now_v7();
     let job = sqlx::query_as::<_, ClaimedPublishJob>(
         r#"
-        SELECT job.id AS job_id, job.project_id,
+        SELECT job.id AS job_id, project.organization_id AS workspace_id, job.project_id,
                job.repository_workspace_id, job.agent_run_id,
                job.requesting_actor_id, job.intended_commit,
                job.attempts + 1 AS attempts, job.max_attempts,
                $1::uuid AS claim_id, run.conversation_id,
                installation.installation_id, repository.github_repository_id,
                repository.owner, repository.name AS repository_name,
-               repository.clone_url, repository.mirror_path,
+               repository.clone_url,
                worktree.path AS worktree_path, workspace.branch_name,
                workspace.base_commit,
                COALESCE(installation.enabled
@@ -2645,6 +2257,7 @@ async fn claim_publish_job(state: &AppState) -> Result<Option<ClaimedPublishJob>
                run.state IN ('completed', 'failed', 'canceled', 'interrupted')
                    AS run_terminal
         FROM github_jobs job
+        JOIN projects project ON project.id = job.project_id
         JOIN github_installations installation
           ON installation.project_id = job.project_id
          AND installation.id = job.github_installation_id
@@ -3025,30 +2638,20 @@ async fn process_publish_job(state: &AppState, job: &ClaimedPublishJob) -> Resul
     if job.clone_url != expected_clone_url {
         return fail_publish_job(state, job, "repository_identity_invalid", true).await;
     }
-    let expected_mirror =
-        expected_repository_mirror_path(&state.config.data_root, job.repository_id)?;
-    let expected_worktree = managed_worktree_path(
-        &state.config.data_root,
-        job.repository_id,
-        job.repository_workspace_id,
-    )?;
-    if Path::new(&job.mirror_path) != expected_mirror
-        || Path::new(&job.worktree_path) != expected_worktree
-    {
-        return fail_publish_job(state, job, "runtime_path_mismatch", true).await;
-    }
-    let mirror = expected_mirror.clone();
-    let worktree = expected_worktree.clone();
-    let branch = job.branch_name.clone();
-    let base = job.base_commit.clone();
-    let inspection = tokio::task::spawn_blocking(move || {
-        inspect_publishable_worktree(&mirror, &worktree, &branch, &base)
-    })
-    .await
-    .map_err(|_| AppError::Internal("join Git publication reinspection"))?;
-    match inspection {
-        Ok(inspection) if inspection.head_commit == job.intended_commit => {}
-        Ok(_) | Err(_) => {
+    let publication = Publication {
+        workspace_id: job.workspace_id,
+        repository_id: job.repository_id,
+        repository_workspace_id: job.repository_workspace_id,
+        worktree_path: &job.worktree_path,
+        branch: &job.branch_name,
+        base_commit: &job.base_commit,
+    };
+    match publication.check(state).await? {
+        PublicationCheck::At(commit) if commit == job.intended_commit => {}
+        PublicationCheck::Moved => {
+            return fail_publish_job(state, job, "runtime_path_mismatch", true).await;
+        }
+        PublicationCheck::At(_) | PublicationCheck::Refused(_) => {
             return fail_publish_job(state, job, "workspace_changed", true).await;
         }
     }
@@ -3089,30 +2692,16 @@ async fn process_publish_job(state: &AppState, job: &ClaimedPublishJob) -> Resul
         }
     }
 
-    let data_root = state.config.data_root.clone();
-    let mirror = expected_mirror;
-    let worktree = expected_worktree;
-    let branch = job.branch_name.clone();
-    let base = job.base_commit.clone();
-    let intended = job.intended_commit.clone();
-    let remote_url = job.clone_url.clone();
-    let remote_is_safe = crate::code_host::is_safe_remote(&remote_url);
-    let push_token = token.secret.clone();
-    let push = tokio::task::spawn_blocking(move || {
-        push_publishable_commit(PublishPush {
-            data_root: &data_root,
-            mirror: &mirror,
-            worktree: &worktree,
-            expected_branch: &branch,
-            base_commit: &base,
-            intended_commit: &intended,
-            remote_url: &remote_url,
+    let remote_is_safe = crate::code_host::is_safe_remote(&job.clone_url);
+    let pushed = publication
+        .push(
+            state,
+            &job.intended_commit,
+            &job.clone_url,
             remote_is_safe,
-            token: &push_token,
-        })
-    })
-    .await
-    .map_err(|_| AppError::Internal("join credentialed Git push"))?;
+            token.secret.clone(),
+        )
+        .await?;
     let remote = client
         .branch_commit(&token, &job.owner, &job.repository_name, &job.branch_name)
         .await;
@@ -3120,7 +2709,7 @@ async fn process_publish_job(state: &AppState, job: &ClaimedPublishJob) -> Resul
     match remote {
         Ok(Some(commit)) if commit == job.intended_commit => complete_publish_job(state, job).await,
         Ok(Some(_)) => fail_publish_job(state, job, "remote_branch_diverged", true).await,
-        Ok(None) if push.is_err() => fail_publish_job(state, job, "git_push_failed", false).await,
+        Ok(None) if !pushed => fail_publish_job(state, job, "git_push_failed", false).await,
         Ok(None) => fail_publish_job(state, job, "remote_ref_unconfirmed", false).await,
         Err(_) => fail_publish_job(state, job, "remote_ref_unavailable", false).await,
     }
@@ -6275,42 +5864,6 @@ pub(crate) async fn merge_pull_request_as(
         already_merged,
         refresh,
     })
-}
-
-async fn merge_pull_request(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, pull_request_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<MergePullRequestRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let actor = CommandActor {
-        actor_id: principal.actor_id,
-        actor_kind: crate::accounts::actor_kind(&principal.actor_kind)?,
-        project_id,
-        audit: AuditAttribution::Browser {
-            session_id: principal.session_id,
-            request_id: headers
-                .get(crate::REQUEST_ID_HEADER)
-                .and_then(|value| value.to_str().ok())
-                .filter(|value| value.len() <= 128)
-                .map(str::to_owned),
-        },
-    };
-    let view = merge_pull_request_as(&state, &actor, pull_request_id, &request)
-        .await
-        .map_err(|error| match error {
-            AppError::Conflict(what, why) => match merge_refusal(what, why) {
-                Some(message) => AppError::Refused {
-                    field: "pullRequest",
-                    message,
-                },
-                None => AppError::Conflict(what, why),
-            },
-            error => error,
-        })?;
-    Ok((StatusCode::OK, Json(view)).into_response())
 }
 
 /// Why a merge didn't go ahead, for the person or agent who asked.

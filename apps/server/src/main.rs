@@ -387,10 +387,11 @@ async fn main() -> anyhow::Result<()> {
         Some("retention-worktrees") => {
             let options = parse_options(arguments)?;
             reject_unknown_options(&options, &["apply"])?;
-            let result = retention::clean_worktrees(
+            let result = agent_workspace_server::hosts::builtin::worktrees::clean_worktrees(
                 &pool,
                 &config.data_root,
                 optional_bool(&options, "apply", false)?,
+                None,
             )
             .await
             .context("clean eligible retained worktrees")?;
@@ -441,14 +442,7 @@ async fn main() -> anyhow::Result<()> {
             let options = parse_options(arguments)?;
             reject_unknown_options(
                 &options,
-                &[
-                    "owner-login",
-                    "name",
-                    "handle",
-                    "token-file",
-                    "webhook-url",
-                    "wakeup-format",
-                ],
+                &["owner-login", "name", "handle", "token-file", "webhook-url"],
             )?;
             let token_file = std::path::PathBuf::from(required_option(&options, "token-file")?);
             // Host-only: the owner's workspace is found by their login, so
@@ -481,14 +475,8 @@ async fn main() -> anyhow::Result<()> {
             .context("create agent")?;
             write_private_file(&token_file, &agent.token)?;
             // With --webhook-url, the signing secret goes to "<token-file>.webhook".
-            // Wakeups are typed (docs/agent-runner.md) unless
-            // --wakeup-format inbox asks for the old inbox.available body.
+            // Pushes are Standard Webhooks (docs/agent-runner.md).
             if let Some(url) = options.get("webhook-url") {
-                let typed = match options.get("wakeup-format").map(String::as_str) {
-                    None | Some("typed") => true,
-                    Some("inbox") => false,
-                    Some(_) => anyhow::bail!("--wakeup-format is typed or inbox"),
-                };
                 let secret = agent_workspace_server::tenancy::system(
                     "server.operator",
                     Box::pin(
@@ -498,7 +486,6 @@ async fn main() -> anyhow::Result<()> {
                             agent.connection_id,
                             url,
                             &config.webhook_trusted_origins,
-                            typed,
                         ),
                     ),
                 )
@@ -576,6 +563,43 @@ async fn main() -> anyhow::Result<()> {
             );
             return Ok(());
         }
+        Some("enrol-builtin-host") => {
+            // A1.17: a one-time code for the built-in host's own program,
+            // written to a file it reads on its first start. Earlier codes
+            // and the token before stop working.
+            let options = parse_options(arguments)?;
+            reject_unknown_options(&options, &["code-file"])?;
+            let path = std::path::PathBuf::from(required_option(&options, "code-file")?);
+            // The file is made first: a path that can't be written fails
+            // before the running host's token is revoked.
+            let mut file = {
+                use std::os::unix::fs::OpenOptionsExt as _;
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&path)
+                    .with_context(|| format!("create {}", path.display()))?
+            };
+            let code = match agent_workspace_server::hosts::builtin::install::new_code(&pool).await
+            {
+                Ok(code) => code,
+                Err(error) => {
+                    let _ = std::fs::remove_file(&path);
+                    return Err(error).context("write a code for the built-in host");
+                }
+            };
+            {
+                use std::io::Write as _;
+                file.write_all(code.as_bytes())?;
+                file.sync_all()?;
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "codeFile": path }))?
+            );
+            return Ok(());
+        }
         Some("migrate") => return Ok(()),
         Some(_) => bail!("unknown command"),
         None => {}
@@ -621,6 +645,27 @@ async fn main() -> anyhow::Result<()> {
             ),
             agent_workspace_server::setup::Prepared::Done
             | agent_workspace_server::setup::Prepared::Claimed => {}
+        }
+    }
+
+    // The built-in host as its own program (A1.17): until it has enrolled,
+    // a one-time code waits where it reads it. Only the file's path is
+    // logged.
+    if config.roles.work && !config.builtin_host {
+        use agent_workspace_server::hosts::builtin::install;
+        match install::prepare(&pool, &install::code_path(&config))
+            .await
+            .context("prepare the built-in host's enrolment")?
+        {
+            install::Prepared::Written(path) | install::Prepared::Waiting(path) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    "the built-in host program hasn't enrolled yet: start agent-workspace-host \
+                     with this data folder (or AGENT_WORKSPACE_HOST_CODE_PATH) and it reads its \
+                     code from this file"
+                );
+            }
+            install::Prepared::Enrolled => {}
         }
     }
 

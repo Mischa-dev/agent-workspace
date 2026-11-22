@@ -24,7 +24,7 @@ test('opens a second workspace by its address, with its own modules', async ({ p
   await page.getByLabel('Username').fill(seeded.loginName)
   await page.getByLabel('Password').fill(seededValue('E2E_PASSWORD'))
   await page.getByRole('button', { name: 'Sign in' }).click()
-  await expect(page).toHaveURL(/\/w\/[^/]+\/home$/)
+  await expect(page).toHaveURL(/\/w\/(?!-\/)[^/]+\/home$/)
   const first = new URL(page.url()).pathname.split('/')[2]
 
   const session = await (await page.request.get(`${serverOrigin}/api/v1/auth/session`)).json()
@@ -38,8 +38,8 @@ test('opens a second workspace by its address, with its own modules', async ({ p
   try {
     // Whiteboards off in the second workspace only.
     const csrf = (await page.context().cookies()).find((cookie) => cookie.name.endsWith('agent_workspace_csrf'))?.value ?? ''
-    const switched = await page.request.put(`${serverOrigin}/api/v1/organizations/${workspaceId}/modules`, {
-      data: { switches: { whiteboards: false } },
+    const switched = await page.request.post(`${serverOrigin}/api/v2/w/${workspaceId}/ops/workspace_update`, {
+      data: { projectId: 'workspace', modules: { whiteboards: false } },
       headers: { origin: webOrigin, 'x-csrf-token': csrf, 'idempotency-key': randomUUID() },
     })
     expect(switched.ok(), await switched.text()).toBe(true)
@@ -52,8 +52,8 @@ test('opens a second workspace by its address, with its own modules', async ({ p
     // The first workspace's project isn't in this one's rail.
     await expect(page.getByRole('navigation', { name: 'Spaces' }).getByRole('link', { name: seeded.projectName })).toHaveCount(0)
 
-    // An old address opens in the workspace used last.
-    await page.goto('/inbox')
+    // An address that names no workspace opens in the workspace used last.
+    await page.goto('/w/-/inbox')
     await expect(page).toHaveURL(new RegExp(`/w/${slug}/inbox$`))
 
     await page.getByRole('button', { name: /^Workspace: Zeta Workspace/ }).click()

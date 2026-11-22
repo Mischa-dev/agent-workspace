@@ -9,13 +9,13 @@ use crate::{
     auth::AuthenticatedActor,
     domain::allocate_conversation_sequence,
     error::{ApiPath, AppError},
+    harness::run_config::RunConfig,
     hosts::builtin::http::select_run_setup,
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     mcp::McpPrincipal,
     message_content::MessageContent,
     outbox,
     policy::{Action, MembershipRole, RoleGrant},
-    provider::run_config::RunConfig,
 };
 
 pub fn router() -> Router<AppState> {

@@ -13,8 +13,10 @@ use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin, bootstrap_development_member},
     config::AppConfig,
-    git_runtime::{create_worktree, expected_repository_mirror_path, managed_worktree_path},
     github::webhook_router,
+    hosts::builtin::git::{
+        create_worktree, expected_repository_mirror_path, managed_worktree_path,
+    },
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
@@ -272,15 +274,16 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
     let viewer_automation = get_json(&application, &viewer_cookie, &automation_uri).await;
     assert_eq!(viewer_automation.0, StatusCode::FORBIDDEN);
     let update_body = serde_json::to_vec(&json!({
+        "projectId": seed.project_id,
         "expectedVersion": 1,
-        "pullRequestOpenEnabled": true,
-        "pullRequestMergeEnabled": true
+        "pullRequestOpen": true,
+        "pullRequestMerge": true
     }))
     .expect("serialize automation settings update");
     let update_automation = || {
         Request::builder()
-            .method("PUT")
-            .uri(&automation_uri)
+            .method("POST")
+            .uri("/api/v2/ops/github_automation_update")
             .header("origin", "http://127.0.0.1:3100")
             .header(header::COOKIE, &owner_cookie)
             .header("x-csrf-token", csrf_from_cookie(&owner_cookie))
@@ -297,10 +300,11 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
             .expect("automation settings update response"),
     )
     .await;
-    assert_eq!(updated.0, StatusCode::OK);
-    assert_eq!(updated.1["pullRequestOpenEnabled"], true);
-    assert_eq!(updated.1["pullRequestMergeEnabled"], true);
-    assert_eq!(updated.1["version"], 2);
+    assert_eq!(updated.0, StatusCode::OK, "{}", updated.1);
+    let automation = &updated.1["value"]["automation"];
+    assert_eq!(automation["pullRequestOpenEnabled"], true, "{}", updated.1);
+    assert_eq!(automation["pullRequestMergeEnabled"], true);
+    assert_eq!(automation["version"], 2);
     let replayed = response_json(
         application
             .clone()
@@ -309,7 +313,9 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
             .expect("automation settings replay response"),
     )
     .await;
-    assert_eq!(replayed, updated);
+    assert_eq!(replayed.0, updated.0);
+    assert_eq!(replayed.1["value"], updated.1["value"]);
+    assert_eq!(replayed.1["replayed"], true, "{}", replayed.1);
     let settings_audits = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM audit_events WHERE action = 'github.automation_settings_update'",
     )
@@ -566,28 +572,30 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
     .await
     .expect("insert terminal publication Agent Run");
     let csrf = csrf_from_cookie(&owner_cookie);
-    let publish_uri = format!(
-        "/api/v1/projects/{}/agent-runs/{run_id}/publish",
-        seed.project_id
-    );
+    let publish_uri = "/api/v2/ops/run_publish";
     let publish = application
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&publish_uri)
+                .uri(publish_uri)
                 .header("origin", "http://127.0.0.1:3100")
                 .header(header::COOKIE, &owner_cookie)
                 .header("x-csrf-token", &csrf)
                 .header("idempotency-key", "m5-explicit-publish")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from("{}"))
+                .body(Body::from(
+                    serde_json::to_vec(&json!({ "runId": run_id }))
+                        .expect("serialize publish command"),
+                ))
                 .expect("build M5 publish request"),
         )
         .await
         .expect("M5 publish response");
-    let publish = response_json(publish).await;
-    assert_eq!(publish.0, StatusCode::ACCEPTED);
+    let (status, publish) = response_json(publish).await;
+    assert_eq!(status, StatusCode::OK, "{publish}");
+    assert_eq!(publish["value"]["queued"], true, "{publish}");
+    let publish = (status, publish["value"]["job"].clone());
     assert_eq!(publish.1["agentRunId"], run_id.to_string());
     assert_eq!(publish.1["repositoryWorkspaceId"], workspace_id.to_string());
     assert_eq!(publish.1["intendedCommit"], intended_commit);
@@ -617,16 +625,13 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
     .execute(&pool)
     .await
     .expect("record exact published commit for pull-request request");
-    let pull_request_uri = format!(
-        "/api/v1/projects/{}/agent-runs/{run_id}/pull-request",
-        seed.project_id
-    );
+    let pull_request_uri = "/api/v2/ops/pull_request_create";
     let pull_request = application
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&pull_request_uri)
+                .uri(pull_request_uri)
                 .header("origin", "http://127.0.0.1:3100")
                 .header(header::COOKIE, &owner_cookie)
                 .header("x-csrf-token", &csrf)
@@ -634,9 +639,10 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
                     serde_json::to_vec(&json!({
+                        "runId": run_id,
                         "title": "M5 exact publication",
                         "body": "Created from the exact managed commit.",
-                        "workItemIds": []
+                        "taskIds": []
                     }))
                     .expect("serialize pull-request command"),
                 ))
@@ -644,8 +650,10 @@ async fn github_status_and_webhook_receipt_are_scoped_signed_and_idempotent() {
         )
         .await
         .expect("M5 pull-request response");
-    let pull_request = response_json(pull_request).await;
-    assert_eq!(pull_request.0, StatusCode::ACCEPTED);
+    let (status, pull_request) = response_json(pull_request).await;
+    assert_eq!(status, StatusCode::OK, "{pull_request}");
+    assert_eq!(pull_request["value"]["queued"], true, "{pull_request}");
+    let pull_request = (status, pull_request["value"]["job"].clone());
     assert_eq!(pull_request.1["agentRunId"], run_id.to_string());
     assert_eq!(
         pull_request.1["repositoryWorkspaceId"],

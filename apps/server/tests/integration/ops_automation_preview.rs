@@ -28,14 +28,13 @@ async fn trying_a_rule_writes_nothing_and_is_for_its_maker() {
     let app = &setup.app;
     let work = create_project(&setup, "TRY", "Try").await;
 
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("try-task"),
-            json!({"title": "Needs a look"}),
-        ),
+        &setup.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("try-task"),
+        json!({"title": "Needs a look"}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");

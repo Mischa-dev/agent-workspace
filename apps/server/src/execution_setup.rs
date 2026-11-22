@@ -10,7 +10,7 @@
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::{error::AppError, provider::manifest::AdapterManifest};
+use crate::{error::AppError, harness::manifest::AdapterManifest};
 
 /// Serialize execution setup for one project for the rest of the transaction.
 pub async fn lock_project_setup(

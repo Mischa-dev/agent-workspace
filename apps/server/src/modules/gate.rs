@@ -142,10 +142,6 @@ pub(crate) const ID_EXEMPT: &[(&str, &str)] = &[
          in, and it was made by someone who could edit the page",
     ),
     (
-        "/api/v1/bug-report-links/",
-        "a link is managed from its project's settings, which the gate covers",
-    ),
-    (
         "/api/v1/bug-reports/",
         "a public report link by token, posted without a session; the gate answers only signed-in callers",
     ),
@@ -166,20 +162,12 @@ pub(crate) const ID_EXEMPT: &[(&str, &str)] = &[
         "a public form by token; its collection's module is checked by the handler",
     ),
     (
-        "/api/v1/later/",
-        "a person's own saved items, across workspaces",
-    ),
-    (
         "/api/v1/messages/",
         "a message is read with its conversation",
     ),
     (
         "/api/v1/project-invitations/",
-        "an invitation is revoked or replaced from its project's members screen, whose routes the gate covers",
-    ),
-    (
-        "/api/v1/reply-requests/",
-        "reply requests belong to a conversation, checked by its handler",
+        "an invitation is opened and accepted by its token, before the person is in the project",
     ),
     (
         "/api/v1/scheduled-messages/",

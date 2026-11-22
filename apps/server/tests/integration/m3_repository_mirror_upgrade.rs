@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, fs, process::Command};
 
 use agent_workspace_server::{
-    config::AppConfig, git_runtime::expected_repository_mirror_path,
+    config::AppConfig, hosts::builtin::git::expected_repository_mirror_path,
     migration_preflight::prepare_m3_repository_upgrade, seed::dev_seed,
 };
 use sqlx::{Executor, PgPool, postgres::PgPoolOptions};

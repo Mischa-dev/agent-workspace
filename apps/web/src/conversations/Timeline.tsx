@@ -178,13 +178,31 @@ export function ConversationTimeline({
   useEffect(() => {
     const element = scroller.current
     if (!element || typeof ResizeObserver === 'undefined') return undefined
-    const observer = new ResizeObserver(() => {
+    const stick = () => {
       if (pinned.current && !window.location.hash.startsWith('#message-')) element.scrollTop = element.scrollHeight
       last.current = { ...last.current, height: element.scrollHeight, top: element.scrollTop }
-    })
+    }
+    const observer = new ResizeObserver(stick)
+    const watchChildren = () => {
+      for (const child of Array.from(element.children)) observer.observe(child)
+    }
     observer.observe(element)
-    for (const child of Array.from(element.children)) observer.observe(child)
-    return () => observer.disconnect()
+    watchChildren()
+    // Parts that arrive on their own (a thread's first message loads
+    // separately) are new children: watch them too, or the list stays at the
+    // top while they push the newest message out of sight.
+    const added =
+      typeof MutationObserver === 'undefined'
+        ? null
+        : new MutationObserver(() => {
+            watchChildren()
+            stick()
+          })
+    added?.observe(element, { childList: true })
+    return () => {
+      observer.disconnect()
+      added?.disconnect()
+    }
   }, [revision, olderKey])
 
   // A copied message link scrolls to that message and highlights it, loading

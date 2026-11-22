@@ -26,15 +26,19 @@ const REQUESTER_APP_REFUSED_REASON: &str = "Cancelled before it started: whoever
 const ACTIVE_TURN_STATES: &str = "('starting', 'working', 'blocked', 'recovering')";
 
 /// Something may be ready to start: the built-in host's holder looks now
-/// (K5.3). Here when this instance holds it; otherwise a wake on the control
-/// channel reaches the holder, whose one-second tick is the safety net. A
-/// state without a cluster (a test's) drains here, as before.
+/// (K5.3). When this instance holds it, its own admission loop is woken (one
+/// loop, so one command pump, per holder); otherwise a wake on the control
+/// channel reaches the holder. The holder's one-second tick is the safety
+/// net. A state without a cluster (a test's) drains here, as before.
 pub fn kick(state: AppState) {
     tokio::spawn(async move {
         let result = match state.supervisors.cluster() {
             None => drain(&state, None).await,
             Some(cluster) => match cluster.held_lease(&LeaseName::BuiltinHost) {
-                Some(lease) => drain(&state, Some((cluster, &lease))).await,
+                Some(_) => {
+                    cluster.release_wake().notify_waiters();
+                    Ok(())
+                }
                 None => crate::db::scoped_one(&state.pool, async |connection| {
                     sqlx::query("SELECT pg_notify(realtime_channel('control'), 'host:kick')")
                         .execute(&mut *connection)
@@ -80,27 +84,61 @@ pub async fn run_host(
 
 async fn host(state: AppState, cluster: Cluster, lease: Lease) -> Result<(), AppError> {
     let result = async {
-        crate::recovery::reconcile_owned(&state, &cluster, &lease).await?;
+        crate::hosts::builtin::recovery::reconcile_owned(&state, &cluster, &lease).await?;
         let jobs = crate::jobs::default_registry();
         let builtin = crate::hosts::builtin::transport::client(&state);
-        let mut interval = tokio::time::interval(Duration::from_secs(1));
-        loop {
-            tokio::select! {
-                _ = interval.tick() => {}
-                // A kick from another instance, or a lease let go.
-                () = cluster.released() => {}
-                () = lease.lost.cancelled() => return Ok(()),
+        // Admission and host jobs take turns on this task without waiting
+        // for each other: a long job (the daily worktree cleanup) never
+        // holds up runs being admitted.
+        let admit = async {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    // A kick from another instance, or a lease let go.
+                    () = cluster.released() => {}
+                    () = lease.lost.cancelled() => return,
+                }
+                if let Err(error) = drain_with(&state, Some((&cluster, &lease)), &builtin).await {
+                    tracing::error!(
+                        error_category = error.log_category(),
+                        "Agent Run scheduler pass failed"
+                    );
+                }
             }
-            if let Err(error) = drain_with(&state, Some((&cluster, &lease)), &builtin).await {
-                tracing::error!(
-                    error_category = error.log_category(),
-                    "Agent Run scheduler pass failed"
-                );
+        };
+        let host_jobs = async {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            // The harnesses this host runs, told to the server once it holds
+            // the lease (and again each second until the server has them).
+            let mut described = false;
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    () = lease.lost.cancelled() => return,
+                }
+                if !described {
+                    match crate::hosts::builtin::describe_harnesses(&state, &builtin, lease.token)
+                        .await
+                    {
+                        Ok(()) => described = true,
+                        Err(error) => tracing::warn!(
+                            status = match error {
+                                agent_workspace_host_protocol::ClientError::Refused(status, _) =>
+                                    status,
+                                agent_workspace_host_protocol::ClientError::Http(_) => 0,
+                            },
+                            "built-in host could not describe its harnesses"
+                        ),
+                    }
+                }
+                if let Err(error) = crate::jobs::run_due_host(&state, &jobs, &lease).await {
+                    tracing::warn!(error_category = error.log_category(), "host jobs failed");
+                }
             }
-            if let Err(error) = crate::jobs::run_due_host(&state, &jobs, &lease).await {
-                tracing::warn!(error_category = error.log_category(), "host jobs failed");
-            }
-        }
+        };
+        tokio::join!(admit, host_jobs);
+        Ok::<(), AppError>(())
     }
     .await;
     // Losing the lease stops every local turn before anyone else may
@@ -164,14 +202,23 @@ async fn drain_with_here(
     fence: Option<(&Cluster, &Lease)>,
     builtin: &agent_workspace_host_protocol::HostClient,
 ) -> Result<(), AppError> {
+    admit(state, fence).await?;
+    // A1.16: the built-in host carries out the starts it was just sent
+    // (and anything else waiting for it), through the host protocol. While
+    // it is busy it keeps admitting runs, and stops starting commands once
+    // the lease is lost.
+    crate::hosts::builtin::driver::pump_with(state, builtin, || Box::pin(admit(state, fence)))
+        .await?;
+    Ok(())
+}
+
+/// Admit every run that can start now.
+async fn admit(state: &AppState, fence: Option<(&Cluster, &Lease)>) -> Result<(), AppError> {
     while claim_next(state, fence).await? {
         if fence.is_some_and(|(_, lease)| lease.lost.is_cancelled()) {
             return Err(AppError::LeaseLost);
         }
     }
-    // A1.16: the built-in host carries out the starts it was just sent
-    // (and anything else waiting for it), through the host protocol.
-    crate::hosts::builtin::driver::pump_with(state, builtin).await?;
     Ok(())
 }
 

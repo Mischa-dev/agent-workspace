@@ -232,7 +232,7 @@ export class ReplyTools {
 
   async progress(requestId: string, generation: number, status: string) {
     return unwrap<{ requestId: string; status: string; leaseExpiresAt: string }>(
-      await this.mcp.callTool('reply_progress', { requestId, generation, status: status.slice(0, 200) }),
+      await this.mcp.callTool('reply_progress_report', { requestId, generation, status: status.slice(0, 200) }),
     )
   }
 

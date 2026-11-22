@@ -362,7 +362,7 @@ test('the built-in Tasks collection shows the project\'s tasks, takes new ones a
   const title = 'Sweep the lighthouse stairs'
   const existing = (await (await request.get(`/api/v1/projects/${projectId}/work-items?q=${encodeURIComponent(title)}`)).json()) as { items: Array<{ id: string }> }
   if (!existing.items.length) {
-    const created = await request.post(`/api/v1/projects/${projectId}/work-items`, { headers: headers('tasks-collection-task'), data: { title } })
+    const created = await request.post('/api/v2/ops/task_create', { headers: headers('tasks-collection-task'), data: { projectId, title } })
     expect(created.ok(), await created.text()).toBe(true)
   }
 

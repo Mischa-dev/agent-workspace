@@ -28,9 +28,9 @@ use crate::{
     scheduled_messages::{self, ScheduledMessageView},
 };
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct LaterListArguments {
+pub(crate) struct LaterListArguments {
     /// open (default: saved and not done, reminders due soonest first),
     /// done, or scheduled (your messages waiting to send).
     pub view: Option<String>,
@@ -38,7 +38,7 @@ pub(super) struct LaterListArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LaterLine {
+pub(crate) struct LaterLine {
     pub id: String,
     /// message, work_item or reminder
     pub kind: String,
@@ -75,7 +75,7 @@ pub struct ScheduledLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LaterListValue {
+pub(crate) struct LaterListValue {
     // `default` keeps each optional in the output schema: an empty list is
     // left out, and clients reject a result missing a required field.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -130,9 +130,11 @@ fn scheduled_line(state: &AppState, message: ScheduledMessageView) -> ScheduledL
     }
 }
 
-/// Whether a person's app made this call (its limit then applies).
+/// Whether a person's app made this call (its limit then applies): not the
+/// person's own browser, which reaches this through its operation.
 fn through_app(principal: &McpPrincipal) -> bool {
     principal.actor_kind == ActorKind::Human // kind-check: mechanical (an app acts as the person who connected it)
+        && principal.authentication_class != "password_session"
 }
 
 /// The projects this call reads in: the one it's confined to, or (for an
@@ -211,7 +213,7 @@ async fn inbox_within(
     )
 }
 
-pub(super) async fn later_list(
+pub(crate) async fn later_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: LaterListArguments,
@@ -271,13 +273,14 @@ pub(super) async fn later_list(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "later_list"))
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ReminderSetArguments {
-    /// What to be reminded of. Needed unless you save a message or task.
+pub(crate) struct ReminderSetArguments {
+    /// A note, or what to be reminded of. Needed unless you save a message
+    /// or task.
     pub text: Option<String>,
     /// When, as RFC 3339 (2026-10-18T09:00:00+02:00), up to a year ahead.
-    /// Leave it out to save a message or task for later without a reminder.
+    /// Leave it out to keep it on the list without a reminder.
     pub at: Option<String>,
     /// Save this message: its ID or link.
     pub message_id: Option<String>,
@@ -287,13 +290,13 @@ pub(super) struct ReminderSetArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LaterItemValue {
+pub(crate) struct LaterItemValue {
     pub item: LaterLine,
 }
 
 /// `later_save`: save a message or task for later, or set a reminder, for
 /// yourself.
-pub(super) async fn later_save(
+pub(crate) async fn later_save(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: ReminderSetArguments,
@@ -337,9 +340,6 @@ pub(super) async fn later_save(
                 .is_none_or(|text| text.trim().is_empty())
             {
                 return Ok(ToolResult::invalid("text", "Say what to remind you of."));
-            }
-            if arguments.at.is_none() {
-                return Ok(ToolResult::invalid("at", "Say when, as RFC 3339."));
             }
             // AWD-75: a person's plain reminder is kept in their home
             // workspace, so Inbox must be on there, not only somewhere. With
@@ -411,9 +411,9 @@ pub(super) async fn later_save(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "later_save"))
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct LaterUpdateArguments {
+pub(crate) struct LaterUpdateArguments {
     /// The item's ID, from later_list or later_save.
     pub id: String,
     /// true: mark it done. false: back to open.
@@ -428,13 +428,13 @@ pub(super) struct LaterUpdateArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct LaterUpdateValue {
+pub(crate) struct LaterUpdateValue {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item: Option<LaterLine>,
     pub removed: bool,
 }
 
-pub(super) async fn later_update(
+pub(crate) async fn later_update(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: LaterUpdateArguments,
@@ -645,8 +645,10 @@ pub(super) async fn message_schedule(
 pub(super) struct ScheduledUpdateArguments {
     /// The scheduled message's ID, from message_schedule or later_list.
     pub id: String,
-    /// New text.
+    /// New text. @handles of people in the project become mentions.
     pub text: Option<String>,
+    /// New structured content instead of text.
+    pub content: Option<MessageContent>,
     /// A new time, as RFC 3339.
     pub send_at: Option<String>,
     /// true: send it now.
@@ -715,9 +717,16 @@ pub(super) async fn scheduled_message_update(
                 Err(error) => Ok(schedule_refusal(error, "scheduled_message_update")),
             };
         }
-        let content = match arguments.text.as_deref() {
-            None => None,
-            Some(text) => {
+        let content = match (arguments.text.as_deref(), arguments.content.clone()) {
+            (None, None) => None,
+            (Some(_), Some(_)) => {
+                return Ok(ToolResult::invalid("text", "Pass either text or content."));
+            }
+            (None, Some(content)) => match serde_json::to_value(content) {
+                Ok(content) => Some(content),
+                Err(_) => return Ok(ToolResult::invalid("content", "The content isn't valid.")),
+            },
+            (Some(text), None) => {
                 let text = text.trim();
                 if text.is_empty() {
                     return Ok(ToolResult::invalid(

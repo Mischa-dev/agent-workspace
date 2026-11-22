@@ -1,30 +1,22 @@
-use axum::{Json, Router, extract::State, http::HeaderMap, routing::get};
+use axum::{Json, Router, extract::State, routing::get};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
-    error::{ApiJson, ApiPath, AppError},
-    idempotency::{IdempotencyKey, IdempotencyOutcome, RequestHash, complete, reserve},
+    auth::AuthenticatedActor,
+    error::{ApiPath, AppError},
     outbox::{OutboxEventPayload, ProjectMembershipUpdatedPayload, enqueue_typed},
     policy::{Action, RoleGrant},
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route(
-            "/api/v1/projects/{project_id}/members",
-            get(list_members).post(add_existing_member),
-        )
+        .route("/api/v1/projects/{project_id}/members", get(list_members))
         .route(
             "/api/v1/projects/{project_id}/member-candidates",
             get(member_candidates),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/members/{actor_id}",
-            axum::routing::patch(update_member),
         )
 }
 
@@ -73,17 +65,6 @@ pub(crate) struct MemberRow {
     pub(crate) disabled_at: Option<String>,
     pub(crate) created_at: String,
     pub(crate) profile_readiness: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct UpdateMemberRequest {
-    expected_version: i64,
-    role: Option<String>,
-    /// A custom role of the workspace, instead of `role`.
-    #[serde(default)]
-    role_id: Option<Uuid>,
-    enabled: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -216,85 +197,6 @@ async fn grantable_roles(
         .collect())
 }
 
-async fn update_member(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, actor_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<UpdateMemberRequest>,
-) -> Result<Json<MemberView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    validate_update(&request)?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let request_hash = RequestHash::for_value(&request)?;
-    let scope = format!(
-        "project_membership.{}.{}.update",
-        project_id.simple(),
-        actor_id.simple()
-    );
-
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let reservation = match reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            transaction.commit().await?;
-            return Ok(Json(replay.decode()?));
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let change = change_member(
-        &mut transaction,
-        principal.actor_id,
-        project_id,
-        actor_id,
-        request.role.as_deref(),
-        request.role_id,
-        request.enabled,
-        Some(request.expected_version),
-    )
-    .await?;
-    let view = match change.updated {
-        None => member_view(change.before, &principal, &change.access),
-        Some(updated) => {
-            insert_audit_event(
-                &mut transaction,
-                &headers,
-                &principal,
-                project_id,
-                actor_id,
-                &change.before,
-                &updated,
-            )
-            .await?;
-            member_view(updated, &principal, &change.access)
-        }
-    };
-    complete(
-        &mut transaction,
-        &reservation,
-        axum::http::StatusCode::OK,
-        &view,
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(view))
-}
-
-/// A membership change: the caller's access, the member before, and after
-/// if anything changed.
-pub(crate) struct MemberChange {
-    access: AccessRow,
-    pub(crate) before: MemberRow,
-    pub(crate) updated: Option<MemberRow>,
-}
-
 /// Change someone's role in a Project or remove them (`enabled: false`), or
 /// bring them back. Shared by the browser API and MCP; callers record their
 /// own audit event.
@@ -312,7 +214,7 @@ pub(crate) async fn change_member(
     role_id: Option<Uuid>,
     enabled: Option<bool>,
     expected_version: Option<i64>,
-) -> Result<MemberChange, AppError> {
+) -> Result<(), AppError> {
     if role.is_none() && role_id.is_none() && enabled.is_none() {
         return Err(AppError::Validation("project membership update"));
     }
@@ -390,11 +292,7 @@ pub(crate) async fn change_member(
 
     if next_role == target.role && next_role_id == target.role_id && next_enabled == target.enabled
     {
-        return Ok(MemberChange {
-            access,
-            before: target,
-            updated: None,
-        });
+        return Ok(());
     }
 
     let updated = sqlx::query_as::<_, MemberRow>(
@@ -474,11 +372,7 @@ pub(crate) async fn change_member(
         }),
     )
     .await?;
-    Ok(MemberChange {
-        access,
-        before: target,
-        updated: Some(updated),
-    })
+    Ok(())
 }
 
 pub mod expiry;
@@ -617,22 +511,6 @@ pub(crate) async fn pick_custom_role(
 /// The built-in roles a membership can be set to: every one but Owner.
 fn settable_role(role: &str) -> bool {
     matches!(role, "admin" | "member" | "viewer")
-}
-
-fn validate_update(request: &UpdateMemberRequest) -> Result<(), AppError> {
-    if request.expected_version < 1
-        || (request.role.is_none() && request.role_id.is_none() && request.enabled.is_none())
-    {
-        return Err(AppError::Validation("project membership update"));
-    }
-    if request
-        .role
-        .as_deref()
-        .is_some_and(|role| !settable_role(role))
-    {
-        return Err(AppError::Validation("project membership role"));
-    }
-    Ok(())
 }
 
 fn authorize_access(
@@ -946,50 +824,6 @@ async fn revoke_project_credentials(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn insert_audit_event(
-    transaction: &mut Transaction<'_, Postgres>,
-    headers: &HeaderMap,
-    principal: &AuthenticatedActor,
-    project_id: Uuid,
-    target_actor_id: Uuid,
-    previous: &MemberRow,
-    current: &MemberRow,
-) -> Result<(), AppError> {
-    let request_id = headers
-        .get(crate::REQUEST_ID_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| value.len() <= 128);
-    sqlx::query(
-        r#"
-        INSERT INTO audit_events (
-            id, actor_id, project_id, session_id, authentication_class,
-            action, target_kind, target_id, outcome, request_id, metadata
-        ) VALUES (
-            $1, $2, $3, $4, 'password_session',
-            'project_membership.updated', 'actor', $5, 'succeeded', $6, $7
-        )
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(principal.actor_id)
-    .bind(project_id)
-    .bind(principal.session_id)
-    .bind(target_actor_id)
-    .bind(request_id)
-    .bind(serde_json::json!({
-        "previous_role": previous.role,
-        "role": current.role,
-        "previous_enabled": previous.enabled,
-        "enabled": current.enabled,
-        "previous_version": previous.version,
-        "version": current.version,
-    }))
-    .execute(&mut **transaction)
-    .await?;
-    Ok(())
-}
-
 fn map_membership_database_error(error: sqlx::Error) -> AppError {
     if matches!(
         &error,
@@ -999,53 +833,6 @@ fn map_membership_database_error(error: sqlx::Error) -> AppError {
         AppError::Conflict("project_membership", "handle already exists")
     } else {
         AppError::Database(error)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{UpdateMemberRequest, validate_update};
-
-    #[test]
-    fn membership_updates_are_bounded_and_cannot_grant_owner() {
-        assert!(
-            validate_update(&UpdateMemberRequest {
-                expected_version: 1,
-                role: Some("admin".to_owned()),
-                role_id: None,
-                enabled: None,
-            })
-            .is_ok()
-        );
-        for role in ["owner", "worker", "system", ""] {
-            assert!(
-                validate_update(&UpdateMemberRequest {
-                    expected_version: 1,
-                    role: Some(role.to_owned()),
-                    role_id: None,
-                    enabled: None,
-                })
-                .is_err()
-            );
-        }
-        assert!(
-            validate_update(&UpdateMemberRequest {
-                expected_version: 0,
-                role: None,
-                role_id: None,
-                enabled: Some(false),
-            })
-            .is_err()
-        );
-        assert!(
-            validate_update(&UpdateMemberRequest {
-                expected_version: 1,
-                role: None,
-                role_id: None,
-                enabled: None,
-            })
-            .is_err()
-        );
     }
 }
 
@@ -1072,7 +859,8 @@ async fn member_candidates(
         project_id,
         Action::MembershipManage,
     )?;
-    Ok(Json(sqlx::query_as::<_, MemberCandidate>(r#"
+    let candidates = crate::db::scoped_one(&state.pool, async |connection| {
+        sqlx::query_as::<_, MemberCandidate>(r#"
         SELECT profile.actor_id, actor.kind AS actor_kind, profile.display_name, profile.handle
         FROM projects project
         JOIN organization_actor_profiles profile ON profile.organization_id = project.organization_id
@@ -1084,50 +872,13 @@ async fn member_candidates(
           AND (actor.kind <> 'human' OR u.status = 'active') -- // kind-check: mechanical (a person signs in with an active user account)
           AND NOT EXISTS (SELECT 1 FROM project_memberships pm WHERE pm.project_id = $1 AND pm.actor_id = actor.id)
         ORDER BY profile.display_name, actor.id LIMIT 200
-    "#).bind(project_id).fetch_all(&state.pool).await?))
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AddExistingMemberRequest {
-    actor_id: Uuid,
-    role: String,
-    /// A custom role of the workspace based on `role`.
-    #[serde(default)]
-    role_id: Option<Uuid>,
-}
-
-async fn add_existing_member(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<AddExistingMemberRequest>,
-) -> Result<Json<MemberView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut tx = state.pool.begin().await?;
-    let added = add_member(
-        &mut tx,
-        principal.actor_id,
-        project_id,
-        request.actor_id,
-        &request.role,
-        request.role_id,
-    )
+    "#).bind(project_id).fetch_all(&mut *connection).await
+    })
     .await?;
-    if added.inserted {
-        sqlx::query(r#"INSERT INTO audit_events (id,actor_id,project_id,session_id,authentication_class,action,target_kind,target_id,outcome)
-            VALUES ($1,$2,$3,$4,'browser_session','project_membership.added','actor',$5,'succeeded')"#)
-            .bind(Uuid::now_v7()).bind(principal.actor_id).bind(project_id).bind(principal.session_id)
-            .bind(request.actor_id).execute(&mut *tx).await?;
-    }
-    tx.commit().await?;
-    Ok(Json(member_view(added.member, &principal, &added.access)))
+    Ok(Json(candidates))
 }
 
 pub(crate) struct AddedMember {
-    access: AccessRow,
-    pub(crate) member: MemberRow,
     /// False when they were already a member with that role.
     pub(crate) inserted: bool,
 }
@@ -1219,11 +970,7 @@ pub(crate) async fn add_member(
         )
         .await?;
     }
-    Ok(AddedMember {
-        access,
-        member,
-        inserted,
-    })
+    Ok(AddedMember { inserted })
 }
 
 /// What joining or leaving did.

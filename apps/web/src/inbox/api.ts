@@ -1,13 +1,16 @@
 import { useInfiniteQuery, useMutation, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 
 import { requestJson } from '../api/client'
-import { callOp } from '../api/ops'
+import { callOp, ranOrThrow } from '../api/ops'
 import { queryKeys } from '../api/queryKeys'
+import { useSignedInWorkspaceIds } from '../auth/session'
 import { whenChoices } from '../later/when'
 import { actorKind, type ActorKind } from '../ui/identityModel'
 import type { MenuEntry } from '../ui/overlays'
 import { formatDateTime, formatTime } from '../ui/time'
 import { spaceHref } from '../app/href'
+import type { ProjectListResponse } from '../projects/types'
 
 export const inboxKeys = {
   root: queryKeys.inbox,
@@ -205,8 +208,36 @@ export type InboxUpdate =
   | { action: InboxAction; ids: string[]; snoozeUntil?: string }
   | { action: 'read' | 'archive'; all: true }
 
-/** What the server changed: the notifications that moved, for Undo. */
-export type InboxUpdateResult = { updated: string[]; unreadCount: number }
+/**
+ * What the server changed: the notifications that moved, for Undo. When the
+ * change went to several workspaces and some refused it, `refused` is the
+ * first refusal; the rest stays done and undoable.
+ */
+export type InboxUpdateResult = { updated: string[]; unreadCount: number; refused?: unknown }
+
+/**
+ * Notes which workspace each notification this tab has loaded lives in (its
+ * space's workspace in the project list), so a change by id goes only where
+ * those notifications are. DMs and spaces not loaded stay unknown.
+ */
+export function noteWorkspaces(queryClient: QueryClient, into: Map<string, string> = new Map()): Map<string, string> {
+  const spaces = new Map<string, string>()
+  for (const project of queryClient.getQueryData<ProjectListResponse>(queryKeys.projects)?.projects ?? []) {
+    if (project.organizationId) spaces.set(project.id, project.organizationId)
+  }
+  for (const [, data] of queryClient.getQueriesData<InboxCache>({ queryKey: inboxKeys.root })) {
+    // The inbox's pages, or a single page (a space's unread on its overview).
+    const single = data as unknown as InboxPage | undefined
+    const pages = data && Array.isArray(data.pages) ? data.pages : single && Array.isArray(single.notifications) ? [single] : []
+    for (const page of pages) {
+      for (const notification of Array.isArray(page?.notifications) ? page.notifications : []) {
+        const workspace = spaces.get(notification.projectId)
+        if (workspace) into.set(notification.id, workspace)
+      }
+    }
+  }
+  return into
+}
 
 /**
  * What the update does to a cached row: changed, or gone from this view. In
@@ -239,12 +270,24 @@ export function applyUpdate(
 
 type InboxCache = InfiniteData<InboxPage, string | null>
 
-export function useUpdateInbox(view: InboxView, category: InboxCategory, spaces: readonly string[] = []) {
+export function useUpdateInbox(
+  view: InboxView,
+  category: InboxCategory,
+  spaces: readonly string[] = [],
+  shared?: Map<string, string>,
+) {
   const queryClient = useQueryClient()
+  const workspaceIds = useSignedInWorkspaceIds()
+  // Noted before a change takes its rows out of the cache; only ever added
+  // to, so changes running side by side don't lose each other's. A page
+  // passes its own to route Undo the same way.
+  const [own] = useState(() => new Map<string, string>())
+  const known = shared ?? own
   const key = inboxKeys.list(view, category, spaces)
   return useMutation({
-    mutationFn: (update: InboxUpdate) => postUpdate(update),
+    mutationFn: (update: InboxUpdate) => postUpdate(update, workspaceIds, known),
     onMutate: async (update) => {
+      noteWorkspaces(queryClient, known)
       await queryClient.cancelQueries({ queryKey: key })
       const previous = queryClient.getQueryData<InboxCache>(key)
       if (previous) {
@@ -281,14 +324,73 @@ function readResult(value: unknown): InboxUpdateResult {
 /** The server takes at most this many ids in one change. */
 const MAX_UPDATE_IDS = 200
 
-/** One change, split into requests the server accepts when it names many ids. */
-export async function postUpdate(update: InboxUpdate): Promise<InboxUpdateResult> {
+/**
+ * One change, sent where it applies (the inbox spans workspaces, and a
+ * change is made in one workspace at a time: ids from another are skipped
+ * there): ids whose workspace `known` names go to that workspace only; the
+ * rest, and changes to everything, go to each workspace you're in. Each
+ * request is split into ones the server accepts when it names many ids.
+ * With no workspaces known, one request lets the server pick yours. A
+ * change a review guard holds throws, so nothing reports it done; when some
+ * workspaces take it and others don't, the result says so in `refused`.
+ */
+export async function postUpdate(
+  update: InboxUpdate,
+  workspaceIds: readonly string[] = [],
+  known: ReadonlyMap<string, string> = new Map(),
+): Promise<InboxUpdateResult> {
+  const workspaces = [...new Set(workspaceIds)]
+  if (workspaces.length <= 1) return postUpdateIn(update, workspaces[0])
+  const sends: Array<[string, InboxUpdate]> = []
+  if ('ids' in update) {
+    const byWorkspace = new Map<string, string[]>()
+    const anywhere: string[] = []
+    for (const id of update.ids) {
+      const workspace = known.get(id)
+      if (workspace && workspaces.includes(workspace)) byWorkspace.set(workspace, [...(byWorkspace.get(workspace) ?? []), id])
+      else anywhere.push(id)
+    }
+    for (const [workspace, ids] of byWorkspace) sends.push([workspace, { ...update, ids }])
+    if (anywhere.length > 0) for (const workspace of workspaces) sends.push([workspace, { ...update, ids: anywhere }])
+  } else {
+    for (const workspace of workspaces) sends.push([workspace, update])
+  }
+  const result: InboxUpdateResult = { updated: [], unreadCount: 0 }
+  let landed = false
+  let refused: unknown = undefined
+  for (const [workspace, part] of sends) {
+    try {
+      const answer = await postUpdateIn(part, workspace)
+      landed = true
+      result.updated.push(...answer.updated)
+      // Each answer counts its workspace and your DMs: the largest is a floor.
+      result.unreadCount = Math.max(result.unreadCount, answer.unreadCount)
+      if (answer.refused !== undefined) refused ??= answer.refused
+    } catch (error) {
+      refused ??= error
+    }
+  }
+  // A DM is changed through every workspace you're in: count each id once.
+  result.updated = [...new Set(result.updated)]
+  if (refused === undefined) return result
+  if (!landed) throw refused
+  return { ...result, refused }
+}
+
+async function postUpdateIn(update: InboxUpdate, workspaceId: string | undefined): Promise<InboxUpdateResult> {
   if (!('ids' in update) || update.ids.length <= MAX_UPDATE_IDS) {
-    return readResult(await requestJson<unknown>('/api/v1/inbox/update', { method: 'POST', json: update }))
+    return readResult(ranOrThrow(await callOp('notification_update', update, workspaceId ? { workspaceId } : {}), 'This change'))
   }
   const result: InboxUpdateResult = { updated: [], unreadCount: 0 }
   for (let start = 0; start < update.ids.length; start += MAX_UPDATE_IDS) {
-    const part = await postUpdate({ ...update, ids: update.ids.slice(start, start + MAX_UPDATE_IDS) })
+    let part: InboxUpdateResult
+    try {
+      part = await postUpdateIn({ ...update, ids: update.ids.slice(start, start + MAX_UPDATE_IDS) }, workspaceId)
+    } catch (error) {
+      // Earlier parts landed: they stay done and undoable.
+      if (start === 0) throw error
+      return { ...result, refused: error }
+    }
     result.updated.push(...part.updated)
     result.unreadCount = part.unreadCount
   }

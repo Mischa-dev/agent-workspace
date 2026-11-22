@@ -31,7 +31,6 @@ export type ExternalAgentConnection = {
   lastWakeupAt?: string | null
   lastWakeupError?: string | null
   /** `inbox`: the old inbox.available wakeups, until someone switches it to typed. */
-  wakeupFormat?: 'typed' | 'inbox'
 }
 
 export type OneTimeCredential = {
@@ -153,21 +152,19 @@ export function removeExternalAgent(
 
 /**
  * Set (or clear, with null) where wakeups are sent. Returns a new signing
- * secret. The wakeup format stays as it was unless `wakeupFormat: 'typed'`
- * switches an old `inbox` webhook to typed wakeups.
+ * secret.
  */
 export function setExternalAgentWebhook(
   projectId: string,
   connectionId: string,
   url: string | null,
-  wakeupFormat?: 'typed',
 ) {
   return requestJson<{
     connection: ExternalAgentConnection
     webhookSecret: string | null
   }>(
     `/api/v1/projects/${encodeURIComponent(projectId)}/external-agents/${encodeURIComponent(connectionId)}/webhook`,
-    { method: 'POST', json: wakeupFormat ? { url, wakeupFormat } : { url } },
+    { method: 'POST', json: { url } },
   )
 }
 

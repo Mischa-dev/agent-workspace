@@ -241,13 +241,13 @@ async fn agent_dm_permissions_follow_role() {
             let (status, project) = call(
                 &app,
                 "POST",
-                "/api/v1/projects",
+                &format!("/api/v2/w/{organization_id}/ops/space_create"),
                 &headers,
-                json!({ "organizationId": organization_id, "key": key, "name": key }),
+                json!({ "key": key, "name": key }),
             )
             .await;
-            assert_eq!(status, StatusCode::CREATED, "{project}");
-            uuid(&project, "id")
+            assert_eq!(status, StatusCode::OK, "{project}");
+            uuid(&project["value"], "id")
         }
     };
     let connect = |project_id: Uuid, name: &'static str, role: &'static str| {
@@ -1096,12 +1096,17 @@ async fn a_kept_dm_ends_with_workspace_membership_and_no_role_reads_a_dm() {
     // While both are in the workspace, both read it.
     assert!(visible(pool, dm_id, ana.actor).await);
     assert!(visible(pool, dm_id, mara.actor).await);
-    let (status, _) = send(
+    let (status, shown) = send(
         &world.app,
         ana.browser.request("GET", &timeline, None, Value::Null),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    // A DM has no space, so the author goes by their workspace profile,
+    // never "Former member".
+    let author = shown.to_string();
+    assert!(author.contains(&word), "{author}");
+    assert!(!author.contains("Former member"), "{author}");
     let answer = read(mara.token.clone(), mara.session.clone()).await;
     assert!(answer.to_string().contains(&word), "{answer}");
 
@@ -1696,9 +1701,9 @@ async fn handles_tokens_and_pins_hold_across_workspaces() {
 
     // Search finds the personal DM, never the second workspace's kept one.
     let found = |answer: &Value| answer["value"]["results"].as_array().map_or(0, Vec::len);
-    let personal_hits = call("search", json!({"query": personal_word})).await;
+    let personal_hits = call("workspace_search", json!({"query": personal_word})).await;
     assert_eq!(found(&personal_hits), 1, "{personal_hits}");
-    let kept_hits = call("search", json!({"query": kept_word})).await;
+    let kept_hits = call("workspace_search", json!({"query": kept_word})).await;
     assert_eq!(
         found(&kept_hits),
         0,
@@ -1836,7 +1841,7 @@ async fn handles_tokens_and_pins_hold_across_workspaces() {
     assert_eq!(later["outcome"], "ok", "{later}");
 
     // Nor does the briefing bring the kept DM's mention.
-    let briefing = call("briefing", json!({})).await;
+    let briefing = call("briefing_get", json!({})).await;
     assert_eq!(briefing["outcome"], "ok", "{briefing}");
     assert!(
         !briefing.to_string().contains(&kept),

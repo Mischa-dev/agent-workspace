@@ -23,7 +23,7 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, patch, post},
+    routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand_core::{OsRng, RngCore};
@@ -35,9 +35,9 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
+    auth::AuthenticatedActor,
     collection_forms::{self, FormConfig},
-    error::{ApiJson, ApiPath, AppError},
+    error::{ApiPath, AppError},
     events::{self, Caller},
     mcp::{self, McpPrincipal},
     policy::{Action as PolicyAction, ActorKind},
@@ -57,15 +57,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/api/v1/projects/{project_id}/bug-report-links",
-            get(list_route).post(create_route),
-        )
-        .route(
-            "/api/v1/bug-report-links/{link_id}",
-            patch(update_route).delete(delete_route),
-        )
-        .route(
-            "/api/v1/bug-report-links/{link_id}/replace",
-            post(replace_route),
+            get(list_route),
         )
         .route(
             "/api/v1/bug-reports/{token}",
@@ -548,6 +540,61 @@ pub(crate) async fn insert_link(
     )
     .await?;
     Ok((link_id, token))
+}
+
+/// A package upgrade (M1.10) giving a form its new name and questions.
+/// Only its maker's: its answers become records as them. False when the
+/// form is gone or someone else's.
+pub(crate) async fn replace_form_in(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    caller: &Caller,
+    project_id: Uuid,
+    link_id: Uuid,
+    name: &str,
+    collection_id: Uuid,
+    form: &FormConfig,
+) -> Result<bool, AppError> {
+    let organization_id = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        UPDATE bug_report_links
+        SET name = $4, version = version + 1, updated_at = now()
+        WHERE id = $1 AND project_id = $2 AND owner_actor_id = $3
+          AND collection_id = $5 AND form_id IS NOT NULL
+        RETURNING organization_id
+        "#,
+    )
+    .bind(link_id)
+    .bind(project_id)
+    .bind(caller.actor_id)
+    .bind(name)
+    .bind(collection_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(organization_id) = organization_id else {
+        return Ok(false);
+    };
+    // The form is its own definition (T1.28); it keeps its collection.
+    sqlx::query(
+        "UPDATE forms SET definition = $2, name = $3, version = version + 1, updated_at = now() \
+         WHERE id = (SELECT form_id FROM bug_report_links WHERE id = $1)",
+    )
+    .bind(link_id)
+    .bind(serde_json::to_value(form).map_err(|_| AppError::Internal("serialize form"))?)
+    .bind(name)
+    .execute(&mut **transaction)
+    .await?;
+    events::audit(
+        &mut **transaction,
+        caller,
+        organization_id,
+        Some(project_id),
+        "bug_report_link.update",
+        "bug_report_link",
+        link_id,
+        json!({ "name": name, "form": true }),
+    )
+    .await?;
+    Ok(true)
 }
 
 pub(crate) async fn update(
@@ -1201,7 +1248,7 @@ async fn turned_off_for_maker(pool: &PgPool, link: &ReportLink) -> Result<bool, 
 }
 
 /// A form's answer (AWD-110): one record in its collection, made by
-/// `record_write` as the link's maker, of only the fields the form asks.
+/// `record_create_many` as the link's maker, of only the fields the form asks.
 async fn receive_answer(
     state: &AppState,
     link: &ReportLink,
@@ -1313,14 +1360,14 @@ async fn receive_answer(
     let result = mcp::call_tool_direct(
         state,
         link_principal(link, "Form"),
-        "record_write",
+        "record_create_many",
         arguments,
     )
     .await
     .map_err(|error| match error {
         mcp::DirectCallError::Refused(error) => error,
         mcp::DirectCallError::UnknownTool | mcp::DirectCallError::InvalidArguments(_) => {
-            AppError::Internal("form record_write call")
+            AppError::Internal("form record_create_many call")
         }
     });
     let result = match result {
@@ -1336,7 +1383,7 @@ async fn receive_answer(
             .get("outcome")
             .and_then(Value::as_str)
             .unwrap_or("none");
-        tracing::warn!(outcome, "form answer refused by record_write");
+        tracing::warn!(outcome, "form answer refused by record_create_many");
         // A value the collection refuses (an option that's gone, a bad
         // date) says why; anything else stays general.
         let message = match outcome {
@@ -1348,8 +1395,24 @@ async fn receive_answer(
         };
         return Ok(refused(crate::public_api::status_for(&result), message));
     }
+    // A call set aside is still `ok` but kept nothing: the maker's account
+    // is paused, or a guard holds record writes for review (and only the
+    // same call made again once it's allowed goes through, which a form's
+    // sender won't make). Neither is an answer received.
+    let set_aside = ["paused", "pendingReview"]
+        .iter()
+        .any(|key| result.get(*key).and_then(Value::as_bool) == Some(true));
+    if set_aside || result.pointer("/value/records").is_none() {
+        give_back_todays_answer(&state.pool, link.id).await?;
+        tracing::warn!(set_aside, "form answer not kept by record_create_many");
+        return Ok(refused(
+            StatusCode::FORBIDDEN,
+            "This form isn't taking answers right now.",
+        ));
+    }
+    // The operation's envelope says a retry was answered from the first call.
     let duplicate = result
-        .pointer("/value/idempotentReplay")
+        .get("replayed")
         .and_then(Value::as_bool)
         .unwrap_or(false);
     if duplicate {
@@ -1674,95 +1737,6 @@ async fn list_route(
 ) -> Result<Json<LinkList>, AppError> {
     let caller = Caller::browser(&principal)?;
     Ok(Json(list(&state, &caller, project_id).await?))
-}
-
-async fn create_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<CreateLink>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    project_rights(&state.pool, &caller, project_id).await?;
-    if let Some(message) = form_problem(
-        &state.pool,
-        project_id,
-        request.collection_id,
-        Some(&request.form.clone().unwrap_or_default()),
-    )
-    .await?
-    {
-        return Ok(form_refusal(&message));
-    }
-    Ok((
-        StatusCode::CREATED,
-        Json(create(&state, &caller, project_id, request).await?),
-    )
-        .into_response())
-}
-
-fn form_refusal(message: &str) -> Response {
-    (
-        StatusCode::UNPROCESSABLE_ENTITY,
-        Json(json!({
-            "error": {
-                "code": "validation_failed",
-                "message": message,
-                "details": { "field": "form" },
-            }
-        })),
-    )
-        .into_response()
-}
-
-async fn update_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(link_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<UpdateLink>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    if request.form.is_some() {
-        let row = manageable(&state.pool, &caller, link_id).await?;
-        if let Some(message) = form_problem(
-            &state.pool,
-            row.project_id,
-            row.collection_id,
-            request.form.as_ref(),
-        )
-        .await?
-        {
-            return Ok(form_refusal(&message));
-        }
-    }
-    Ok(Json(update(&state, &caller, link_id, request).await?).into_response())
-}
-
-async fn replace_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(link_id): ApiPath<Uuid>,
-) -> Result<Json<LinkWithUrl>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    Ok(Json(replace(&state, &caller, link_id).await?))
-}
-
-async fn delete_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(link_id): ApiPath<Uuid>,
-) -> Result<StatusCode, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let caller = Caller::browser(&principal)?;
-    delete(&state, &caller, link_id).await?;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]

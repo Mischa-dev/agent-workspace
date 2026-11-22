@@ -478,16 +478,14 @@ async fn removed_message_text_vanishes_everywhere() {
     }
     // Status changes on the board are audited without the thread's name.
     for thread in &threads {
-        let (status, updated) = send(
-            app,
-            setup.browser.request(
-                "PATCH",
-                &format!("/api/v1/threads/{thread}"),
-                None,
-                json!({ "status": "Done" }),
-            ),
-        )
-        .await;
+        let (status, updated) = setup
+            .browser
+            .op(
+                app,
+                "thread_update",
+                json!({ "threadId": thread, "status": "Done" }),
+            )
+            .await;
         assert_eq!(status, StatusCode::OK, "{updated}");
         let audit = sqlx::query_scalar::<_, Value>(
             "SELECT metadata FROM audit_events WHERE action = 'conversation.thread_updated' AND target_id = $1",
@@ -548,7 +546,7 @@ async fn removed_message_text_vanishes_everywhere() {
         "You can only remove your own messages. Project owners and admins can remove anyone's."
     );
     let refused = mara(
-        "message_edit",
+        "message_update",
         json!({"messageId": message, "text": "Nothing to see"}),
     )
     .await;
@@ -680,7 +678,14 @@ async fn removed_message_text_vanishes_everywhere() {
         (mara_token.as_str(), mara_session.as_str()),
         (nova_token.as_str(), nova_session.as_str()),
     ] {
-        let found = tool(app, token, session, "search", json!({"query": secret})).await;
+        let found = tool(
+            app,
+            token,
+            session,
+            "workspace_search",
+            json!({"query": secret}),
+        )
+        .await;
         assert_eq!(found["value"]["results"], json!([]), "{found}");
         let read = tool(
             app,
@@ -764,20 +769,13 @@ async fn removed_message_text_vanishes_everywhere() {
             assert_eq!(version["text"], "");
         }
         assert_eq!(versions[0]["via"], "Codex", "{history}");
-        let briefing = tool(app, token, session, "briefing", json!({})).await;
+        let briefing = tool(app, token, session, "briefing_get", json!({})).await;
         assert!(!briefing.to_string().contains(&secret), "{briefing}");
         assert!(
             !briefing.to_string().contains(&message),
             "no mention of it is left: {briefing}"
         );
-        let task = tool(
-            app,
-            token,
-            session,
-            "task_open",
-            json!({"taskId": "WORK-1"}),
-        )
-        .await;
+        let task = tool(app, token, session, "task_get", json!({"taskId": "WORK-1"})).await;
         assert_eq!(task["outcome"], "ok", "{task}");
         assert!(!task.to_string().contains(&secret), "{task}");
         let task_link = task["value"]["links"]
@@ -858,7 +856,7 @@ async fn removed_message_text_vanishes_everywhere() {
     assert_eq!(
         count(
             &setup.pool,
-            "SELECT count(*) FROM work_item_links WHERE target_id = $1",
+            "SELECT count(*) FROM task_links WHERE target_id = $1",
             &message
         )
         .await,
@@ -929,19 +927,14 @@ async fn removed_message_text_vanishes_everywhere() {
     assert_eq!(thread_again["value"]["id"], threads[0].as_str());
     assert_eq!(thread_again["value"]["name"], "New thread");
     // A withdrawn request can't be retried into asking about it again.
-    let (status, retried) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            &format!(
-                "/api/v1/reply-requests/{}/retry",
-                nova_request.as_str().expect("Nova's request")
-            ),
-            None,
-            Value::Null,
-        ),
-    )
-    .await;
+    let (status, retried) = setup
+        .browser
+        .op(
+            app,
+            "reply_retry",
+            json!({"requestId": nova_request.as_str().expect("Nova's request")}),
+        )
+        .await;
     assert_eq!(status, StatusCode::CONFLICT, "{retried}");
 
     // Retries never bring it back.
@@ -1042,7 +1035,7 @@ async fn removed_message_text_vanishes_everywhere() {
     assert_eq!(again["value"]["cancelledReplyRequests"], 0, "{again}");
     assert_eq!(again["value"]["removedBy"], removed_by.as_str());
     let edit_again = call(
-        "message_edit",
+        "message_update",
         json!({"messageId": message, "text": format!("key {secret}"), "clientRequestId": "secret-edit"}),
     )
     .await;
@@ -1078,7 +1071,7 @@ async fn removed_message_text_vanishes_everywhere() {
         "expectedRevision": 1,
         "clientRequestId": "own-edit"
     });
-    let edited_own = mara("message_edit", own_edit.clone()).await;
+    let edited_own = mara("message_update", own_edit.clone()).await;
     assert_eq!(edited_own["outcome"], "ok", "{edited_own}");
     assert_eq!(edited_own["value"]["revision"], 2, "{edited_own}");
     assert_eq!(edited_own["value"]["changed"], true);
@@ -1089,7 +1082,7 @@ async fn removed_message_text_vanishes_everywhere() {
             .is_some_and(|url| url.ends_with(&format!("#message-{own_id}"))),
         "{edited_own}"
     );
-    let replayed = mara("message_edit", own_edit).await;
+    let replayed = mara("message_update", own_edit).await;
     assert_eq!(replayed["outcome"], "ok", "{replayed}");
     assert_eq!(replayed["value"]["idempotentReplay"], true, "{replayed}");
     assert_eq!(replayed["value"]["revision"], 2);
@@ -1160,7 +1153,7 @@ async fn removed_message_text_vanishes_everywhere() {
         "{own_history}"
     );
     let replayed = mara(
-        "message_edit",
+        "message_update",
         json!({
             "messageId": own_id,
             "text": format!("token {own_secret} (staging)"),
@@ -1175,7 +1168,14 @@ async fn removed_message_text_vanishes_everywhere() {
         (codex.as_str(), session.as_str()),
         (nova_token.as_str(), nova_session.as_str()),
     ] {
-        let found = tool(app, token, session, "search", json!({"query": own_secret})).await;
+        let found = tool(
+            app,
+            token,
+            session,
+            "workspace_search",
+            json!({"query": own_secret}),
+        )
+        .await;
         assert_eq!(found["value"]["results"], json!([]), "{found}");
         let listed = tool(
             app,
@@ -1222,7 +1222,7 @@ async fn removed_message_text_vanishes_everywhere() {
         "deliveries",
         "reply_requests",
         "conversation_pins",
-        "work_item_links",
+        "links",
         "conversations",
         "message_mentions",
         "project_decisions",
@@ -1461,21 +1461,21 @@ async fn only_authors_edit_and_owners_or_admins_remove() {
         async move { tool(app, &token, &session, name, arguments).await }
     };
     let refused = codex_call(
-        "message_edit",
+        "message_update",
         json!({"messageId": from_mara, "text": "Owner's words"}),
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
     assert_eq!(refused["message"], "You can only edit your own messages.");
     let edited = mara_call(
-        "message_edit",
+        "message_update",
         json!({"messageId": from_mara, "text": "Mara here, fixed", "expectedRevision": 1}),
     )
     .await;
     assert_eq!(edited["outcome"], "ok", "{edited}");
     assert_eq!(edited["value"]["revision"], 2);
     let stale = mara_call(
-        "message_edit",
+        "message_update",
         json!({"messageId": from_mara, "text": "Mara here, again", "expectedRevision": 1}),
     )
     .await;
@@ -1485,7 +1485,7 @@ async fn only_authors_edit_and_owners_or_admins_remove() {
         "This message was edited since you read it (now revision 2). Read it again with conversation_read, then retry."
     );
     let same = mara_call(
-        "message_edit",
+        "message_update",
         json!({"messageId": from_mara, "text": "Mara here, fixed"}),
     )
     .await;
@@ -1493,13 +1493,13 @@ async fn only_authors_edit_and_owners_or_admins_remove() {
     assert_eq!(same["value"]["changed"], false);
     assert_eq!(same["value"]["revision"], 2);
     let reused = mara_call(
-        "message_edit",
+        "message_update",
         json!({"messageId": from_mara, "text": "Mara here, once", "clientRequestId": "mara-1"}),
     )
     .await;
     assert_eq!(reused["outcome"], "ok", "{reused}");
     let reused = mara_call(
-        "message_edit",
+        "message_update",
         json!({"messageId": from_mara, "text": "Mara here, twice", "clientRequestId": "mara-1"}),
     )
     .await;
@@ -1549,7 +1549,7 @@ async fn only_authors_edit_and_owners_or_admins_remove() {
     let reader_session = initialize(app, &reader).await.expect("Reader MCP");
     for (name, arguments) in [
         (
-            "message_edit",
+            "message_update",
             json!({"messageId": owners_second, "text": "Read only"}),
         ),
         ("message_delete", json!({"messageId": owners_second})),
@@ -1609,7 +1609,7 @@ async fn only_authors_edit_and_owners_or_admins_remove() {
     .await;
     assert_eq!(status, StatusCode::OK, "{on_web}");
     let on_mcp = codex_call(
-        "message_edit",
+        "message_update",
         json!({"messageId": owners_third, "text": "Owner's third, fixed", "clientRequestId": "shared-edit"}),
     )
     .await;
@@ -1681,7 +1681,7 @@ async fn only_authors_edit_and_owners_or_admins_remove() {
         "Owner's third, fixed"
     );
     let refused = codex_call(
-        "message_edit",
+        "message_update",
         json!({"messageId": owners_third, "text": "Too late"}),
     )
     .await;
@@ -1821,7 +1821,7 @@ async fn edits_keep_every_revision_and_projections_follow() {
         app,
         &codex,
         &session,
-        "search",
+        "workspace_search",
         json!({"query": "zebracorn"}),
     )
     .await;
@@ -1833,7 +1833,14 @@ async fn edits_keep_every_revision_and_projections_follow() {
             .any(|hit| hit.to_string().contains(&message)),
         "{old_words}"
     );
-    let new_words = tool(app, &codex, &session, "search", json!({"query": "instead"})).await;
+    let new_words = tool(
+        app,
+        &codex,
+        &session,
+        "workspace_search",
+        json!({"query": "instead"}),
+    )
+    .await;
     assert!(
         new_words["value"]["results"]
             .as_array()
@@ -2053,7 +2060,7 @@ async fn edits_and_removals_never_widen_visibility() {
         ("message_history", json!({"messageId": message})),
         ("message_history", json!({"messageId": link})),
         (
-            "message_edit",
+            "message_update",
             json!({"messageId": message, "text": "Mine now"}),
         ),
         ("message_delete", json!({"messageId": link})),
@@ -2065,12 +2072,12 @@ async fn edits_and_removals_never_widen_visibility() {
         app,
         &bob_token,
         &bob_session,
-        "search",
+        "workspace_search",
         json!({"query": "Plans"}),
     )
     .await;
     assert_eq!(found["value"]["results"], json!([]), "{found}");
-    let briefing = tool(app, &bob_token, &bob_session, "briefing", json!({})).await;
+    let briefing = tool(app, &bob_token, &bob_session, "briefing_get", json!({})).await;
     assert!(!briefing.to_string().contains(&message), "{briefing}");
 
     // A group the owner isn't in: its messages don't exist for the owner, by
@@ -2126,7 +2133,7 @@ async fn edits_and_removals_never_widen_visibility() {
     for (name, arguments) in [
         ("message_history", json!({"messageId": hidden})),
         (
-            "message_edit",
+            "message_update",
             json!({"messageId": hidden, "text": "Mine now"}),
         ),
         ("message_delete", json!({"messageId": hidden})),
@@ -2275,7 +2282,7 @@ async fn editing_a_message_rechecks_access_after_parent_membership_is_revoked() 
             &app,
             &token,
             &session,
-            "message_edit",
+            "message_update",
             json!({
                 "messageId": message_id, "text": "Forbidden edit", "clientRequestId": "revoked"
             }),
@@ -2365,20 +2372,26 @@ async fn a_timeline_reads_in_a_fixed_number_of_statements() {
     }
     let mut counts = Vec::new();
     for channel in [&quiet, &busy] {
-        let counter = StatementCount::default();
-        let subscriber = tracing_subscriber::registry().with(counter.clone());
-        // Counted only while the request itself is polled: a default for
-        // the thread would also count whatever else the runtime polls on
-        // it meanwhile, such as the app's background loops.
-        let (status, timeline) = get(
-            &setup,
-            &setup.browser,
-            &format!("/api/v1/conversations/{channel}/timeline"),
-        )
-        .with_subscriber(subscriber)
-        .await;
-        assert_eq!(status, StatusCode::OK, "{timeline}");
-        counts.push(counter.0.load(std::sync::atomic::Ordering::Relaxed));
+        // The fewest of three reads: anything else that happens to run in
+        // the request's task (a pool connection being set up) only adds.
+        let mut fewest = usize::MAX;
+        for _ in 0..3 {
+            let counter = StatementCount::default();
+            let subscriber = tracing_subscriber::registry().with(counter.clone());
+            // Counted only while the request itself is polled: a default for
+            // the thread would also count whatever else the runtime polls on
+            // it meanwhile, such as the app's background loops.
+            let (status, timeline) = get(
+                &setup,
+                &setup.browser,
+                &format!("/api/v1/conversations/{channel}/timeline"),
+            )
+            .with_subscriber(subscriber)
+            .await;
+            assert_eq!(status, StatusCode::OK, "{timeline}");
+            fewest = fewest.min(counter.0.load(std::sync::atomic::Ordering::Relaxed));
+        }
+        counts.push(fewest);
     }
     assert!(counts[0] > 0, "statements are counted: {counts:?}");
     assert_eq!(

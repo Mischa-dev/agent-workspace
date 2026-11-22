@@ -1,5 +1,6 @@
 import { apiUrl, origins, readCsrfToken, requestJson } from '../api/client'
 import { ApiError } from '../api/errors'
+import { callOp, ranOrThrow } from '../api/ops'
 import { normalizeFile, normalizeFiles, type FileAttachment } from './model'
 
 export {
@@ -111,13 +112,13 @@ export function uploadFile(target: UploadTarget): Uploader {
   }
 }
 
-/** One file's own address: read it, or remove it. */
-function fileRequest(id: string, init?: { method: 'DELETE' }) {
-  return requestJson<unknown>(`/api/v1/files/${encodeURIComponent(id)}`, init)
+/** One file's own address. */
+function fileRequest(id: string) {
+  return requestJson<unknown>(`/api/v1/files/${encodeURIComponent(id)}`)
 }
 
 export async function removeFile(id: string) {
-  await fileRequest(id, { method: 'DELETE' })
+  ranOrThrow(await callOp('file_delete', { fileId: id }), 'Removing the file')
 }
 
 /** One file, if the session may see it. */

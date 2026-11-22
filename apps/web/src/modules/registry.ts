@@ -1,5 +1,15 @@
 import type { Experience } from '../experience/layout'
-import type { CaptureRegistration, PaletteEntry, ShortcutRegistration, SidebarRow, ThingRegistration, WebModule } from './define'
+import type {
+  CaptureRegistration,
+  ComposerExtraRegistration,
+  MakerRegistration,
+  PaletteEntry,
+  ShortcutRegistration,
+  SidebarRow,
+  ThingRegistration,
+  ThingTabRegistration,
+  WebModule,
+} from './define'
 import { MODULE_IDS } from './names'
 
 // M1.4: every core module's web registration, found by the build
@@ -83,4 +93,33 @@ export function captureEntries(
   return modules
     .filter((module) => experience.moduleOn(module.id))
     .flatMap((module) => (module.capture ?? []).map((entry) => ({ ...entry, module: module.id })))
+}
+
+/** What a registration shows where: its module is on and the layout shows its part. */
+type Where = Pick<Experience, 'shows' | 'moduleOn'>
+
+function shown<T extends { part?: Parameters<Experience['shows']>[0]; rank: number }>(
+  experience: Where,
+  modules: readonly WebModule[],
+  pick: (module: WebModule) => readonly T[] | undefined,
+): (T & { module: string })[] {
+  return modules
+    .filter((module) => experience.moduleOn(module.id))
+    .flatMap((module) => (pick(module) ?? []).filter((entry) => !entry.part || experience.shows(entry.part)).map((entry) => ({ ...entry, module: module.id })))
+    .sort((left, right) => left.rank - right.rank)
+}
+
+/** The tabs modules add to a thing of this kind's detail view, in order (M1.5). */
+export function thingTabs(thing: string, experience: Where, modules: readonly WebModule[] = WEB_MODULES): (ThingTabRegistration & { module: string })[] {
+  return shown(experience, modules, (module) => module.tabs).filter((tab) => tab.thing === thing)
+}
+
+/** What modules add to the message composer here, in order (M1.5). */
+export function composerExtras(experience: Where, modules: readonly WebModule[] = WEB_MODULES): (ComposerExtraRegistration & { module: string })[] {
+  return shown(experience, modules, (module) => module.composer)
+}
+
+/** What modules add to a space's make menu here, in order (M1.5). */
+export function makers(experience: Where, modules: readonly WebModule[] = WEB_MODULES): (MakerRegistration & { module: string })[] {
+  return shown(experience, modules, (module) => module.makers)
 }

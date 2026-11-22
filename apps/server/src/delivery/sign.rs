@@ -1,9 +1,6 @@
 //! Webhook signatures (A2 3.5). Standard Webhooks: `v1,<base64>` of an
 //! HMAC-SHA256 over `"{webhook-id}.{webhook-timestamp}.{body}"`, keyed by
-//! the secret's bytes after `whsec_`. The older `x-workspace-signature`
-//! header is kept as an alias: `sha256=<hex>` of an HMAC over
-//! `"{timestamp}.{body}"` keyed by the whole secret string, so receivers
-//! set up before keep verifying unchanged.
+//! the secret's bytes after `whsec_`.
 
 use base64::{
     Engine as _,
@@ -45,21 +42,6 @@ pub fn standard(secret: &str, message_id: &str, timestamp: &str, body: &str) -> 
     ))
 }
 
-/// The older alias: HMAC-SHA256 over `"{timestamp}.{body}"`, hex.
-pub fn legacy(secret: &str, timestamp: &str, body: &str) -> Option<String> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).ok()?;
-    mac.update(timestamp.as_bytes());
-    mac.update(b".");
-    mac.update(body.as_bytes());
-    Some(
-        mac.finalize()
-            .into_bytes()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect(),
-    )
-}
-
 /// Seconds since the epoch, as the headers carry them.
 pub fn unix_timestamp() -> String {
     std::time::SystemTime::now()
@@ -83,17 +65,6 @@ mod tests {
             standard(secret, id, timestamp, body).as_deref(),
             Some("v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=")
         );
-    }
-
-    #[test]
-    fn the_alias_keeps_the_older_scheme() {
-        let signature = legacy("secret", "1700000000", "{}").expect("sign");
-        assert_eq!(signature.len(), 64);
-        assert_ne!(
-            Some(signature.clone()),
-            legacy("secret", "1700000001", "{}")
-        );
-        assert_ne!(Some(signature), legacy("other", "1700000000", "{}"));
     }
 
     #[test]

@@ -27,11 +27,13 @@ async fn replies_quote_a_comment_on_the_same_task_and_tell_its_author() {
     let base = format!("/api/v1/projects/{project}/work-items");
     let mut tasks = Vec::new();
     for (key, title) in [("task-a", "Pick colours"), ("task-b", "Pick fonts")] {
-        let (status, task) = send(
+        let (status, task) = crate::support::tasks::send(
             app,
-            setup
-                .browser
-                .request("POST", &base, Some(key), json!({"title": title})),
+            &setup.browser,
+            "POST",
+            &base,
+            Some(key),
+            json!({"title": title}),
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "{task}");
@@ -39,44 +41,52 @@ async fn replies_quote_a_comment_on_the_same_task_and_tell_its_author() {
     }
     let (task_a, task_b) = (&tasks[0], &tasks[1]);
     let comment =
-        |browser: &super::agent_interface::Browser, task: &str, key: &str, body: Value| {
+        |browser: &super::agent_interface::Browser, task: &str, key: &str, mut body: Value| {
+            body["taskId"] = json!(task);
             let request =
-                browser.request("POST", &format!("{base}/{task}/comments"), Some(key), body);
+                browser.request("POST", "/api/v2/ops/task_comment_create", Some(key), body);
             send(app, request)
         };
-    let (status, asked) = comment(
+    let ok = |(status, body): (StatusCode, Value)| {
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body["value"]["resultId"]
+            .as_str()
+            .expect("comment id")
+            .to_owned()
+    };
+    let asked = ok(comment(
         &mara_browser,
         task_a,
         "asked",
         json!({"content": text("Teal or navy?")}),
     )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{asked}");
-    let asked = asked["comment"]["id"].as_str().expect("asked").to_owned();
-    let (status, elsewhere) = comment(
+    .await);
+    let elsewhere = ok(comment(
         &setup.browser,
         task_b,
         "elsewhere",
         json!({"content": text("Serif, please")}),
     )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{elsewhere}");
-    let elsewhere = elsewhere["comment"]["id"]
-        .as_str()
-        .expect("elsewhere")
-        .to_owned();
+    .await);
 
     // A reply shows what it answers.
-    let (status, answered) = comment(
+    let answered = ok(comment(
         &setup.browser,
         task_a,
         "answered",
         json!({"content": text("Teal"), "replyToCommentId": asked}),
     )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{answered}");
-    assert_eq!(answered["comment"]["replyTo"]["commentId"], asked.as_str());
-    assert_eq!(answered["comment"]["replyTo"]["text"], "Teal or navy?");
+    .await);
+    let (status, timeline) = get(&setup, &mara_browser, &format!("{base}/{task_a}/timeline")).await;
+    assert_eq!(status, StatusCode::OK, "{timeline}");
+    let reply = timeline["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|entry| entry["comment"]["id"] == answered.as_str())
+        .expect("the reply in the timeline");
+    assert_eq!(reply["comment"]["replyTo"]["commentId"], asked.as_str());
+    assert_eq!(reply["comment"]["replyTo"]["text"], "Teal or navy?");
 
     // A comment on another task can't be quoted.
     let (status, refused) = comment(
@@ -86,7 +96,7 @@ async fn replies_quote_a_comment_on_the_same_task_and_tell_its_author() {
         json!({"content": text("Same here"), "replyToCommentId": elsewhere}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
 
     // Mara hears she was answered.
     drain(&setup).await;
@@ -107,10 +117,10 @@ async fn replies_quote_a_comment_on_the_same_task_and_tell_its_author() {
     let (status, removed) = send(
         app,
         mara_browser.request(
-            "DELETE",
-            &format!("{base}/{task_a}/comments/{asked}"),
-            None,
-            Value::Null,
+            "POST",
+            "/api/v2/ops/task_comment_delete",
+            Some("delete-asked"),
+            json!({"taskId": task_a, "commentId": asked}),
         ),
     )
     .await;
@@ -124,9 +134,9 @@ async fn replies_quote_a_comment_on_the_same_task_and_tell_its_author() {
         json!({"content": text("Teal"), "replyToCommentId": asked}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{replayed}");
+    assert_eq!(status, StatusCode::OK, "{replayed}");
+    assert_eq!(replayed["value"]["resultId"], answered.as_str());
     assert!(!replayed.to_string().contains("navy"), "{replayed}");
-    assert_eq!(replayed["comment"]["replyTo"]["removed"], true);
     let (status, timeline) = get(&setup, &mara_browser, &format!("{base}/{task_a}/timeline")).await;
     assert_eq!(status, StatusCode::OK, "{timeline}");
     assert!(!timeline.to_string().contains("navy"), "{timeline}");
@@ -145,7 +155,7 @@ async fn replies_quote_a_comment_on_the_same_task_and_tell_its_author() {
         json!({"content": text("Still teal"), "replyToCommentId": asked}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 
     // The MCP tool keeps to the same task too.
     let codex = connect_app(app, &setup.browser, "Codex", "full").await;
@@ -154,7 +164,7 @@ async fn replies_quote_a_comment_on_the_same_task_and_tell_its_author() {
         app,
         &codex,
         &session,
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": task_a, "text": "Agreed", "clientRequestId": "c1", "replyToCommentId": elsewhere}),
     )
     .await;
@@ -163,14 +173,14 @@ async fn replies_quote_a_comment_on_the_same_task_and_tell_its_author() {
         app,
         &codex,
         &session,
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": task_b, "text": "Agreed", "clientRequestId": "c2", "replyToCommentId": elsewhere}),
     )
     .await;
-    assert_eq!(replied["outcome"], "applied", "{replied}");
+    assert_eq!(replied["outcome"], "ok", "{replied}");
     let stored: Option<uuid::Uuid> =
         sqlx::query_scalar("SELECT reply_to_message_id FROM messages WHERE id = $1::uuid")
-            .bind(replied["activityId"].as_str().expect("comment id"))
+            .bind(replied["value"]["activityId"].as_str().expect("comment id"))
             .fetch_one(&setup.pool)
             .await
             .expect("reply stored");

@@ -97,13 +97,13 @@ async fn fixing_a_failed_scheduled_message_keeps_it_until_it_gets_a_new_time() {
         setup,
         &setup.browser,
         "POST",
-        &format!("/api/v1/conversations/{channel}/scheduled-messages"),
-        None,
-        json!({"content": text("Typo hree"), "sendAt": in_an_hour()}),
+        "/api/v2/ops/message_schedule",
+        Some(&Uuid::now_v7().to_string()),
+        json!({"conversationId": channel, "content": text("Typo hree"), "sendAt": in_an_hour()}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{scheduled}");
-    let id = scheduled["scheduledMessage"]["id"]
+    assert_eq!(status, StatusCode::OK, "{scheduled}");
+    let id = scheduled["value"]["scheduled"]["id"]
         .as_str()
         .expect("id")
         .to_owned();
@@ -123,18 +123,24 @@ async fn fixing_a_failed_scheduled_message_keeps_it_until_it_gets_a_new_time() {
     let (status, fixed) = call(
         setup,
         &setup.browser,
-        "PATCH",
-        &format!("/api/v1/scheduled-messages/{id}"),
-        None,
-        json!({"content": text("Typo here")}),
+        "POST",
+        "/api/v2/ops/scheduled_message_update",
+        Some("fix-typo"),
+        json!({"id": id, "content": text("Typo here")}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{fixed}");
-    assert_eq!(fixed["scheduledMessage"]["status"], "failed", "{fixed}");
-    assert_eq!(
-        fixed["scheduledMessage"]["plainText"], "Typo here",
-        "{fixed}"
-    );
+    assert_eq!(fixed["value"]["scheduled"]["status"], "failed", "{fixed}");
+    assert_eq!(fixed["value"]["scheduled"]["text"], "Typo here", "{fixed}");
+    // Fixed in the browser, it isn't counted as an app's message.
+    let through_app = sqlx::query_scalar::<_, bool>(
+        "SELECT made_through_app FROM scheduled_messages WHERE id = $1",
+    )
+    .bind(id.parse::<Uuid>().expect("id"))
+    .fetch_one(&setup.pool)
+    .await
+    .expect("scheduled");
+    assert!(!through_app);
     let queued = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM background_jobs WHERE state = 'queued' AND payload::text LIKE '%' || $1 || '%'",
     )
@@ -344,13 +350,13 @@ async fn joining_another_workspace_doesnt_route_reset_mail_through_it() {
         setup,
         &mallory_browser,
         "POST",
-        &format!("/api/v1/organizations/{b}/invitations"),
-        None,
-        json!({"role": "member", "expiresInHours": 24}),
+            &format!("/api/v2/w/{b}/ops/invitation_create"),
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"projectId": "workspace", "wholeWorkspace": true, "role": "member", "expiresInHours": 24}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{invitation}");
-    let token = invitation["invitationUrl"]
+    assert_eq!(status, StatusCode::OK, "{invitation}");
+    let token = invitation["value"]["joinUrl"]
         .as_str()
         .and_then(|url| url.split_once("#token="))
         .expect("token")

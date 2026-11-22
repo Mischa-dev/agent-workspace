@@ -180,7 +180,8 @@ export function CommandPalette() {
         project: task.projectId,
         group: 'Tasks',
         label: task.title,
-        hint: `${task.key} · ${task.projectName}`,
+        // The current project's name on every row says nothing; a typed key from elsewhere says where.
+        hint: task.projectId === current?.id ? task.key : `${task.key} · ${task.projectName}`,
         icon: 'checklist',
         matched: true,
         onSelect: go(task.href),

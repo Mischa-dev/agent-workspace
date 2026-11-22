@@ -1,6 +1,6 @@
 //! Proposals as operations (C1.7): `proposal_list` reads them and
 //! `proposal_decide` accepts, rejects or withdraws one, for every kind that
-//! can be proposed. The page tools (`page_suggestions`,
+//! can be proposed. The page tools (`page_suggestion_list`,
 //! `page_suggestion_decide`) and the page routes stay as aliases.
 
 use rmcp::schemars::{self, JsonSchema};

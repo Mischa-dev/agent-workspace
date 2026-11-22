@@ -65,6 +65,11 @@ pub enum MutationAction {
     /// next turn, only for the built-in assistant's runs, within the
     /// workspace's budget.
     HostCredential,
+    /// A connected module's own call, before or beside its account (M1.12,
+    /// M1.13): trading the one-time install code sent to its manifest's
+    /// install address, or sending in an event signed with its install's
+    /// inbound secret. Each only reaches that one install.
+    ConnectedModuleSignature,
     /// The generated operation route (K2): the operation it names checks
     /// its own permission, module and target through `ops::dispatch`, the
     /// same as its MCP tool.
@@ -102,97 +107,13 @@ macro_rules! boundary_route {
 }
 
 pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
-    policy_route!(
-        "settings",
-        Put,
-        "/api/v1/settings/values/{key}",
-        SettingsManage
-    ),
-    policy_route!(
-        "settings",
-        Post,
-        "/api/v1/settings/values/{key}/reset",
-        SettingsManage
-    ),
     // Layouts: owners and admins of the project or workspace, checked in the
     // handler; "mine" is each person's own view.
     policy_route!(
         "layouts",
         Put,
-        "/api/v1/projects/{project_id}/layout",
-        SettingsManage
-    ),
-    policy_route!(
-        "layouts",
-        Put,
-        "/api/v1/projects/{project_id}/layout/rules",
-        SettingsManage
-    ),
-    policy_route!(
-        "layouts",
-        Put,
-        "/api/v1/organizations/{organization_id}/layout",
-        SettingsManage
-    ),
-    policy_route!(
-        "layouts",
-        Put,
         "/api/v1/organizations/{organization_id}/layout/mine",
         NavigationWrite
-    ),
-    policy_route!(
-        "modules/http",
-        Put,
-        "/api/v1/organizations/{organization_id}/modules",
-        SettingsManage
-    ),
-    policy_route!(
-        "layouts",
-        Post,
-        "/api/v1/organizations/{organization_id}/layout/presets",
-        SettingsManage
-    ),
-    policy_route!(
-        "layouts",
-        Patch,
-        "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-        SettingsManage
-    ),
-    policy_route!(
-        "layouts",
-        Delete,
-        "/api/v1/organizations/{organization_id}/layout/presets/{preset_id}",
-        SettingsManage
-    ),
-    policy_route!(
-        "environments",
-        Post,
-        "/api/v1/projects/{project_id}/environments",
-        SettingsManage
-    ),
-    policy_route!(
-        "environments",
-        Put,
-        "/api/v1/projects/{project_id}/environments/{environment_id}",
-        SettingsManage
-    ),
-    policy_route!(
-        "environments",
-        Post,
-        "/api/v1/projects/{project_id}/environments/{environment_id}/archive",
-        SettingsManage
-    ),
-    policy_route!(
-        "environments",
-        Post,
-        "/api/v1/projects/{project_id}/environments/{environment_id}/default",
-        SettingsManage
-    ),
-    policy_route!(
-        "environments",
-        Post,
-        "/api/v1/projects/{project_id}/environments/{environment_id}/check",
-        WorkerInvoke
     ),
     policy_route!(
         "harnesses",
@@ -210,24 +131,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "harnesses",
         Delete,
         "/api/v1/organizations/{organization_id}/harnesses/{harness_id}",
-        SettingsManage
-    ),
-    policy_route!(
-        "agent_profiles",
-        Post,
-        "/api/v1/projects/{project_id}/agent-profiles",
-        SettingsManage
-    ),
-    policy_route!(
-        "agent_profiles",
-        Patch,
-        "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-        SettingsManage
-    ),
-    policy_route!(
-        "agent_profiles",
-        Delete,
-        "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
         SettingsManage
     ),
     policy_route!(
@@ -306,18 +209,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         SessionAuthentication
     ),
     policy_route!(
-        "memberships",
-        Post,
-        "/api/v1/projects/{project_id}/members",
-        MembershipManage
-    ),
-    policy_route!(
-        "workspace",
-        Patch,
-        "/api/v1/organizations/{organization_id}",
-        SettingsManage
-    ),
-    policy_route!(
         "workspace",
         Patch,
         "/api/v1/organizations/{organization_id}/members/{actor_id}",
@@ -329,71 +220,11 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/organizations/{organization_id}/transfer-ownership",
         MembershipManage
     ),
-    policy_route!(
-        "roles",
-        Post,
-        "/api/v1/organizations/{organization_id}/roles",
-        RoleManage
-    ),
-    policy_route!(
-        "roles",
-        Patch,
-        "/api/v1/organizations/{organization_id}/roles/{role_id}",
-        RoleManage
-    ),
-    policy_route!(
-        "roles",
-        Delete,
-        "/api/v1/organizations/{organization_id}/roles/{role_id}",
-        RoleManage
-    ),
-    policy_route!(
-        "roles",
-        Put,
-        "/api/v1/organizations/{organization_id}/members/{actor_id}/role",
-        MembershipManage
-    ),
-    policy_route!(
-        "roles",
-        Put,
-        "/api/v1/organizations/{organization_id}/members/{actor_id}/agent-limit",
-        MembershipManage
-    ),
-    policy_route!(
-        "workspace_templates",
-        Post,
-        "/api/v1/organizations/{organization_id}/workspace-templates",
-        SettingsManage
-    ),
-    policy_route!(
-        "workspace_templates",
-        Post,
-        "/api/v1/organizations/{organization_id}/workspace-templates/apply",
-        SettingsManage
-    ),
-    policy_route!(
-        "workspace_templates",
-        Delete,
-        "/api/v1/organizations/{organization_id}/workspace-templates/{template_id}",
-        SettingsManage
-    ),
     boundary_route!(
         "workspace",
         Post,
         "/api/v1/organizations/{organization_id}/leave",
         SessionAuthentication
-    ),
-    policy_route!(
-        "workspace",
-        Post,
-        "/api/v1/organizations/{organization_id}/invitations",
-        InvitationManage
-    ),
-    policy_route!(
-        "workspace",
-        Post,
-        "/api/v1/workspace-invitations/{invitation_id}/revoke",
-        InvitationManage
     ),
     boundary_route!(
         "workspace",
@@ -560,30 +391,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/account/api-tokens/{credential_id}/revoke",
         CredentialManage
     ),
-    policy_route!(
-        "bug_reports",
-        Post,
-        "/api/v1/projects/{project_id}/bug-report-links",
-        WorkItemCreate
-    ),
-    policy_route!(
-        "bug_reports",
-        Patch,
-        "/api/v1/bug-report-links/{link_id}",
-        WorkItemCreate
-    ),
-    policy_route!(
-        "bug_reports",
-        Delete,
-        "/api/v1/bug-report-links/{link_id}",
-        WorkItemCreate
-    ),
-    policy_route!(
-        "bug_reports",
-        Post,
-        "/api/v1/bug-report-links/{link_id}/replace",
-        WorkItemCreate
-    ),
     boundary_route!(
         "bug_reports",
         Post,
@@ -597,19 +404,7 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         SessionAuthentication
     ),
     policy_route!("api", Post, "/api/v1/threads/{id}/agent-runs", WorkerInvoke),
-    policy_route!(
-        "api",
-        Post,
-        "/api/v1/agent-runs/{id}/interrupt",
-        RunInterrupt
-    ),
     policy_route!("api", Post, "/api/v1/agent-runs/{id}/retry", WorkerInvoke),
-    policy_route!(
-        "api",
-        Post,
-        "/api/v1/agent-runs/{id}/acknowledge-failure",
-        ReadStateUpdate
-    ),
     policy_route!(
         "account",
         Post,
@@ -701,42 +496,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         CredentialManage
     ),
     policy_route!(
-        "execution",
-        Post,
-        "/api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
-        ExecutionProfileManage
-    ),
-    policy_route!(
-        "execution",
-        Put,
-        "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-        ProjectManage
-    ),
-    policy_route!(
-        "execution",
-        Delete,
-        "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-        ProjectManage
-    ),
-    policy_route!(
-        "execution",
-        Post,
-        "/api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
-        SettingsManage
-    ),
-    policy_route!(
-        "execution",
-        Put,
-        "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-        SettingsManage
-    ),
-    policy_route!(
-        "execution",
-        Delete,
-        "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-        SettingsManage
-    ),
-    policy_route!(
         "conversations",
         Post,
         "/api/v1/projects/{id}/channels",
@@ -793,12 +552,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "conversations",
         Post,
-        "/api/v1/conversations/{id}/mark-unread",
-        ReadStateUpdate
-    ),
-    policy_route!(
-        "conversations",
-        Post,
         "/api/v1/conversations/{id}/messages",
         MessageSend
     ),
@@ -808,7 +561,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/conversations/{id}/threads",
         ThreadCreate
     ),
-    policy_route!("conversations", Patch, "/api/v1/threads/{id}", ThreadCreate),
     policy_route!("memory", Post, "/api/v1/projects/{id}/pages", PageEdit),
     policy_route!(
         "memory",
@@ -851,18 +603,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     policy_route!(
         "whiteboards/http",
-        Post,
-        "/api/v1/whiteboards",
-        WhiteboardEdit
-    ),
-    policy_route!(
-        "whiteboards/http",
-        Patch,
-        "/api/v1/whiteboards/{id}",
-        WhiteboardEdit
-    ),
-    policy_route!(
-        "whiteboards/http",
         Delete,
         "/api/v1/whiteboards/{id}",
         WhiteboardEdit
@@ -871,12 +611,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "whiteboards/http",
         Post,
         "/api/v1/whiteboard-trash/empty",
-        WhiteboardEdit
-    ),
-    policy_route!(
-        "whiteboards/http",
-        Post,
-        "/api/v1/whiteboards/{id}/duplicate",
         WhiteboardEdit
     ),
     policy_route!(
@@ -903,19 +637,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/whiteboards/{id}/revisions/{revision}/restore",
         WhiteboardEdit
     ),
-    policy_route!(
-        "whiteboards/http",
-        Post,
-        "/api/v1/whiteboards/{id}/links",
-        WhiteboardEdit
-    ),
-    policy_route!(
-        "whiteboards/http",
-        Delete,
-        "/api/v1/whiteboards/{id}/links/{kind}/{target_id}",
-        WhiteboardEdit
-    ),
-    policy_route!("memory", Post, "/api/v1/projects/{id}/decisions", PageEdit),
     policy_route!(
         "memory",
         Post,
@@ -954,24 +675,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/conversations/{id}/members/{actor_id}/remove",
         ChannelCreate
     ),
-    policy_route!(
-        "replies",
-        Post,
-        "/api/v1/conversations/{id}/continue",
-        MessageSend
-    ),
-    policy_route!(
-        "replies",
-        Post,
-        "/api/v1/reply-requests/{id}/retry",
-        MessageSend
-    ),
-    policy_route!(
-        "replies",
-        Post,
-        "/api/v1/reply-requests/{id}/stop",
-        MessageSend
-    ),
     // Editing and removing your own message needs MessageSend. Removing
     // someone else's also needs MessageModerate, checked in the handler.
     policy_route!(
@@ -1009,7 +712,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/things/{kind}/{id}/files",
         PageEdit
     ),
-    policy_route!("files/http", Delete, "/api/v1/files/{id}", WorkItemEdit),
     // Hiding a link preview follows the rule for removing the message: its
     // author, or a person who may moderate.
     policy_route!(
@@ -1030,14 +732,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Delete,
         "/api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
         MessageSend
-    ),
-    // A person changes only their own notifications; every row is also
-    // checked against what they can still see.
-    boundary_route!(
-        "notifications",
-        Post,
-        "/api/v1/inbox/update",
-        SessionAuthentication
     ),
     // Notification settings, devices and usage are the caller's own: their
     // devices, their provider accounts (owner only), their preferences.
@@ -1062,41 +756,8 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     // W21: Later is the caller's own list. Saving checks they can see the
     // message or task, and every read and reminder checks again.
-    boundary_route!("later", Post, "/api/v1/later", SessionAuthentication),
-    boundary_route!("later", Patch, "/api/v1/later/{id}", SessionAuthentication),
-    boundary_route!("later", Delete, "/api/v1/later/{id}", SessionAuthentication),
     // W21: scheduling, editing and sending run the send command's checks;
     // canceling is the author's own.
-    policy_route!(
-        "scheduled_messages",
-        Post,
-        "/api/v1/conversations/{id}/scheduled-messages",
-        MessageSend
-    ),
-    policy_route!(
-        "scheduled_messages",
-        Patch,
-        "/api/v1/scheduled-messages/{id}",
-        MessageSend
-    ),
-    boundary_route!(
-        "scheduled_messages",
-        Delete,
-        "/api/v1/scheduled-messages/{id}",
-        SessionAuthentication
-    ),
-    policy_route!(
-        "scheduled_messages",
-        Post,
-        "/api/v1/scheduled-messages/{id}/send-now",
-        MessageSend
-    ),
-    policy_route!(
-        "forwarding",
-        Post,
-        "/api/v1/messages/{id}/forward",
-        MessageSend
-    ),
     boundary_route!(
         "push",
         Post,
@@ -1167,30 +828,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         SessionAuthentication
     ),
     policy_route!(
-        "repositories",
-        Post,
-        "/api/v1/projects/{project_id}/repositories",
-        RepositoryManage
-    ),
-    policy_route!(
-        "repositories",
-        Post,
-        "/api/v1/projects/{project_id}/repositories/{repository_id}/prepare",
-        RepositoryManage
-    ),
-    policy_route!(
-        "repositories",
-        Post,
-        "/api/v1/projects/{project_id}/repositories/{repository_id}/archive",
-        RepositoryManage
-    ),
-    policy_route!(
-        "github",
-        Post,
-        "/api/v1/projects/{project_id}/integrations/github/sync",
-        GithubIntegrationManage
-    ),
-    policy_route!(
         "github/connect",
         Post,
         "/api/v1/projects/{project_id}/integrations/github/connect",
@@ -1201,36 +838,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects/{project_id}/integrations/github/repositories",
         RepositoryManage
-    ),
-    policy_route!(
-        "github",
-        Put,
-        "/api/v1/projects/{project_id}/integrations/github/automation",
-        GithubIntegrationManage
-    ),
-    policy_route!(
-        "github",
-        Post,
-        "/api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
-        RepositoryPublish
-    ),
-    policy_route!(
-        "github",
-        Post,
-        "/api/v1/projects/{project_id}/agent-runs/{run_id}/pull-request",
-        PullRequestCreate
-    ),
-    policy_route!(
-        "github",
-        Post,
-        "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/refresh",
-        PullRequestRefresh
-    ),
-    policy_route!(
-        "github",
-        Post,
-        "/api/v1/projects/{project_id}/pull-requests/{pull_request_id}/merge",
-        PullRequestMerge
     ),
     boundary_route!(
         "github",
@@ -1262,24 +869,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/internal/work/tick",
         OperatorWorkToken
     ),
-    policy_route!(
-        "invitations",
-        Post,
-        "/api/v1/projects/{project_id}/invitations",
-        InvitationManage
-    ),
-    policy_route!(
-        "invitations",
-        Post,
-        "/api/v1/project-invitations/{invitation_id}/revoke",
-        InvitationManage
-    ),
-    policy_route!(
-        "invitations",
-        Post,
-        "/api/v1/project-invitations/{invitation_id}/replace",
-        InvitationManage
-    ),
     boundary_route!(
         "invitations",
         Post,
@@ -1297,12 +886,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/project-invitations/accept-existing",
         InvitationCapability
-    ),
-    policy_route!(
-        "memberships",
-        Patch,
-        "/api/v1/projects/{project_id}/members/{actor_id}",
-        MembershipManage
     ),
     policy_route!(
         "external_agents",
@@ -1368,6 +951,36 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     boundary_route!(
         "hosts/routes",
         Post,
+        "/api/v1/host/builtin/enrol",
+        HostCredential
+    ),
+    boundary_route!(
+        "hosts/routes",
+        Put,
+        "/api/v1/host/builtin/harnesses",
+        HostCredential
+    ),
+    boundary_route!(
+        "modules/connected/http",
+        Post,
+        "/api/v1/connected-modules/token",
+        ConnectedModuleSignature
+    ),
+    boundary_route!(
+        "modules/connected/http",
+        Post,
+        "/api/v1/modules/{module_id}/events",
+        ConnectedModuleSignature
+    ),
+    boundary_route!(
+        "modules/connected/http",
+        Post,
+        "/api/v1/modules/{module_id}/frames/redeem",
+        ConnectedModuleSignature
+    ),
+    boundary_route!(
+        "hosts/routes",
+        Post,
         "/api/v1/host/describe",
         HostCredential
     ),
@@ -1398,6 +1011,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/host/runs/{run_id}/model",
         HostCredential
     ),
+    boundary_route!(
+        "hosts/routes",
+        Post,
+        "/api/v1/host/runs/{run_id}/stream",
+        HostCredential
+    ),
     boundary_route!("mcp/oauth", Post, "/oauth/register", OAuthProtocol),
     boundary_route!("mcp/oauth", Post, "/oauth/authorize", OAuthProtocol),
     boundary_route!("mcp/oauth", Post, "/connect/confirm", OAuthProtocol),
@@ -1412,25 +1031,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Operation
     ),
     boundary_route!("ops/web", Post, "/api/v2/ops/{name}", Operation),
-    policy_route!(
-        "projects",
-        Post,
-        "/api/v1/projects",
-        OrganizationProjectCreate
-    ),
-    policy_route!("projects", Patch, "/api/v1/projects/{id}", ProjectManage),
-    policy_route!(
-        "projects",
-        Post,
-        "/api/v1/projects/{id}/archive",
-        ProjectManage
-    ),
-    policy_route!(
-        "projects",
-        Post,
-        "/api/v1/projects/{id}/restore",
-        ProjectManage
-    ),
     policy_route!(
         "projects",
         Put,
@@ -1449,38 +1049,8 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/projects/{id}/switch",
         NavigationWrite
     ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items",
-        WorkItemCreate
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/archive",
-        WorkItemArchive
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/move",
-        WorkItemEdit
-    ),
     // AWD-102: moving a task to another project archives it here (and
     // creates in the target, checked there).
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/project-move",
-        WorkItemArchive
-    ),
     policy_route!(
         "work_items",
         Post,
@@ -1492,174 +1062,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects/{project_id}/launches",
         WorkerInvoke
-    ),
-    policy_route!(
-        "launch",
-        Post,
-        "/api/v1/projects/{project_id}/launches/{launch_id}/cancel",
-        WorkerInvoke
-    ),
-    policy_route!(
-        "automations",
-        Post,
-        "/api/v1/projects/{project_id}/automations",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "automations",
-        Patch,
-        "/api/v1/projects/{project_id}/automations/{rule_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "automations",
-        Delete,
-        "/api/v1/projects/{project_id}/automations/{rule_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "automations",
-        Post,
-        "/api/v1/projects/{project_id}/automations/{rule_id}/run",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/restore",
-        WorkItemArchive
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Delete,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/acceptance-criteria/{criterion_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments",
-        WorkItemComment
-    ),
-    policy_route!(
-        "work_items/comments",
-        Patch,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items/comments",
-        Delete,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Delete,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/threads/{conversation_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Delete,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/{repository_id}/primary",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Delete,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/pull-requests/{pull_request_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/bulk",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/dependencies",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/relations",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/watch",
-        WorkItemView
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/work-items/{work_item_id}/release-claim",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/labels",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/projects/{project_id}/labels/{label_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/fields",
-        WorkflowManage
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/projects/{project_id}/fields/{field_id}",
-        WorkflowManage
     ),
     policy_route!(
         "collections/http",
@@ -1720,18 +1122,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects/{project_id}/sheets/{sheet_id}/changes",
         SheetEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/milestones",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/projects/{project_id}/milestones/{milestone_id}",
-        WorkItemEdit
     ),
     policy_route!(
         "ai/http",
@@ -1808,74 +1198,8 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "work_items",
         Post,
-        "/api/v1/projects/{project_id}/task-templates",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/projects/{project_id}/task-templates/{template_id}",
-        WorkItemEdit
-    ),
-    policy_route!(
-        "work_items",
-        Post,
         "/api/v1/projects/{project_id}/task-templates/{template_id}/apply",
         WorkItemCreate
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/imports",
-        WorkItemCreate
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/projects/{project_id}/imports/{import_id}",
-        WorkItemCreate
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/imports/{import_id}/commit",
-        WorkItemCreate
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/save-as-template",
-        SettingsManage
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/organizations/{organization_id}/project-templates/{template_id}",
-        SettingsManage
-    ),
-    policy_route!(
-        "work_items",
-        Post,
-        "/api/v1/projects/{project_id}/recurring-tasks",
-        WorkItemCreate
-    ),
-    policy_route!(
-        "work_items",
-        Patch,
-        "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-        WorkItemCreate
-    ),
-    policy_route!(
-        "work_items",
-        Delete,
-        "/api/v1/projects/{project_id}/recurring-tasks/{recurring_id}",
-        WorkItemCreate
-    ),
-    policy_route!(
-        "work_items",
-        Put,
-        "/api/v1/projects/{project_id}/work-item-workflow",
-        WorkflowManage
     ),
 ];
 

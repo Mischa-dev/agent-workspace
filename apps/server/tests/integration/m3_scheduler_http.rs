@@ -4,7 +4,7 @@ use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
-    git_runtime::expected_repository_mirror_path,
+    hosts::builtin::git::expected_repository_mirror_path,
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
@@ -338,9 +338,8 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     .expect("insert repository precedence Work Item");
     transaction.commit().await.expect("commit");
     sqlx::query(
-        "INSERT INTO work_item_conversation_links (project_id, work_item_id, conversation_id, created_by_actor_id) VALUES ($1, $2, $3, $4)",
+        "INSERT INTO links (workspace_id, from_thing_id, to_thing_id, kind, origin, created_by_account_id) SELECT task.workspace_id, task.id, $2, 'about', 'explicit', $3 FROM things task WHERE task.id = $1",
     )
-    .bind(seed.project_id)
     .bind(linked_work_item_id)
     .bind(linked_thread_id)
     .bind(seed.human_actor_id)
@@ -479,6 +478,16 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     .await;
     assert_eq!(repeated_question.0, StatusCode::OK);
     wait_for_state(&pool, second_run_id, "completed").await;
+    // A1.17: its host reported what it changed before it finished, so the
+    // run's page reads that, never the worktree.
+    let reported = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM run_changes WHERE run_id = $1)",
+    )
+    .bind(second_run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("run changes");
+    assert!(reported, "the built-in host reports the run's changes");
     agent_workspace_server::scheduler::drain_now(&state)
         .await
         .expect("promote explicit repository run after completion");
@@ -595,9 +604,12 @@ async fn queued_runs_are_idempotent_and_create_no_workspace_before_admission() {
     .await
     .expect("read retained workspace repository");
     let mut cleanup = pool.begin().await.expect("begin cleanup");
-    agent_workspace_server::retention::lock_repository_retention(&mut cleanup, repository_id)
-        .await
-        .expect("cleanup takes the retention lock");
+    agent_workspace_server::hosts::builtin::worktrees::lock_repository_retention(
+        &mut cleanup,
+        repository_id,
+    )
+    .await
+    .expect("cleanup takes the retention lock");
     sqlx::query("UPDATE repository_workspaces SET state = 'cleaned' WHERE id = $1")
         .bind(workspace_id)
         .execute(&mut *cleanup)
@@ -1257,12 +1269,15 @@ pub(super) async fn interrupt(
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/api/v1/agent-runs/{run_id}/interrupt"))
+                    .uri("/api/v2/ops/run_stop")
                     .header("origin", ORIGIN)
                     .header("cookie", cookie)
                     .header("x-csrf-token", csrf)
                     .header("idempotency-key", format!("interrupt-{run_id}"))
-                    .body(Body::empty())
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({"runId": run_id})).expect("serialize stop"),
+                    ))
                     .expect("build scheduler interrupt"),
             )
             .await
@@ -1345,7 +1360,7 @@ async fn acknowledge_failure(
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/api/v1/agent-runs/{run_id}/acknowledge-failure"))
+                    .uri("/api/v2/ops/run_failure_hide")
                     .header("origin", ORIGIN)
                     .header("cookie", cookie)
                     .header("x-csrf-token", csrf)
@@ -1355,7 +1370,7 @@ async fn acknowledge_failure(
                     )
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        serde_json::to_vec(&json!({"eventId": event_id}))
+                        serde_json::to_vec(&json!({"runId": run_id}))
                             .expect("serialize failure acknowledgement"),
                     ))
                     .expect("build failure acknowledgement"),

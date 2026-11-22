@@ -145,20 +145,7 @@ async fn call(
     match mcp::call_tool_direct(state, principal, tool, arguments).await {
         Ok(result) => {
             let status = status_for(&result);
-            let mut response = (status, Json(result)).into_response();
-            // An old name for an operation (K2 3.6) says it's on its way out.
-            if let Some(old) = crate::ops::aliases::active(tool)
-                && !crate::ops::registry().contains(tool)
-            {
-                let headers = response.headers_mut();
-                headers.insert("deprecation", axum::http::HeaderValue::from_static("true"));
-                if let Some(sunset) = old.sunset_header()
-                    && let Ok(value) = axum::http::HeaderValue::from_str(&sunset)
-                {
-                    headers.insert("sunset", value);
-                }
-            }
-            Ok(response)
+            Ok((status, Json(result)).into_response())
         }
         Err(DirectCallError::UnknownTool) => Err(AppError::NotFound("api_route")),
         Err(DirectCallError::InvalidArguments(message)) => Ok((
@@ -217,7 +204,7 @@ fn outcome_status(outcome: &str) -> Option<StatusCode> {
 
 /// Groups operations by the noun their tool starts with.
 pub(crate) fn tag_for(tool: &str) -> &'static str {
-    if tool == "my_permissions" {
+    if matches!(tool, "permissions_get" | "app_limit_set") {
         return "Roles and access";
     }
     let noun = tool.split('_').next().unwrap_or(tool);
@@ -742,7 +729,14 @@ pub(crate) fn document() -> Value {
         let description = description
             .strip_suffix(crate::ops::mcp::RETRY_NOTE)
             .unwrap_or(description);
-        let mut input = hoist(&name, &tool.input_schema, &mut components);
+        // The types an input shares (a field, a rule, a role's defaults)
+        // keep their first sentence, as results do; the tool's own
+        // arguments keep their whole description.
+        let mut schema = Map::clone(tool.input_schema.as_ref());
+        if let Some(definitions) = schema.get_mut("$defs") {
+            brief(definitions);
+        }
+        let mut input = hoist(&name, &schema, &mut components);
         share_arguments(&mut input, &mut components);
         drop_optional_nulls(&mut input);
         brief(&mut input);
@@ -782,7 +776,7 @@ pub(crate) fn document() -> Value {
         // under 200. The introduction says what each status means.
         refusals.entry(result.clone()).or_insert_with(|| {
             json!({
-                "description": "Result, refusal (see `outcome`) or `Error`.",
+                "description": "The result or an `Error`.",
                 "content": { "application/json": { "schema": {
                     "oneOf": [output, { "$ref": "#/components/schemas/Error" }],
                 } } },

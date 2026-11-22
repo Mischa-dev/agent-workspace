@@ -149,7 +149,7 @@ existing thread with `run_start`, on their own Codex account; an agent uses
   leave `required = false` until the connection is stable.
 - Missing writes: confirm `read write` scope and inspect `codex mcp get` plus
   `/mcp`. The `writes` approval mode should prompt rather than hide them.
-- Version conflict: call `task_open`, preserve
+- Version conflict: call `task_get`, preserve
   the current version, and make an informed retry with a new request ID unless
   replaying the exact previously completed payload.
 - Permission or archive error: do not retry blindly. Restore membership or the

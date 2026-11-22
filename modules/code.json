@@ -26,11 +26,7 @@
   "routes": [
     "/api/v1/integrations/github/*",
     "/api/v1/projects/{project_id}/integrations/github*",
-    "/api/v1/projects/{project_id}/repositories*",
-    "/api/v1/projects/{project_id}/pull-requests/*",
-    "/api/v1/projects/{project_id}/agent-runs/{run_id}/publish",
-    "/api/v1/projects/{project_id}/agent-runs/{run_id}/pull-request",
-    "/api/v1/projects/{project_id}/work-items/{work_item_id}/repositories/*"
+    "/api/v1/projects/{project_id}/repositories*"
   ],
   "events": {
     "emits": ["pull_request.checks_failed", "pull_request.checks_passed", "pull_request.merged", "pull_request.closed"],

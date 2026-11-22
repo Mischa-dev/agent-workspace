@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 import { seededValue, storageStatePath } from './environment'
+import { CURRENT_WORKSPACE, spaceSettingsHref } from '../src/app/href'
 
 // W1.42, the automation builder: a person makes "when a task moves to a
 // status, comment on it" from the pickers and the operation's own form (no
@@ -12,7 +13,7 @@ test.use({ storageState: storageStatePath })
 test('a rule built from pickers and an operation’s form, tried without writing', async ({ page }) => {
   const projectId = seededValue('E2E_PROJECT_ID')
   const name = `Check reviews ${Date.now() % 100000}`
-  await page.goto(`/settings/projects/${projectId}/automations`)
+  await page.goto(spaceSettingsHref(projectId, 'automations', CURRENT_WORKSPACE))
   await page.getByRole('button', { name: 'New rule' }).first().click()
   const dialog = page.getByRole('dialog', { name: 'New rule' })
   await dialog.getByLabel('Name').fill(name)

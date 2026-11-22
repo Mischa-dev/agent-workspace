@@ -198,14 +198,14 @@ async fn world(setup: &Setup, codex: &str, session: &str) -> World {
         for (key, value) in extra.as_object().expect("extra") {
             arguments[key] = value.clone();
         }
-        let written = tool(app, codex, session, "field_write", arguments).await;
+        let written = tool(app, codex, session, "field_create", arguments).await;
         assert_eq!(written["outcome"], "ok", "{written}");
     }
     let page = tool(
         app,
         codex,
         session,
-        "page_write",
+        "page_create",
         json!({"projectId": "SRC", "title": SECRET_PAGE, "body": "Private plan"}),
     )
     .await;
@@ -536,7 +536,7 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
         app,
         &codex,
         &session,
-        "field_write",
+        "field_update",
         json!({"projectId": "DST", "field": "Risk", "options": [
             {"id": option_id(&setup, &w.dst, "Risk", "Low").await, "name": "Low"},
             {"id": option_id(&setup, &w.dst, "Risk", "Medium").await, "name": "Medium"},
@@ -567,7 +567,7 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
             app,
             &codex,
             &session,
-            "milestone_write",
+            "milestone_create",
             json!({"projectId": project, "name": "M1", "addTasks": tasks}),
         )
         .await;
@@ -578,7 +578,7 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
         app,
         &codex,
         &session,
-        "milestone_write",
+        "milestone_create",
         json!({"projectId": "DST", "name": "M1"}),
     )
     .await;
@@ -587,7 +587,7 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
         app,
         &codex,
         &session,
-        "milestone_write",
+        "milestone_update",
         json!({"projectId": "DST", "milestoneId": old_id, "archived": true}),
     )
     .await;
@@ -596,7 +596,7 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
         app,
         &codex,
         &session,
-        "milestone_write",
+        "milestone_create",
         json!({"projectId": "DST", "name": "M1"}),
     )
     .await;
@@ -668,14 +668,16 @@ async fn a_stale_preview_or_lost_access_moves_nothing() {
         .await
         .expect("demote");
     let before = footprint(&setup).await;
-    let (status, body) = send(
+    let (status, body) = crate::support::tasks::send(
         app,
-        mo_browser.request(
-            "POST",
-            &format!("/api/v1/projects/{}/work-items/{}/project-move", w.src, w.root),
-            Some("mo-move"),
-            json!({"targetProjectId": w.dst, "snapshot": plan["snapshot"], "leaveUnresolved": true}),
+        &mo_browser,
+        "POST",
+        &format!(
+            "/api/v1/projects/{}/work-items/{}/project-move",
+            w.src, w.root
         ),
+        Some("mo-move"),
+        json!({"targetProjectId": w.dst, "snapshot": plan["snapshot"], "leaveUnresolved": true}),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
@@ -773,11 +775,11 @@ async fn a_comment_naming_a_task_that_stays_moves_with_its_task() {
         app,
         &codex,
         &session,
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": "SRC-1", "text": "Waits on SRC-3", "clientRequestId": "move-ref"}),
     )
     .await;
-    assert_eq!(commented["outcome"], "applied", "{commented}");
+    assert_eq!(commented["outcome"], "ok", "{commented}");
     let stays = task_id(&setup, &w.src, 3).await;
     let moved = tool(
         app,
@@ -859,18 +861,17 @@ async fn a_move_without_a_preview_carries_what_fits_and_keeps_the_rest() {
     );
 
     // The web app moves too, and always previews first.
-    let (status, body) = send(
+    let (status, body) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &format!(
-                "/api/v1/projects/{}/work-items/{}/project-move",
-                w.src,
-                task_id(&setup, &w.src, 3).await
-            ),
-            Some("web-move-no-preview"),
-            json!({"targetProjectId": w.dst, "snapshot": "0".repeat(64)}),
+        &setup.browser,
+        "POST",
+        &format!(
+            "/api/v1/projects/{}/work-items/{}/project-move",
+            w.src,
+            task_id(&setup, &w.src, 3).await
         ),
+        Some("web-move-no-preview"),
+        json!({"targetProjectId": w.dst, "snapshot": "0".repeat(64)}),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
@@ -891,32 +892,35 @@ async fn a_move_without_a_preview_carries_what_fits_and_keeps_the_rest() {
     assert_eq!(status, StatusCode::OK, "{plan}");
     let request = json!({"targetProjectId": w.dst, "snapshot": plan["snapshot"]});
     let path = format!("/api/v1/projects/{}/work-items/{stays}/project-move", w.src);
-    let (status, done) = send(
+    let (status, done) = crate::support::tasks::send(
         app,
-        setup
-            .browser
-            .request("POST", &path, Some("web-move"), request.clone()),
+        &setup.browser,
+        "POST",
+        &path,
+        Some("web-move"),
+        request.clone(),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{done}");
-    let (status, replay) = send(
+    let (status, replay) = crate::support::tasks::send(
         app,
-        setup
-            .browser
-            .request("POST", &path, Some("web-move"), request),
+        &setup.browser,
+        "POST",
+        &path,
+        Some("web-move"),
+        request,
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{replay}");
     assert_eq!(replay["replayed"], true, "{replay}");
     assert_eq!(replay["moved"], done["moved"]);
-    let (status, conflict) = send(
+    let (status, conflict) = crate::support::tasks::send(
         app,
-        setup.browser.request(
-            "POST",
-            &path,
-            Some("web-move"),
-            json!({"targetProjectId": w.dst, "snapshot": plan["snapshot"], "leaveUnresolved": true}),
-        ),
+        &setup.browser,
+        "POST",
+        &path,
+        Some("web-move"),
+        json!({"targetProjectId": w.dst, "snapshot": plan["snapshot"], "leaveUnresolved": true}),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
@@ -1104,7 +1108,6 @@ async fn only_projects_the_mover_can_add_tasks_to_are_offered() {
         "moira",
     )
     .await;
-    let roles = format!("/api/v1/organizations/{}/roles", setup.organization_id);
     let mut role_ids = Vec::new();
     for (name, permissions) in [
         // An unfamiliar name, with what a move needs.
@@ -1112,17 +1115,16 @@ async fn only_projects_the_mover_can_add_tasks_to_are_offered() {
         // A member-like role without adding tasks.
         ("Editor", json!(["tasks.view", "tasks.edit"])),
     ] {
-        let (status, role) = send(
-            app,
-            setup.browser.request(
-                "POST",
-                &roles,
-                None,
+        let (status, role) = setup
+            .browser
+            .op_in(
+                app,
+                setup.organization_id,
+                "role_create",
                 json!({"name": name, "baseRole": "member", "permissions": permissions}),
-            ),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED, "{role}");
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{role}");
         role_ids.push(
             role["id"]
                 .as_str()
@@ -1206,14 +1208,16 @@ async fn only_projects_the_mover_can_add_tasks_to_are_offered() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
-    let (status, refused) = send(
+    let (status, refused) = crate::support::tasks::send(
         app,
-        mo_browser.request(
-            "POST",
-            &format!("/api/v1/projects/{}/work-items/{}/project-move", w.src, w.root),
-            Some("mo-editors"),
-            json!({"targetProjectId": editors, "snapshot": plan["snapshot"], "leaveUnresolved": true}),
+        &mo_browser,
+        "POST",
+        &format!(
+            "/api/v1/projects/{}/work-items/{}/project-move",
+            w.src, w.root
         ),
+        Some("mo-editors"),
+        json!({"targetProjectId": editors, "snapshot": plan["snapshot"], "leaveUnresolved": true}),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");

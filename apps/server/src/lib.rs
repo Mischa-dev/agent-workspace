@@ -52,11 +52,13 @@ pub mod files;
 pub mod follows;
 pub mod forms;
 pub mod forwarding;
-pub mod guards;
-pub use agent_workspace_builtin_host::git as git_runtime;
 pub mod github;
 pub mod groups;
-pub mod harness_host;
+pub mod guards;
+/// How hosts describe the harnesses they run (manifests, run
+/// configuration): shared with every host.
+pub use agent_workspace_host_protocol::harness;
+pub mod harness_catalog;
 pub mod harnesses;
 pub mod health;
 pub mod history;
@@ -83,6 +85,7 @@ pub mod message_edits;
 pub mod metering;
 pub mod metrics;
 pub mod migration_preflight;
+pub mod model_catalog;
 pub mod modules;
 pub mod notification_email;
 pub mod notification_settings;
@@ -110,7 +113,11 @@ pub mod rate_limit;
 pub mod reactions;
 pub mod read_state;
 pub mod realtime;
-pub mod recovery;
+/// Recovery of the built-in host's runs, which lives with the host
+/// (`hosts::builtin::recovery`).
+pub mod recovery {
+    pub use crate::hosts::builtin::recovery::*;
+}
 pub mod releases;
 pub mod replies;
 pub mod repositories;
@@ -130,6 +137,7 @@ pub mod server_status;
 pub mod settings;
 pub mod setup;
 pub mod sheets;
+pub mod sign_ins;
 pub mod spaces;
 pub mod startup;
 pub mod statuses;
@@ -185,7 +193,7 @@ pub struct AppState {
     pub pool: PgPool,
     pub rate_limits: RateLimiters,
     pub realtime: RealtimeHub,
-    pub supervisors: provider::SupervisorRegistry,
+    pub supervisors: hosts::builtin::SupervisorRegistry,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -194,7 +202,7 @@ pub fn router(state: AppState) -> Router {
     state.rate_limits.attach(&state.pool);
     state
         .supervisors
-        .set_host(Arc::new(harness_host::ServerHost::new(
+        .set_host(Arc::new(hosts::builtin::harness_host::ServerHost::new(
             state.pool.clone(),
             Arc::clone(&state.config),
         )));
@@ -296,7 +304,10 @@ pub fn router(state: AppState) -> Router {
         .layer(PropagateRequestIdLayer::new(request_id.clone()))
         .layer(SetRequestIdLayer::new(request_id, MakeRequestUuid))
         // What each source may load: client_config::content_security_policy.
-        .layer(SetResponseHeaderLayer::overriding(
+        // A response that sets its own keeps it: an avatar's or emoji's
+        // stricter one, and a framed panel's host page (M1.15), which may
+        // frame its app's one origin and be framed by the app's own pages.
+        .layer(SetResponseHeaderLayer::if_not_present(
             HeaderName::from_static("content-security-policy"),
             content_security_policy,
         ))
@@ -309,7 +320,7 @@ pub fn router(state: AppState) -> Router {
             HeaderName::from_static("x-content-type-options"),
             HeaderValue::from_static("nosniff"),
         ))
-        .layer(SetResponseHeaderLayer::overriding(
+        .layer(SetResponseHeaderLayer::if_not_present(
             HeaderName::from_static("x-frame-options"),
             HeaderValue::from_static("DENY"),
         ))
@@ -411,8 +422,8 @@ mod tests {
         let pool = PgPoolOptions::new()
             .connect_lazy(config.database_url.expose())
             .expect("lazy PostgreSQL pool");
-        let supervisors =
-            crate::provider::SupervisorRegistry::new(&config).expect("test supervisor registry");
+        let supervisors = crate::hosts::builtin::SupervisorRegistry::new(&config)
+            .expect("test supervisor registry");
         let application = router(AppState {
             config: Arc::new(config),
             pool,
@@ -479,8 +490,8 @@ mod tests {
         let pool = PgPoolOptions::new()
             .connect_lazy(config.database_url.expose())
             .expect("lazy PostgreSQL pool");
-        let supervisors =
-            crate::provider::SupervisorRegistry::new(&config).expect("test supervisor registry");
+        let supervisors = crate::hosts::builtin::SupervisorRegistry::new(&config)
+            .expect("test supervisor registry");
         let application = router(AppState {
             config: Arc::new(config),
             pool,

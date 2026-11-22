@@ -6,7 +6,7 @@
 //! Each runs the command its hand-written tool ran (`mcp::*`), with the
 //! caller the dispatcher checked: the same checks inside, the same answers
 //! inside the envelope. The `_write` tools became a create and an update
-//! each (their old names stay as aliases, `ops::aliases`). Until K3.15's
+//! each (their old names are retired, `ops::retired`). Until K3.15's
 //! `link_create` lands, `task_link` writes today's link tables.
 
 use rmcp::schemars::{self, JsonSchema};
@@ -67,6 +67,8 @@ macro_rules! tool_op {
             $(preview: $preview:literal,)?
             $(destructive: $destructive:literal,)?
             $(long: |$long_input:ident| $long_body:expr,)?
+            $(shown_once: [$($shown:literal),*],)?
+            $(max_body_bytes: $max_body:expr,)?
             title: $title:literal,
             description: $description:expr,
             emits: [$($emit:literal),*],
@@ -83,6 +85,7 @@ macro_rules! tool_op {
             const MODULE: &'static str = "tasks";
             const PERMISSION: Option<Perm> = $perm;
             const IDEMPOTENCY: Idempotency = Idempotency::$idem;
+            const OWN_TRANSACTION: bool = true;
             $(const PREVIEW: bool = $preview;)?
             $(const DESTRUCTIVE: bool = $destructive;)?
             $(
@@ -91,6 +94,8 @@ macro_rules! tool_op {
                     $long_body
                 }
             )?
+            $(const SHOWN_ONCE: &'static [&'static str] = &[$($shown),*];)?
+            $(const MAX_BODY_BYTES: usize = $max_body;)?
             const TITLE: &'static str = $title;
             const DESCRIPTION: &'static str = $description;
             const EMITS: &'static [&'static str] = &[$($emit),*];
@@ -246,7 +251,7 @@ tool_op!(TaskReorder {
 });
 
 // ---------------------------------------------------------------------------
-// task_link (aliases task_depend, task_relate, task_link_pull_request)
+// task_link
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -467,7 +472,7 @@ tool_op!(TaskLinkMany {
 });
 
 // ---------------------------------------------------------------------------
-// task_watch_set (alias task_watch)
+// task_watch_set
 
 tool_op!(TaskWatchSet {
     name: "task_watch_set",
@@ -489,7 +494,9 @@ tool_op!(TaskWatchSet {
 tool_op!(TaskMove {
     name: "task_move",
     kind: Change,
-    permission: Some(Perm::TasksEdit),
+    // A move archives the task here and creates it there; the command
+    // checks both projects.
+    permission: Some(Perm::TasksDelete),
     idempotency: Command,
     preview: true,
     destructive: true,
@@ -502,7 +509,9 @@ tool_op!(TaskMove {
         values carry over into a field of the same name and type when they fit there; the rest \
         stay on the original. Call first with preview: true to see what carries over and what \
         needs a choice, then move with its snapshot and one resolution per issue (set it in a \
-        target field, or leave it). Moving it again returns where it went.",
+        target field, or leave it). Moving it again returns where it went. It needs seeing and \
+        archiving tasks where it is and creating tasks where it goes; an app or agent also \
+        needs leave to write in both.",
     emits: ["task.created", "task.updated"],
     input: task_move::TaskMoveArguments,
     output: task_move::TaskMoveValue,
@@ -749,7 +758,10 @@ tool_op!(MilestoneCreate {
             call.key_honoured();
         }
         call.audited_by_command();
-        tool!(call, None, planning::milestone_write, input)
+        let mut value = tool!(call, None, planning::milestone_write, input)?;
+        // A retry the command answered from its own key is a replay.
+        call.mark_replayed(std::mem::take(&mut value.idempotent_replay));
+        Ok(value)
     }
 });
 
@@ -772,7 +784,10 @@ tool_op!(MilestoneUpdate {
             call.key_honoured();
         }
         call.audited_by_command();
-        tool!(call, None, planning::milestone_write, input)
+        let mut value = tool!(call, None, planning::milestone_write, input)?;
+        // A retry the command answered from its own key is a replay.
+        call.mark_replayed(std::mem::take(&mut value.idempotent_replay));
+        Ok(value)
     }
 });
 
@@ -879,11 +894,13 @@ tool_op!(TaskImport {
     kind: Create,
     permission: Some(Perm::TasksCreate),
     idempotency: Dispatcher,
+    max_body_bytes: crate::work_items::imports::MAX_IMPORT_BODY_BYTES,
     title: "Import tasks",
     description: "Import tasks from Markdown, CSV (Linear and Jira exports work as they are) or a \
         connected repository's issues. It previews first: each row's status, labels, assignee \
-        and milestone, and anything that doesn't match. Call again with the importId and commit: \
-        true to create them. Rows imported before from the same source are skipped.",
+        and milestone, and anything that doesn't match. Call again with the importId to map its \
+        columns again, change its options or cancel it, and with commit: true to create them. \
+        Rows imported before from the same source are skipped.",
     emits: ["task.created"],
     input: views_data::TaskImportArguments,
     output: views_data::TaskImportValue,
@@ -935,6 +952,8 @@ tool_op!(BugReportLinkCreate {
     kind: Create,
     permission: None,
     idempotency: Dispatcher,
+    // A link's URLs carry its token: never kept for a replay.
+    shown_once: ["url", "formUrl"],
     title: "Create bug report link",
     description: "Make a bug report link (its URL is shown once), optionally into a collection \
         with a form, as the space's settings do. Anyone who can add tasks makes one.",
@@ -953,6 +972,8 @@ tool_op!(BugReportLinkUpdate {
     permission: None,
     idempotency: Dispatcher,
     destructive: true,
+    // A link's URLs carry its token: never kept for a replay.
+    shown_once: ["url", "formUrl"],
     title: "Update bug report link",
     description: "Rename or pause a bug report link, give it a new URL (replace: true), or \
         delete it (linkId). Its maker or whoever manages the space changes it.",

@@ -1246,13 +1246,14 @@ async fn a_project_overrides_the_workspace_says_so_and_reset_falls_back() {
         app,
         setup.browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", organization),
             Some("settings-project"),
-            json!({"organizationId": organization, "key": "WORK", "name": "Work"}),
+            json!({"key": "WORK", "name": "Work"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{project}");
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project = project["value"].clone();
     let project = project["id"].as_str().expect("project").to_owned();
     let effective = |query: String| {
         let request = setup.browser.request(
@@ -1272,24 +1273,18 @@ async fn a_project_overrides_the_workspace_says_so_and_reset_falls_back() {
 
     // The workspace picks a model; the project overrides it.
     for (scope, model, target) in [
-        (
-            "workspace",
-            "big-model",
-            json!({"organizationId": organization}),
-        ),
-        ("project", "small-model", json!({"projectId": project})),
+        ("workspace", "big-model", json!({})),
+        ("project", "small-model", json!({"spaceId": project})),
     ] {
-        let mut body = json!({"scope": scope, "value": model, "expectedVersion": 0});
+        let mut body =
+            json!({"key": "run.model", "scope": scope, "value": model, "expectedVersion": 0});
         body.as_object_mut()
             .expect("body")
             .extend(target.as_object().expect("target").clone());
-        let (status, written) = send(
-            app,
-            setup
-                .browser
-                .request("PUT", "/api/v1/settings/values/run.model", None, body),
-        )
-        .await;
+        let (status, written) = setup
+            .browser
+            .op_in(app, organization, "setting_update", body)
+            .await;
         assert_eq!(status, StatusCode::OK, "{written}");
     }
     let (_, now) = effective(format!("projectId={project}")).await;
@@ -1303,41 +1298,35 @@ async fn a_project_overrides_the_workspace_says_so_and_reset_falls_back() {
     assert_eq!(setting(&workspace, "run.model")["source"], "workspace");
 
     // A stale write is refused instead of overwriting.
-    let (status, stale) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            "/api/v1/settings/values/run.model",
-            None,
-            json!({"scope": "project", "projectId": project, "value": "other", "expectedVersion": 0}),
-        ),
-    )
-    .await;
+    let (status, stale) = setup
+        .browser
+        .op(
+            app,
+            "setting_update",
+            json!({"key": "run.model", "scope": "project", "spaceId": project, "value": "other", "expectedVersion": 0}),
+        )
+        .await;
     assert_eq!(status, StatusCode::CONFLICT, "{stale}");
     // Values must match the key's type.
-    let (status, _) = send(
-        app,
-        setup.browser.request(
-            "PUT",
-            "/api/v1/settings/values/run.reasoning",
-            None,
-            json!({"scope": "project", "projectId": project, "value": "extreme"}),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = setup
+        .browser
+        .op(
+            app,
+            "setting_update",
+            json!({"key": "run.reasoning", "scope": "project", "spaceId": project, "value": "extreme"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 
     // Reset at the project falls back to the workspace.
-    let (status, reset) = send(
-        app,
-        setup.browser.request(
-            "POST",
-            "/api/v1/settings/values/run.model/reset",
-            None,
-            json!({"scope": "project", "projectId": project}),
-        ),
-    )
-    .await;
+    let (status, reset) = setup
+        .browser
+        .op(
+            app,
+            "setting_update",
+            json!({"key": "run.model", "reset": true, "scope": "project", "spaceId": project}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{reset}");
     assert_eq!(reset["setting"]["value"], "big-model");
     assert_eq!(reset["setting"]["source"], "workspace");
@@ -1375,8 +1364,8 @@ async fn a_project_overrides_the_workspace_says_so_and_reset_falls_back() {
         app,
         &codex,
         &session,
-        "settings_get",
-        json!({"projectId": "WORK", "keys": ["run.model"]}),
+        "setting_list",
+        json!({"spaceId": "WORK", "keys": ["run.model"]}),
     )
     .await;
     assert_eq!(read["outcome"], "ok", "{read}");
@@ -1432,43 +1421,37 @@ async fn a_project_overrides_the_workspace_says_so_and_reset_falls_back() {
     .execute(&setup.pool)
     .await
     .expect("join as member");
-    let (status, _) = send(
-        app,
-        outsider.request(
-            "PUT",
-            "/api/v1/settings/values/run.model",
-            None,
-            json!({"scope": "workspace", "organizationId": organization, "value": "mine"}),
-        ),
-    )
-    .await;
+    let (status, _) = outsider
+        .op_in(
+            app,
+            organization,
+            "setting_update",
+            json!({"key": "run.model", "scope": "workspace", "value": "mine"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     // Their own preference is theirs to set, and applies only to them.
-    let (status, own) = send(
-        app,
-        outsider.request(
-            "PUT",
-            "/api/v1/settings/values/run.speed",
-            None,
-            json!({"scope": "user", "organizationId": organization, "value": "fast"}),
-        ),
-    )
-    .await;
+    let (status, own) = outsider
+        .op_in(
+            app,
+            organization,
+            "setting_update",
+            json!({"key": "run.speed", "scope": "user", "value": "fast"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{own}");
     assert_eq!(own["setting"]["source"], "user");
     let (_, owners) = effective(format!("organizationId={organization}")).await;
     assert_eq!(setting(&owners, "run.speed")["source"], "default");
     // The other workspace's values never apply here.
-    let (status, _) = send(
-        app,
-        outsider.request(
-            "PUT",
-            "/api/v1/settings/values/run.model",
-            None,
-            json!({"scope": "workspace", "organizationId": elsewhere, "value": "leaky-model"}),
-        ),
-    )
-    .await;
+    let (status, _) = outsider
+        .op_in(
+            app,
+            elsewhere,
+            "setting_update",
+            json!({"key": "run.model", "scope": "workspace", "value": "leaky-model"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK);
     let (_, ours) = effective(format!("projectId={project}")).await;
     assert_eq!(setting(&ours, "run.model")["value"], "big-model");
@@ -1482,9 +1465,9 @@ async fn access_revoked_while_a_write_is_in_flight_stops_the_write() {
     let organization = setup.organization_id;
     let writes = [
         (
-            "PUT",
-            "/api/v1/settings/values/run.model".to_owned(),
-            json!({"scope": "workspace", "organizationId": organization, "value": "late-model"}),
+            "POST",
+            format!("/api/v2/w/{organization}/ops/setting_update"),
+            json!({"key": "run.model", "scope": "workspace", "value": "late-model"}),
         ),
         (
             "PUT",
@@ -1506,7 +1489,8 @@ async fn access_revoked_while_a_write_is_in_flight_stops_the_write() {
         .execute(&mut *revoke)
         .await
         .expect("disable membership");
-        let request = setup.browser.request(method, &uri, None, body);
+        let key = uuid::Uuid::now_v7().to_string();
+        let request = setup.browser.request(method, &uri, Some(&key), body);
         let app = setup.app.clone();
         let write = tokio::spawn(async move { send(&app, request).await });
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -1655,6 +1639,9 @@ async fn retention_runs_as_scheduled_jobs() {
     .await
     .expect("finished deliveries");
     let registry = jobs::default_registry();
+    // The worktrees' upkeep is the built-in host's own job: only the
+    // process holding its lease, where the worktrees are, runs it.
+    assert!(registry.host_kinds().contains(&"retention.worktrees"));
     jobs::ensure_recurring(&setup.pool, &registry)
         .await
         .expect("schedule");

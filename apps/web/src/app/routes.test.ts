@@ -25,18 +25,26 @@ describe('the route table', () => {
     expect(handle('/w/:ws/dm/:conversationId')).toEqual({ space: 'direct', layout: 'shell' })
   })
 
-  it('serves every workspace page under /w/:ws and redirects its old address (W1.14a)', () => {
+  it('serves every workspace page under /w/:ws; only old addresses that can still arrive redirect (W1.14a, W1.14d)', () => {
     const paths = routePaths()
     const handle = (path: string) => routesWithHandles().find((route) => route.path === path)?.handle
     for (const [old, now] of [
       ['/home', '/w/:ws/home'],
       ['/inbox', '/w/:ws/inbox'],
       ['/runs/:runId', '/w/:ws/runs/:runId'],
+      ['/new-task', '/w/:ws/new'],
+      ['/whiteboards/:whiteboardId', '/w/:ws/whiteboards/:whiteboardId'],
+    ]) {
+      expect(paths).toContain(now)
+      expect(handle(old)).toBeUndefined()
+    }
+    // Hrefs stored in old messages and quotes, and the installed app's share target.
+    for (const [old, now] of [
       ['/projects', '/w/:ws/spaces'],
       ['/projects/new', '/w/:ws/spaces/new'],
-      ['/new-task', '/w/:ws/new'],
+      ['/messages/:conversationId', '/w/:ws/dm/:conversationId'],
       ['/dm/:conversationId', '/w/:ws/dm/:conversationId'],
-      ['/whiteboards/:whiteboardId', '/w/:ws/whiteboards/:whiteboardId'],
+      ['/share', '/w/:ws/share'],
     ]) {
       expect(paths).toContain(now)
       expect(handle(old)?.layout).toBe('redirect')
@@ -65,10 +73,10 @@ describe('the route table', () => {
       expect(handle(now)?.layout).not.toBe('redirect')
       expect(handle(old)?.layout).toBe('redirect')
     }
-    // Any other old space address, and old settings links, redirect too.
+    // Any other old space address redirects too; old settings links no longer do (W1.14d).
     expect(handle('/projects/:projectId/*')?.layout).toBe('redirect')
-    expect(handle('/settings/workspace/*')?.layout).toBe('redirect')
-    expect(handle('/settings/projects/*')?.layout).toBe('redirect')
+    expect(handle('/settings/workspace/*')).toBeUndefined()
+    expect(handle('/settings/projects/*')).toBeUndefined()
     expect(handle('/w/:ws/settings/*')?.layout).toBe('shell')
     expect(handle('/w/:ws/t/:kind/:id')?.layout).toBe('shell')
   })

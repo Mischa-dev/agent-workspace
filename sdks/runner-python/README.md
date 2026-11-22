@@ -95,10 +95,8 @@ reads one page; `receive_push(secret, headers, body)` checks and handles a
 signed push. `send` posts a message, or answers a reply request with
 `reply={"requestId": ..., "generation": ...}`; `edit`, `delete`, `react`,
 `typing`, `download` and `upload` do the rest. `verify_push` checks Standard
-Webhooks signatures (and the older `x-workspace-signature`) against several
-secrets during a rotation, and turns a push to an older `typed_v1`
-connection into an event like any other. The tests run against
-`sdks/fixtures/delivery`.
+Webhooks signatures against several secrets during a rotation. The tests run
+against `sdks/fixtures/delivery`.
 
 The lower-level pieces are there too: `Deduper`,
 `McpClient(url, token).call_tool(name, arguments)`, `ReplyTools`,

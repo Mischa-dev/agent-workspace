@@ -56,7 +56,7 @@ async fn board_columns_and_calendar_months_read_only_their_own_records() {
     // A board and a calendar written without their fields take the first
     // that fits; a gallery needs none.
     let created = call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": "WORK",
             "name": "Builds",
@@ -77,7 +77,7 @@ async fn board_columns_and_calendar_months_read_only_their_own_records() {
     .await;
     assert_eq!(created["outcome"], "ok", "{created}");
     let described = call(
-        "collection_describe",
+        "collection_get",
         json!({"projectId": "WORK", "collection": "Builds"}),
     )
     .await;
@@ -101,10 +101,10 @@ async fn board_columns_and_calendar_months_read_only_their_own_records() {
     // The definition makes the same views in another project.
     let mut definition = described["value"]["definition"].clone();
     definition["projectId"] = json!("COPY");
-    let copied = call("collection_write", definition).await;
+    let copied = call("collection_create", definition).await;
     assert_eq!(copied["outcome"], "ok", "{copied}");
     let copy = call(
-        "collection_describe",
+        "collection_get",
         json!({"projectId": "COPY", "collection": "Builds"}),
     )
     .await;
@@ -112,19 +112,19 @@ async fn board_columns_and_calendar_months_read_only_their_own_records() {
 
     // A calendar needs a date field; a board a field that groups.
     let refused = call(
-        "collection_write",
+        "collection_create",
         json!({"projectId": "WORK", "name": "Plain", "fields": [{"name": "Notes", "type": "text"}], "views": [{"name": "When", "type": "calendar"}]}),
     )
     .await;
     assert_eq!(refused["outcome"], "invalid_request", "{refused}");
     let refused = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Builds", "views": [{"view": "Schedule", "dateField": "Notes"}]}),
     )
     .await;
     assert_eq!(refused["outcome"], "invalid_request", "{refused}");
     let refused = call(
-        "collection_write",
+        "collection_update",
         json!({"projectId": "WORK", "collection": "Builds", "views": [{"view": "Pipeline", "type": "table"}]}),
     )
     .await;
@@ -148,7 +148,7 @@ async fn board_columns_and_calendar_months_read_only_their_own_records() {
         .collect::<Vec<_>>();
     for (batch, chunk) in records.chunks(100).enumerate() {
         let written = call(
-            "record_write",
+            "record_create_many",
             json!({"projectId": "WORK", "collection": "Builds", "records": chunk, "clientRequestId": format!("builds-{batch}")}),
         )
         .await;
@@ -419,7 +419,7 @@ async fn timeline_ranges_read_only_bars_that_touch_them() {
         async move { tool(app, &codex, &session, name, arguments).await }
     };
     let created = call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": "WORK",
             "name": "Trips",
@@ -436,7 +436,7 @@ async fn timeline_ranges_read_only_bars_that_touch_them() {
     .await;
     assert_eq!(created["outcome"], "ok", "{created}");
     let described = call(
-        "collection_describe",
+        "collection_get",
         json!({"projectId": "WORK", "collection": "Trips"}),
     )
     .await;
@@ -478,7 +478,7 @@ async fn timeline_ranges_read_only_bars_that_touch_them() {
         })
         .collect::<Vec<_>>();
     let written = call(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Trips", "records": records, "clientRequestId": "trips"}),
     )
     .await;
@@ -566,7 +566,7 @@ async fn charts_add_up_a_number_field_by_group() {
         async move { tool(app, &codex, &session, name, arguments).await }
     };
     let created = call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": "WORK",
             "name": "Deals",
@@ -599,7 +599,7 @@ async fn charts_add_up_a_number_field_by_group() {
     })
     .collect::<Vec<_>>();
     let written = call(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Deals", "records": records, "clientRequestId": "deals"}),
     )
     .await;
@@ -607,7 +607,7 @@ async fn charts_add_up_a_number_field_by_group() {
 
     // The view groups by its first choice field and sums Amount.
     let described = call(
-        "collection_describe",
+        "collection_get",
         json!({"projectId": "WORK", "collection": "Deals"}),
     )
     .await;
@@ -616,7 +616,7 @@ async fn charts_add_up_a_number_field_by_group() {
     assert_eq!(view["chart"]["measure"], "sum", "{view}");
     assert_eq!(view["chart"]["field"], "Amount", "{view}");
     let by_stage = call(
-        "record_query",
+        "record_list",
         json!({"projectId": "WORK", "collection": "Deals", "view": "By stage", "limit": 1}),
     )
     .await;

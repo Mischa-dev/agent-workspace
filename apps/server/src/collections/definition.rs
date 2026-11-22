@@ -1,7 +1,7 @@
 //! A collection's fields and views as one portable piece, by name (AWD-90).
 //!
-//! collection_describe returns a collection's definition, and
-//! collection_write takes the same shape to make the collection again, here
+//! collection_get returns a collection's definition, and
+//! collection_create takes the same shape to make the collection again, here
 //! or in another project, or to change one. Each field and view is matched
 //! by name (or by `field` / `view` naming the one to change), so writing a
 //! definition a second time changes nothing. Filter values read the way
@@ -216,7 +216,7 @@ pub struct ViewWrite {
     pub remove: Option<bool>,
 }
 
-/// A collection's definition: pass its parts to collection_write to make
+/// A collection's definition: pass its parts to collection_create to make
 /// the collection again.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -1101,7 +1101,7 @@ pub async fn apply(
             ));
         }
         // Compared as stored: a record link's collection resolves by name or
-        // ID, so the definition collection_describe gives replays.
+        // ID, so the definition collection_get gives replays.
         let retargeted = match write.target.as_deref() {
             None => false,
             Some(written) => {

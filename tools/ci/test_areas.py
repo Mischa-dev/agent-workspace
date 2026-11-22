@@ -102,6 +102,76 @@ class AreaValidationTests(unittest.TestCase):
                 self.assertIn("pnpm install --frozen-lockfile --reporter=silent", calls)
                 self.assertIn("pnpm test:e2e", calls)
 
+    def test_parts_split_the_checks_without_losing_one(self):
+        """GitHub's parallel jobs (CI_PART) run between them what one run does."""
+        self.env["CI_NEXTEST_ARCHIVE"] = str(self.root / "archive.tar.zst")
+        nextest = self.root / ".cargo" / "bin" / "cargo-nextest"
+        self.stub(nextest)
+        parts = {}
+        for part, shard in (
+            ("lint", None),
+            ("rust-build", None),
+            ("rust-tests", "2/4"),
+            ("web", None),
+            ("e2e", "1/3"),
+        ):
+            self.env["CI_PART"] = part
+            if shard:
+                self.env["CI_SHARD"] = shard
+            else:
+                self.env.pop("CI_SHARD", None)
+            with self.subTest(part=part):
+                result, calls = self.run_script("checks.sh", ["rust,web"], scoped=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("All checks passed", result.stdout)
+                parts[part] = calls
+
+        lint, build, tests, web, e2e = (
+            parts[p] for p in ("lint", "rust-build", "rust-tests", "web", "e2e")
+        )
+        self.assertIn("cargo fmt --check", lint)
+        self.assertIn("cargo clippy --workspace --all-targets --all-features -- -D warnings", lint)
+        self.assertIn("cargo deny check", lint)
+        self.assertIn(
+            f"cargo nextest archive --workspace --archive-file {self.env['CI_NEXTEST_ARCHIVE']}",
+            build,
+        )
+        self.assertIn("cargo build -p agent-workspace-server --bin agent-workspace-server", build)
+        self.assertIn("cargo test --workspace --doc --quiet", build)
+        self.assertTrue(any(c.split() == ["schema-snapshot.sh"] for c in build))
+        run = [c for c in tests if c.startswith("cargo-nextest nextest run")]
+        self.assertEqual(len(run), 1, tests)
+        self.assertIn(f"--archive-file {self.env['CI_NEXTEST_ARCHIVE']}", run[0])
+        self.assertIn("--partition slice:2/4", run[0])
+        self.assertIn("--profile ci", run[0])
+        self.assertTrue(any(c.startswith("createdb ") for c in tests), tests)
+        for call in ("pnpm lint", "pnpm typecheck", "pnpm test", "pnpm build"):
+            self.assertIn(call, web)
+        # The shard's tests are listed, dealt out (e2e_shard.py) and run from
+        # that list.
+        self.assertIn("pnpm --filter @agent-workspace/web exec playwright test --list --reporter=json", e2e)
+        self.assertTrue(any(c.startswith("python3 -I tools/ci/e2e_shard.py 1/3") for c in e2e), e2e)
+        self.assertTrue(
+            any(c.startswith("pnpm --filter @agent-workspace/web exec playwright test --test-list ") for c in e2e),
+            e2e,
+        )
+        # Each part runs only its own checks: no cargo build in the e2e or web
+        # jobs, no browser in the others, no tests run twice.
+        self.assertFalse(any(c.startswith("cargo") for c in web + e2e), web + e2e)
+        for calls in (lint, build, tests, web):
+            self.assertFalse(any("playwright" in c or "test:e2e" in c for c in calls))
+        self.assertNotIn("cargo nextest run --workspace --profile ci", sum(parts.values(), []))
+
+    def test_invalid_part_or_shard_fails_before_side_effects(self):
+        for name, value in (("CI_PART", "rust"), ("CI_SHARD", "1of4"), ("CI_SHARD", "0/4")):
+            env = {name: value}
+            with self.subTest(**env):
+                self.env.update(env)
+                result, calls = self.run_script("checks.sh", ["rust,web"])
+                del self.env[name]
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(calls, [])
+
     def test_browser_smoke_fails_in_ci_instead_of_skipping(self):
         del self.env["PLAYWRIGHT_CHROMIUM_EXECUTABLE"]
         result, calls = self.run_script("checks.sh", ["web"], scoped=True)

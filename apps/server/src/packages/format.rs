@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::ops::OpError;
 use crate::workspace_templates::TemplateDefinition;
 
 pub const FORMAT: &str = "agent-workspace-package/1";
@@ -119,7 +120,7 @@ pub enum ContentKind {
     Channels,
     /// A built module's definition.
     Module,
-    /// `collection_describe`'s definition.
+    /// `collection_get`'s definition.
     Collection,
     /// A form on a collection, without its link.
     Form,
@@ -131,6 +132,9 @@ pub enum ContentKind {
     Skill,
     /// An agent template (never an account).
     Agent,
+    /// A theme, offered to the workspace: `{"name", "document"}`, where the
+    /// document is the theme file Appearance exports.
+    Theme,
 }
 
 impl ContentKind {
@@ -148,6 +152,7 @@ impl ContentKind {
             Self::Page => "page",
             Self::Skill => "skill",
             Self::Agent => "agent",
+            Self::Theme => "theme",
         }
     }
 }
@@ -204,6 +209,16 @@ fn is_key(text: &str) -> bool {
         && text
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// A version's three numbers, for ordering (None for one that isn't a
+/// semantic version).
+pub fn version_order(text: &str) -> Option<(u32, u32, u32)> {
+    if !is_version(text) {
+        return None;
+    }
+    let mut parts = text.split('.').map(|part| part.parse::<u32>().ok());
+    Some((parts.next()??, parts.next()??, parts.next()??))
 }
 
 fn is_version(text: &str) -> bool {
@@ -332,6 +347,12 @@ impl Package {
                 && matches!(part.kind, ContentKind::Switches | ContentKind::Layout)
             {
                 problems.push(format!("{name}: only a workspace package sets this"));
+            }
+            if part.kind == ContentKind::Theme
+                && let Some(body) = &part.body
+                && let Err(problem) = check_theme(body)
+            {
+                problems.push(format!("{name}: {problem}"));
             }
         }
         for needed in &self.needs_admin {
@@ -494,6 +515,27 @@ pub fn is_default_reference(body: &Value) -> bool {
     })
 }
 
+/// A theme part's body: a name in one line and a document the theme
+/// contract accepts (nothing in it loads from elsewhere).
+pub fn check_theme(body: &Value) -> Result<(String, crate::themes::ThemeDocument), String> {
+    let limit = crate::themes::CONTRACT.name_limit;
+    let name = body["name"].as_str().unwrap_or("").trim();
+    if name.is_empty() || name.chars().count() > limit || name.chars().any(char::is_control) {
+        return Err(format!(
+            "a theme's name is one line of 1 to {limit} characters"
+        ));
+    }
+    let document = serde_json::from_value::<crate::themes::ThemeDocument>(
+        body.get("document").cloned().unwrap_or(Value::Null),
+    )
+    .map_err(|error| format!("its document isn't a theme: {error}"))?;
+    document.check().map_err(|error| match error {
+        OpError::Invalid { field, message } => format!("{field}: {message}"),
+        _ => "its document isn't a theme".to_owned(),
+    })?;
+    Ok((name.to_owned(), document))
+}
+
 /// A workspace package read back as a template, for the template list and
 /// routes (M1.11): `None` when it holds a part a template can't (a form,
 /// an automation, a page, a skill, an agent, a built module).
@@ -577,6 +619,14 @@ pub fn schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn versions_order_by_their_numbers() {
+        assert!(version_order("1.10.0") > version_order("1.9.3"));
+        assert!(version_order("2.0.0") > version_order("1.99.99"));
+        assert_eq!(version_order("1.0"), None);
+        assert_eq!(version_order("01.0.0"), None);
+    }
 
     #[test]
     fn the_built_in_templates_are_packages_that_validate() {

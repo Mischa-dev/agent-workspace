@@ -74,6 +74,9 @@ export class WorkspaceBridge {
   private readonly claiming = new Set<string>()
   /** Requests cancelled while their claim was still on its way. */
   private readonly cancelledWhileClaiming = new Set<string>()
+  /** Requests being given back: still claimed until reply_release answers,
+   * so a pick-up in the meantime must not take them again. */
+  private readonly releasing = new Set<string>()
   /** The last pick-up came back full: more may wait behind it. */
   private backlog = false
   private pickingUp: Promise<void> | null = null
@@ -133,7 +136,7 @@ export class WorkspaceBridge {
   }
 
   private async take(requestId: string): Promise<void> {
-    if (this.held.has(requestId) || this.claiming.has(requestId)) return
+    if (this.held.has(requestId) || this.claiming.has(requestId) || this.releasing.has(requestId)) return
     this.claiming.add(requestId)
     try {
       await this.claimAndRun(requestId)
@@ -234,23 +237,30 @@ export class WorkspaceBridge {
   }
 
   private async release(held: Held, reason: string): Promise<void> {
-    this.close(held)
+    // Kept out of pick-ups until the release is in, or a pick-up (set off
+    // by closing) could claim it again and start a second turn.
+    this.releasing.add(held.requestId)
+    held.closed = true
+    this.held.delete(held.requestId)
     try {
       await this.call('reply_release', { requestId: held.requestId, generation: held.generation, reason })
     } catch (error) {
       this.options.log?.warn?.(`agent-workspace: reply_release failed: ${String(error)}`)
+    } finally {
+      this.releasing.delete(held.requestId)
     }
+    if (this.backlog) void this.pickUpWaiting()
   }
 
   private async progress(held: Held, status: string): Promise<void> {
     try {
-      await this.call('reply_progress', {
+      await this.call('reply_progress_report', {
         requestId: held.requestId,
         generation: held.generation,
         status: status.slice(0, 200),
       })
     } catch (error) {
-      this.options.log?.info?.(`agent-workspace: reply_progress failed: ${String(error)}`)
+      this.options.log?.info?.(`agent-workspace: reply_progress_report failed: ${String(error)}`)
     }
   }
 

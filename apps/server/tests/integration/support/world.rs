@@ -67,13 +67,14 @@ pub(crate) async fn create_project(setup: &Setup, key: &str, name: &str) -> Stri
         &setup.app,
         setup.browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", setup.organization_id),
             Some(&format!("create-{key}")),
-            json!({"organizationId": setup.organization_id, "key": key, "name": name}),
+            json!({"key": key, "name": name}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{project}");
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project = project["value"].clone();
     project["id"].as_str().expect("project").to_owned()
 }
 
@@ -292,16 +293,15 @@ impl WorldBuilder {
         }
         let mut roles = BTreeMap::new();
         for (name, base, permissions) in &self.custom_roles {
-            let (status, role) = send(
-                &app,
-                setup.browser.request(
-                    "POST",
-                    &format!("/api/v1/organizations/{}/roles", owner.organization_id),
-                    None,
+            let (status, role) = setup
+                .browser
+                .op_in(
+                    &app,
+                    owner.organization_id,
+                    "role_create",
                     json!({"name": name, "baseRole": base, "permissions": permissions}),
-                ),
-            )
-            .await;
+                )
+                .await;
             assert!(status.is_success(), "{role}");
             let id = role["role"]["id"]
                 .as_str()
@@ -408,7 +408,7 @@ async fn a_world_has_every_kind_of_caller() {
         .await;
     assert_eq!(status, StatusCode::OK, "{by_http}");
     let read = || Call::Tool {
-        name: "project_open",
+        name: "project_get",
         arguments: json!({"projectId": "WORK"}),
     };
     let (_, by_app) = world.apps["codex"].call(app, read()).await;
@@ -423,7 +423,7 @@ async fn a_world_has_every_kind_of_caller() {
         .call(
             app,
             Call::PublicApi {
-                tool: "project_open",
+                tool: "project_get",
                 arguments: json!({"projectId": "WORK"}),
             },
         )

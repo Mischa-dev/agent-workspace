@@ -55,7 +55,7 @@ export function SelectionBar({
   // A multiple choice reports each toggle; the last one is sent when its editor closes.
   const chosen = useRef<{ value: FieldValue | null } | null>(null)
 
-  const run = async (changes: BulkChanges, cards: readonly WorkItemCard[]) => {
+  const run = async (changes: BulkChanges, cards: ReadonlyArray<Pick<WorkItemCard, 'id' | 'key' | 'version'>>) => {
     setSaving(true)
     try {
       return await bulkUpdateWorkItems({

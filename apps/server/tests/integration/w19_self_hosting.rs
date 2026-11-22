@@ -724,15 +724,14 @@ async fn notification_email_waits_for_a_confirmed_address_and_respects_the_diges
     assert_eq!(mail_count(&inbox), before);
 
     // With a daily digest, nothing goes one at a time; the digest collects it.
-    let (status, body) = call(
-        setup,
-        &mara,
-        "PUT",
-        "/api/v1/settings/values/notifications.digest",
-        None,
-        json!({"scope": "user", "organizationId": setup.organization_id, "value": "daily"}),
-    )
-    .await;
+    let (status, body) = mara
+        .op_in(
+            &setup.app,
+            setup.organization_id,
+            "setting_update",
+            json!({"key": "notifications.digest", "scope": "user", "value": "daily"}),
+        )
+        .await;
     assert!(status.is_success(), "{status} {body}");
     say(
         setup,

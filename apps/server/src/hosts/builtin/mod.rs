@@ -15,21 +15,45 @@ use serde_json::Value;
 use sqlx::{PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
+pub mod accounts;
 pub mod assistant;
 pub mod capacity;
+pub mod custom;
 pub mod driver;
+pub mod harness_host;
 pub mod http;
+pub mod install;
+pub mod preflight;
+pub mod program;
+pub mod recovery;
 pub mod report;
+pub mod repositories;
 pub mod requests;
 pub mod transport;
+pub mod worktrees;
+
+/// The registry of harness processes the embedded built-in host runs. The
+/// server's state carries it only so this process can be the host.
+pub use crate::provider::SupervisorRegistry;
+/// The host's git work on its mirrors and run worktrees.
+pub use agent_workspace_builtin_host::git;
+
+/// The harness a personal profile gets when its owner names neither a
+/// harness nor an account: the built-in host's first choice.
+pub const DEFAULT_HARNESS: &str = crate::provider::CODEX_KIND;
+
+/// The manifest of [`DEFAULT_HARNESS`], for seeding a demo project.
+pub fn default_manifest() -> crate::harness::manifest::AdapterManifest {
+    crate::provider::codex_manifest()
+}
 
 use crate::{
     AppState,
     domain::RunState,
     error::AppError,
+    harness::run_config::RunConfig,
     hosts::builtin::http::RunSetup,
     outbox,
-    provider::run_config::RunConfig,
     runs::{ACTIVE_RUN_STATES, run_cap},
 };
 
@@ -119,6 +143,22 @@ pub(crate) async fn resolve_config(
     resolve_config_with(state, &defaults, setup, launch).await
 }
 
+/// A1.17: tells the server which harnesses this host runs, so it offers
+/// them and checks launches against them without asking the host.
+pub async fn describe_harnesses(
+    state: &AppState,
+    client: &agent_workspace_host_protocol::HostClient,
+    lease_token: i64,
+) -> Result<(), agent_workspace_host_protocol::ClientError> {
+    client
+        .builtin_harnesses(&agent_workspace_host_protocol::BuiltinHarnesses {
+            harnesses: state.supervisors.builtin_manifests(),
+            lease_token,
+        })
+        .await
+        .map(|_| ())
+}
+
 /// [`resolve_config`] when the caller already read the run settings.
 pub(crate) async fn resolve_config_with(
     state: &AppState,
@@ -126,12 +166,16 @@ pub(crate) async fn resolve_config_with(
     setup: &RunSetup,
     launch: &RunConfig,
 ) -> Result<RunConfig, AppError> {
-    let account_defaults = match state.supervisors.manifest(&setup.adapter_kind) {
-        Some(manifest) => crate::launch::merged_defaults(&setup.run_defaults, defaults, &manifest),
+    // One catalog for both: the defaults are merged against the manifest
+    // the launch is checked against.
+    let harnesses = crate::harness_catalog::Harnesses::of(state, setup.organization_id).await?;
+    let account_defaults = match harnesses.manifest(&setup.adapter_kind) {
+        Some(manifest) => crate::launch::merged_defaults(&setup.run_defaults, defaults, manifest),
         None => setup.run_defaults.clone(),
     };
-    crate::provider::resolve_run_config(
+    crate::model_catalog::resolve_run_config(
         state,
+        &harnesses,
         setup.organization_id,
         &setup.adapter_kind,
         &account_defaults,

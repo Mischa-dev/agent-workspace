@@ -428,13 +428,14 @@ async fn channels_are_joined_left_and_browsed() {
         app,
         world.owner.browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", world.organization),
             Some("c2-7-side"),
-            json!({"organizationId": world.organization, "key": "SIDE", "name": "Side"}),
+            json!({"key": "SIDE", "name": "Side"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{side}");
+    assert_eq!(status, StatusCode::OK, "{side}");
+    let side = side["value"].clone();
     let side = side["id"].as_str().expect("side").to_owned();
     let (status, open) = send(
         app,
@@ -466,16 +467,15 @@ async fn channels_are_joined_left_and_browsed() {
         .as_str()
         .expect("closed")
         .to_owned();
-    let (status, added) = send(
-        app,
-        world.owner.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{side}/members"),
-            None,
-            json!({"actorId": mara.actor, "role": "member"}),
-        ),
-    )
-    .await;
+    let (status, added) = world
+        .owner
+        .browser
+        .op(
+            app,
+            "space_member_add",
+            json!({"spaceId": side, "account": mara.actor, "role": "member"}),
+        )
+        .await;
     assert!(status.is_success(), "{added}");
     assert!(in_sidebar(app, mara, &side, &open).await);
     assert!(!in_sidebar(app, mara, &side, &closed).await);

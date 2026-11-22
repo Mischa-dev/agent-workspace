@@ -1,9 +1,9 @@
 //! Tasks' core writes as operations (K2.13): create, update (with blocked
-//! and ready for review, which `task_mark_blocked` and
-//! `task_mark_ready_for_review` now alias), archive, restore, comments and
+//! and ready for review, which replaced `task_mark_blocked` and
+//! `task_mark_ready_for_review`), archive, restore, comments and
 //! acceptance criteria. Agents call them as tools of the same names
-//! (`task_comment`, `task_comment_edit`, `task_criteria` and the two mark
-//! tools stay as aliases), scripts through the v2 route, and rules as
+//! (the old `task_comment`, `task_comment_edit`, `task_criteria` and
+//! mark tools are retired), scripts through the v2 route, and rules as
 //! actions. Each runs the command the hand-written tool ran
 //! (`mcp::task_commands`, over `work_item_commands`), which keeps its own
 //! idempotency scope, its own checks and its own audit row.
@@ -20,6 +20,7 @@ use crate::{
             TaskWritten,
         },
     },
+    message_content::MessageContent,
     ops::{
         Idempotency, OpCall, OpError, OpKind, Operation, Perm, Registry, Target, Targeted,
         refs::IdRef,
@@ -113,7 +114,7 @@ pub struct TaskCreateInput {
     #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
     pub item_type: Option<String>,
     /// Labels by name or ID, at most 20. They must exist already; create one
-    /// with label_write.
+    /// with label_create.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub labels: Option<Vec<String>>,
     /// What done looks like, one criterion per entry, in order (at most 50).
@@ -150,11 +151,11 @@ pub struct TaskCreateInput {
     pub estimate: Option<f64>,
     /// Custom field values by field name (see field_list), such as
     /// {"Risk": "High", "Owner": "@ana", "Shipped": true}. In a collection
-    /// that acts like a task, its own fields (see collection_describe).
+    /// that acts like a task, its own fields (see collection_get).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fields: Option<serde_json::Map<String, serde_json::Value>>,
     /// Make it in a collection that acts like a task, such as "Bugs", by
-    /// name or ID (project_open lists them). Left out, it's a plain task.
+    /// name or ID (project_get lists them). Left out, it's a plain task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collection: Option<String>,
     /// Made from this message, one in the same space you can read: the task
@@ -213,7 +214,7 @@ impl Operation for TaskCreate {
             (Some(_), _) | (None, Some(_)) => None,
             (None, None) => Some(call.ctx.caller.confined_space.ok_or(OpError::invalid(
                 "projectId",
-                "Say which space with projectId (see projects_list).",
+                "Say which space with projectId (see project_list).",
             ))?),
         };
         let written = task_commands::create(call.state, call.ctx, space, &input).await?;
@@ -223,7 +224,7 @@ impl Operation for TaskCreate {
 }
 
 // ---------------------------------------------------------------------------
-// task_update (aliases task_mark_blocked, task_mark_ready_for_review)
+// task_update
 
 pub struct TaskUpdate;
 
@@ -233,7 +234,7 @@ pub struct TaskUpdateInput {
     /// The task: its ID, link, or key such as AWD-12.
     #[serde(alias = "workItemId")]
     pub task_id: IdRef,
-    /// The version you last read (from task_open or task_list).
+    /// The version you last read (from task_get or task_list).
     pub expected_version: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -326,6 +327,10 @@ pub struct TaskUpdateInput {
     /// true clears its blocker and moves it to review. Pass it on its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready_for_review: Option<bool>,
+    /// true clears its blocker and leaves it in its status. Pass it on its
+    /// own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unblock: Option<bool>,
     /// When your role only suggests on tasks and the change becomes a
     /// proposal: why, for whoever decides it (up to 500 characters).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -342,6 +347,7 @@ impl TaskUpdateInput {
                 "expectedVersion",
                 "blockedReason",
                 "readyForReview",
+                "unblock",
                 "note",
             ] {
                 object.remove(own);
@@ -373,8 +379,8 @@ impl Operation for TaskUpdate {
         (who it is handed to), type, status (by name), its place in its column (position, beforeTaskId, afterTaskId), \
         its parent (parentId, or clearParent for top-level), labels (addLabels, removeLabels), \
         or archive it (archived: true; false restores; pass it on its own). Mark it blocked \
-        with blockedReason, or clear the blocker and move it to review with readyForReview: \
-        true (each on its own). Pass the version you last read as expectedVersion; on a \
+        with blockedReason, clear the blocker with unblock: true, or clear it and move it to \
+        review with readyForReview: true (each on its own). Pass the version you last read as expectedVersion; on a \
         conflict, open it again and retry. If your role only suggests on tasks, a change to \
         its own fields becomes a proposal (proposalId) that someone who edits the task accepts \
         or rejects, from its request card or with proposal_decide; it is then written as yours.";
@@ -386,15 +392,19 @@ impl Operation for TaskUpdate {
 
     async fn run(call: &mut OpCall<'_>, input: TaskUpdateInput) -> Result<TaskWritten, OpError> {
         let task_id = input.task_id.id();
-        let blocker = input.blocked_reason.is_some() || input.ready_for_review.is_some();
-        if blocker
-            && (input.changes_fields()
-                || input.blocked_reason.is_some() == input.ready_for_review.is_some())
-        {
+        let blockers = [
+            input.blocked_reason.is_some(),
+            input.ready_for_review.is_some(),
+            input.unblock.is_some(),
+        ]
+        .into_iter()
+        .filter(|set| *set)
+        .count();
+        if blockers > 1 || (blockers == 1 && input.changes_fields()) {
             return Err(OpError::invalid(
                 "blockedReason",
-                "Pass blockedReason or readyForReview on its own, then make other changes with \
-                 the new version.",
+                "Pass blockedReason, readyForReview or unblock on its own, then make other \
+                 changes with the new version.",
             ));
         }
         if let Some(written) = propose_instead(call, &input).await? {
@@ -406,6 +416,16 @@ impl Operation for TaskUpdate {
             return Ok(written);
         }
         let written = match (input.blocked_reason.clone(), input.ready_for_review) {
+            (None, None) if input.unblock == Some(true) => {
+                task_commands::clear_blocker(call.state, call.ctx, task_id, input.expected_version)
+                    .await?
+            }
+            (None, None) if input.unblock == Some(false) => {
+                return Err(OpError::invalid(
+                    "unblock",
+                    "unblock takes true; to block it, pass blockedReason.",
+                ));
+            }
             (Some(reason), _) => {
                 task_commands::mark_blocked(
                     call.state,
@@ -498,7 +518,8 @@ async fn propose_instead(
         || input.cycle.is_some()
         || input.delegate.is_some()
         || input.blocked_reason.is_some()
-        || input.ready_for_review.is_some();
+        || input.ready_for_review.is_some()
+        || input.unblock.is_some();
     if edit_only {
         return Err(denied(task_proposals::EDIT_ONLY.to_owned()));
     }
@@ -641,7 +662,7 @@ pub struct TaskVersionInput {
     /// The task: its ID, link, or key such as AWD-12.
     #[serde(alias = "workItemId")]
     pub task_id: IdRef,
-    /// The version you last read (from task_open or task_list).
+    /// The version you last read (from task_get or task_list).
     pub expected_version: i64,
 }
 
@@ -713,7 +734,7 @@ impl Operation for TaskRestore {
 }
 
 // ---------------------------------------------------------------------------
-// task_comment_create (alias task_comment)
+// task_comment_create
 
 pub struct TaskCommentCreate;
 
@@ -725,13 +746,16 @@ pub struct TaskCommentCreateInput {
     pub task_id: IdRef,
     /// The comment or update. It may span several lines and use Markdown.
     /// @handles of people in the space become mentions and notify them.
-    #[serde(alias = "update")]
-    pub text: String,
+    #[serde(alias = "update", default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Structured content instead of text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<MessageContent>,
     /// Files to post with it: up to 10 fileIds from file_upload with taskId
     /// and forComment: true on this task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachment_ids: Option<Vec<String>>,
-    /// To answer one comment on this task, its id (task_open lists them): it
+    /// To answer one comment on this task, its id (task_get lists them): it
     /// shows quoted above yours, and its author is told.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to_comment_id: Option<String>,
@@ -767,7 +791,10 @@ impl Operation for TaskCommentCreate {
             call.state,
             call.ctx,
             input.task_id.id(),
-            input.text,
+            task_commands::CommentText {
+                text: input.text,
+                content: input.content,
+            },
             input.attachment_ids,
             input.reply_to_comment_id,
         )
@@ -778,7 +805,7 @@ impl Operation for TaskCommentCreate {
 }
 
 // ---------------------------------------------------------------------------
-// task_comment_update (alias task_comment_edit), task_comment_delete
+// task_comment_update, task_comment_delete
 
 pub struct TaskCommentUpdate;
 
@@ -787,12 +814,16 @@ pub struct TaskCommentUpdate;
 pub struct TaskCommentUpdateInput {
     /// The task: its ID, link, or key such as AWD-12.
     pub task_id: IdRef,
-    /// The comment's ID. task_open lists the task's recent comments with
+    /// The comment's ID. task_get lists the task's recent comments with
     /// their IDs.
     pub comment_id: IdRef,
     /// The new text, 1 to 20,000 characters. Line breaks and Markdown are
     /// kept.
-    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// New structured content instead of text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<MessageContent>,
     /// The revision you read (this returns it; a comment never edited is 1).
     /// Leave it out to edit whatever is there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -809,8 +840,11 @@ impl Operation for TaskCommentUpdate {
     const NAME: &'static str = "task_comment_update";
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "tasks";
-    const PERMISSION: Option<Perm> = Some(Perm::TasksEdit);
-    const IDEMPOTENCY: Idempotency = Idempotency::Command;
+    const PERMISSION: Option<Perm> = Some(Perm::TasksComment);
+    // The edit commits in its own transaction: the dispatcher keeps the
+    // request id apart from it, so a retry replays the first answer.
+    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    const OWN_TRANSACTION: bool = true;
     const TITLE: &'static str = "Edit task comment";
     const DESCRIPTION: &'static str = "Edit your own comment on a task. Earlier versions stay in \
         the comment's history for everyone who can see the task, and it shows (edited). To take \
@@ -830,12 +864,13 @@ impl Operation for TaskCommentUpdate {
             call.ctx,
             input.task_id.id(),
             input.comment_id.id(),
-            input.text,
+            task_commands::CommentText {
+                text: input.text,
+                content: input.content,
+            },
             input.expected_revision,
         )
         .await?;
-        // The command keeps no request ids, so a retry after a later edit
-        // would write again: replaySafe stays false.
         call.audited_by_command();
         Ok(edited)
     }
@@ -848,7 +883,7 @@ pub struct TaskCommentDelete;
 pub struct TaskCommentDeleteInput {
     /// The task: its ID, link, or key such as AWD-12.
     pub task_id: IdRef,
-    /// The comment's ID. task_open lists the task's recent comments with
+    /// The comment's ID. task_get lists the task's recent comments with
     /// their IDs.
     pub comment_id: IdRef,
 }
@@ -863,7 +898,7 @@ impl Operation for TaskCommentDelete {
     const NAME: &'static str = "task_comment_delete";
     const KIND: OpKind = OpKind::Change;
     const MODULE: &'static str = "tasks";
-    const PERMISSION: Option<Perm> = Some(Perm::TasksEdit);
+    const PERMISSION: Option<Perm> = Some(Perm::TasksComment);
     const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const DESTRUCTIVE: bool = true;
     const TITLE: &'static str = "Delete task comment";
@@ -895,7 +930,7 @@ impl Operation for TaskCommentDelete {
 }
 
 // ---------------------------------------------------------------------------
-// task_criteria_update (alias task_criteria)
+// task_criteria_update
 
 pub struct TaskCriteriaUpdate;
 
@@ -905,7 +940,7 @@ pub struct TaskCriteriaUpdateInput {
     /// The task: its ID, link, or key such as AWD-12.
     #[serde(alias = "workItemId")]
     pub task_id: IdRef,
-    /// The task's version you last read (from task_open or task_list).
+    /// The task's version you last read (from task_get or task_list).
     pub expected_version: i64,
     /// 1 to 50 operations, applied in order. Either all apply or none do.
     pub operations: Vec<CriterionOperationArgument>,
@@ -1548,9 +1583,9 @@ impl Operation for InitiativeList {
     const IDEMPOTENCY: Idempotency = Idempotency::None;
     const TITLE: &'static str = "List initiatives";
     const DESCRIPTION: &'static str = "The workspace's initiatives: work that spans spaces, \
-        each a record of the workspace's Initiatives collection (change one with record_write \
+        each a record of the workspace's Initiatives collection (change one with record_update_many \
         there) with its milestones in the spaces you can see and their task counts. Put a \
-        milestone in one with milestone_write's initiative; make one with initiative_create.";
+        milestone in one with milestone_create's initiative; make one with initiative_create.";
 
     type Input = InitiativeListInput;
     type Output = super::initiatives::Initiatives;
@@ -1614,7 +1649,7 @@ impl Operation for InitiativeCreate {
     const DESCRIPTION: &'static str = "Start an initiative: work that spans spaces, followed \
         through its milestones. It is a record of the workspace's Initiatives collection \
         (made with Owner, Status, Target date and Health fields the first time), so it is \
-        changed with record_write there. Add milestones with milestone_write's initiative.";
+        changed with record_update_many there. Add milestones with milestone_create's initiative.";
 
     type Input = InitiativeCreateInput;
     type Output = InitiativeCreateOutput;

@@ -53,10 +53,12 @@ async fn post(
         if let Some(method) = payload["method"].as_str() {
             request = request.header("mcp-method", method);
         }
-        // A task method names its task there.
+        // A task method names its task there, and a resource read its
+        // address.
         if let Some(name) = payload
             .pointer("/params/name")
             .or_else(|| payload.pointer("/params/taskId"))
+            .or_else(|| payload.pointer("/params/uri"))
             .and_then(Value::as_str)
         {
             request = request.header("mcp-name", name);
@@ -247,7 +249,7 @@ async fn every_served_revision_lists_reads_writes_and_resumes() {
             request(
                 3,
                 "tools/call",
-                json!({ "name": "projects_list", "arguments": {} }),
+                json!({ "name": "project_list", "arguments": {} }),
                 revision,
             ),
         )
@@ -618,4 +620,278 @@ async fn long_calls_finish_as_tasks_any_server_can_answer() {
     );
     let (_, _, hidden) = post(app, &token, STATELESS, None, tasks_get(27, &task_id, true)).await;
     assert!(hidden.get("error").is_some(), "{hidden}");
+}
+
+/// Opens a session on a revision that has one; `None` on 2026-07-28.
+async fn open(app: &axum::Router, token: &str, revision: &str) -> Option<String> {
+    if revision == STATELESS {
+        return None;
+    }
+    let (status, session, initialized) = post(
+        app,
+        token,
+        revision,
+        None,
+        json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": revision,
+                "capabilities": {},
+                "clientInfo": { "name": "resources", "version": "1" }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{revision}: {initialized}");
+    let session = session.unwrap_or_else(|| panic!("{revision} gives a session"));
+    let (status, _, _) = post(
+        app,
+        token,
+        revision,
+        Some(&session),
+        json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{revision} initialized");
+    Some(session)
+}
+
+/// One tools/call's structured answer.
+async fn call(app: &axum::Router, token: &str, name: &str, arguments: Value) -> Value {
+    let (status, _, answer) = post(
+        app,
+        token,
+        STATELESS,
+        None,
+        request(
+            9,
+            "tools/call",
+            json!({ "name": name, "arguments": arguments }),
+            STATELESS,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{name}: {answer}");
+    answer["result"]["structuredContent"].clone()
+}
+
+/// K2.20: guide pages read as resources and skills come through the skills
+/// extension on every revision, each as the caller may read it: a page in
+/// a space they're not in is neither listed nor read. The server card says
+/// what the server is before anyone connects.
+#[tokio::test]
+async fn resources_and_skills_follow_access_and_the_card_describes_the_server() {
+    let Some(setup) = setup("k2_mcp_resources").await else {
+        return;
+    };
+    let app = &setup.app;
+    let open_space = create_project(&setup, "RES", "Resources").await;
+    let closed_space = create_project(&setup, "PRV", "Private").await;
+    let owner = connect_app(app, &setup.browser, "Owner's app", "full").await;
+    let page = |space: &str, title: &str, extra: Value| {
+        let mut arguments = json!({
+            "projectId": space,
+            "title": title,
+            "body": format!("{title}: the okapi rule"),
+        });
+        for (key, value) in extra.as_object().into_iter().flatten() {
+            arguments[key.as_str()] = value.clone();
+        }
+        arguments
+    };
+    let guide = call(
+        app,
+        &owner,
+        "page_create",
+        page(&open_space, "Guide", json!({"isGuide": true})),
+    )
+    .await;
+    assert_eq!(guide["outcome"], "ok", "{guide}");
+    let guide_uri = format!(
+        "workspace://pages/{}",
+        guide["value"]["id"].as_str().expect("id")
+    );
+    let hidden = call(
+        app,
+        &owner,
+        "page_create",
+        page(&closed_space, "Secret guide", json!({"isGuide": true})),
+    )
+    .await;
+    assert_eq!(hidden["outcome"], "ok", "{hidden}");
+    let hidden_uri = format!(
+        "workspace://pages/{}",
+        hidden["value"]["id"].as_str().expect("id")
+    );
+    let skill = call(
+        app,
+        &owner,
+        "page_create",
+        page(
+            &open_space,
+            "Deploy steps",
+            json!({"skillDescription": "When you deploy"}),
+        ),
+    )
+    .await;
+    assert_eq!(skill["outcome"], "ok", "{skill}");
+    let skill_uri = format!(
+        "workspace://skills/{}/deploy-steps/SKILL.md",
+        skill["value"]["id"].as_str().expect("id")
+    );
+
+    let (_, mara_browser) =
+        super::message_edits::add_person(&setup, &[open_space.as_str()], "mara").await;
+    let mara = connect_app(app, &mara_browser, "Mara's app", "full").await;
+
+    for revision in LEGACY.into_iter().chain([STATELESS]) {
+        let session = open(app, &mara, revision).await;
+        let ask = |id: u64, method: &'static str, params: Value| {
+            let session = session.clone();
+            let mara = mara.clone();
+            async move {
+                let (status, _, answer) = post(
+                    app,
+                    &mara,
+                    revision,
+                    session.as_deref(),
+                    request(id, method, params, revision),
+                )
+                .await;
+                assert_eq!(status, StatusCode::OK, "{revision} {method}: {answer}");
+                answer
+            }
+        };
+
+        let listed = ask(2, "resources/list", json!({})).await;
+        let uris = listed
+            .pointer("/result/resources")
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("{revision} resources: {listed}"))
+            .iter()
+            .filter_map(|resource| resource["uri"].as_str())
+            .collect::<Vec<_>>();
+        assert!(uris.contains(&guide_uri.as_str()), "{revision}: {listed}");
+        assert!(
+            !listed.to_string().contains("Secret"),
+            "{revision}: {listed}"
+        );
+
+        let templates = ask(3, "resources/templates/list", json!({})).await;
+        assert!(
+            templates.to_string().contains("workspace://pages/{pageId}"),
+            "{revision}: {templates}"
+        );
+
+        let read = ask(4, "resources/read", json!({ "uri": guide_uri })).await;
+        assert_eq!(
+            read.pointer("/result/contents/0/text"),
+            Some(&json!("Guide: the okapi rule")),
+            "{revision}: {read}"
+        );
+        assert_eq!(
+            read.pointer("/result/contents/0/mimeType"),
+            Some(&json!("text/markdown")),
+            "{revision}: {read}"
+        );
+        let refused = ask(5, "resources/read", json!({ "uri": hidden_uri })).await;
+        assert!(refused["result"].is_null(), "{revision}: {refused}");
+        assert!(refused["error"].is_object(), "{revision}: {refused}");
+        assert!(
+            !refused.to_string().contains("okapi"),
+            "{revision}: {refused}"
+        );
+
+        let skills = ask(6, "skills/list", json!({})).await;
+        let listed_skill = skills
+            .pointer("/result/skills")
+            .and_then(Value::as_array)
+            .and_then(|skills| skills.iter().find(|skill| skill["uri"] == skill_uri))
+            .unwrap_or_else(|| panic!("{revision} skills: {skills}"))
+            .clone();
+        assert_eq!(listed_skill["frontmatter"]["name"], "deploy-steps");
+        assert_eq!(
+            listed_skill["frontmatter"]["description"],
+            "When you deploy"
+        );
+        let got = ask(7, "skills/get", json!({ "uri": skill_uri })).await;
+        assert_eq!(got.pointer("/result/skill"), Some(&listed_skill), "{got}");
+        let file = ask(8, "resources/read", json!({ "uri": skill_uri })).await;
+        let text = file
+            .pointer("/result/contents/0/text")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("{revision} SKILL.md: {file}"));
+        assert!(text.starts_with("---\nname: deploy-steps\n"), "{text}");
+        assert_eq!(
+            listed_skill["resources"][0]["size"],
+            json!(text.len()),
+            "{revision}: {listed_skill}"
+        );
+    }
+
+    // The owner, who is in the closed space, reads its guide: the refusal
+    // above is Mara's access, not a broken read.
+    let session = open(app, &owner, LEGACY[0]).await;
+    let (status, _, read) = post(
+        app,
+        &owner,
+        LEGACY[0],
+        session.as_deref(),
+        request(
+            10,
+            "resources/read",
+            json!({ "uri": hidden_uri }),
+            LEGACY[0],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(
+        read.pointer("/result/contents/0/text"),
+        Some(&json!("Secret guide: the okapi rule")),
+        "{read}"
+    );
+
+    // The card needs no sign-in.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/.well-known/mcp/server-card.json")
+                .header(header::HOST, "127.0.0.1")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let card: Value = serde_json::from_slice(
+        &to_bytes(response.into_body(), 4_000_000)
+            .await
+            .expect("body"),
+    )
+    .expect("JSON");
+    assert_eq!(card["serverInfo"]["name"], "agent-workspace", "{card}");
+    assert!(
+        card["transport"]["endpoint"]
+            .as_str()
+            .is_some_and(|endpoint| endpoint.ends_with(MCP_PATH)),
+        "{card}"
+    );
+    assert!(card["capabilities"]["resources"].is_object(), "{card}");
+    assert!(
+        card["supportedProtocolVersions"]
+            .as_array()
+            .is_some_and(|versions| LEGACY
+                .iter()
+                .chain([&STATELESS])
+                .all(|revision| versions.contains(&json!(revision)))),
+        "{card}"
+    );
+    assert!(
+        card["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == "page_get")),
+        "{card}"
+    );
 }

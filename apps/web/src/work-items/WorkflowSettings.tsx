@@ -25,8 +25,11 @@ import {
 } from './workflowModel'
 import './work.css'
 
+/** A save refused because the workflow changed since it was read (workflow_update answers a conflict). */
+const changedElsewhere = (error: unknown) => isApiError(error) && (error.code === 'conflict' || error.code === 'version_conflict')
+
 function saveError(error: unknown) {
-  if (isApiError(error) && error.code === 'version_conflict') return 'Someone else changed the workflow while you were editing. Discard your changes to see theirs, then make yours again.'
+  if (changedElsewhere(error)) return 'Someone else changed the workflow while you were editing. Discard your changes to see theirs, then make yours again.'
   if (isApiError(error) && error.message) return error.message
   return `The workflow didn’t save. ${describeError(error).message}`
 }
@@ -207,7 +210,7 @@ function WorkflowEditor({
                 setDraft(draftFromWorkflow(saved))
                 setDirty(false)
                 setTried(false)
-                if (isApiError(save.error) && save.error.code === 'version_conflict') onRefresh()
+                if (changedElsewhere(save.error)) onRefresh()
                 save.reset()
               }}
               variant="ghost"

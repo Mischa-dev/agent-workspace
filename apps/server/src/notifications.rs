@@ -24,12 +24,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::HeaderMap,
-    routing::{get, post},
-};
+use axum::{Json, Router, extract::State, routing::get};
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
@@ -38,9 +33,9 @@ use uuid::Uuid;
 use crate::{
     AppState,
     addresses::{Addresses, Place, Target, WorkspaceAddress},
-    auth::{AuthenticatedActor, require_authenticated_write},
+    auth::AuthenticatedActor,
     domain::RunState,
-    error::{ApiJson, ApiQuery, AppError},
+    error::{ApiQuery, AppError},
     outbox::{self, NotificationsUpdatedPayload, OutboxEventPayload},
 };
 
@@ -56,6 +51,7 @@ const MAX_CHANGE_EVENTS: usize = 50;
 // ---------------------------------------------------------------------------
 // Kinds
 
+pub mod ops;
 pub mod views;
 
 pub mod kind {
@@ -310,6 +306,22 @@ impl NewNotification {
             dedupe_key,
         )
     }
+}
+
+/// Whether the occurrence `dedupe_key` was already delivered to `recipient`.
+pub async fn delivered(
+    transaction: &mut Transaction<'_, Postgres>,
+    recipient: Uuid,
+    dedupe_key: &str,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM notification_occurrences \
+         WHERE recipient_actor_id = $1 AND dedupe_key = $2)",
+    )
+    .bind(recipient)
+    .bind(dedupe_key)
+    .fetch_one(&mut **transaction)
+    .await?)
 }
 
 /// Delivers one occurrence. Returns whether anything changed (false when
@@ -2273,7 +2285,12 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
         }
         // A2.14: its words come from the budget's numbers (rule 10).
         kind::BUDGET_WARNING => (
-            "A budget you set is nearly used".to_owned(),
+            if row.detail.get("level").and_then(serde_json::Value::as_str) == Some("hard") {
+                "A budget you set is used up"
+            } else {
+                "A budget you set is nearly used"
+            }
+            .to_owned(),
             match (
                 row.detail.get("used").and_then(serde_json::Value::as_i64),
                 row.detail.get("limit").and_then(serde_json::Value::as_i64),
@@ -2570,6 +2587,13 @@ pub async fn update(
         "#
     );
     let mut transaction = crate::db::scoped_tx(pool).await?;
+    // The recipient acts on their own inbox; the call's request id and
+    // credential come from the edge.
+    crate::events::set_context(
+        &mut transaction,
+        &crate::events::EventContext::actor(viewer, None),
+    )
+    .await?;
     let changed = sqlx::query_as::<_, (Uuid, Uuid)>(&sql)
         .bind(viewer)
         .bind(ids)
@@ -2611,7 +2635,6 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/inbox", get(list_http))
         .route("/api/v1/inbox/summary", get(summary_http))
-        .route("/api/v1/inbox/update", post(update_http))
 }
 
 #[derive(Debug, Deserialize)]
@@ -2663,48 +2686,6 @@ async fn summary_http(
     principal: AuthenticatedActor,
 ) -> Result<Json<Attentions>, AppError> {
     Ok(Json(attentions(&state.pool, principal.actor_id).await?))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct UpdateRequest {
-    action: UpdateAction,
-    ids: Option<Vec<Uuid>>,
-    /// Everything in the inbox instead of `ids` (read and archive only).
-    all: Option<bool>,
-    project_id: Option<Uuid>,
-    snooze_until: Option<String>,
-}
-
-async fn update_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiJson(request): ApiJson<UpdateRequest>,
-) -> Result<Json<UpdateResult>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let selection = match (request.ids, request.all) {
-        (Some(ids), None | Some(false)) => {
-            if request.project_id.is_some() {
-                return Err(AppError::Validation("projectId"));
-            }
-            Selection::Ids(ids)
-        }
-        (None, Some(true)) => Selection::AllInInbox {
-            project_id: request.project_id,
-        },
-        _ => return Err(AppError::Validation("ids")),
-    };
-    let result = update(
-        &state.pool,
-        principal.actor_id,
-        None,
-        &selection,
-        request.action,
-        request.snooze_until.as_deref(),
-    )
-    .await?;
-    Ok(Json(result))
 }
 
 #[cfg(test)]

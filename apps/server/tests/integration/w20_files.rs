@@ -341,14 +341,13 @@ async fn files_open_only_where_their_message_or_task_does() {
     assert!(entry["message"].get("attachments").is_none(), "{entry}");
 
     // A task's file opens for its project's members only.
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         &setup.app,
-        owner.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some("task-1"),
-            json!({"title": "Ship it"}),
-        ),
+        owner,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some("task-1"),
+        json!({"title": "Ship it"}),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");
@@ -533,7 +532,7 @@ async fn files_open_only_where_their_message_or_task_does() {
         &setup.app,
         &token,
         &session,
-        "task_comment",
+        "task_comment_create",
         json!({
             "taskId": task,
             "text": "taking someone's file",
@@ -547,7 +546,7 @@ async fn files_open_only_where_their_message_or_task_does() {
         &setup.app,
         &token,
         &session,
-        "task_comment",
+        "task_comment_create",
         json!({
             "taskId": task,
             "text": "Trace attached",
@@ -556,7 +555,7 @@ async fn files_open_only_where_their_message_or_task_does() {
         }),
     )
     .await;
-    assert_eq!(commented["outcome"], "applied", "{commented}");
+    assert_eq!(commented["outcome"], "ok", "{commented}");
     assert_eq!(
         read(&setup, owner, &for_comment)
             .await
@@ -567,7 +566,7 @@ async fn files_open_only_where_their_message_or_task_does() {
         &setup.app,
         &token,
         &session,
-        "task_open",
+        "task_get",
         json!({"taskId": task}),
     )
     .await;
@@ -938,28 +937,14 @@ async fn a_page_keeps_its_own_files() {
     assert_eq!(read_back["outcome"], "ok", "{read_back}");
 
     // Its uploader removes a page's file; nobody else does.
-    let (status, _) = send(
-        &setup.app,
-        rook.request(
-            "DELETE",
-            &format!("/api/v1/files/{notes}"),
-            None,
-            Value::Null,
-        ),
-    )
-    .await;
+    let (status, _) = rook
+        .op(&setup.app, "file_delete", json!({"fileId": notes}))
+        .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
-    let (status, _) = send(
-        &setup.app,
-        owner.request(
-            "DELETE",
-            &format!("/api/v1/files/{notes}"),
-            None,
-            Value::Null,
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = owner
+        .op(&setup.app, "file_delete", json!({"fileId": notes}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(
         read(&setup, owner, &notes).await,
         Err(StatusCode::NOT_FOUND)
@@ -1152,7 +1137,14 @@ async fn pages_nest_and_move_with_the_pages_inside() {
     add_member(&setup, &work, wren, "member").await;
     add_member(&setup, &team, wren, "member").await;
     let session = initialize(&setup.app, &token).await.expect("MCP session");
-    let write = |arguments: Value| tool(&setup.app, &token, &session, "page_write", arguments);
+    let write = |arguments: Value| {
+        let name = if arguments.get("pageId").is_some() {
+            "page_update"
+        } else {
+            "page_create"
+        };
+        tool(&setup.app, &token, &session, name, arguments)
+    };
     let id_of = |value: &Value| value["value"]["id"].as_str().expect("page id").to_owned();
     let handbook = write(json!({"projectId": work, "title": "Handbook", "body": "Start"})).await;
     assert_eq!(handbook["outcome"], "ok", "{handbook}");

@@ -333,6 +333,10 @@ pub struct LimitRefusal {
     pub resets_at: Option<DateTime<Utc>>,
     pub who_can_change: Who,
     pub message: String,
+    /// The budget that refused it and who set it (A2.14), when a budget did.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub budget: Option<(Uuid, Uuid)>,
 }
 
 impl LimitRefusal {
@@ -395,6 +399,7 @@ impl LimitRefusal {
             resets_at,
             who_can_change: who,
             message,
+            budget: limit.row,
         }
     }
 }
@@ -822,7 +827,20 @@ fn decide(
         return Err(Box::new(refused));
     }
     // Near a hard limit (80%), or over a soft one: the nearest of them.
-    let mut near: Option<(Limit, i64, i64, f64)> = None;
+    Ok(near(checked, quantity, kind).into_iter().next())
+}
+
+/// Every limit the ask comes near (80% of a hard limit) or goes over (a
+/// soft one), nearest first, each once at its nearest value.
+fn near(checked: &[(Limit, i64)], quantity: i64, kind: MeterKind) -> Vec<Decided> {
+    let after = |used: i64| {
+        if kind == MeterKind::Each {
+            quantity
+        } else {
+            used.saturating_add(quantity)
+        }
+    };
+    let mut near: Vec<(Decided, f64)> = Vec::new();
     for (limit, used) in checked {
         let reached = after(*used);
         let candidates = [
@@ -831,14 +849,20 @@ fn decide(
                 .hard
                 .filter(|hard| *hard > 0 && reached.saturating_mul(5) >= hard.saturating_mul(4)),
         ];
-        for value in candidates.into_iter().flatten() {
-            let share = reached as f64 / value.max(1) as f64;
-            if near.is_none_or(|(_, _, _, best)| share > best) {
-                near = Some((*limit, value, *used, share));
-            }
+        let best = candidates
+            .into_iter()
+            .flatten()
+            .map(|value| (value, reached as f64 / value.max(1) as f64))
+            .fold(None::<(i64, f64)>, |best, (value, share)| match best {
+                Some((_, top)) if top >= share => best,
+                _ => Some((value, share)),
+            });
+        if let Some((value, share)) = best {
+            near.push(((*limit, value, *used), share));
         }
     }
-    Ok(near.map(|(limit, value, used, _)| (limit, value, used)))
+    near.sort_by(|left, right| right.1.total_cmp(&left.1));
+    near.into_iter().map(|(decided, _)| decided).collect()
 }
 
 /// Whether `ask` may go ahead: see the module notes. A refusal is
@@ -884,8 +908,8 @@ pub async fn admit(connection: &mut PgConnection, ask: Ask<'_>) -> Result<Admiss
         };
         checked.push((limit, used));
     }
-    let decided = match decide(&checked, quantity, meter.kind) {
-        Ok(decided) => decided,
+    match decide(&checked, quantity, meter.kind) {
+        Ok(_) => {}
         Err(refused) => {
             let (limit, value, used) = *refused;
             note(connection, meter, ask.workspace_id, &limit, "hard").await?;
@@ -893,7 +917,7 @@ pub async fn admit(connection: &mut PgConnection, ask: Ask<'_>) -> Result<Admiss
                 meter, &limit, value, used,
             ))));
         }
-    };
+    }
     if let Some(recorded) = ask.record
         && meter.kind == MeterKind::Counter
     {
@@ -911,25 +935,28 @@ pub async fn admit(connection: &mut PgConnection, ask: Ask<'_>) -> Result<Admiss
         )
         .await?;
     }
-    let Some((limit, value, used)) = decided else {
-        return Ok(Admission::Allowed);
-    };
-    if !note(connection, meter, ask.workspace_id, &limit, "soft").await? {
-        return Ok(Admission::Allowed);
+    // The nearest limit not yet noticed this period gives its notice, so
+    // a second budget reached later still tells whoever set it.
+    for (limit, value, used) in near(&checked, quantity, meter.kind) {
+        if note(connection, meter, ask.workspace_id, &limit, "soft").await? {
+            return Ok(Admission::AllowedNearLimit {
+                notice: LimitNotice {
+                    meter: meter.id,
+                    scope: limit.scope,
+                    limit: value,
+                    used: used.saturating_add(quantity),
+                    level: "soft",
+                    budget: limit.row,
+                },
+            });
+        }
     }
-    Ok(Admission::AllowedNearLimit {
-        notice: LimitNotice {
-            meter: meter.id,
-            scope: limit.scope,
-            limit: value,
-            used: used.saturating_add(quantity),
-            level: "soft",
-            budget: limit.row,
-        },
-    })
+    Ok(Admission::Allowed)
 }
 
 /// Marks a notice as given for this scope and period; true the first time.
+/// A budget (a `spend_limits` row) is its own scope, so two budgets on the
+/// same meter and account each give their notice.
 async fn note(
     connection: &mut PgConnection,
     meter: &'static Meter,
@@ -938,14 +965,18 @@ async fn note(
     level: &str,
 ) -> Result<bool, AppError> {
     let start = limit.period.unwrap_or(Period::Month).bounds(Utc::now()).0;
+    let (scope_kind, scope_id) = match limit.row {
+        Some((row, _)) => ("budget", row),
+        None => (limit.scope.kind(), limit.scope.id(workspace)),
+    };
     Ok(sqlx::query(
         "INSERT INTO limit_notices (workspace_id, meter, scope_kind, scope_id, period_start, level) \
          VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
     )
     .bind(workspace)
     .bind(meter.id)
-    .bind(limit.scope.kind())
-    .bind(limit.scope.id(workspace))
+    .bind(scope_kind)
+    .bind(scope_id)
     .bind(start)
     .bind(level)
     .execute(&mut *connection)

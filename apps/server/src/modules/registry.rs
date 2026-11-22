@@ -75,6 +75,11 @@ pub enum ModuleFilter {
     /// The module also serves these tools of another module: they work
     /// where either is on, and keep to this module's part.
     AlsoServes(&'static [&'static str]),
+    /// The module's space is home to these tools of another module: they
+    /// run in the workspace's own space while their module is on for the
+    /// workspace (a workspace's project templates while Projects is on),
+    /// and are listed only where their own module is.
+    HomeFor(&'static [&'static str]),
 }
 
 /// A slot in a workspace export the module fills (H1.8, H1.9): declared
@@ -360,6 +365,21 @@ impl Registry {
         self.by_id.get(id).copied()
     }
 
+    /// The module that owns a permission: the one whose manifest lists it
+    /// (M1.3o). The Roles page groups the permission under it.
+    pub fn module_of_permission(&self, key: &str) -> Option<&Manifest> {
+        self.descriptions
+            .iter()
+            .find(|manifest| manifest.permissions.iter().any(|owned| owned == key))
+    }
+
+    /// The modules that own permissions, in order: the Roles page's groups.
+    pub fn permission_modules(&self) -> impl Iterator<Item = &Manifest> {
+        self.descriptions
+            .iter()
+            .filter(|manifest| !manifest.permissions.is_empty())
+    }
+
     pub fn module_of_tool(&self, tool: &str) -> Option<&Manifest> {
         self.tools.get(tool).map(|index| &self.descriptions[*index])
     }
@@ -422,6 +442,15 @@ impl Registry {
         self.filters()
             .filter_map(move |(module, filter)| match filter {
                 ModuleFilter::AlsoServes(tools) if tools.contains(&tool) => Some(module),
+                _ => None,
+            })
+    }
+
+    /// The module whose space is home to `tool` (`ModuleFilter::HomeFor`).
+    pub fn home_of(&self, tool: &str) -> Option<&str> {
+        self.filters()
+            .find_map(move |(module, filter)| match filter {
+                ModuleFilter::HomeFor(tools) if tools.contains(&tool) => Some(module),
                 _ => None,
             })
     }
@@ -591,7 +620,7 @@ mod tests {
         // A tool another module also serves names a module that isn't its owner.
         for module in registry.modules() {
             for filter in &module.contributions.filters {
-                if let ModuleFilter::AlsoServes(tools) = filter {
+                if let ModuleFilter::AlsoServes(tools) | ModuleFilter::HomeFor(tools) = filter {
                     for tool in *tools {
                         let owner = registry.module_of_tool(tool).map(|owner| owner.id.as_str());
                         assert!(owner.is_some(), "{tool} has no module");

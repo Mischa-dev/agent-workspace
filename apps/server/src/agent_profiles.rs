@@ -13,25 +13,20 @@
 //! agent's claimed requests and open sessions. What it's working on is only
 //! named to people who can see that thread.
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::HeaderMap,
-    routing::{get, patch},
-};
+use axum::{Json, Router, extract::State, routing::get};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
+use crate::harness_catalog::Harnesses;
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
+    auth::AuthenticatedActor,
     environments::authorize_project,
-    error::{ApiJson, ApiPath, AppError},
+    error::{ApiPath, AppError},
     policy::Action,
-    settings,
 };
 
 const MAX_PROFILES_PER_PROJECT: i64 = 40;
@@ -40,11 +35,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/api/v1/projects/{project_id}/agent-profiles",
-            get(list_http).post(create_http),
-        )
-        .route(
-            "/api/v1/projects/{project_id}/agent-profiles/{profile_id}",
-            patch(update_http).delete(delete_http),
+            get(list_http),
         )
         .route("/api/v1/projects/{project_id}/agents", get(presence_http))
 }
@@ -168,15 +159,15 @@ pub struct ProfileList {
     pub ready: bool,
 }
 
-fn named(state: &AppState, mut profile: ProfileView) -> ProfileView {
+fn named(harnesses: &Harnesses, mut profile: ProfileView) -> ProfileView {
     profile.harness_name = profile
         .harness
         .as_deref()
-        .map(|harness| crate::agent_sessions::harness_name(state, harness));
+        .map(|harness| harnesses.name(harness));
     profile
 }
 
-fn takes(manifest: &crate::provider::manifest::AdapterManifest, option: &str) -> bool {
+fn takes(manifest: &crate::harness::manifest::AdapterManifest, option: &str) -> bool {
     manifest
         .options_schema
         .pointer(&format!("/properties/{option}"))
@@ -194,6 +185,7 @@ pub async fn list_profiles(
         crate::memory::project_access(&state.pool, viewer, project_id, Action::SettingsManage)
             .await
             .is_ok();
+    let catalog = Harnesses::of(state, organization_id).await?;
     let profiles = sqlx::query_as::<_, ProfileView>(&format!(
         "{PROFILE_SELECT} WHERE profile.project_id = $1 AND profile.hidden_at IS NULL ORDER BY profile.enabled DESC, membership.display_name, profile.id"
     ))
@@ -201,18 +193,16 @@ pub async fn list_profiles(
     .fetch_all(crate::db::scoped(&state.pool))
     .await?
     .into_iter()
-    .map(|profile| named(state, profile))
+    .map(|profile| named(&catalog, profile))
     .collect();
-    let harnesses = state
-        .supervisors
-        .manifests_in(organization_id)
-        .into_iter()
-        .filter(|manifest| state.supervisors.runner_for(&manifest.kind).is_none())
+    let harnesses = catalog
+        .manifests()
+        .filter(|manifest| catalog.runner_for(&manifest.kind).is_none())
         .map(|manifest| HarnessChoice {
             kind: manifest.kind.clone(),
             display_name: manifest.display_name.clone(),
-            takes_instructions: takes(&manifest, "instructions"),
-            takes_allowed_tools: takes(&manifest, "allowedTools"),
+            takes_instructions: takes(manifest, "instructions"),
+            takes_allowed_tools: takes(manifest, "allowedTools"),
         })
         .collect();
     let ready = default_worker(&state.pool, project_id).await?.is_some();
@@ -323,7 +313,7 @@ fn text(value: Option<String>, max: usize, what: &'static str) -> Result<Option<
 
 async fn clean(
     state: &AppState,
-    organization_id: Uuid,
+    catalog: &Harnesses,
     project_id: Uuid,
     request: ProfileRequest,
     current: Option<&ProfileView>,
@@ -390,11 +380,8 @@ async fn clean(
         None => current.and_then(|profile| profile.harness.clone()),
     };
     if let Some(harness) = &harness {
-        let known = state
-            .supervisors
-            .manifest_in(organization_id, harness)
-            .is_some();
-        if !known || state.supervisors.runner_for(harness).is_some() {
+        let known = catalog.manifest(harness).is_some();
+        if !known || catalog.runner_for(harness).is_some() {
             return Err(AppError::Validation("harness"));
         }
     }
@@ -536,71 +523,23 @@ async fn handle_taken(
     .await?)
 }
 
-async fn manage(
-    state: &AppState,
-    headers: &HeaderMap,
-    principal: &AuthenticatedActor,
-    project_id: Uuid,
-) -> Result<Uuid, AppError> {
-    require_authenticated_write(state, headers, principal).await?;
-    authorize_project(
-        &state.pool,
-        principal.actor_id,
-        project_id,
-        Action::SettingsManage,
-    )
-    .await
-}
-
 pub(crate) async fn load(
-    executor: impl sqlx::PgExecutor<'_>,
+    connection: &mut sqlx::PgConnection,
     state: &AppState,
     project_id: Uuid,
     profile_id: Uuid,
 ) -> Result<ProfileView, AppError> {
+    // On the caller's connection: a save holds it while it reads back.
+    let harnesses = Harnesses::visible_on(state, &mut *connection).await?;
     sqlx::query_as::<_, ProfileView>(&format!(
         "{PROFILE_SELECT} WHERE profile.project_id = $1 AND profile.id = $2 AND profile.hidden_at IS NULL"
     ))
     .bind(project_id)
     .bind(profile_id)
-    .fetch_optional(executor)
+    .fetch_optional(&mut *connection)
     .await?
-    .map(|profile| named(state, profile))
+    .map(|profile| named(&harnesses, profile))
     .ok_or(AppError::NotFound("agent_profile"))
-}
-
-async fn create_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<ProfileRequest>,
-) -> Result<Json<ProfileView>, AppError> {
-    let organization_id = manage(&state, &headers, &principal, project_id).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (profile_id, metadata) = create_in(
-        &state,
-        &mut transaction,
-        principal.actor_id,
-        organization_id,
-        project_id,
-        request,
-    )
-    .await?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        Some(project_id),
-        "agent_profile.created",
-        "agent_profile",
-        Some(profile_id),
-        metadata,
-    )
-    .await?;
-    let view = load(&mut *transaction, &state, project_id, profile_id).await?;
-    transaction.commit().await?;
-    Ok(Json(view))
 }
 
 /// Make an agent in the project, for someone the caller checked may manage
@@ -614,7 +553,8 @@ pub(crate) async fn create_in(
     project_id: Uuid,
     request: ProfileRequest,
 ) -> Result<(Uuid, Value), AppError> {
-    let clean = clean(state, organization_id, project_id, request.clone(), None).await?;
+    let catalog = Harnesses::of_on(state, transaction, organization_id).await?;
+    let clean = clean(state, &catalog, project_id, request.clone(), None).await?;
     crate::execution_setup::lock_project_setup(transaction, project_id).await?;
     let count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM agent_profiles WHERE project_id = $1 AND hidden_at IS NULL",
@@ -754,41 +694,6 @@ pub(crate) async fn create_in(
     ))
 }
 
-async fn update_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, profile_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<ProfileRequest>,
-) -> Result<Json<ProfileView>, AppError> {
-    let organization_id = manage(&state, &headers, &principal, project_id).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (action, metadata) = update_in(
-        &state,
-        &mut transaction,
-        principal.actor_id,
-        organization_id,
-        project_id,
-        profile_id,
-        request,
-    )
-    .await?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        Some(project_id),
-        action,
-        "agent_profile",
-        Some(profile_id),
-        metadata,
-    )
-    .await?;
-    let view = load(&mut *transaction, &state, project_id, profile_id).await?;
-    transaction.commit().await?;
-    Ok(Json(view))
-}
-
 /// Change an agent of the project (turning it off takes it out of
 /// mentions), for someone the caller checked may manage its settings.
 /// Returns the audit row's action and metadata; the caller records it.
@@ -804,7 +709,7 @@ pub(crate) async fn update_in(
     if request.template.is_some() {
         return Err(AppError::Validation("template"));
     }
-    let current = load(&mut **transaction, state, project_id, profile_id).await?;
+    let current = load(transaction, state, project_id, profile_id).await?;
     if request
         .version
         .is_some_and(|version| version != current.version)
@@ -815,7 +720,8 @@ pub(crate) async fn update_in(
         ));
     }
     let enabled = request.enabled.unwrap_or(current.enabled);
-    let clean = clean(state, organization_id, project_id, request, Some(&current)).await?;
+    let catalog = Harnesses::of_on(state, transaction, organization_id).await?;
+    let clean = clean(state, &catalog, project_id, request, Some(&current)).await?;
     crate::execution_setup::lock_project_setup(transaction, project_id).await?;
     if enabled
         && handle_taken(
@@ -923,33 +829,6 @@ pub struct RemovedProfile {
     /// it: then it's off the list, out of mentions and can't run, and what it
     /// did keeps its name.
     pub outcome: &'static str,
-}
-
-/// Deletes an agent that never did anything; one that did is hidden instead,
-/// so its past runs and messages keep their author.
-async fn delete_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, profile_id)): ApiPath<(Uuid, Uuid)>,
-) -> Result<Json<RemovedProfile>, AppError> {
-    manage(&state, &headers, &principal, project_id).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let (outcome, handle) =
-        remove_in(&mut transaction, principal.actor_id, project_id, profile_id).await?;
-    settings::audit(
-        &mut transaction,
-        &headers,
-        &principal,
-        Some(project_id),
-        &format!("agent_profile.{outcome}"),
-        "agent_profile",
-        Some(profile_id),
-        json!({ "handle": handle }),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(RemovedProfile { outcome }))
 }
 
 /// Remove an agent of the project: delete it if it never did anything, or
@@ -1152,7 +1031,7 @@ impl ProfileSettings {
     /// allowed tools, for harnesses whose options name them.
     pub fn options(
         &self,
-        manifest: &crate::provider::manifest::AdapterManifest,
+        manifest: &crate::harness::manifest::AdapterManifest,
     ) -> Map<String, Value> {
         let mut options = Map::new();
         if !self.instructions.trim().is_empty() && takes(manifest, "instructions") {
@@ -1168,7 +1047,7 @@ impl ProfileSettings {
     /// prompt instead, so every harness hears them.
     pub fn prompt(
         &self,
-        manifest: Option<&crate::provider::manifest::AdapterManifest>,
+        manifest: Option<&crate::harness::manifest::AdapterManifest>,
         prompt: &str,
     ) -> String {
         let instructions = self.instructions.trim();
@@ -1319,7 +1198,7 @@ pub async fn presence(
               AND conversation_visible_to(ranked.conversation_id, $2)
         ) visible ON true
         LEFT JOIN LATERAL (
-            SELECT link.work_item_id FROM work_item_conversation_links link
+            SELECT link.work_item_id FROM task_threads link
             WHERE link.project_id = $1 AND link.conversation_id = visible.conversation_id
             ORDER BY link.created_at, link.work_item_id LIMIT 1
         ) task_link ON true

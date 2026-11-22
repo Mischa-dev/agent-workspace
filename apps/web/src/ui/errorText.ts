@@ -77,7 +77,15 @@ function isOutcome(code: string): code is OpErrorOutcome {
  */
 export function opErrorSentence(error: unknown): { message: string; stale: boolean } | null {
   if (!(error instanceof ApiError) || !isOutcome(error.code) || !fromOperation(error)) return null
-  const stale = error.code === 'conflict' || error.code === 'not_found'
-  const explains = error.code === 'invalid_request' || error.code === 'permission_denied' || error.code === 'limit_reached'
+  // Only a version clash means the screen is out of date; a conflict with
+  // the thing's state ("a run is still going") explains itself.
+  const reason = (error.details as { reason?: unknown } | undefined)?.reason
+  const clash = error.code === 'conflict' && (reason === undefined || reason === null || reason === 'version' || reason === 'version_conflict')
+  const stale = clash || error.code === 'not_found'
+  const explains =
+    error.code === 'invalid_request' ||
+    error.code === 'permission_denied' ||
+    error.code === 'limit_reached' ||
+    (error.code === 'conflict' && !clash)
   return { message: explains && error.message ? error.message : OUTCOME_SENTENCES[error.code], stale }
 }

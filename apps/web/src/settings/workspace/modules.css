@@ -1,0 +1,72 @@
+/* M1.7: the module builder's parts: each part a row, with its sidebar
+   choice under it once it's in the module. */
+
+.aw-builder__parts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.aw-builder__list {
+  display: flex;
+  flex-direction: column;
+  max-height: 18rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  border: var(--border-width) solid var(--content-border);
+  border-radius: var(--radius-md);
+  list-style: none;
+}
+
+.aw-builder__part {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+}
+
+.aw-builder__part + .aw-builder__part {
+  border-top: var(--border-width) solid var(--content-border);
+}
+
+/* The icon and the space side by side where there's room. */
+.aw-builder__pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: var(--space-3);
+}
+
+/* M1.12: connecting an outside app: who it is, then what it adds. */
+.aw-connect__about {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.aw-connect__about p {
+  margin: 0;
+}
+
+.aw-connect__facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+}
+
+.aw-connect__facts dt {
+  color: var(--content-fg-muted);
+}
+
+.aw-connect__facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}

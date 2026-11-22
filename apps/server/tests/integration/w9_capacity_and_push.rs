@@ -151,6 +151,10 @@ pub(super) async fn call(
     key: Option<&str>,
     body: Value,
 ) -> (StatusCode, Value) {
+    // The task writes moved to operations (K2.22).
+    if crate::support::tasks::op_for(method, uri, &body).is_some() {
+        return crate::support::tasks::send(&setup.app, browser, method, uri, key, body).await;
+    }
     send(&setup.app, browser.request(method, uri, key, body)).await
 }
 

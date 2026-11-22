@@ -1539,9 +1539,8 @@ span.aw-taskstart__fix {
 }
 
 .aw-criterion:has(.aw-check__input:checked) .aw-check__label {
+  /* Met, not deleted: the tick says done, so the words stay readable (UI round 0). */
   color: var(--content-fg-muted);
-  text-decoration: line-through;
-  text-decoration-color: color-mix(in oklab, currentColor 55%, transparent);
 }
 
 .aw-criterion__actions {

@@ -101,17 +101,14 @@ async fn join_workspace(setup: &Setup, role: &str, login_name: &str) -> (Uuid, B
         &setup.app,
         setup.browser.request(
             "POST",
-            &format!(
-                "/api/v1/organizations/{}/invitations",
-                setup.organization_id
-            ),
-            None,
-            json!({ "role": role, "expiresInHours": 24 }),
+            &format!("/api/v2/w/{}/ops/invitation_create", setup.organization_id),
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"projectId": "workspace", "wholeWorkspace": true, "role": role, "expiresInHours": 24}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{issued}");
-    let url = issued["invitationUrl"].as_str().expect("invitation URL");
+    assert_eq!(status, StatusCode::OK, "{issued}");
+    let url = issued["value"]["joinUrl"].as_str().expect("invitation URL");
     let token = url.split("#token=").nth(1).expect("token in fragment");
     assert!(url.contains("/join#token=aw_wsi_"), "{url}");
     let accept = json!({
@@ -256,16 +253,14 @@ async fn workspace_roles_are_explicit_and_removal_takes_everything_away() {
     let owner = owner_actor(&setup.pool).await;
     let (mira, mira_browser) = join_workspace(&setup, "member", "mira").await;
     assert_eq!(member(&setup, mira).await["role"], "member");
-    let (status, body) = send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{project}/members"),
-            Some("add-mira"),
-            json!({ "actorId": mira, "role": "member" }),
-        ),
-    )
-    .await;
+    let (status, body) = setup
+        .browser
+        .op(
+            &setup.app,
+            "space_member_add",
+            json!({"spaceId": project, "account": mira, "role": "member"}),
+        )
+        .await;
     assert!(status.is_success(), "{body}");
     let (status, _) = get(
         &setup.app,
@@ -281,9 +276,9 @@ async fn workspace_roles_are_explicit_and_removal_takes_everything_away() {
         &setup.app,
         mira_browser.request(
             "POST",
-            &format!("/api/v1/organizations/{org}/invitations"),
-            None,
-            json!({ "role": "member", "expiresInHours": 24 }),
+            &format!("/api/v2/w/{org}/ops/invitation_create"),
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"projectId": "workspace", "wholeWorkspace": true, "role": "member", "expiresInHours": 24}),
         ),
     )
     .await;
@@ -931,7 +926,7 @@ async fn github_installations_need_a_claim_and_the_state_needs_its_browser() {
             Some(cookie.clone())
         )
         .await,
-        format!("/settings/projects/{project}/repositories?github=error&reason=denied")
+        format!("/w/-/settings/spaces/{project}/repositories?github=error&reason=denied")
     );
     assert_eq!(unused().await, 0);
     assert_eq!(
@@ -977,16 +972,14 @@ async fn github_installations_need_a_claim_and_the_state_needs_its_browser() {
         None,
     )
     .await;
-    let (status, body) = send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{project}/integrations/github/sync"),
-            None,
-            json!({ "installationId": 42, "repositoryIds": [repository] }),
-        ),
-    )
-    .await;
+    let (status, body) = setup
+        .browser
+        .op(
+            &setup.app,
+            "github_installation_link",
+            json!({ "projectId": project, "installationId": 42, "repositories": [repository] }),
+        )
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     let (_, connection) = get(
         &setup.app,

@@ -10,6 +10,7 @@ description = "The built-in host: the harness adapters, run worktrees and accoun
 agent-workspace-host-protocol = { version = "0.0.1", path = "../host-protocol" }
 agent-workspace-redaction = { version = "0.0.1", path = "../redaction" }
 base64 = "0.22.1"
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 codex-bridge-spike = { version = "0.0.1", path = "../../tools/codex-bridge-spike" }
 command-fds = { version = "0.3.3", features = ["tokio"] }
 fs2 = "0.4.3"

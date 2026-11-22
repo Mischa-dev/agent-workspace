@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::Response,
     routing::{get, post},
 };
@@ -38,15 +38,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/api/v1/projects/{project_id}/invitations",
-            get(list_invitations).post(issue_invitation),
-        )
-        .route(
-            "/api/v1/project-invitations/{invitation_id}/revoke",
-            post(revoke_invitation),
-        )
-        .route(
-            "/api/v1/project-invitations/{invitation_id}/replace",
-            post(replace_invitation),
+            get(list_invitations),
         )
         .route(
             "/api/v1/project-invitations/resolve",
@@ -60,29 +52,6 @@ pub fn router() -> Router<AppState> {
             "/api/v1/project-invitations/accept-existing",
             post(accept_existing_user),
         )
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct IssueInvitationRequest {
-    role: String,
-    /// A custom role of the workspace, instead of `role` (AWD-74).
-    #[serde(default)]
-    role_id: Option<Uuid>,
-    expires_in_hours: i32,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RevokeInvitationRequest {
-    expected_version: i64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ReplaceInvitationRequest {
-    expected_version: i64,
-    expires_in_hours: i32,
 }
 
 #[derive(Deserialize)]
@@ -192,14 +161,6 @@ pub(crate) struct InvitationView {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct IssuedInvitation {
-    #[serde(flatten)]
-    invitation: InvitationView,
-    invitation_url: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct ResolvedInvitation {
     organization_name: String,
     project_name: String,
@@ -257,52 +218,9 @@ pub(crate) async fn invitations_for(
 /// carries; the database keeps a digest.
 pub(crate) struct Issued {
     pub invitation_id: Uuid,
-    pub project_id: Uuid,
     pub token: String,
     /// For the caller's audit row.
     pub metadata: serde_json::Value,
-}
-
-async fn issue_invitation(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<IssueInvitationRequest>,
-) -> Result<(StatusCode, Json<IssuedInvitation>), AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let issued = issue_invitation_in(
-        &mut transaction,
-        principal.actor_id,
-        project_id,
-        &request.role,
-        request.role_id,
-        request.expires_in_hours,
-    )
-    .await?;
-    insert_audit(
-        &mut transaction,
-        &principal,
-        project_id,
-        issued.invitation_id,
-        "project.invitation.issue",
-        issued.metadata.clone(),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(issued_invitation(&state, issued).await?),
-    ))
-}
-
-async fn issued_invitation(state: &AppState, issued: Issued) -> Result<IssuedInvitation, AppError> {
-    let invitation = fetch_invitation(state, issued.project_id, issued.invitation_id).await?;
-    Ok(IssuedInvitation {
-        invitation,
-        invitation_url: join_url(state, &issued.token),
-    })
 }
 
 /// The link someone opens to join with `token`.
@@ -362,7 +280,6 @@ pub(crate) async fn issue_invitation_in(
     .await?;
     Ok(Issued {
         invitation_id,
-        project_id,
         token,
         metadata: serde_json::json!({
             "role": role,
@@ -372,43 +289,9 @@ pub(crate) async fn issue_invitation_in(
     })
 }
 
-async fn revoke_invitation(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(invitation_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<RevokeInvitationRequest>,
-) -> Result<Json<InvitationView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let revoked = revoke_invitation_in(
-        &mut transaction,
-        principal.actor_id,
-        invitation_id,
-        request.expected_version,
-    )
-    .await?;
-    if let Some(role) = &revoked.newly_revoked_role {
-        insert_audit(
-            &mut transaction,
-            &principal,
-            revoked.project_id,
-            invitation_id,
-            "project.invitation.revoke",
-            serde_json::json!({"role": role}),
-        )
-        .await?;
-    }
-    transaction.commit().await?;
-    Ok(Json(
-        fetch_invitation(&state, revoked.project_id, invitation_id).await?,
-    ))
-}
-
-/// What revoking did: the invitation's project, and its role when this
-/// call revoked it (None when it was already revoked).
+/// What revoking did: the invitation's role when this call revoked it
+/// (None when it was already revoked).
 pub(crate) struct Revoked {
-    pub project_id: Uuid,
     pub newly_revoked_role: Option<String>,
 }
 
@@ -440,7 +323,6 @@ pub(crate) async fn revoke_invitation_in(
     authorize_manage(actor_id, row.project_id, &access, Some(&row.role))?;
     if row.status == "revoked" {
         return Ok(Revoked {
-            project_id: row.project_id,
             newly_revoked_role: None,
         });
     }
@@ -468,42 +350,8 @@ pub(crate) async fn revoke_invitation_in(
     .execute(&mut **transaction)
     .await?;
     Ok(Revoked {
-        project_id: row.project_id,
         newly_revoked_role: Some(row.role),
     })
-}
-
-async fn replace_invitation(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(invitation_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<ReplaceInvitationRequest>,
-) -> Result<(StatusCode, Json<IssuedInvitation>), AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let issued = replace_invitation_in(
-        &mut transaction,
-        principal.actor_id,
-        invitation_id,
-        request.expected_version,
-        request.expires_in_hours,
-    )
-    .await?;
-    insert_audit(
-        &mut transaction,
-        &principal,
-        issued.project_id,
-        invitation_id,
-        "project.invitation.replace",
-        issued.metadata.clone(),
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(issued_invitation(&state, issued).await?),
-    ))
 }
 
 /// Replace an active invitation with a new link (the old one stops
@@ -597,7 +445,6 @@ pub(crate) async fn replace_invitation_in(
     .await?;
     Ok(Issued {
         invitation_id: replacement_id,
-        project_id: row.project_id,
         token,
         metadata: serde_json::json!({
             "replacementInvitationId": replacement_id,
@@ -1326,35 +1173,6 @@ pub(crate) async fn fetch_invitation(
     .await?
     .ok_or(AppError::NotFound("project_invitation"))?;
     Ok(row.into())
-}
-
-async fn insert_audit(
-    transaction: &mut Transaction<'_, Postgres>,
-    principal: &AuthenticatedActor,
-    project_id: Uuid,
-    invitation_id: Uuid,
-    action: &'static str,
-    metadata: serde_json::Value,
-) -> Result<(), AppError> {
-    sqlx::query(
-        r#"
-        INSERT INTO audit_events (
-            id, actor_id, project_id, session_id, authentication_class,
-            action, target_kind, target_id, outcome, metadata, channel
-        ) VALUES ($1, $2, $3, $4, 'password_session', $5,
-                  'project_invitation', $6, 'succeeded', $7, 'browser')
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(principal.actor_id)
-    .bind(project_id)
-    .bind(principal.session_id)
-    .bind(action)
-    .bind(invitation_id)
-    .bind(metadata)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(())
 }
 
 impl From<InvitationRow> for InvitationView {

@@ -693,12 +693,12 @@ async fn build_workspace(
     };
 
     call(
-        "label_write",
+        "label_create",
         json!({"projectId": "WORK", "name": format!("Launch{m}")}),
     )
     .await;
     call(
-        "field_write",
+        "field_create",
         json!({
             "projectId": "WORK",
             "name": format!("Risk{m}"),
@@ -708,7 +708,7 @@ async fn build_workspace(
     )
     .await;
     call(
-        "field_write",
+        "field_create",
         json!({"projectId": "WORK", "name": format!("Owner{m}"), "type": "person"}),
     )
     .await;
@@ -750,43 +750,43 @@ async fn build_workspace(
     let task = task_number(1).await;
     let subtask = task_number(2).await;
     let comment = call(
-        "task_comment",
+        "task_comment_create",
         json!({"workItemId": "WORK-1", "update": format!("Launch comment{m}"), "clientRequestId": "comment-1"}),
     )
     .await;
-    let comment = Uuid::parse_str(&string_at(&comment, "/activityId")).expect("comment id");
+    let comment = Uuid::parse_str(&string_at(&comment, "/value/activityId")).expect("comment id");
     // An edit, so the comment has versions to read.
     call(
-        "task_comment_edit",
+        "task_comment_update",
         json!({"taskId": "WORK-1", "commentId": comment, "text": format!("Launch comment, corrected{m}")}),
     )
     .await;
     call(
-        "milestone_write",
+        "milestone_create",
         json!({"projectId": "WORK", "name": format!("Launch milestone{m}"), "addTasks": ["WORK-1"]}),
     )
     .await;
     let page = call(
-        "page_write",
+        "page_create",
         json!({"projectId": "WORK", "title": format!("Launch page{m}"), "body": format!("Launch notes{m}")}),
     )
     .await;
     let page = string_at(&page, "/value/id");
     call(
-        "page_write",
+        "page_update",
         json!({"pageId": page, "body": format!("Launch notes, second draft{m}"), "skillDescription": format!("Use when launching{m}"), "expectedVersion": 1}),
     )
     .await;
     // Someone has had the page open, so it has a live document. Its
     // generation is the page's ID, for write cases to name.
-    call("page_blocks", json!({"pageId": page})).await;
+    call("page_blocks_get", json!({"pageId": page})).await;
     sqlx::query("UPDATE project_page_documents SET generation = page_id WHERE page_id = $1")
         .bind(Uuid::parse_str(&page).expect("page id"))
         .execute(pool)
         .await
         .expect("page document generation");
     let page_thread = call(
-        "page_comment",
+        "page_comment_create",
         json!({"pageId": page, "text": format!("Launch page comment{m}")}),
     )
     .await;
@@ -797,7 +797,7 @@ async fn build_workspace(
     // page, a saved view, and a record that uses them, changed once so it
     // has history.
     let collection = call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": "WORK",
             "name": format!("Playtests{m}"),
@@ -836,7 +836,7 @@ async fn build_workspace(
         json!(format!("Falls through the floor{m}")),
     );
     let written = call(
-        "record_write",
+        "record_create_many",
         json!({
             "projectId": "WORK",
             "collection": collection,
@@ -847,7 +847,7 @@ async fn build_workspace(
     .await;
     let record = Uuid::parse_str(&string_at(&written, "/value/records/0/id")).expect("record id");
     call(
-        "record_write",
+        "record_update_many",
         json!({
             "projectId": "WORK",
             "collection": collection,
@@ -948,7 +948,7 @@ async fn build_workspace(
 
     // Sheets (AWD-54): a header row, a value and a formula over it.
     let sheet = call(
-        "sheet_write",
+        "sheet_create",
         json!({
             "projectId": "WORK",
             "name": format!("Budget{m}"),
@@ -1052,7 +1052,7 @@ async fn build_workspace(
             app,
             &agent_token,
             &agent_session,
-            "page_edit",
+            "page_update_blocks",
             json!({"pageId": page, "suggest": true, "edits": [{"op": "append", "markdown": format!("Launch suggestion {index}{m}")}]}),
         )
         .await;
@@ -1067,13 +1067,13 @@ async fn build_workspace(
     // A page only the owner's app edits, so its one change can be undone
     // whatever the other cases do to the launch page (C1.9).
     let undo_page = call(
-        "page_write",
+        "page_create",
         json!({"projectId": project, "title": format!("Undo notes{m}"), "body": "One"}),
     )
     .await;
     let undo_page = string_at(&undo_page, "/value/id");
     call(
-        "page_edit",
+        "page_update_blocks",
         json!({"pageId": undo_page, "edits": [{"op": "append", "markdown": format!("Two{m}")}]}),
     )
     .await;
@@ -1086,16 +1086,13 @@ async fn build_workspace(
     .await
     .expect("the edit made a change set");
 
-    let (status, invitation) = send(
-        app,
-        browser.request(
-            "POST",
-            &format!("/api/v1/projects/{project}/invitations"),
-            Some("invite-1"),
-            json!({"role": "viewer", "expiresInHours": 24}),
-        ),
-    )
-    .await;
+    let (status, invitation) = browser
+        .op(
+            app,
+            "invitation_create",
+            json!({"projectId": project, "role": "viewer", "expiresInHours": 24}),
+        )
+        .await;
     assert!(
         status.is_success(),
         "{label} invitation: {status} {invitation}"
@@ -1126,31 +1123,42 @@ async fn build_workspace(
     .await;
     assert_eq!(view["outcome"], "ok", "{label} view: {view}");
     let task_template = post(
-        format!("/api/v1/projects/{project}/task-templates"),
+        format!("/api/v2/w/{organization}/ops/template_create"),
         "template-1",
-        json!({"name": format!("Launch template{m}"), "title": format!("Launch review{m}"), "subtasks": [{"title": format!("Launch step{m}")}]}),
+        json!({"projectId": project, "name": format!("Launch template{m}"), "title": format!("Launch review{m}"), "subtasks": [{"title": format!("Launch step{m}")}]}),
     )
     .await;
-    let task_template = string_at(&task_template, "/id");
-    post(
-        format!("/api/v1/projects/{project}/recurring-tasks"),
+    assert_eq!(
+        task_template["outcome"], "ok",
+        "{label} task template: {task_template}"
+    );
+    let task_template = string_at(&task_template, "/value/template/id");
+    let recurring = post(
+        format!("/api/v2/w/{organization}/ops/recurring_create"),
         "recurring-1",
-        json!({"templateId": task_template, "frequency": "weekly", "weekdays": [1]}),
+        json!({"projectId": project, "template": task_template, "frequency": "weekly", "weekdays": [1]}),
     )
     .await;
-    post(
-        format!("/api/v1/projects/{project}/save-as-template"),
+    assert_eq!(recurring["outcome"], "ok", "{label} recurring: {recurring}");
+    let project_template = post(
+        format!("/api/v2/w/{organization}/ops/project_template_create"),
         "project-template-1",
-        json!({"name": format!("Launch setup{m}"), "description": format!("Launch defaults{m}")}),
+        json!({"projectId": project, "name": format!("Launch setup{m}"), "description": format!("Launch defaults{m}")}),
     )
     .await;
-    let import = post(
-        format!("/api/v1/projects/{project}/imports"),
-        "import-1",
-        json!({"source": "markdown", "text": format!("# Launch{m}\n- [ ] Launch import{m}\n"), "fileName": format!("launch{tag}.md")}),
-    )
-    .await;
-    let import = string_at(&import, "/id");
+    assert_eq!(
+        project_template["outcome"], "ok",
+        "{label} project template: {project_template}"
+    );
+    let (status, import) = browser
+        .op(
+            app,
+            "task_import",
+            json!({"projectId": project, "source": "markdown", "text": format!("# Launch{m}\n- [ ] Launch import{m}\n"), "fileName": format!("launch{tag}.md")}),
+        )
+        .await;
+    assert!(status.is_success(), "{label} import: {status} {import}");
+    let import = string_at(&import, "/import/id");
 
     // Code: the same repository name in both, and a pull request on it.
     let repository = insert_repository(&setup, &project, "acme/widgets", true, true, None).await;
@@ -1337,24 +1345,21 @@ async fn build_workspace(
     )
     .await
     .expect("run usage");
-    let uri = format!("/api/v1/projects/{project}/agent-profiles");
-    let (status, written) = send(
-        app,
-        browser.request(
-            "POST",
-            &uri,
-            None,
+    let (status, written) = browser
+        .op(
+            app,
+            "agent_profile_set",
             json!({
+                "projectId": project,
                 "template": "reviewer",
                 "name": format!("Reviewer{m}"),
                 "description": format!("Reviews{m}"),
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(
         status.is_success(),
-        "{label} POST {uri}: {status} {written}"
+        "{label} agent_profile_set: {status} {written}"
     );
     let uri = format!("/api/v1/organizations/{organization}/harnesses");
     let (status, written) = send(
@@ -1391,15 +1396,16 @@ async fn build_workspace(
     } else {
         format!("{marker}_key")
     };
+    for input in [
+        json!({"key": "run.model", "scope": "workspace", "value": model}),
+        json!({"key": "run.model", "scope": "project", "spaceId": project, "value": format!("{model}-project")}),
+    ] {
+        let (status, written) = browser
+            .op_in(app, &organization, "setting_update", input)
+            .await;
+        assert!(status.is_success(), "{label} setting: {status} {written}");
+    }
     for (uri, body) in [
-        (
-            "/api/v1/settings/values/run.model".to_owned(),
-            json!({"scope": "workspace", "organizationId": organization, "value": model}),
-        ),
-        (
-            "/api/v1/settings/values/run.model".to_owned(),
-            json!({"scope": "project", "projectId": project, "value": format!("{model}-project")}),
-        ),
         (
             format!("/api/v1/organizations/{organization}/secrets/{secret_name}"),
             json!({"value": format!("value-{secret_name}"), "description": format!("Launch key{m}")}),
@@ -1418,25 +1424,22 @@ async fn build_workspace(
     }
     // An environment and a queued launch (W7), started far ahead so the
     // queue leaves it waiting.
-    let uri = format!("/api/v1/projects/{project}/environments");
-    let (status, written) = send(
-        app,
-        browser.request(
-            "POST",
-            &uri,
-            None,
+    let (status, written) = browser
+        .op(
+            app,
+            "environment_create",
             json!({
+                "projectId": project,
                 "name": format!("Cloud{m}"),
                 "harness": "codex_cloud",
                 "providerEnvironmentId": "env-launch",
                 "setupNotes": format!("Notes{m}"),
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(
         status.is_success(),
-        "{label} POST {uri}: {status} {written}"
+        "{label} environment_create: {status} {written}"
     );
     let uri = format!("/api/v1/projects/{project}/launches");
     let start_at = (chrono::Utc::now() + chrono::Duration::days(20)).to_rfc3339();
@@ -1564,42 +1567,52 @@ async fn build_workspace(
     // reminder, a saved task, a bare reminder, a scheduled message and a
     // channel set to every message.
     let soon = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
-    for (method, uri, body) in [
+    for (workspace, input) in [
         (
-            "POST",
-            "/api/v1/later".to_owned(),
-            json!({"messageId": message, "note": format!("Read{m}"), "remindAt": soon}),
+            None,
+            json!({"messageId": message, "text": format!("Read{m}"), "at": soon}),
         ),
+        (None, json!({"task": task.to_string()})),
         (
-            "POST",
-            "/api/v1/later".to_owned(),
-            json!({"workItemId": task}),
+            Some(organization),
+            json!({"text": format!("Call back{m}"), "at": soon}),
         ),
-        (
-            "POST",
-            "/api/v1/later".to_owned(),
-            json!({"note": format!("Call back{m}"), "remindAt": soon, "organizationId": organization}),
+    ] {
+        let (status, written) = match workspace {
+            Some(workspace) => browser.op_in(app, workspace, "later_save", input).await,
+            None => browser.op(app, "later_save", input).await,
+        };
+        assert_eq!(status, StatusCode::OK, "{label} later_save: {written}");
+    }
+    let (status, written) = send(
+        app,
+        browser.request(
+            "PUT",
+            &format!("/api/v1/conversations/{channel}/notification-level"),
+            None,
+            json!({"level": "all"}),
         ),
-        (
-            "POST",
-            format!("/api/v1/conversations/{channel}/scheduled-messages"),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "{label} notification level: {status} {written}"
+    );
+    let (status, scheduled) = browser
+        .op(
+            app,
+            "message_schedule",
             json!({
+                "conversationId": channel,
                 "content": {"version": 1, "nodes": [{"type": "text", "text": format!("Later{m}")}]},
                 "sendAt": soon,
             }),
-        ),
-        (
-            "PUT",
-            format!("/api/v1/conversations/{channel}/notification-level"),
-            json!({"level": "all"}),
-        ),
-    ] {
-        let (status, written) = send(app, browser.request(method, &uri, None, body)).await;
-        assert!(
-            status.is_success(),
-            "{label} {method} {uri}: {status} {written}"
-        );
-    }
+        )
+        .await;
+    assert!(
+        status.is_success(),
+        "{label} scheduled message: {status} {scheduled}"
+    );
 
     // Webhooks and automations (W14, A2.6): the owner's webhook (a
     // connection with an address) on the whole workspace, and a rule that
@@ -1625,21 +1638,19 @@ async fn build_workspace(
     assert!(status.is_success(), "{label} webhook: {status} {created}");
     let webhook =
         Uuid::parse_str(&string_at(&created, "/value/connection/id")).expect("webhook id");
-    let (status, created) = send(
-        app,
-        browser.request(
-            "POST",
-            &format!("/api/v1/projects/{project}/automations"),
-            None,
+    let (status, created) = browser
+        .op(
+            app,
+            "automation_create",
             json!({
+                "projectId": project,
                 "name": format!("Rule{m}"),
                 "trigger": {"kind": "task_created"},
                 "actions": [{"kind": "notify", "recipients": "owner",
                              "message": format!("New task{m}")}],
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(
         status.is_success(),
         "{label} automation: {status} {created}"
@@ -1665,9 +1676,9 @@ async fn build_workspace(
         app,
         browser.request(
             "POST",
-            &format!("/api/v1/projects/{project}/bug-report-links"),
-            None,
-            json!({"name": format!("Game{m}")}),
+            "/api/v2/ops/bug_report_link_create",
+            Some(&format!("bug-link-{tag}")),
+            json!({"projectId": project, "name": format!("Game{m}")}),
         ),
     )
     .await;
@@ -1677,87 +1688,73 @@ async fn build_workspace(
     );
 
     // AWD-76: a saved workspace template, carrying the project's channels.
-    let (status, created) = send(
-        app,
-        browser.request(
-            "POST",
-            &format!("/api/v1/organizations/{organization}/workspace-templates"),
-            None,
+    let (status, created) = browser
+        .op_in(
+            app,
+            organization,
+            "workspace_template_save",
             json!({
+                "projectId": project,
+                "includeProject": true,
                 "name": format!("Our setup{m}"),
                 "description": format!("How we work{m}"),
-                "projectId": project,
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert_eq!(
         status,
-        StatusCode::CREATED,
+        StatusCode::OK,
         "{label} workspace template: {created}"
     );
 
     // Layouts: a saved preset, the workspace's default and the project's
     // layout, and rules for viewers and for Rook.
-    let (status, created) = send(
-        app,
-        browser.request(
-            "POST",
-            &format!("/api/v1/organizations/{organization}/layout/presets"),
-            None,
+    let (status, created) = browser
+        .op_in(
+            app,
+            organization,
+            "layout_preset_create",
             json!({
+                "projectId": "workspace",
                 "name": format!("Chores{m}"),
                 "description": format!("For the house{m}"),
-                "layout": {
-                    "preset": "household",
-                    "words": {"task": {"one": format!("chore{m}"), "many": format!("chores{m}")}},
-                },
+                "base": "household",
+                "words": {"task": {"one": format!("chore{m}"), "many": format!("chores{m}")}},
             }),
-        ),
-    )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::CREATED,
-        "{label} layout preset: {created}"
-    );
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{label} layout preset: {created}");
     let layout_preset = string_at(&created, "/id");
-    for (path, body) in [
-        (
-            format!("/api/v1/organizations/{organization}/layout"),
-            json!({"layout": {"preset": layout_preset}}),
-        ),
-        (
-            format!("/api/v1/projects/{project}/layout"),
-            json!({"layout": {
-                "preset": "personal_life",
-                "words": {"page": {"one": format!("note{m}"), "many": format!("notes{m}")}},
-            }}),
-        ),
-        (
-            format!("/api/v1/projects/{project}/layout/rules"),
-            json!({"rules": [
-                {"role": "viewer", "preset": layout_preset},
-                {"actorId": rook, "preset": "bug_reporting"},
-            ]}),
-        ),
+    for body in [
+        json!({"projectId": "workspace", "wholeWorkspace": true, "preset": layout_preset}),
+        json!({
+            "projectId": project,
+            "preset": "personal_life",
+            "words": {"page": {"one": format!("note{m}"), "many": format!("notes{m}")}},
+        }),
+        json!({"projectId": project, "rules": [
+            {"role": "viewer", "preset": layout_preset},
+            {"person": rook.to_string(), "preset": "bug_reporting"},
+        ]}),
     ] {
-        let (status, changed) = send(app, browser.request("PUT", &path, None, body)).await;
-        assert!(status.is_success(), "{label} {path}: {status} {changed}");
+        let (status, changed) = browser
+            .op_in(app, organization, "layout_update", body.clone())
+            .await;
+        assert!(
+            status.is_success(),
+            "{label} layout {body}: {status} {changed}"
+        );
     }
 
     // Whiteboards: one for the whole workspace, drawn on and with an image,
     // and one in the project, linked to the task, the project and the page.
-    let (status, created) = send(
-        app,
-        browser.request(
-            "POST",
-            "/api/v1/whiteboards",
-            None,
-            json!({"title": format!("Sketch{m}"), "organizationId": organization}),
-        ),
-    )
-    .await;
+    let (status, created) = browser
+        .op(
+            app,
+            "whiteboard_create",
+            json!({"title": format!("Sketch{m}"), "workspaceId": organization}),
+        )
+        .await;
     assert!(
         status.is_success(),
         "{label} whiteboard: {status} {created}"
@@ -1796,20 +1793,17 @@ async fn build_workspace(
         status.is_success(),
         "{label} whiteboard file: {status} {stored}"
     );
-    let (status, created) = send(
-        app,
-        browser.request(
-            "POST",
-            "/api/v1/whiteboards",
-            None,
+    let (status, created) = browser
+        .op(
+            app,
+            "whiteboard_create",
             json!({
                 "title": format!("Plan{m}"),
                 "projectId": project,
-                "link": {"targetKind": "task", "targetId": task},
+                "linkTo": {"targetKind": "task", "targetId": task},
             }),
-        ),
-    )
-    .await;
+        )
+        .await;
     assert!(
         status.is_success(),
         "{label} project whiteboard: {status} {created}"
@@ -1820,16 +1814,13 @@ async fn build_workspace(
         (project_whiteboard, "page", page.clone()),
         (whiteboard, "project", project.clone()),
     ] {
-        let (status, linked) = send(
-            app,
-            browser.request(
-                "POST",
-                &format!("/api/v1/whiteboards/{board}/links"),
-                None,
-                json!({"targetKind": kind, "targetId": target}),
-            ),
-        )
-        .await;
+        let (status, linked) = browser
+            .op(
+                app,
+                "whiteboard_link",
+                json!({"whiteboardId": board, "targetKind": kind, "targetId": target}),
+            )
+            .await;
         assert!(
             status.is_success(),
             "{label} whiteboard link: {status} {linked}"

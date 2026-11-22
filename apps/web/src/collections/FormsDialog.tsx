@@ -135,13 +135,13 @@ function FormList({
   const [deleting, setDeleting] = useState<BugReportLink | null>(null)
   const change = useMutation({
     mutationFn: async ({ link, action }: { link: BugReportLink; action: 'toggle' | 'replace' | 'delete' }) => {
-      if (action === 'toggle') return updateBugReportLink(link.id, { state: link.state === 'active' ? 'paused' : 'active' })
+      if (action === 'toggle') return updateBugReportLink(link, { state: link.state === 'active' ? 'paused' : 'active' })
       if (action === 'replace') {
-        const result = await replaceBugReportLink(link.id)
+        const result = await replaceBugReportLink(link)
         onReplaced(result.link.name, result.formUrl ?? result.url)
         return result.link
       }
-      await deleteBugReportLink(link.id)
+      await deleteBugReportLink(link)
       return null
     },
     onMutate: () => setProblem(null),
@@ -361,15 +361,18 @@ function FormEditor({
         return null
       }
       if (link) {
-        await updateBugReportLink(link.id, { name, form })
+        await updateBugReportLink(link, { name, form })
         return null
       }
       return createCollectionForm(projectId, body.collection.id, name, form)
     },
-    onSuccess: (created) => {
+    // A link made on an earlier try can answer without its address: list it either way.
+    onSettled: () => {
       void client.invalidateQueries({ queryKey: bugReportKeys.links(projectId) })
       void client.invalidateQueries({ queryKey: opPrefix('form_list', workspaceId) })
       void client.invalidateQueries({ queryKey: opPrefix('form_get', workspaceId) })
+    },
+    onSuccess: (created) => {
       if (created) onShared(created.link.name, created.formUrl ?? created.url)
       else {
         showToast({ title: `${draft.name.trim()} saved` })

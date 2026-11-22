@@ -37,7 +37,7 @@ async fn a_record_keeps_its_files_in_a_field_and_readers_keep_them_when_archived
     };
 
     ok(&tool(
-        "collection_write",
+        "collection_create",
         json!({"projectId": "WORK", "name": "Bugs", "fields": [
             {"name": "Screenshots", "type": "file"},
         ]}),
@@ -46,7 +46,7 @@ async fn a_record_keeps_its_files_in_a_field_and_readers_keep_them_when_archived
 
     // A new record can't name files yet: they're uploaded to it once made.
     let early = tool(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Bugs", "clientRequestId": "early",
                "records": [{"title": "Early", "fields": {"Screenshots": [Uuid::now_v7()]}}]}),
     )
@@ -54,7 +54,7 @@ async fn a_record_keeps_its_files_in_a_field_and_readers_keep_them_when_archived
     assert_eq!(early["outcome"], "invalid_request", "{early}");
 
     let made = tool(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Bugs", "clientRequestId": "two",
                "records": [{"title": "Crash on start"}, {"title": "Slow search"}]}),
     )
@@ -86,7 +86,7 @@ async fn a_record_keeps_its_files_in_a_field_and_readers_keep_them_when_archived
     .await;
     assert!(ok(&set)["changed"].as_bool().unwrap_or(true), "{set}");
     let read = tool(
-        "record_query",
+        "record_list",
         json!({"projectId": "WORK", "collection": "Bugs"}),
     )
     .await;

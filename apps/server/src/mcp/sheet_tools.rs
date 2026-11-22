@@ -1,9 +1,9 @@
 //! Sheet tools (AWD-54): three tools for every sheet a project has.
 //!
 //! - `sheet_list`: a project's sheets, with their tabs and revision.
-//! - `sheet_read`: a range of one tab's cells (values, and formulas where
+//! - `sheet_get`: a range of one tab's cells (values, and formulas where
 //!   there are any), or its rows as objects by header, filtered.
-//! - `sheet_write`: create a sheet, rename, describe, archive or restore
+//! - `sheet_create` and `sheet_update`: create a sheet, rename, describe, archive or restore
 //!   it, and change its cells, rows, tabs and formats, all or nothing
 //!   (`sheets.edit`).
 //!
@@ -45,9 +45,9 @@ use crate::{
 };
 
 const MESSAGES_SPACE_MESSAGE: &str =
-    "The Messages space has no sheets. Pick a project with projects_list.";
+    "The Messages space has no sheets. Pick a project with project_list.";
 const EDIT_MESSAGE: &str =
-    "Your role here can't edit sheets (sheets.edit). my_permissions says what it can do.";
+    "Your role here can't edit sheets (sheets.edit). permissions_get says what it can do.";
 /// Cells one read returns at most.
 const MAX_READ_CELLS: i64 = 2_000;
 /// Rows one read returns at most, as objects.
@@ -190,18 +190,18 @@ fn json_of(value: &CellValue) -> Value {
 // ---------------------------------------------------------------------------
 // sheet_list
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct SheetListArguments {
+pub(crate) struct SheetListArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
-    /// Also list archived sheets, which sheet_write can restore.
+    /// Also list archived sheets, which sheet_update can restore.
     pub include_archived: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SheetLine {
+pub(crate) struct SheetLine {
     #[serde(flatten)]
     pub sheet: SheetSummary,
     pub url: String,
@@ -209,14 +209,14 @@ pub(super) struct SheetLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SheetListValue {
+pub(crate) struct SheetListValue {
     /// The project's sheets, last changed first.
     pub sheets: Vec<SheetLine>,
     /// Whether you can create sheets and change them.
     pub can_edit: bool,
 }
 
-pub(super) async fn sheet_list(
+pub(crate) async fn sheet_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: SheetListArguments,
@@ -269,9 +269,9 @@ pub(super) async fn sheet_list(
 // ---------------------------------------------------------------------------
 // sheet_read
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct SheetReadArguments {
+pub(crate) struct SheetReadArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// The sheet, by name or ID.
@@ -300,7 +300,7 @@ pub(super) struct SheetReadArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct TabLine {
+pub(crate) struct TabLine {
     pub id: String,
     pub name: String,
     /// The last row and column holding something, such as "F120"; empty
@@ -312,7 +312,7 @@ pub(super) struct TabLine {
     /// Its conditional formats, in order (the first that applies wins).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditional_formats: Vec<sheets::conditional::ConditionalRule>,
-    /// Its validation rules, as sheet_write's validations takes them.
+    /// Its validation rules, as sheet_update's validations takes them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(with = "Vec<serde_json::Value>")]
     pub validations: Vec<sheets::validation::ValidationRule>,
@@ -320,7 +320,7 @@ pub(super) struct TabLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CellLine {
+pub(crate) struct CellLine {
     /// Such as "B12".
     pub cell: String,
     /// What it computes to: a number, text, true or false, or an error
@@ -352,7 +352,7 @@ pub(super) struct CellLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RowLine {
+pub(crate) struct RowLine {
     /// The row's number in the tab.
     pub row: i32,
     /// Its values by header.
@@ -362,7 +362,7 @@ pub(super) struct RowLine {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SheetReadValue {
+pub(crate) struct SheetReadValue {
     pub sheet: SheetSummary,
     /// Every tab, in order.
     pub tabs: Vec<TabLine>,
@@ -438,7 +438,7 @@ fn matches_filter(wanted: &Value, value: &CellValue) -> bool {
     }
 }
 
-pub(super) async fn sheet_read(
+pub(crate) async fn sheet_read(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: SheetReadArguments,
@@ -706,7 +706,7 @@ pub(super) async fn sheet_read(
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct CellWrite {
+pub(crate) struct CellWrite {
     /// The tab, by name or ID. Defaults to the first.
     pub tab: Option<String>,
     /// The cell, such as "B12".
@@ -724,7 +724,7 @@ pub(super) struct CellWrite {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct RowWrite {
+pub(crate) struct RowWrite {
     /// The tab, by name or ID. Defaults to the first.
     pub tab: Option<String>,
     /// The header whose value finds the row to change (such as "ID" or
@@ -741,7 +741,7 @@ pub(super) struct RowWrite {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct TabWrite {
+pub(crate) struct TabWrite {
     /// The tab to change, by name or ID. Leave it out with add to add one.
     pub tab: Option<String>,
     /// Add a tab with this name, at the end.
@@ -773,7 +773,8 @@ pub(super) struct TabWrite {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct SortKey {
+#[schemars(rename = "SheetSortKey")]
+pub(crate) struct SortKey {
     /// A column of the range, by its letters (such as "C").
     pub column: String,
     /// Largest or last first.
@@ -783,7 +784,8 @@ pub(super) struct SortKey {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct SortWrite {
+#[schemars(rename = "SheetSortWrite")]
+pub(crate) struct SortWrite {
     /// The tab, by name or ID. Defaults to the first.
     pub tab: Option<String>,
     /// The block whose rows are sorted, such as "A2:F40" (leave the header
@@ -796,14 +798,14 @@ pub(super) struct SortWrite {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ValidationsWrite {
+pub(crate) struct ValidationsWrite {
     pub tab: Option<String>,
     pub rules: Vec<sheets::validation::ValidationRule>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ConditionalFormatsWrite {
+pub(crate) struct ConditionalFormatsWrite {
     /// The tab, by name or ID. Defaults to the first.
     pub tab: Option<String>,
     /// All of the tab's rules, in order: the first that applies to a cell
@@ -820,7 +822,7 @@ pub(super) struct ConditionalFormatsWrite {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct FormatWrite {
+pub(crate) struct FormatWrite {
     /// The tab, by name or ID. Defaults to the first.
     pub tab: Option<String>,
     /// The cells, in A1 form: "B2:B40", "C4", "B:D" (whole columns) or
@@ -866,7 +868,7 @@ impl FormatWrite {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct SheetWriteArguments {
+pub(crate) struct SheetWriteArguments {
     /// The project's ID, link or key (such as "AWD").
     pub project_id: String,
     /// The sheet to change, by name or ID. Leave it out to create one
@@ -913,7 +915,7 @@ pub(super) struct SheetWriteArguments {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct SheetImport {
+pub(crate) struct SheetImport {
     /// An Excel (.xlsx) or CSV file in this project, by ID (file_upload
     /// puts one here; file_list shows them). Up to 5 MB.
     pub file_id: Option<String>,
@@ -924,7 +926,7 @@ pub(super) struct SheetImport {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ChangedCellLine {
+pub(crate) struct ChangedCellLine {
     pub tab: String,
     /// Such as "B12".
     pub cell: String,
@@ -943,7 +945,7 @@ pub(super) struct ChangedCellLine {
 
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SheetWriteValue {
+pub(crate) struct SheetWriteValue {
     /// The sheet's ID.
     pub id: String,
     pub name: String,
@@ -977,7 +979,7 @@ pub(super) struct SheetWriteValue {
 /// A cell a proposal would set.
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ProposedCellLine {
+pub(crate) struct ProposedCellLine {
     pub tab: String,
     /// Such as "B12".
     pub cell: String,
@@ -1294,7 +1296,7 @@ fn changed_lines(applied: &Applied) -> Vec<ChangedCellLine> {
         .collect()
 }
 
-pub(super) async fn sheet_write(
+pub(crate) async fn sheet_write(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: SheetWriteArguments,
@@ -1605,20 +1607,22 @@ pub(super) async fn sheet_write(
                 sheet.revision,
             )
             .await?;
+            // One rule for sheets on every edge: audited when the revision
+            // moved (K2.11).
+            insert_audit(
+                &mut transaction,
+                principal,
+                project_id,
+                if created { "sheet.created" } else { "sheet.changed" },
+                "sheet",
+                sheet.id,
+                json!({
+                    "revision": sheet.revision,
+                    "cells": applied.as_ref().map(|applied| applied.inputs_changed).unwrap_or(0),
+                }),
+            )
+            .await?;
         }
-        insert_audit(
-            &mut transaction,
-            principal,
-            project_id,
-            if created { "sheet.created" } else { "sheet.changed" },
-            "sheet",
-            sheet.id,
-            json!({
-                "revision": sheet.revision,
-                "cells": applied.as_ref().map(|applied| applied.inputs_changed).unwrap_or(0),
-            }),
-        )
-        .await?;
         let value = SheetWriteValue {
             id: sheet.id.to_string(),
             name: sheet.name.clone(),
@@ -1657,7 +1661,7 @@ pub(super) async fn sheet_write(
     result.unwrap_or_else(|error| ToolResult::from_error(error, "sheet_write"))
 }
 
-/// A sheet_write by someone whose role only suggests on the sheet: kept
+/// A sheet_update by someone whose role only suggests on the sheet: kept
 /// as a proposal (C1.11), answered and committed here.
 async fn propose_cells(
     state: &AppState,

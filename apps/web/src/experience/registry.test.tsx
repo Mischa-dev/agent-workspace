@@ -14,9 +14,9 @@ import { HomeSidebar } from '../shell/HomeSidebar'
 import { ProjectSidebar } from '../shell/ProjectSidebar'
 import { MemoryTabs, WorkTabs } from '../shell/ProjectTabs'
 import { authenticatedSession, organization } from '../test/appHarness'
-import { OWN_WORDS, layoutKeys, type EffectiveLayout } from './layout'
+import { OWN_WORDS, layoutKeys, normalizeEffective, type EffectiveLayout } from './layout'
 import { NOUN_IDS, PART_IDS } from './parts'
-import { REGISTRY } from './registry'
+import { REGISTRY, keepModuleChanges, layoutFrom, layoutShowsModule, modulePart, moduleSwitches, withModuleSwitches, type SavedPreset } from './registry'
 
 // Keeps layouts (AWD-66) whole as the app grows: the ids the code names
 // match registry.json, presets name only real parts, and every row of a
@@ -78,12 +78,17 @@ function layout(hidden: readonly string[]): { effective: EffectiveLayout } {
   return { effective: { source: 'project', preset: null, hidden: [...hidden], layoutHidden: [...hidden], words: {}, lead: [], showingHidden: false, modulesOff: [] } }
 }
 
-function renderWith(hidden: readonly string[], children: ReactNode) {
+function renderWith(hidden: readonly string[], children: ReactNode, answers: Record<string, unknown> = {}) {
+  const answer = (address: string) => {
+    if (address.includes('/conversation-sidebar')) return sidebarData
+    const found = Object.entries(answers).find(([path]) => address.includes(path))
+    return found ? found[1] : {}
+  }
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL) =>
       Promise.resolve(
-        new Response(JSON.stringify(String(input).includes('/conversation-sidebar') ? sidebarData : {}), {
+        new Response(JSON.stringify(answer(String(input))), {
           headers: { 'content-type': 'application/json' },
         }),
       ),
@@ -148,6 +153,61 @@ describe('layout registry', () => {
     expect(linkNames()).toEqual(['Overview'])
   })
 
+  it('shows a built module’s sidebar entries in their space, and hides them with the module’s part', async () => {
+    const builtModule = {
+      id: '019fb600-0000-7000-8000-000000000020',
+      key: 'local.crm',
+      name: 'CRM',
+      description: '',
+      on: true,
+      parts: 2,
+      // A workspace-wide module: each entry shows in the space it points into.
+      spaceId: null,
+      nav: [
+        { id: '019fb600-0000-7000-8000-000000000021', label: 'Leads', icon: 'table', target: { kind: 'collection', collection: '019fb600-0000-7000-8000-000000000022' }, spaceId: projectId },
+        // In another space: shown there, not here.
+        { id: '019fb600-0000-7000-8000-000000000023', label: 'Elsewhere', icon: null, target: { kind: 'page', page: '019fb600-0000-7000-8000-000000000024' }, spaceId: channelId },
+      ],
+    }
+    const answers = { '/ops/module_list': { outcome: 'ok', value: { built: [builtModule], modules: [], workspaceId: organization.id } } }
+    const view = renderWith([], <ProjectSidebar mobileOpen={false} onNavigate={vi.fn()} project={project} />, answers)
+    const leads = await screen.findByRole('link', { name: 'Leads' })
+    expect(leads.getAttribute('href')).toContain('/collections/019fb600-0000-7000-8000-000000000022')
+    expect(linkNames()).not.toContain('Elsewhere')
+    view.unmount()
+
+    renderWith(['module.crm'], <ProjectSidebar mobileOpen={false} onNavigate={vi.fn()} project={project} />, answers)
+    await screen.findByText('Plans for the week')
+    await new Promise((resolve) => window.setTimeout(resolve, 50))
+    expect(linkNames()).not.toContain('Leads')
+  })
+
+  it('reads built modules’ hidden parts from the server, and keeps them through a layout save', () => {
+    const effective = normalizeEffective({ hidden: ['area.pages'], hiddenModules: ['module.crm'] })
+    expect(effective.hidden).toEqual(['area.pages', 'module.crm'])
+
+    // The editor has no switch for a built module yet: saving anything else keeps the stored one.
+    const stored = { preset: 'software_team', changes: { 'module.crm': false } } as Parameters<typeof keepModuleChanges>[1]
+    const edited = layoutFrom('software_team', new Set(), {}, [])
+    expect(keepModuleChanges(edited, stored).changes).toMatchObject({ 'module.crm': false })
+    expect(keepModuleChanges(edited, null)).toEqual(edited)
+  })
+
+  it('keeps built modules’ switches both ways, over what a saved preset says', () => {
+    const stored = { preset: 'software_team', changes: { 'module.crm': false, 'module.desk': true } } as Parameters<typeof keepModuleChanges>[1]
+    expect(moduleSwitches(stored?.changes)).toEqual({ 'module.crm': false, 'module.desk': true })
+    const edited = layoutFrom('software_team', new Set(), {}, [])
+    expect(keepModuleChanges(edited, stored).changes).toMatchObject({ 'module.crm': false, 'module.desk': true })
+    expect(withModuleSwitches(edited, { [modulePart('local.hiring')]: false }).changes).toMatchObject({ 'module.hiring': false })
+    expect(withModuleSwitches(edited, {})).toEqual(edited)
+
+    // A saved preset that hides a module: the layout's own switch turns it back on.
+    const saved = [{ id: 'quiet', name: 'Quiet', description: '', base: 'software_team', changes: { 'module.crm': false }, words: {}, version: 1, removed: false }] as unknown as SavedPreset[]
+    expect(layoutShowsModule({ preset: 'quiet' }, saved, modulePart('local.crm'))).toBe(false)
+    expect(layoutShowsModule({ preset: 'quiet', changes: { 'module.crm': true } } as Parameters<typeof layoutShowsModule>[0], saved, modulePart('local.crm'))).toBe(true)
+    expect(layoutShowsModule({ preset: 'software_team' }, saved, modulePart('local.crm'))).toBe(true)
+  })
+
   it('hides every tab whose part is hidden, and the tab bar once one tab is left', () => {
     const view = renderWith([], <WorkTabs current="items" projectId={projectId} />)
     expect(linkNames()).toEqual(['Tasks', 'Milestones', 'Timeline', 'Planning'])
@@ -192,6 +252,7 @@ describe('layout registry', () => {
       'collections/CollectionPage.tsx',
       'conversations/SidebarSections.tsx',
       'direct/DirectSidebar.tsx',
+      'shell/BuiltModuleRows.tsx',
       'shell/HomeSidebar.tsx',
       'shell/ProjectSidebar.tsx',
       'shell/ProjectTabs.tsx',

@@ -19,6 +19,7 @@ export const PACKAGE_CONTENT_KINDS = [
   'page',
   'skill',
   'agent',
+  'theme',
 ] as const
 
 export type PackageContentKind = (typeof PACKAGE_CONTENT_KINDS)[number]

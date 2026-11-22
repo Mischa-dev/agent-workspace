@@ -2,23 +2,25 @@ use axum::{
     Json, Router,
     extract::State,
     http::{HeaderMap, StatusCode},
-    routing::{get, post, put},
+    routing::get,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
+use agent_workspace_host_protocol::account::{AccountAnswer, AccountQuestion};
+
+use crate::harness_catalog::Harnesses;
 use crate::{
     AppState,
     auth::{AuthenticatedActor, require_authenticated_write},
     error::{ApiJson, ApiPath, AppError},
+    harness::manifest::{AdapterManifest, ModelOverrides},
+    harness::report::ProfileHealth,
+    hosts::builtin::accounts::{self, Asked, ProfileAccount},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
+    model_catalog::{self as catalog, Catalog},
     policy::{Action, Permission, RoleGrant},
-    provider::{
-        CODEX_KIND, ProfileHealth, SupervisorRegistry,
-        catalog::{self, Catalog},
-        manifest::{AdapterManifest, ModelOverrides},
-    },
 };
 
 const MAX_EXECUTION_RESOURCES: i64 = 100;
@@ -38,24 +40,8 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/v1/projects/{id}/harnesses", get(list_harnesses))
         .route(
-            "/api/v1/projects/{id}/harnesses/{kind}/catalog/refresh",
-            post(refresh_catalog),
-        )
-        .route(
-            "/api/v1/projects/{id}/harnesses/{kind}/models/{model_id}",
-            put(save_model_overrides).delete(remove_model),
-        )
-        .route(
             "/api/v1/organizations/{organization_id}/model-catalog",
             get(list_workspace_catalog),
-        )
-        .route(
-            "/api/v1/organizations/{organization_id}/model-catalog/{kind}/refresh",
-            post(refresh_workspace_catalog),
-        )
-        .route(
-            "/api/v1/organizations/{organization_id}/model-catalog/{kind}/models/{model_id}",
-            put(save_workspace_model).delete(remove_workspace_model),
         )
 }
 
@@ -209,6 +195,8 @@ struct SupervisorHealthView {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum SupervisorState {
+    /// The host runs elsewhere and wasn't asked.
+    Unknown,
     Stopped,
     Ready,
     CircuitOpen,
@@ -290,6 +278,7 @@ async fn list_execution_workers(
         Action::ProjectView,
     )
     .await?;
+    let harnesses = Harnesses::visible_on(&state, &mut transaction).await?;
     let rows = sqlx::query_as::<_, ExecutionWorkerRow>(
         r#"
         SELECT
@@ -361,10 +350,8 @@ async fn list_execution_workers(
     .bind(principal.actor_id)
     .bind(MAX_EXECUTION_RESOURCES)
     .bind(
-        state
-            .supervisors
+        harnesses
             .manifests()
-            .into_iter()
             .map(|manifest| manifest.kind.clone())
             .collect::<Vec<_>>(),
     )
@@ -374,7 +361,7 @@ async fn list_execution_workers(
 
     let workers = rows
         .into_iter()
-        .map(|row| execution_worker_view(&state.supervisors, row))
+        .map(|row| execution_worker_view(&harnesses, row))
         .collect::<Result<Vec<_>, _>>()?;
     transaction.commit().await?;
     Ok(Json(ExecutionWorkersResponse { workers }))
@@ -444,14 +431,17 @@ async fn list_execution_profiles(
     .fetch_all(&mut *transaction)
     .await?;
 
+    let harnesses = Harnesses::visible_on(&state, &mut transaction).await?;
     let mut profiles = Vec::with_capacity(rows.len());
     for row in rows {
-        let health = state
-            .supervisors
-            .health(&row.account_adapter_kind, row.provider_account_id)
-            .await;
+        let health = crate::hosts::builtin::accounts::health(
+            &state,
+            &row.account_adapter_kind,
+            row.provider_account_id,
+        )
+        .await;
         profiles.push(execution_profile_view(
-            &state.supervisors,
+            &harnesses,
             row,
             health,
             principal.actor_id,
@@ -489,12 +479,12 @@ async fn register_personal_execution_profile(
         }
         (_, Some(account)) => account.adapter_kind.clone(),
         (Some(kind), None) => kind.clone(),
-        (None, None) => CODEX_KIND.to_owned(),
+        (None, None) => crate::hosts::builtin::DEFAULT_HARNESS.to_owned(),
     };
-    let manifest = state
-        .supervisors
+    let manifest = Harnesses::visible(&state)
+        .await?
         .manifest(&adapter_kind)
-        .map(|manifest| (*manifest).clone())
+        .cloned()
         .ok_or(AppError::Validation("adapterKind"))?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let access = require_project_action(
@@ -729,8 +719,11 @@ async fn list_harnesses(
     transaction.commit().await?;
     let can_edit = may_edit_catalog(&workspace);
     let mut harnesses = Vec::new();
-    for manifest in state.supervisors.manifests_in(workspace.organization_id) {
-        harnesses.push(harness_view(&state, workspace.organization_id, &manifest, can_edit).await?);
+    for manifest in Harnesses::of(&state, workspace.organization_id)
+        .await?
+        .manifests()
+    {
+        harnesses.push(harness_view(&state, workspace.organization_id, manifest, can_edit).await?);
     }
     Ok(Json(HarnessesResponse { harnesses }))
 }
@@ -749,63 +742,10 @@ async fn list_workspace_catalog(
             .await
             .is_ok();
     let mut harnesses = Vec::new();
-    for manifest in state.supervisors.manifests_in(organization_id) {
-        harnesses.push(harness_view(&state, organization_id, &manifest, can_edit).await?);
+    for manifest in Harnesses::of(&state, organization_id).await?.manifests() {
+        harnesses.push(harness_view(&state, organization_id, manifest, can_edit).await?);
     }
     Ok(Json(HarnessesResponse { harnesses }))
-}
-
-/// Asks the harness for its current models, through one of the caller's
-/// signed-in accounts, and stores them. People's edits are kept.
-async fn refresh_catalog(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath((project_id, kind)): ApiPath<(Uuid, String)>,
-) -> Result<Json<HarnessView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let scope = idempotency::resource_bound_scope("project", project_id, "catalog_refresh")?;
-    // Same boundary as the other catalog edits: the project is visible and
-    // the caller may edit the workspace catalog. A refresh replaces the
-    // workspace's provider-reported models for everyone, so it is one.
-    let organization_id = require_catalog_editor(&state, &principal, project_id).await?;
-    Ok(Json(
-        refresh_in(
-            &state,
-            principal.actor_id,
-            organization_id,
-            Some(project_id),
-            &kind,
-            Some((&scope, &idempotency_key)),
-        )
-        .await?,
-    ))
-}
-
-/// The same refresh from the workspace's settings, where no project is open.
-async fn refresh_workspace_catalog(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath((organization_id, kind)): ApiPath<(Uuid, String)>,
-) -> Result<Json<HarnessView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let scope =
-        idempotency::resource_bound_scope("organization", organization_id, "catalog_refresh")?;
-    require_workspace_catalog_editor(&state, &principal, organization_id).await?;
-    Ok(Json(
-        refresh_in(
-            &state,
-            principal.actor_id,
-            organization_id,
-            None,
-            &kind,
-            Some((&scope, &idempotency_key)),
-        )
-        .await?,
-    ))
 }
 
 /// Lists the harness's models through the caller's own signed-in account
@@ -821,10 +761,10 @@ pub(crate) async fn refresh_in(
     idempotency: Option<(&str, &IdempotencyKey)>,
 ) -> Result<HarnessView, AppError> {
     let request_hash = RequestHash::for_value(&serde_json::json!({ "kind": kind }))?;
-    let manifest = state
-        .supervisors
-        .manifest_in(organization_id, kind)
-        .map(|manifest| (*manifest).clone())
+    let manifest = Harnesses::of(state, organization_id)
+        .await?
+        .manifest(kind)
+        .cloned()
         .ok_or(AppError::NotFound("harness"))?;
     if !manifest.features.model_listing {
         return Err(AppError::Conflict(
@@ -849,7 +789,7 @@ pub(crate) async fn refresh_in(
         transaction.commit().await?;
         return harness_view(state, organization_id, &manifest, true).await;
     }
-    let account = sqlx::query_as::<_, crate::provider::ProfileAccount>(
+    let account = sqlx::query_as::<_, ProfileAccount>(
         r#"
         SELECT account.id AS account_id, account.adapter_kind, account.home_path,
                account.max_concurrent_runs
@@ -872,16 +812,11 @@ pub(crate) async fn refresh_in(
     // Its own code, so the settings page can say to sign in first.
     .ok_or(AppError::ExecutionProfileRequired)?;
     transaction.rollback().await?;
-    let mut session = state
-        .supervisors
-        .acquire_control(&manifest.kind, account.handle())
-        .await
-        .map_err(|error| catalog_error(&manifest.kind, error))?;
-    let models = session
-        .list_models()
-        .await
-        .map_err(|error| catalog_error(&manifest.kind, error))?;
-    drop(session);
+    let models =
+        match accounts::ask(state, organization_id, account.ask(AccountQuestion::Models)).await? {
+            Asked::Answered(AccountAnswer::Models { models }) => models,
+            other => return Err(catalog_error(&manifest.kind, other.category())),
+        };
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let Some((scope, idempotency_key)) = idempotency else {
         catalog::store_refresh(&mut transaction, organization_id, &manifest.kind, &models).await?;
@@ -915,10 +850,10 @@ pub(crate) async fn refresh_in(
     harness_view(state, organization_id, &manifest, true).await
 }
 
-fn catalog_error(kind: &str, error: crate::provider::HarnessError) -> AppError {
+fn catalog_error(kind: &str, category: &str) -> AppError {
     tracing::warn!(
         adapter_kind = kind,
-        error_type = std::any::type_name_of_val(&error),
+        category,
         "harness model listing failed"
     );
     AppError::Conflict("harness", "the harness could not list its models")
@@ -936,85 +871,6 @@ pub(crate) fn valid_model_id(model_id: &str) -> Result<(), AppError> {
     }
 }
 
-async fn require_catalog_editor(
-    state: &AppState,
-    principal: &AuthenticatedActor,
-    project_id: Uuid,
-) -> Result<Uuid, AppError> {
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    require_project_action(&mut transaction, principal, project_id, Action::ProjectView).await?;
-    let workspace = workspace_access(&mut transaction, principal, project_id).await?;
-    transaction.commit().await?;
-    if may_edit_catalog(&workspace) {
-        Ok(workspace.organization_id)
-    } else {
-        Err(AppError::Forbidden)
-    }
-}
-
-/// The workspace's owners and admins edit its catalog; other members get a
-/// 403, and people outside it a 404.
-async fn require_workspace_catalog_editor(
-    state: &AppState,
-    principal: &AuthenticatedActor,
-    organization_id: Uuid,
-) -> Result<(), AppError> {
-    crate::settings::authorize_personal(&state.pool, principal, organization_id).await?;
-    crate::settings::authorize_workspace_manage(&state.pool, principal, organization_id).await
-}
-
-/// A workspace owner or admin edits one model (context size, prices, name,
-/// reasoning levels, speeds, hiding it), or adds one by hand.
-async fn save_model_overrides(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath((project_id, kind, model_id)): ApiPath<(Uuid, String, String)>,
-    ApiJson(overrides): ApiJson<ModelOverrides>,
-) -> Result<Json<HarnessView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    IdempotencyKey::from_headers(&headers)?;
-    valid_model_id(&model_id)?;
-    overrides.validate().map_err(AppError::Validation)?;
-    let organization_id = require_catalog_editor(&state, &principal, project_id).await?;
-    Ok(Json(
-        save_overrides_in(
-            &state,
-            principal.actor_id,
-            organization_id,
-            &kind,
-            &model_id,
-            &overrides,
-        )
-        .await?,
-    ))
-}
-
-async fn save_workspace_model(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath((organization_id, kind, model_id)): ApiPath<(Uuid, String, String)>,
-    ApiJson(overrides): ApiJson<ModelOverrides>,
-) -> Result<Json<HarnessView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    IdempotencyKey::from_headers(&headers)?;
-    valid_model_id(&model_id)?;
-    overrides.validate().map_err(AppError::Validation)?;
-    require_workspace_catalog_editor(&state, &principal, organization_id).await?;
-    Ok(Json(
-        save_overrides_in(
-            &state,
-            principal.actor_id,
-            organization_id,
-            &kind,
-            &model_id,
-            &overrides,
-        )
-        .await?,
-    ))
-}
-
 pub(crate) async fn save_overrides_in(
     state: &AppState,
     actor_id: Uuid,
@@ -1023,10 +879,10 @@ pub(crate) async fn save_overrides_in(
     model_id: &str,
     overrides: &ModelOverrides,
 ) -> Result<HarnessView, AppError> {
-    let manifest = state
-        .supervisors
-        .manifest_in(organization_id, kind)
-        .map(|manifest| (*manifest).clone())
+    let manifest = Harnesses::of(state, organization_id)
+        .await?
+        .manifest(kind)
+        .cloned()
         .ok_or(AppError::NotFound("harness"))?;
     catalog::save_overrides(
         &state.pool,
@@ -1040,46 +896,16 @@ pub(crate) async fn save_overrides_in(
     harness_view(state, organization_id, &manifest, true).await
 }
 
-async fn remove_model(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath((project_id, kind, model_id)): ApiPath<(Uuid, String, String)>,
-) -> Result<Json<HarnessView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    IdempotencyKey::from_headers(&headers)?;
-    valid_model_id(&model_id)?;
-    let organization_id = require_catalog_editor(&state, &principal, project_id).await?;
-    Ok(Json(
-        remove_model_in(&state, organization_id, &kind, &model_id).await?,
-    ))
-}
-
-async fn remove_workspace_model(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath((organization_id, kind, model_id)): ApiPath<(Uuid, String, String)>,
-) -> Result<Json<HarnessView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    IdempotencyKey::from_headers(&headers)?;
-    valid_model_id(&model_id)?;
-    require_workspace_catalog_editor(&state, &principal, organization_id).await?;
-    Ok(Json(
-        remove_model_in(&state, organization_id, &kind, &model_id).await?,
-    ))
-}
-
 pub(crate) async fn remove_model_in(
     state: &AppState,
     organization_id: Uuid,
     kind: &str,
     model_id: &str,
 ) -> Result<HarnessView, AppError> {
-    let manifest = state
-        .supervisors
-        .manifest_in(organization_id, kind)
-        .map(|manifest| (*manifest).clone())
+    let manifest = Harnesses::of(state, organization_id)
+        .await?
+        .manifest(kind)
+        .cloned()
         .ok_or(AppError::NotFound("harness"))?;
     if !catalog::remove_model(&state.pool, organization_id, &manifest.kind, model_id).await? {
         return Err(AppError::NotFound("harness_model"));
@@ -1138,11 +964,14 @@ async fn fetch_owned_execution_profile(
     .fetch_optional(crate::db::scoped(&state.pool))
     .await?
     .ok_or(AppError::NotFound("execution_profile"))?;
-    let health = state
-        .supervisors
-        .health(&row.account_adapter_kind, row.provider_account_id)
-        .await;
-    execution_profile_view(&state.supervisors, row, health, owner_actor_id)
+    let health = crate::hosts::builtin::accounts::health(
+        state,
+        &row.account_adapter_kind,
+        row.provider_account_id,
+    )
+    .await;
+    let harnesses = Harnesses::visible(state).await?;
+    execution_profile_view(&harnesses, row, health, owner_actor_id)
 }
 
 async fn require_project_action(
@@ -1192,7 +1021,7 @@ async fn require_project_action(
 }
 
 fn execution_worker_view(
-    registry: &SupervisorRegistry,
+    harnesses: &Harnesses,
     row: ExecutionWorkerRow,
 ) -> Result<ExecutionWorkerView, AppError> {
     let actor_status = parse_actor_status(&row.actor_status)?;
@@ -1228,7 +1057,7 @@ fn execution_worker_view(
     {
         ExecutionWorkerStatus::AuthenticationRequired
     } else if !row.provider_enabled
-        || registry.manifest(&row.provider_kind).is_none()
+        || harnesses.manifest(&row.provider_kind).is_none()
         || profile_status == Some(ExecutionProfileStatus::Unavailable)
         || row.profile_usable == Some(false)
         || account_state == Some(AccountState::Unknown)
@@ -1251,7 +1080,7 @@ fn execution_worker_view(
         enabled: row.worker_enabled,
         status,
         provider: provider_view(
-            registry,
+            harnesses,
             &row.provider_kind,
             row.provider_enabled,
             row.provider_version,
@@ -1262,7 +1091,7 @@ fn execution_worker_view(
 }
 
 fn execution_profile_view(
-    registry: &SupervisorRegistry,
+    harnesses: &Harnesses,
     row: ExecutionProfileRow,
     supervisor_health: Option<ProfileHealth>,
     viewer_actor_id: Uuid,
@@ -1273,7 +1102,7 @@ fn execution_profile_view(
     let available_for_new_runs = status == ExecutionProfileStatus::Available
         && account_state == AccountState::Authenticated
         && row.provider_enabled
-        && registry.manifest(&row.provider_kind).is_some()
+        && harnesses.manifest(&row.provider_kind).is_some()
         && owner_status == ActorStatus::Active
         && row.owner_membership_enabled;
 
@@ -1304,7 +1133,7 @@ fn execution_profile_view(
         available_for_new_runs,
         supervisor: supervisor_health_view(supervisor_health),
         provider: provider_view(
-            registry,
+            harnesses,
             &row.provider_kind,
             row.provider_enabled,
             row.provider_version,
@@ -1317,7 +1146,7 @@ fn execution_profile_view(
 fn supervisor_health_view(health: Option<ProfileHealth>) -> SupervisorHealthView {
     let Some(health) = health else {
         return SupervisorHealthView {
-            state: SupervisorState::Stopped,
+            state: SupervisorState::Unknown,
             consecutive_failures: 0,
             process_starts: 0,
         };
@@ -1367,14 +1196,14 @@ fn execution_actor_view(
 /// adapter for, or a binary version outside its range, shows as unsupported
 /// rather than failing the whole list.
 fn provider_view(
-    registry: &SupervisorRegistry,
+    harnesses: &Harnesses,
     kind: &str,
     enabled: bool,
     version: i64,
     binary_version: &str,
     capabilities: &serde_json::Value,
 ) -> Result<ProviderView, AppError> {
-    let manifest = registry.manifest(kind);
+    let manifest = harnesses.manifest(kind);
     Ok(ProviderView {
         kind: kind.to_owned(),
         display_name: manifest

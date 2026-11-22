@@ -418,6 +418,13 @@
       "default": true
     },
     {
+      "id": "tech.run_files",
+      "group": "technical",
+      "label": "Run file changes",
+      "description": "The files each run changed, with its diff.",
+      "default": true
+    },
+    {
       "id": "tech.ids",
       "group": "technical",
       "label": "IDs and developer detail",
@@ -764,6 +771,7 @@
         "task.custom_fields",
         "task.dates",
         "task.runs",
+        "tech.run_files",
         "talk.slash_commands",
         "talk.scheduling",
         "talk.agent_mentions",

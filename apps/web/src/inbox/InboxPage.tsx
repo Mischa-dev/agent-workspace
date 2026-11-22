@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
+import { useSignedInWorkspaceIds } from '../auth/session'
 import { useHomeExperience, type Experience } from '../experience/layout'
 import { atPhrase } from '../later/when'
 import { useShellPage } from '../shell/shellStore'
@@ -32,6 +33,7 @@ import {
   groupBySubject,
   invalidateInbox,
   isExternalHref,
+  noteWorkspaces,
   postUpdate,
   needsYou,
   answerRequest,
@@ -83,6 +85,17 @@ function isCategory(value: string | null): value is InboxCategory {
   return CATEGORIES.some((category) => category.value === value)
 }
 
+/**
+ * A restore skips a notification whose group already has one in the inbox
+ * (a newer one about the same thing), so it stays archived: say so rather
+ * than nothing.
+ */
+function stayedArchived(skipped: number): string {
+  return skipped === 1
+    ? 'One stayed archived: a newer notification about the same thing is already in your inbox or snoozed.'
+    : `${countLabel(skipped, 'notification')} stayed archived: newer ones about the same things are already in your inbox or snoozed.`
+}
+
 function typingTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false
   return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
@@ -107,6 +120,7 @@ type ChangeOptions = {
 export function InboxPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const workspaceIds = useSignedInWorkspaceIds()
   const [params, setParams] = useSearchParams()
   const view: InboxView = isView(params.get('view')) ? (params.get('view') as InboxView) : 'inbox'
   const category: InboxCategory = isCategory(params.get('category'))
@@ -120,7 +134,10 @@ export function InboxPage() {
   const density = currentView(savedViews.data?.views ?? [], shown)?.density ?? 'detailed'
   const inbox = useInbox(view, category, spaces)
   useTimeToShow('inbox_open', 'inbox', !inbox.isPending)
-  const mutation = useUpdateInbox(view, category, spaces)
+  // Where each notification lives, noted before a change takes its rows
+  // out of the cache, so its Undo goes back to the same workspaces.
+  const [known] = useState(() => new Map<string, string>())
+  const mutation = useUpdateInbox(view, category, spaces, known)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
@@ -218,8 +235,12 @@ export function InboxPage() {
     })
 
   const undo = useCallback(
-    (update: InboxUpdate) => postUpdate(update).then(() => invalidateInbox(queryClient)),
-    [queryClient],
+    (update: InboxUpdate) =>
+      postUpdate(update, workspaceIds, noteWorkspaces(queryClient, known)).then((result) => {
+        invalidateInbox(queryClient)
+        if (result.refused) throw result.refused
+      }),
+    [known, queryClient, workspaceIds],
   )
 
   const change = useCallback(
@@ -228,6 +249,9 @@ export function InboxPage() {
         onSuccess: (result) => {
           const toast = options.success?.(result)
           if (toast) showToast(toast)
+          // Done in some workspaces, refused in another: what's done stays
+          // undoable, and the refusal still shows.
+          if (result.refused) toastError(options.failed, result.refused)
         },
         onError: (reason) => toastError(options.failed, reason),
       })
@@ -276,7 +300,12 @@ export function InboxPage() {
         change(
           { action: 'restore', ids },
           {
-            success: () => ({ tone: 'success', title: 'Moved back to the inbox', onUndo: () => undo({ action: 'archive', ids }) }),
+            success: (result) =>
+              result.updated.length
+                ? { tone: 'success', title: 'Moved back to the inbox', onUndo: () => undo({ action: 'archive', ids: result.updated }) }
+                : result.refused
+                  ? null
+                  : { tone: 'info', title: 'Stayed archived', description: 'A newer notification about the same thing is already in your inbox or snoozed.' },
             failed: 'It wasn’t moved back to the inbox',
           },
         )
@@ -284,7 +313,8 @@ export function InboxPage() {
         change(
           { action: 'archive', ids },
           {
-            success: () => ({ tone: 'success', title: 'Archived', onUndo: () => undo({ action: 'restore', ids }) }),
+            success: (result) =>
+              result.updated.length ? { tone: 'success', title: 'Archived', onUndo: () => undo({ action: 'restore', ids: result.updated }) } : null,
             failed: 'It wasn’t archived',
           },
         )
@@ -313,13 +343,23 @@ export function InboxPage() {
     change(
       { action: restoring ? 'restore' : 'archive', ids },
       {
-        success: (result) => ({
-          tone: 'success',
-          title: restoring
-            ? `Moved ${countLabel(result.updated.length || ids.length, 'notification')} back to the inbox`
-            : `Archived ${countLabel(result.updated.length || ids.length, 'notification')}`,
-          onUndo: () => undo({ action: restoring ? 'archive' : 'restore', ids }),
-        }),
+        // Undo changes back only what changed: never a notification another
+        // workspace refused.
+        success: (result) => {
+          // Skipped without a refusal: a newer one in the group is open.
+          const skipped = restoring && !result.refused ? ids.length - result.updated.length : 0
+          if (!result.updated.length) {
+            return skipped ? { tone: 'info', title: 'Stayed archived', description: stayedArchived(skipped) } : null
+          }
+          return {
+            tone: 'success',
+            title: restoring
+              ? `Moved ${countLabel(result.updated.length, 'notification')} back to the inbox`
+              : `Archived ${countLabel(result.updated.length, 'notification')}`,
+            ...(skipped ? { description: stayedArchived(skipped) } : {}),
+            onUndo: () => undo({ action: restoring ? 'archive' : 'restore', ids: result.updated }),
+          }
+        },
         failed: restoring ? 'They weren’t moved back' : 'They weren’t archived',
       },
     )
@@ -346,11 +386,17 @@ export function InboxPage() {
     change(
       until === 'activity' ? { action: 'snooze_until_activity', ids } : { action: 'snooze', ids, snoozeUntil: until.toISOString() },
       {
-        success: () => ({
-          tone: 'success',
-          title: ids.length === 1 ? `Snoozed until ${when}` : `Snoozed ${countLabel(ids.length, 'notification')} until ${when}`,
-          onUndo: () => undo({ action: 'unsnooze', ids }),
-        }),
+        success: (result) =>
+          result.updated.length
+            ? {
+                tone: 'success',
+                title:
+                  result.updated.length === 1
+                    ? `Snoozed until ${when}`
+                    : `Snoozed ${countLabel(result.updated.length, 'notification')} until ${when}`,
+                onUndo: () => undo({ action: 'unsnooze', ids: result.updated }),
+              }
+            : null,
         failed: ids.length === 1 ? 'It wasn’t snoozed' : 'They weren’t snoozed',
       },
     )

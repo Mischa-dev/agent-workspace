@@ -137,12 +137,12 @@ async fn channel(world: &World, browser: &Browser, workspace: Uuid, key: &str) -
         world.api(),
         browser,
         "POST",
-        "/api/v1/projects",
+        &format!("/api/v2/w/{}/ops/space_create", workspace),
         Some(&format!("{key}-project")),
-        json!({"organizationId": workspace, "key": key.to_ascii_uppercase(), "name": key}),
+        json!({"key": key.to_ascii_uppercase(), "name": key}),
     )
     .await;
-    let project: Uuid = project["id"]
+    let project: Uuid = project["value"]["id"]
         .as_str()
         .expect("project")
         .parse()
@@ -415,6 +415,8 @@ async fn conformance(name: &str, target: Target) {
         say(&world, &owner, general, "live-missed-0").await,
         say(&world, &owner, general, "live-missed-1").await,
     ];
+    // Missed means in the log: a message still being sequenced comes live.
+    world.cluster.sequenced().await;
     let resumed = call(
         api,
         &owner,
@@ -715,10 +717,10 @@ async fn document_rooms(name: &str, target: Target) {
     call(
         api,
         &owner,
-        "PATCH",
-        &format!("/api/v1/projects/{project}/members/{mara}"),
+        "POST",
+        "/api/v2/ops/space_member_remove",
         Some("rooms-disable"),
-        json!({"expectedVersion": version, "enabled": false}),
+        json!({"spaceId": project, "account": mara, "expectedVersion": version}),
     )
     .await;
     until(&mut sockets[0], WAIT, |frame| {

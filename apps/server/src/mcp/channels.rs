@@ -123,7 +123,7 @@ pub(crate) struct ChannelCreateArguments {
     /// The channel's name, such as "design" or "releases".
     pub name: String,
     /// true for a private channel: only its members see it, starting with
-    /// you. Add people with conversation_members.
+    /// you. Add people with conversation_members_update.
     #[serde(default)]
     pub private: Option<bool>,
     /// A public channel: false to have only you join it now, with others
@@ -315,7 +315,7 @@ pub(crate) async fn conversation_update(
         if arguments.archived.is_some() && kind == "group" {
             return Ok(ToolResult::invalid(
                 "archived",
-                "Groups can't be archived. Leave them out of your briefing with mark_read instead.",
+                "Groups can't be archived. Leave them out of your briefing with conversation_mark_read instead.",
             ));
         }
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;

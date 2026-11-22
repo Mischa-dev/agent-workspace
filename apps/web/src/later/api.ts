@@ -4,6 +4,7 @@ import { requestJson } from '../api/client'
 import { callOp } from '../api/ops'
 import type { MessageContentV1 } from '../conversations/types'
 import { laterKeys } from './keys'
+import { CURRENT_WORKSPACE, workspaceHref } from '../app/href'
 
 export { laterKeys } from './keys'
 
@@ -82,7 +83,7 @@ function maybe(value: unknown): string | null {
 /** Only in-app paths are followed; anything else opens the Later page. */
 function inApp(value: unknown): string {
   const href = str(value)
-  return href.startsWith('/') && !href.startsWith('//') ? href : '/later'
+  return href.startsWith('/') && !href.startsWith('//') ? href : workspaceHref(CURRENT_WORKSPACE, '/later')
 }
 
 export function normalizeSavedItem(value: unknown): SavedItem | null {
@@ -180,27 +181,55 @@ export type SaveInput = {
   remindAt?: string | null
 }
 
-export async function saveForLater(input: SaveInput): Promise<SavedItem> {
-  const body = asRecord(await requestJson<unknown>('/api/v1/later', { method: 'POST', json: input }))
-  const item = normalizeSavedItem(body.item)
+/** What a save or change answers: enough to mark the message and say when. */
+export type SavedResult = { id: string; remindAt: string | null }
+
+const savedResult = (item: { id: string; remindAt?: string | null } | null | undefined): SavedResult => {
   if (!item) throw new Error('The saved item came back unreadable.')
-  return item
+  return { id: item.id, remindAt: item.remindAt ?? null }
+}
+
+/**
+ * Later is the person's own, across workspaces; the operations still run in
+ * one, so each call names the workspace the person is in (`useWorkspaceId`).
+ */
+const inWorkspace = (workspaceId: string | null | undefined) => ({ workspaceId: workspaceId ?? undefined })
+
+export async function saveForLater(input: SaveInput, workspaceId: string | null | undefined): Promise<SavedResult> {
+  const { item } = await callOp(
+    'later_save',
+    {
+      messageId: input.messageId ?? null,
+      task: input.workItemId ?? null,
+      text: input.note ?? null,
+      at: input.remindAt ?? null,
+    },
+    inWorkspace(workspaceId),
+  )
+  return savedResult(item)
 }
 
 export async function changeSaved(
   id: string,
   change: { remindAt?: string | null; note?: string; done?: boolean },
-): Promise<SavedItem> {
-  const body = asRecord(
-    await requestJson<unknown>(`/api/v1/later/${encodeURIComponent(id)}`, { method: 'PATCH', json: change }),
+  workspaceId: string | null | undefined,
+): Promise<SavedResult> {
+  const { item } = await callOp(
+    'later_update',
+    {
+      id,
+      // A reminder taken off is "none"; left out, it stays as it is.
+      at: change.remindAt === undefined ? undefined : (change.remindAt ?? 'none'),
+      text: change.note,
+      done: change.done,
+    },
+    inWorkspace(workspaceId),
   )
-  const item = normalizeSavedItem(body.item)
-  if (!item) throw new Error('The saved item came back unreadable.')
-  return item
+  return savedResult(item)
 }
 
-export async function removeSaved(id: string) {
-  await requestJson<unknown>(`/api/v1/later/${encodeURIComponent(id)}`, { method: 'DELETE' })
+export async function removeSaved(id: string, workspaceId: string | null | undefined) {
+  await callOp('later_update', { id, remove: true }, inWorkspace(workspaceId))
 }
 
 export async function fetchScheduled(conversationId: string | null): Promise<ScheduledMessage[]> {
@@ -220,21 +249,13 @@ export function useScheduled(conversationId: string | null, enabled = true) {
   })
 }
 
-function scheduledFrom(value: unknown) {
-  const item = normalizeScheduled(asRecord(value).scheduledMessage)
-  if (!item) throw new Error('The scheduled message came back unreadable.')
-  return item
-}
-
 export async function scheduleMessage(conversationId: string, content: MessageContentV1, sendAt: string) {
   const { scheduled } = await callOp('message_schedule', { conversationId, content, sendAt })
   return scheduled
 }
 
 export async function updateScheduled(id: string, change: { content?: MessageContentV1; sendAt?: string }) {
-  return scheduledFrom(
-    await requestJson<unknown>(`/api/v1/scheduled-messages/${encodeURIComponent(id)}`, { method: 'PATCH', json: change }),
-  )
+  await callOp('scheduled_message_update', { id, ...change })
 }
 
 export async function sendScheduledNow(id: string) {

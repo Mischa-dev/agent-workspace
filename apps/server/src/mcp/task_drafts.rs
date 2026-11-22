@@ -832,7 +832,7 @@ async fn resolve_labels(
                 .find_map(|name| full.get(&name.to_lowercase()).map(|limit| (name, limit)))
             {
                 Some((name, limit)) => format!(
-                    "There's no room for a label called \"{}\": {}. Archive labels you don't use with label_write, or leave it out.",
+                    "There's no room for a label called \"{}\": {}. Archive labels you don't use with label_update, or leave it out.",
                     echo(name),
                     match limit {
                         LabelLimit::Active => format!(

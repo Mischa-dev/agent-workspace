@@ -99,8 +99,6 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/conversations/{id}/timeline",
     "/api/v1/conversations/{conversation_id}/agent-sessions",
     "/api/v1/custom-emoji/{id}",
-    "/api/v1/agent-runs/{run_id}",
-    "/api/v1/agent-runs/{run_id}/diff",
     "/api/v1/dev/bootstrap",
     "/api/v1/direct",
     "/api/v1/events",
@@ -217,8 +215,6 @@ const HTTP_ROUTES: &[&str] = &[
     "/api/v1/projects/{project_id}/work-items/{work_item_id}/comments/{comment_id}/revisions",
     "/api/v1/push/config",
     "/api/v1/push/subscriptions",
-    "/api/v1/runs",
-    "/api/v1/runs/usage",
     "/api/v1/scheduled-messages",
     "/api/v1/search",
     "/api/v1/settings/effective",
@@ -1357,51 +1353,6 @@ pub(super) fn http_cases(a: &World, b: &World) -> Vec<HttpCase> {
             "/agent-profiles",
         ),
         project_route("/api/v1/projects/{project_id}/agents", "/agents"),
-        case(
-            "/api/v1/runs",
-            vec![
-                "/api/v1/runs".to_owned(),
-                format!("/api/v1/runs?organizationId={}", a.organization),
-                format!("/api/v1/runs?projectId={}&status=needs_you", a.project),
-            ],
-            vec![],
-            vec![
-                format!("/api/v1/runs?organizationId={}", b.organization),
-                format!("/api/v1/runs?projectId={}", b.project),
-            ],
-        ),
-        case(
-            "/api/v1/runs/usage",
-            vec![
-                "/api/v1/runs/usage".to_owned(),
-                "/api/v1/runs/usage?groupBy=model".to_owned(),
-                "/api/v1/runs/usage?groupBy=account".to_owned(),
-                format!(
-                    "/api/v1/runs/usage?groupBy=project&organizationId={}",
-                    a.organization
-                ),
-            ],
-            vec![],
-            vec![
-                format!(
-                    "/api/v1/runs/usage?organizationId={}&groupBy=model",
-                    b.organization
-                ),
-                format!("/api/v1/runs/usage?projectId={}", b.project),
-            ],
-        ),
-        case(
-            "/api/v1/agent-runs/{run_id}",
-            vec![format!("/api/v1/agent-runs/{}", a.run)],
-            vec![format!("/api/v1/agent-runs/{}", b.run)],
-            vec![],
-        ),
-        case(
-            "/api/v1/agent-runs/{run_id}/diff",
-            vec![format!("/api/v1/agent-runs/{}/diff", a.run)],
-            vec![format!("/api/v1/agent-runs/{}/diff", b.run)],
-            vec![],
-        ),
         project_route(
             "/api/v1/projects/{project_id}/environments",
             "/environments",
@@ -2122,12 +2073,12 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "invite_link_list",
     "job_get",
     "collection_list",
-    "collection_describe",
+    "collection_get",
     "formula_preview",
     "button_get",
-    "record_query",
+    "record_list",
     "sheet_list",
-    "sheet_read",
+    "sheet_get",
     "sheet_search",
     "sheet_view_list",
     "sheet_chart_get",
@@ -2173,7 +2124,11 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "recurring_record_list",
     "module_list",
     "module_open",
-    "my_permissions",
+    "connected_module_list",
+    "file_source_get",
+    "file_source_list",
+    "module_panel_list",
+    "module_panel_open",
     "my_work_get",
     "notification_list",
     "directory_list",
@@ -2190,13 +2145,15 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "package_export",
     "package_list",
     "package_preview",
-    "page_blocks",
-    "page_comments",
+    "package_upgrade_preview",
+    "page_blocks_get",
+    "page_comment_list",
     "page_get",
-    "page_suggestions",
+    "page_suggestion_list",
     "page_list",
     "page_template_list",
     "people_search",
+    "permissions_get",
     "project_export",
     "project_members",
     "project_get",
@@ -2210,13 +2167,15 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "role_list",
     "run_activity_list",
     "run_detail_get",
+    "run_diff_get",
+    "run_line_list",
     "run_get",
     "run_list",
-    "run_steps",
-    "run_usage",
+    "run_step_list",
+    "run_usage_list",
     "agent_usage_list",
     "workspace_search",
-    "settings_get",
+    "setting_list",
     "space_list",
     "space_open",
     "space_personal_open",
@@ -2229,8 +2188,8 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "template_list",
     "thing_open",
     "thread_followed_list",
-    "usage_batch",
-    "usage_windows",
+    "usage_batch_preview",
+    "usage_window_list",
     "view_list",
     "whiteboard_list",
     "whiteboard_read",
@@ -2324,17 +2283,27 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
         by_project("workflow_get"),
         by_project("project_members"),
         by_project("invitation_list"),
-        by_project("role_list"),
-        by_project("my_permissions"),
+        case(
+            "role_list",
+            vec![json!({})],
+            vec![json!({"workspace": b.organization})],
+            vec![],
+        ),
+        case(
+            "permissions_get",
+            vec![json!({}), json!({"spaceId": a.project})],
+            vec![
+                json!({"workspace": b.organization}),
+                json!({"spaceId": b.project}),
+            ],
+            vec![],
+        ),
         by_project("workspace_template_list"),
         by_project("project_template_list"),
         case(
             "role_get",
-            vec![
-                json!({"projectId": "WORK", "role": "member"}),
-                json!({"projectId": a.project, "role": "Viewer"}),
-            ],
-            vec![json!({"projectId": b.project, "role": "member"})],
+            vec![json!({"role": "member"}), json!({"role": "Viewer"})],
+            vec![json!({"workspace": b.organization, "role": "member"})],
             vec![],
         ),
         by_project("label_list"),
@@ -2364,7 +2333,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
-            "sheet_read",
+            "sheet_get",
             vec![
                 json!({"projectId": "WORK", "sheet": "Budget"}),
                 json!({"projectId": a.project, "sheet": a.sheet, "range": "A1:B3"}),
@@ -2377,7 +2346,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
-            "collection_describe",
+            "collection_get",
             vec![
                 json!({"projectId": "WORK", "collection": "Playtests"}),
                 json!({"projectId": a.project, "collection": a.collection, "includeArchived": true}),
@@ -2407,7 +2376,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
-            "record_query",
+            "record_list",
             vec![
                 json!({"projectId": "WORK", "collection": "Playtests"}),
                 json!({"projectId": "WORK", "collection": a.collection, "records": ["#1", a.record], "includeHistory": true}),
@@ -2546,6 +2515,55 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "module_open",
             vec![json!({"moduleId": a.module.to_string()})],
             vec![json!({"moduleId": b.module.to_string()})],
+            vec![],
+        ),
+        case(
+            "connected_module_list",
+            vec![json!({})],
+            vec![
+                json!({"workspace": b.organization}),
+                json!({"moduleId": b.module.to_string()}),
+            ],
+            vec![],
+        ),
+        // M1.14 and M1.18: a connected module's panels and files are asked of
+        // the module live; A's own calls are in connected_modules.rs, since
+        // they need a module answering. B's never reach it.
+        case(
+            "module_panel_list",
+            vec![json!({}), json!({"spaceId": a.project})],
+            vec![
+                json!({"workspace": b.organization}),
+                json!({"spaceId": b.project}),
+            ],
+            vec![],
+        ),
+        case(
+            "module_panel_open",
+            vec![],
+            vec![
+                json!({"moduleId": b.module.to_string(), "panel": "main"}),
+                json!({"workspace": b.organization, "moduleId": b.module.to_string(), "panel": "main"}),
+                json!({"moduleId": b.module.to_string(), "panel": "main", "spaceId": b.project}),
+            ],
+            vec![],
+        ),
+        case(
+            "file_source_list",
+            vec![],
+            vec![
+                json!({"moduleId": b.module.to_string()}),
+                json!({"workspace": b.organization, "moduleId": b.module.to_string()}),
+            ],
+            vec![],
+        ),
+        case(
+            "file_source_get",
+            vec![],
+            vec![
+                json!({"moduleId": b.module.to_string(), "ref": "f1"}),
+                json!({"workspace": b.organization, "moduleId": b.module.to_string(), "ref": "f1"}),
+            ],
             vec![],
         ),
         by_project("milestone_list"),
@@ -2761,7 +2779,18 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![json!({"projectId": b.project})],
             vec![],
         ),
-        by_project("settings_get"),
+        case(
+            "setting_list",
+            vec![
+                json!({}),
+                json!({"spaceId": a.project, "keys": ["run.model"]}),
+            ],
+            vec![
+                json!({"workspace": b.organization}),
+                json!({"spaceId": b.project}),
+            ],
+            vec![],
+        ),
         by_project("module_list"),
         by_project("package_list"),
         by_project("agent_template_list"),
@@ -2771,6 +2800,15 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![json!({})],
             vec![],
             vec![json!({}), json!({"query": "lists"})],
+        ),
+        // M1.10: another workspace's install is never planned against.
+        case(
+            "package_upgrade_preview",
+            vec![],
+            vec![json!({"installId": b.package_install, "package": {
+                "format": "agent-workspace-package/1", "id": "fixture", "version": "2.0.0",
+                "name": "Fixture", "target": "space", "contents": []}})],
+            vec![],
         ),
         case(
             "package_preview",
@@ -2799,13 +2837,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
-            "usage_windows",
+            "usage_window_list",
             vec![json!({})],
             vec![json!({"accountId": b.provider_account})],
             vec![],
         ),
         case(
-            "usage_batch",
+            "usage_batch_preview",
             vec![json!({"accountId": a.provider_account})],
             vec![json!({"accountId": b.provider_account})],
             vec![],
@@ -3113,7 +3151,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
-            "page_blocks",
+            "page_blocks_get",
             vec![
                 json!({"pageId": a.page}),
                 json!({"pageId": a.page, "includeMarkdown": true}),
@@ -3125,13 +3163,13 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
-            "page_comments",
+            "page_comment_list",
             vec![json!({"pageId": a.page, "includeResolved": true})],
             vec![json!({"pageId": b.page, "includeResolved": true})],
             vec![],
         ),
         case(
-            "page_suggestions",
+            "page_suggestion_list",
             vec![json!({"pageId": a.page, "includeDecided": true})],
             vec![json!({"pageId": b.page, "includeDecided": true})],
             vec![],
@@ -3176,7 +3214,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
-            "run_steps",
+            "run_step_list",
             vec![
                 json!({"runId": a.run.to_string()}),
                 json!({"runId": a.run.to_string(), "includeDiff": true}),
@@ -3192,13 +3230,29 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             vec![],
         ),
         case(
+            "run_diff_get",
+            vec![json!({"runId": a.run.to_string()})],
+            vec![json!({"runId": b.run.to_string()})],
+            vec![],
+        ),
+        // The Runs page: every run in the workspace, or one space's.
+        case(
+            "run_line_list",
+            vec![
+                json!({}),
+                json!({"spaceId": a.project.to_string(), "status": "needs_you"}),
+            ],
+            vec![json!({"spaceId": b.project.to_string()})],
+            vec![],
+        ),
+        case(
             "run_activity_list",
             vec![json!({"runId": a.run.to_string(), "afterSeq": 0})],
             vec![json!({"runId": b.run.to_string()})],
             vec![],
         ),
         case(
-            "run_usage",
+            "run_usage_list",
             vec![
                 json!({}),
                 json!({"projectId": "WORK", "groupBy": "model"}),
@@ -3579,16 +3633,14 @@ async fn check_token(
     .expect("B's owner's profile in A");
     {
         let space = &a.project;
-        let (status, added) = send_json(
-            app,
-            a.browser.request(
-                "POST",
-                &format!("/api/v1/projects/{space}/members"),
-                None,
-                json!({"actorId": b_owner, "role": "member"}),
-            ),
-        )
-        .await;
+        let (status, added) = a
+            .browser
+            .op(
+                app,
+                "space_member_add",
+                json!({"spaceId": space, "account": b_owner, "role": "member"}),
+            )
+            .await;
         assert!(status.is_success(), "{status} {added}");
     }
     // B's DMs and groups are kept in B (ruling R20): B's, not the account's
@@ -3733,16 +3785,15 @@ async fn check_token(
     .fetch_one(pool)
     .await
     .expect("a message in B's DM");
-    let (status, saved_dm) = send_json(
-        app,
-        b.browser.request(
-            "POST",
-            "/api/v1/later",
-            None,
-            json!({"messageId": dm_message, "note": "From the DM"}),
-        ),
-    )
-    .await;
+    let (status, saved_dm) = b
+        .browser
+        .op_in(
+            app,
+            b.organization,
+            "later_save",
+            json!({"messageId": dm_message, "text": "From the DM"}),
+        )
+        .await;
     assert!(status.is_success(), "{status} {saved_dm}");
     let saved_dm = sqlx::query_scalar::<_, uuid::Uuid>(
         "SELECT id FROM saved_items WHERE actor_id = $1 AND message_id = $2",
@@ -3752,14 +3803,39 @@ async fn check_token(
     .fetch_one(pool)
     .await
     .expect("the saved DM message");
+    // The Later page names the workspace it shows, which needn't be the one
+    // an item was saved in: B's owner, on a page in A, still changes and
+    // removes a note filed in B.
+    let (status, note) = b
+        .browser
+        .op_in(
+            app,
+            b.organization,
+            "later_save",
+            json!({"text": "Filed in B"}),
+        )
+        .await;
+    assert!(status.is_success(), "{status} {note}");
+    let note = note["item"]["id"].as_str().expect("the note").to_owned();
+    for change in [
+        json!({"id": note, "done": true}),
+        json!({"id": note, "remove": true}),
+    ] {
+        let (status, changed) = b
+            .browser
+            .op_in(app, a.organization, "later_update", change)
+            .await;
+        assert!(status.is_success(), "{status} {changed}");
+    }
     let soon = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
     let (status, scheduled_dm) = send_json(
         app,
         b.browser.request(
             "POST",
-            &format!("/api/v1/conversations/{}/scheduled-messages", b.dm),
-            None,
+            "/api/v2/ops/message_schedule",
+            Some("isolation-dm-schedule"),
             json!({
+                "conversationId": b.dm,
                 "content": {"version": 1, "nodes": [{"type": "text", "text": "Later in the DM"}]},
                 "sendAt": soon,
             }),
@@ -3974,7 +4050,7 @@ async fn check_realtime(
             .expect("serve");
     });
 
-    let mut request = format!("ws://{address}/api/v1/realtime")
+    let mut request = format!("ws://{address}/api/v1/realtime?v=2")
         .into_client_request()
         .expect("WebSocket request");
     request
@@ -3985,6 +4061,23 @@ async fn check_realtime(
         HeaderValue::from_str(&a.browser.cookie).expect("cookie header"),
     );
     let (mut socket, _) = connect_async(request).await.expect("A's WebSocket");
+    // Protocol 2: `hello`, then everything after `ready` is live.
+    futures_util::SinkExt::send(
+        &mut socket,
+        ClientMessage::Text(r#"{"type":"hello"}"#.into()),
+    )
+    .await
+    .expect("hello");
+    loop {
+        let Ok(Some(Ok(ClientMessage::Text(frame)))) =
+            timeout(Duration::from_secs(5), socket.next()).await
+        else {
+            panic!("A's socket closed before ready");
+        };
+        if frame.as_str().contains(r#""type":"ready""#) {
+            break;
+        }
+    }
 
     let (stop_log, log) = crate::support::live::follow_log(pool, realtime, Some(0)).await;
 
@@ -4029,7 +4122,7 @@ async fn check_realtime(
         app,
         &b.app_token,
         &b_session,
-        "whiteboard_edit",
+        "whiteboard_update_elements",
         json!({"whiteboardId": b.whiteboard, "operations": [
             {"op": "add", "type": "text", "id": "live", "text": format!("Live note {}", b.marker)},
         ]}),

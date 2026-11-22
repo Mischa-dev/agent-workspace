@@ -17,9 +17,9 @@ use crate::{AppState, error::AppError};
 
 const CHOOSE_PROJECT: &str = "Name the project (projectId: an ID, link or key such as \"AWD\").";
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct RunStepsArguments {
+pub(crate) struct RunStepsArguments {
     /// The run's ID (run_list, run_get).
     pub run_id: String,
     /// Also return the unified diff against the run's base (it can be long).
@@ -29,7 +29,7 @@ pub(super) struct RunStepsArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RunStepsValue {
+pub(crate) struct RunStepsValue {
     /// The run: state, agent, harness and model, task, branch, pull request,
     /// tokens and cost, then its steps (commands with exit code and the end
     /// of their output, file changes, notes, tools, approvals, test results),
@@ -42,7 +42,7 @@ pub(super) struct RunStepsValue {
     pub diff: Option<Value>,
 }
 
-pub(super) async fn run_steps(
+pub(crate) async fn run_steps(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: RunStepsArguments,
@@ -74,9 +74,9 @@ pub(super) async fn run_steps(
     }
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct RunUsageArguments {
+pub(crate) struct RunUsageArguments {
     // Read by the MCP middleware, which scopes the call to this project.
     #[allow(dead_code)]
     /// One project (ID, link or key such as "AWD"); left out, every project
@@ -93,7 +93,7 @@ pub(super) struct RunUsageArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct RunUsageValue {
+pub(crate) struct RunUsageValue {
     /// { groupBy, since, rows: [{ key, label, runs, inputTokens,
     /// outputTokens, cachedInputTokens, cost, currency }], totals, runs }.
     /// Cost is estimated from the model catalog's prices, or what the
@@ -102,7 +102,7 @@ pub(super) struct RunUsageValue {
     pub usage: Value,
 }
 
-pub(super) async fn run_usage(
+pub(crate) async fn run_usage(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: RunUsageArguments,
@@ -123,7 +123,8 @@ pub(super) async fn run_usage(
             Err(error) => return ToolResult::from_error(error, "run_usage"),
         };
     let query = crate::runs::views::UsageQuery {
-        organization_id: None,
+        // The call's workspace, unless it spans every one the caller reaches.
+        organization_id: principal.workspace_id,
         project_id: project_is_chosen(principal).then_some(principal.project_id),
         group_by: arguments.group_by,
         days: arguments.days,
@@ -138,9 +139,9 @@ pub(super) async fn run_usage(
     }
 }
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct AgentProfileListArguments {
+pub(crate) struct AgentProfileListArguments {
     // Read by the MCP middleware, which scopes the call to this project.
     #[allow(dead_code)]
     /// The project (ID, link or key such as "AWD").
@@ -149,7 +150,7 @@ pub(super) struct AgentProfileListArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct AgentProfileListValue {
+pub(crate) struct AgentProfileListValue {
     /// The agents people made here (name, @handle, template, harness, model
     /// settings, instructions, allowed tools, environment, on or off).
     #[schemars(with = "Vec<serde_json::Map<String, Value>>")]
@@ -166,7 +167,7 @@ pub(super) struct AgentProfileListValue {
     pub templates: Value,
 }
 
-pub(super) async fn agent_profile_list(
+pub(crate) async fn agent_profile_list(
     state: &AppState,
     principal: &McpPrincipal,
     _arguments: AgentProfileListArguments,

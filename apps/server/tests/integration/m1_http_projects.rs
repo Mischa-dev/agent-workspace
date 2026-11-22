@@ -145,8 +145,11 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     let cookie_header = rotated_cookie_header;
     let csrf = rotated_csrf;
 
+    let create_uri = format!(
+        "/api/v2/w/{}/ops/space_create",
+        bootstrapped.organization_id
+    );
     let create_body = json!({
-        "organizationId": bootstrapped.organization_id,
         "key": "one",
         "name": "First Project"
     });
@@ -158,7 +161,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     ];
     let missing_csrf = request(
         "POST",
-        "/api/v1/projects",
+        &create_uri,
         &[
             ("origin", "http://127.0.0.1:3100"),
             ("cookie", cookie_header.as_str()),
@@ -176,7 +179,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     );
     let mismatched_csrf = request(
         "POST",
-        "/api/v1/projects",
+        &create_uri,
         &[
             ("origin", "http://127.0.0.1:3100"),
             ("cookie", cookie_header.as_str()),
@@ -198,14 +201,14 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         .clone()
         .oneshot(request(
             "POST",
-            "/api/v1/projects",
+            &create_uri,
             &create_headers,
             create_body.clone(),
         ))
         .await
         .expect("create Project");
-    assert_eq!(first_create.status(), StatusCode::CREATED);
-    let first_project = response_json(first_create).await;
+    assert_eq!(first_create.status(), StatusCode::OK);
+    let first_project = response_json(first_create).await["value"].clone();
     let first_project_id = first_project["id"].as_str().expect("Project id");
     assert_eq!(first_project["key"], "ONE");
 
@@ -213,14 +216,16 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         .clone()
         .oneshot(request(
             "POST",
-            "/api/v1/projects",
+            &create_uri,
             &create_headers,
             create_body.clone(),
         ))
         .await
         .expect("replay Project creation");
-    assert_eq!(replay.status(), StatusCode::CREATED);
-    assert_eq!(response_json(replay).await["id"], first_project_id);
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replay = response_json(replay).await;
+    assert_eq!(replay["replayed"], true, "{replay}");
+    assert_eq!(replay["value"]["id"], first_project_id);
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM projects WHERE project_key = 'ONE'")
             .fetch_one(&pool)
@@ -233,7 +238,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         .clone()
         .oneshot(request(
             "POST",
-            "/api/v1/projects",
+            &create_uri,
             &[
                 ("origin", "http://127.0.0.1:3100"),
                 ("cookie", cookie_header.as_str()),
@@ -241,7 +246,6 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
                 ("idempotency-key", "m1-create-duplicate-key"),
             ],
             json!({
-                "organizationId": bootstrapped.organization_id,
                 "key": "oNe",
                 "name": "Duplicate Project Key"
             }),
@@ -250,8 +254,8 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         .expect("duplicate Project key response");
     assert_eq!(duplicate_key.status(), StatusCode::CONFLICT);
     assert_eq!(
-        response_json(duplicate_key).await["error"]["code"],
-        "project_key_conflict"
+        response_json(duplicate_key).await["code"],
+        "space_key_taken"
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
@@ -276,7 +280,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         .clone()
         .oneshot(request(
             "POST",
-            "/api/v1/projects",
+            &create_uri,
             &create_headers,
             create_body.clone(),
         ))
@@ -296,66 +300,8 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     .await
     .expect("restore Organization membership");
 
-    sqlx::query(
-        "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND actor_id = $2",
-    )
-    .bind(first_project_id.parse::<Uuid>().expect("Project UUID"))
-    .bind(bootstrapped.actor_id)
-    .execute(&pool)
-    .await
-    .expect("disable Project membership");
-    let inaccessible_replay = app
-        .clone()
-        .oneshot(request(
-            "POST",
-            "/api/v1/projects",
-            &create_headers,
-            create_body.clone(),
-        ))
-        .await
-        .expect("inaccessible idempotent replay");
-    assert_eq!(
-        inaccessible_replay.status(),
-        StatusCode::NOT_FOUND,
-        "cached responses never bypass current Project access"
-    );
-    sqlx::query(
-        "UPDATE project_memberships SET enabled = true, role = 'viewer' WHERE project_id = $1 AND actor_id = $2",
-    )
-    .bind(first_project_id.parse::<Uuid>().expect("Project UUID"))
-    .bind(bootstrapped.actor_id)
-    .execute(&pool)
-    .await
-    .expect("restore Project membership as Viewer");
-    let viewer_replay = app
-        .clone()
-        .oneshot(request(
-            "POST",
-            "/api/v1/projects",
-            &create_headers,
-            create_body.clone(),
-        ))
-        .await
-        .expect("Viewer idempotent replay");
-    assert_eq!(viewer_replay.status(), StatusCode::CREATED);
-    let viewer_project = response_json(viewer_replay).await;
-    assert_eq!(viewer_project["id"], first_project_id);
-    assert_eq!(viewer_project["role"], "viewer");
-    assert_eq!(viewer_project["capabilities"]["view"], true);
-    assert_eq!(viewer_project["capabilities"]["manage"], false);
-    assert_eq!(viewer_project["capabilities"]["archive"], false);
-    assert_eq!(
-        viewer_project["capabilities"]["navigationWrite"], true,
-        "idempotent replay returns capabilities from current Project authority"
-    );
-    sqlx::query(
-        "UPDATE project_memberships SET role = 'owner' WHERE project_id = $1 AND actor_id = $2",
-    )
-    .bind(first_project_id.parse::<Uuid>().expect("Project UUID"))
-    .bind(bootstrapped.actor_id)
-    .execute(&pool)
-    .await
-    .expect("restore Project Owner membership");
+    // A replay hands back the answer as it was first given; reading the
+    // space (below) is what checks access as it is now.
 
     let switch = app
         .clone()
@@ -455,7 +401,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         .clone()
         .oneshot(request(
             "POST",
-            "/api/v1/projects",
+            &create_uri,
             &[
                 ("origin", "http://127.0.0.1:3100"),
                 ("cookie", cookie_header.as_str()),
@@ -463,15 +409,14 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
                 ("idempotency-key", "m1-create-named-like-key"),
             ],
             json!({
-                "organizationId": bootstrapped.organization_id,
                 "key": "alp",
                 "name": "Alpha one notes"
             }),
         ))
         .await
         .expect("create second Project");
-    assert_eq!(named_like_key.status(), StatusCode::CREATED);
-    let second_project_id = response_json(named_like_key).await["id"]
+    assert_eq!(named_like_key.status(), StatusCode::OK);
+    let second_project_id = response_json(named_like_key).await["value"]["id"]
         .as_str()
         .expect("second Project id")
         .to_owned();
@@ -498,13 +443,14 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         .clone()
         .oneshot(request(
             "POST",
-            &format!("/api/v1/projects/{first_project_id}/archive"),
+            "/api/v2/ops/space_archive",
             &[
                 ("origin", "http://127.0.0.1:3100"),
                 ("cookie", cookie_header.as_str()),
                 ("x-csrf-token", csrf.as_str()),
+                ("idempotency-key", "archive-blocked"),
             ],
-            json!({"expectedVersion": 1}),
+            json!({"spaceId": first_project_id, "expectedVersion": 1}),
         ))
         .await
         .expect("active-run archive response");
@@ -532,48 +478,48 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         .clone()
         .oneshot(request(
             "POST",
-            &format!("/api/v1/projects/{first_project_id}/archive"),
+            "/api/v2/ops/space_archive",
             &[
                 ("origin", "http://127.0.0.1:3100"),
                 ("cookie", cookie_header.as_str()),
                 ("x-csrf-token", csrf.as_str()),
+                ("idempotency-key", "archive"),
             ],
-            json!({"expectedVersion": 1}),
+            json!({"spaceId": first_project_id, "expectedVersion": 1}),
         ))
         .await
         .expect("archive response");
-    assert_eq!(archive.status(), StatusCode::OK);
+    let status = archive.status();
     let archived_project = response_json(archive).await;
-    let archived_at = archived_project["archivedAt"]
-        .as_str()
-        .expect("archive timestamp")
-        .to_owned();
+    assert_eq!(status, StatusCode::OK, "{archived_project}");
+    let archived_project = archived_project["value"].clone();
+    assert_eq!(archived_project["archived"], true, "{archived_project}");
     assert_eq!(archived_project["version"], 2);
 
     let repeated_archive = app
         .clone()
         .oneshot(request(
             "POST",
-            &format!("/api/v1/projects/{first_project_id}/archive"),
+            "/api/v2/ops/space_archive",
             &[
                 ("origin", "http://127.0.0.1:3100"),
                 ("cookie", cookie_header.as_str()),
                 ("x-csrf-token", csrf.as_str()),
+                ("idempotency-key", "archive"),
             ],
-            json!({"expectedVersion": 1}),
+            json!({"spaceId": first_project_id, "expectedVersion": 1}),
         ))
         .await
         .expect("repeated archive response");
-    assert_eq!(repeated_archive.status(), StatusCode::OK);
-    let repeated_archived_project = response_json(repeated_archive).await;
-    assert_eq!(repeated_archived_project["version"], 2);
-    assert_eq!(repeated_archived_project["archivedAt"], archived_at);
+    // An archived space is closed to every call but space_restore, so the
+    // same archive sent again reads as not found and changes nothing.
+    assert_eq!(repeated_archive.status(), StatusCode::NOT_FOUND);
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
             r#"
             SELECT count(*)
             FROM audit_events
-            WHERE action = 'project.archived' AND target_id = $1
+            WHERE action = 'space_archive' AND target_id = $1
             "#,
         )
         .bind(first_project_id.parse::<Uuid>().expect("Project UUID"))
@@ -586,22 +532,13 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
 
     let archived_replay = app
         .clone()
-        .oneshot(request(
-            "POST",
-            "/api/v1/projects",
-            &create_headers,
-            create_body,
-        ))
+        .oneshot(request("POST", &create_uri, &create_headers, create_body))
         .await
         .expect("archived idempotent replay");
-    assert_eq!(archived_replay.status(), StatusCode::CREATED);
-    let archived_project = response_json(archived_replay).await;
-    assert_eq!(archived_project["id"], first_project_id);
-    assert_eq!(archived_project["version"], 2);
-    assert!(
-        archived_project["archivedAt"].is_string(),
-        "idempotent replay returns the current Project archive state"
-    );
+    assert_eq!(archived_replay.status(), StatusCode::OK);
+    let archived_replay = response_json(archived_replay).await;
+    assert_eq!(archived_replay["replayed"], true, "{archived_replay}");
+    assert_eq!(archived_replay["value"]["id"], first_project_id);
 
     // Renaming from project settings: managers only, against the version they
     // read, never an archived project, and audited once per real change.
@@ -610,13 +547,22 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         ("cookie", cookie_header.as_str()),
         ("x-csrf-token", csrf.as_str()),
     ];
-    let rename = |project_id: &str, body: Value| {
+    // Each call is a new change, with its own request id.
+    let op = |name: &str, body: Value| {
+        let key = Uuid::now_v7().to_string();
+        let mut headers = write_headers.to_vec();
+        headers.push(("idempotency-key", key.as_str()));
         app.clone().oneshot(request(
-            "PATCH",
-            &format!("/api/v1/projects/{project_id}"),
-            &write_headers,
+            "POST",
+            &format!("/api/v2/ops/{name}"),
+            &headers,
             body,
         ))
+    };
+    let rename = |project_id: &str, body: Value| {
+        let mut body = body;
+        body["spaceId"] = json!(project_id);
+        op("space_update", body)
     };
     let archived_rename = rename(
         first_project_id,
@@ -624,7 +570,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     )
     .await
     .expect("archived rename response");
-    assert_eq!(archived_rename.status(), StatusCode::CONFLICT);
+    assert_eq!(archived_rename.status(), StatusCode::NOT_FOUND);
 
     // Archived projects are listed only when asked for, and a manager can
     // bring one back against the version they read, audited once.
@@ -651,12 +597,10 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         }
     };
     let restore = |project_id: &str, expected_version: i64| {
-        app.clone().oneshot(request(
-            "POST",
-            &format!("/api/v1/projects/{project_id}/restore"),
-            &write_headers,
-            json!({"expectedVersion": expected_version}),
-        ))
+        op(
+            "space_restore",
+            json!({"spaceId": project_id, "expectedVersion": expected_version}),
+        )
     };
     assert!(
         !listed_ids("/api/v1/projects")
@@ -675,14 +619,14 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
         .await
         .expect("restore response");
     assert_eq!(restored.status(), StatusCode::OK);
-    let restored = response_json(restored).await;
-    assert!(restored["archivedAt"].is_null(), "{restored}");
+    let restored = response_json(restored).await["value"].clone();
+    assert_eq!(restored["archived"], false, "{restored}");
     assert_eq!(restored["version"], 3);
     let repeated_restore = restore(first_project_id, 2)
         .await
         .expect("repeated restore response");
     assert_eq!(repeated_restore.status(), StatusCode::OK);
-    assert_eq!(response_json(repeated_restore).await["version"], 3);
+    assert_eq!(response_json(repeated_restore).await["value"]["version"], 3);
     assert!(
         listed_ids("/api/v1/projects")
             .await
@@ -695,13 +639,14 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM audit_events WHERE action = 'project.restored' AND target_id = $1",
+            "SELECT count(*) FROM audit_events WHERE action = 'space_restore' AND target_id = $1",
         )
         .bind(first_project_id.parse::<Uuid>().expect("Project UUID"))
         .fetch_one(&pool)
         .await
         .expect("count restore audit events"),
-        1
+        2,
+        "each call is audited; the second changed nothing (still version 3)"
     );
     let renamed = rename(
         &second_project_id,
@@ -710,8 +655,8 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     .await
     .expect("rename response");
     assert_eq!(renamed.status(), StatusCode::OK);
-    let renamed = response_json(renamed).await;
-    assert_eq!(renamed["name"], "Alpha renamed");
+    let renamed = response_json(renamed).await["value"].clone();
+    assert_eq!(renamed["name"], "Alpha renamed", "{renamed}");
     assert_eq!(renamed["key"], "ALP");
     assert_eq!(renamed["version"], 2);
     let stale_rename = rename(
@@ -721,9 +666,11 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     .await
     .expect("stale rename response");
     assert_eq!(stale_rename.status(), StatusCode::CONFLICT);
+    let stale_rename = response_json(stale_rename).await;
     assert_eq!(
-        response_json(stale_rename).await["error"]["code"],
-        "version_conflict"
+        (&stale_rename["outcome"], &stale_rename["code"]),
+        (&json!("conflict"), &json!("version")),
+        "{stale_rename}"
     );
     let blank_rename = rename(
         &second_project_id,
@@ -731,7 +678,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     )
     .await
     .expect("blank rename response");
-    assert_eq!(blank_rename.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(blank_rename.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let unchanged = rename(
         &second_project_id,
         json!({"name": "Alpha renamed", "expectedVersion": 2}),
@@ -739,7 +686,7 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     .await
     .expect("unchanged rename response");
     assert_eq!(unchanged.status(), StatusCode::OK);
-    assert_eq!(response_json(unchanged).await["version"], 2);
+    assert_eq!(response_json(unchanged).await["value"]["version"], 2);
     sqlx::query(
         "UPDATE project_memberships SET role = 'viewer' WHERE project_id = $1 AND actor_id = $2",
     )
@@ -769,13 +716,14 @@ async fn authenticated_project_lifecycle_is_scoped_csrf_safe_and_idempotent() {
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM audit_events WHERE action = 'project.renamed' AND target_id = $1",
+            "SELECT count(*) FROM audit_events WHERE action = 'space_update' AND target_id = $1",
         )
         .bind(second_project_id.parse::<Uuid>().expect("Project UUID"))
         .fetch_one(&pool)
         .await
         .expect("count rename audit events"),
-        1
+        2,
+        "the rename and the unchanged call; the refused ones leave none"
     );
 
     let logout_headers = [

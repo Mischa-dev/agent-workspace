@@ -53,16 +53,16 @@ async fn workspace_of(
 // ---------------------------------------------------------------------------
 // workspace_template_list
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct WorkspaceTemplateListArguments {
+pub(crate) struct WorkspaceTemplateListArguments {
     /// A project in the workspace: its ID, link or key (such as "AWD").
     pub project_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct WorkspaceTemplateListValue {
+pub(crate) struct WorkspaceTemplateListValue {
     /// Built-in templates first (Everything first), then the workspace's
     /// saved ones.
     pub templates: Vec<TemplateView>,
@@ -74,7 +74,7 @@ pub(super) struct WorkspaceTemplateListValue {
     pub can_use: bool,
 }
 
-pub(super) async fn workspace_template_list(
+pub(crate) async fn workspace_template_list(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: WorkspaceTemplateListArguments,
@@ -102,9 +102,9 @@ pub(super) async fn workspace_template_list(
 // ---------------------------------------------------------------------------
 // workspace_template_apply
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct WorkspaceTemplateApplyArguments {
+pub(crate) struct WorkspaceTemplateApplyArguments {
     /// A project in the workspace: its ID, link or key.
     pub project_id: String,
     /// The template: a built-in one's id or name (such as "software_team"
@@ -113,7 +113,7 @@ pub(super) struct WorkspaceTemplateApplyArguments {
     pub template: String,
 }
 
-pub(super) async fn workspace_template_apply(
+pub(crate) async fn workspace_template_apply(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: WorkspaceTemplateApplyArguments,
@@ -182,9 +182,9 @@ pub(super) async fn workspace_template_apply(
 // ---------------------------------------------------------------------------
 // workspace_template_save
 
-#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct WorkspaceTemplateSaveArguments {
+pub(crate) struct WorkspaceTemplateSaveArguments {
     /// A project in the workspace: its ID, link or key.
     pub project_id: String,
     /// The new template's name, 1 to 60 characters. Leave it out with
@@ -205,14 +205,14 @@ pub(super) struct WorkspaceTemplateSaveArguments {
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct WorkspaceTemplateSaveValue {
+pub(crate) struct WorkspaceTemplateSaveValue {
     /// saved or removed.
     pub done: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub template: Option<TemplateView>,
 }
 
-pub(super) async fn workspace_template_save(
+pub(crate) async fn workspace_template_save(
     state: &AppState,
     principal: &McpPrincipal,
     arguments: WorkspaceTemplateSaveArguments,

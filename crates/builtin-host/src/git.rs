@@ -2,7 +2,10 @@ use std::{
     ffi::{OsStr, OsString},
     fs::{self, OpenOptions},
     io::{Read, Write},
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    os::unix::{
+        ffi::OsStrExt,
+        fs::{OpenOptionsExt, PermissionsExt},
+    },
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     sync::atomic::{AtomicUsize, Ordering},
@@ -83,6 +86,19 @@ pub fn expected_repository_mirror_path(
         &repository_id.to_string(),
     )?;
     Ok(repository_root.join("mirror.git"))
+}
+
+/// Where this host keeps a repository's mirror, without creating or
+/// changing anything: for looking at a mirror that may be missing or
+/// unreadable (recovery, cleanup), where a failure isn't the caller's.
+pub fn repository_mirror_path_here(
+    data_root: &Path,
+    repository_id: Uuid,
+) -> Result<PathBuf, RuntimeError> {
+    Ok(absolute_runtime_path(data_root)?
+        .join("repositories")
+        .join(repository_id.to_string())
+        .join("mirror.git"))
 }
 
 pub fn managed_worktree_path(
@@ -390,6 +406,38 @@ pub fn inspect_worktree(
     })
 }
 
+/// Why inspection refuses to publish a worktree (all `git_worktree`
+/// conflicts). [`publication_refusal`] reads one back after it has crossed
+/// the wire as text.
+pub const REFUSED_DIRTY: &str =
+    "dirty worktree is retained; commit intended changes through the Thread before publishing";
+pub const REFUSED_BRANCH: &str = "worktree branch does not match its durable workspace";
+pub const REFUSED_HEAD: &str = "HEAD commit is invalid";
+pub const REFUSED_NOTHING_AHEAD: &str = "workspace has no commit ahead of its recorded base";
+pub const REFUSED_NOT_DESCENDED: &str = "workspace HEAD is not descended from its recorded base";
+pub const REFUSED_MOVED_ON: &str = "workspace HEAD changed after publication was queued";
+/// Any other refusal, read back after it crossed the wire.
+pub const REFUSED_OTHER: &str = "workspace can't be published as it is";
+const PUBLICATION_REFUSALS: [&str; 6] = [
+    REFUSED_DIRTY,
+    REFUSED_BRANCH,
+    REFUSED_HEAD,
+    REFUSED_NOTHING_AHEAD,
+    REFUSED_NOT_DESCENDED,
+    REFUSED_MOVED_ON,
+];
+
+/// The refusal an inspection answered with, from its text: one of
+/// [`PUBLICATION_REFUSALS`] reads back as itself, anything else as
+/// [`REFUSED_OTHER`].
+pub fn publication_refusal(why: &str) -> RuntimeError {
+    let why = PUBLICATION_REFUSALS
+        .into_iter()
+        .find(|known| *known == why)
+        .unwrap_or(REFUSED_OTHER);
+    RuntimeError::Conflict("git_worktree", why)
+}
+
 pub fn inspect_publishable_worktree(
     mirror: &Path,
     worktree: &Path,
@@ -404,16 +452,10 @@ pub fn inspect_publishable_worktree(
     let _lock = repository_lock(repository_root)?;
     let inspection = inspect_worktree(mirror, worktree)?;
     if inspection.dirty {
-        return Err(RuntimeError::Conflict(
-            "git_worktree",
-            "dirty worktree is retained; commit intended changes through the Thread before publishing",
-        ));
+        return Err(RuntimeError::Conflict("git_worktree", REFUSED_DIRTY));
     }
     if inspection.branch != expected_branch {
-        return Err(RuntimeError::Conflict(
-            "git_worktree",
-            "worktree branch does not match its durable workspace",
-        ));
+        return Err(RuntimeError::Conflict("git_worktree", REFUSED_BRANCH));
     }
     let head = run_git([
         OsString::from("-C"),
@@ -423,14 +465,14 @@ pub fn inspect_publishable_worktree(
         OsString::from("HEAD^{commit}"),
     ])?;
     let head_commit = String::from_utf8(head.stdout)
-        .map_err(|_| RuntimeError::Conflict("git_worktree", "HEAD commit is invalid"))?
+        .map_err(|_| RuntimeError::Conflict("git_worktree", REFUSED_HEAD))?
         .trim()
         .to_owned();
     validate_commit(&head_commit)?;
     if head_commit == base_commit {
         return Err(RuntimeError::Conflict(
             "git_worktree",
-            "workspace has no commit ahead of its recorded base",
+            REFUSED_NOTHING_AHEAD,
         ));
     }
     run_git([
@@ -441,12 +483,7 @@ pub fn inspect_publishable_worktree(
         OsString::from(base_commit),
         OsString::from(&head_commit),
     ])
-    .map_err(|_| {
-        RuntimeError::Conflict(
-            "git_worktree",
-            "workspace HEAD is not descended from its recorded base",
-        )
-    })?;
+    .map_err(|_| RuntimeError::Conflict("git_worktree", REFUSED_NOT_DESCENDED))?;
     Ok(PublishInspection {
         branch: inspection.branch,
         head_commit,
@@ -461,10 +498,7 @@ pub fn push_publishable_commit(request: PublishPush<'_>) -> Result<(), RuntimeEr
         request.base_commit,
     )?;
     if inspection.head_commit != request.intended_commit {
-        return Err(RuntimeError::Conflict(
-            "git_worktree",
-            "workspace HEAD changed after publication was queued",
-        ));
+        return Err(RuntimeError::Conflict("git_worktree", REFUSED_MOVED_ON));
     }
     if !request.remote_is_safe {
         return Err(RuntimeError::Invalid("unsafe GitHub remote"));
@@ -611,10 +645,7 @@ pub fn remove_published_worktree(
         ));
     }
     if inspection.branch != expected_branch {
-        return Err(RuntimeError::Conflict(
-            "git_worktree",
-            "worktree branch does not match its durable workspace",
-        ));
+        return Err(RuntimeError::Conflict("git_worktree", REFUSED_BRANCH));
     }
     let head = run_git([
         OsString::from("-C"),
@@ -624,7 +655,7 @@ pub fn remove_published_worktree(
         OsString::from("HEAD^{commit}"),
     ])?;
     let head = String::from_utf8(head.stdout)
-        .map_err(|_| RuntimeError::Conflict("git_worktree", "HEAD commit is invalid"))?;
+        .map_err(|_| RuntimeError::Conflict("git_worktree", REFUSED_HEAD))?;
     if head.trim() != published_commit {
         return Err(RuntimeError::Conflict(
             "git_worktree",
@@ -787,7 +818,7 @@ pub fn apply_result_and_commit(
         OsString::from("HEAD^{commit}"),
     ])?;
     let head = String::from_utf8(head.stdout)
-        .map_err(|_| RuntimeError::Conflict("git_worktree", "HEAD commit is invalid"))?
+        .map_err(|_| RuntimeError::Conflict("git_worktree", REFUSED_HEAD))?
         .trim()
         .to_owned();
     validate_commit(&head)?;
@@ -851,6 +882,10 @@ pub struct ChangedFile {
     pub removed: Option<u32>,
 }
 
+/// The most files a run's diff lists; past it the diff says it was
+/// truncated.
+pub const MAX_CHANGED_FILES: usize = 2_000;
+
 /// What a run's branch changed against its base commit.
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -881,6 +916,20 @@ pub fn run_diff(
             "worktree is not ready",
         ));
     }
+    // In a worktree, files the run made but never staged count too. They
+    // are marked to be added in a scratch copy of the index, so the
+    // worktree's own index (what the harness staged) is left as it is.
+    // One that can't be marked (a nested repository with no commit yet)
+    // leaves the new files out, and the diff says it is incomplete.
+    let (scratch, new_files_left_out) = if bare || head.is_some() {
+        (None, false)
+    } else {
+        match ScratchIndex::with_new_files(repository) {
+            Ok((scratch, left_out)) => (Some(scratch), left_out),
+            Err(_) => (None, true),
+        }
+    };
+    let index = scratch.as_ref().map(ScratchIndex::path);
     let args = |extra: &[&str]| {
         let mut args = vec![
             OsString::from(if bare { "--git-dir" } else { "-C" }),
@@ -898,9 +947,11 @@ pub fn run_diff(
         args.push(OsString::from("--"));
         args
     };
-    let numstat = run_git(args(&["--numstat", "-z"]))?;
-    let statuses = run_git(args(&["--name-status", "-z"]))?;
+    let numstat = run_git_on_index(args(&["--numstat", "-z"]), None, index)?;
+    let statuses = run_git_on_index(args(&["--name-status", "-z"]), None, index)?;
     let mut files = parse_numstat(&numstat.stdout);
+    let more_files = files.len() > MAX_CHANGED_FILES;
+    files.truncate(MAX_CHANGED_FILES);
     let status_of = parse_name_status(&statuses.stdout);
     for file in &mut files {
         file.status = status_of
@@ -909,7 +960,7 @@ pub fn run_diff(
             .map(|(_, status)| status.clone())
             .unwrap_or_else(|| "modified".to_owned());
     }
-    let (patch, truncated) = match run_git(args(&[])) {
+    let (patch, truncated) = match run_git_on_index(args(&[]), None, index) {
         Ok(output) if output.stdout.len() <= max_patch_bytes => {
             (String::from_utf8_lossy(&output.stdout).into_owned(), false)
         }
@@ -920,8 +971,109 @@ pub fn run_diff(
     Ok(RunDiff {
         files,
         patch,
-        truncated,
+        truncated: truncated || more_files || new_files_left_out,
     })
+}
+
+/// A copy of a worktree's index in which its untracked files (those not
+/// ignored) are marked to be added, removed when dropped.
+struct ScratchIndex(PathBuf);
+
+impl ScratchIndex {
+    /// The scratch index, and whether some new files were left out (a
+    /// nested repository with no commit yet can't be marked).
+    fn with_new_files(worktree: &Path) -> Result<(Self, bool), RuntimeError> {
+        let worktree_arg = || [OsString::from("-C"), worktree.as_os_str().to_owned()];
+        let own = run_git(
+            worktree_arg()
+                .into_iter()
+                .chain(["rev-parse", "--git-path", "index"].map(OsString::from)),
+        )?;
+        let own = PathBuf::from(String::from_utf8_lossy(&own.stdout).trim());
+        let own = if own.is_absolute() {
+            own
+        } else {
+            worktree.join(own)
+        };
+        let mut name = own.file_name().map(OsString::from).unwrap_or_default();
+        name.push(format!(".diff-{}", uuid::Uuid::new_v4().simple()));
+        let scratch = Self(own.with_file_name(name));
+        match std::fs::copy(&own, &scratch.0) {
+            Ok(_) => {}
+            // No index yet: Git starts the scratch one empty.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(RuntimeError::Internal("copy the worktree's index")),
+        }
+        let untracked = run_git_on_index(
+            worktree_arg()
+                .into_iter()
+                .chain(["ls-files", "--others", "--exclude-standard", "-z"].map(OsString::from)),
+            None,
+            Some(&scratch.0),
+        )?;
+        // A nested repository is listed as its folder (`prototype/`). One
+        // with a commit checked out is marked as a link to that commit; one
+        // with none can't be marked.
+        let (folders, mut files): (Vec<&[u8]>, Vec<&[u8]>) = untracked
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|entry| !entry.is_empty())
+            .partition(|entry| entry.ends_with(b"/"));
+        // Past what a diff lists, the rest wouldn't show anyway.
+        let (committed, unborn): (Vec<&[u8]>, Vec<&[u8]>) = folders
+            .into_iter()
+            .take(MAX_CHANGED_FILES + 1)
+            .partition(|folder| has_commit(&worktree.join(OsStr::from_bytes(folder))));
+        let left_out = !unborn.is_empty();
+        files.extend(committed);
+        if !files.is_empty() {
+            // Past what a diff lists, the rest wouldn't show anyway.
+            let listed = files
+                .into_iter()
+                .take(MAX_CHANGED_FILES + 1)
+                .flat_map(|entry| entry.iter().copied().chain([0]))
+                .collect::<Vec<u8>>();
+            run_git_on_index(
+                worktree_arg().into_iter().chain(
+                    [
+                        // A new file's name is a name, never pathspec magic.
+                        "--literal-pathspecs",
+                        "add",
+                        "--intent-to-add",
+                        "--pathspec-from-file=-",
+                        "--pathspec-file-nul",
+                    ]
+                    .map(OsString::from),
+                ),
+                Some(&listed),
+                Some(&scratch.0),
+            )?;
+        }
+        Ok((scratch, left_out))
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+/// Whether the repository at `folder` has a commit checked out.
+fn has_commit(folder: &Path) -> bool {
+    run_git([
+        OsString::from("-C"),
+        folder.as_os_str().to_owned(),
+        OsString::from("rev-parse"),
+        OsString::from("--verify"),
+        OsString::from("--quiet"),
+        OsString::from("HEAD"),
+    ])
+    .is_ok()
+}
+
+impl Drop for ScratchIndex {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 fn parse_numstat(output: &[u8]) -> Vec<ChangedFile> {
@@ -944,7 +1096,8 @@ fn parse_numstat(output: &[u8]) -> Vec<ChangedFile> {
                 .map(|to| String::from_utf8_lossy(to).into_owned())
                 .unwrap_or_default();
         }
-        if !path.is_empty() && files.len() < 2_000 {
+        // One past the most listed, so the caller can tell there were more.
+        if !path.is_empty() && files.len() <= MAX_CHANGED_FILES {
             files.push(ChangedFile {
                 path,
                 status: String::new(),
@@ -989,6 +1142,11 @@ fn validate_mirror(mirror: &Path) -> Result<(), RuntimeError> {
     Ok(())
 }
 
+/// A clone address without its user information (`user:secret@`), the
+/// form that may be shown or sent: `https://host/path`, or `host:path` for
+/// the scp-like form.
+pub use agent_workspace_host_protocol::git_ref::without_user_info;
+
 fn validate_existing_mirror(mirror: &Path, expected_origin: &str) -> Result<(), RuntimeError> {
     validate_mirror(mirror)?;
     let origin = run_git([
@@ -1000,7 +1158,10 @@ fn validate_existing_mirror(mirror: &Path, expected_origin: &str) -> Result<(), 
     ])?;
     let origin = String::from_utf8(origin.stdout)
         .map_err(|_| RuntimeError::Conflict("repository", "origin is invalid"))?;
-    if origin.trim() != expected_origin {
+    // The start command carries the address without user information
+    // (credentials never travel in a command); an older mirror's origin may
+    // still have it, so both are compared without it.
+    if without_user_info(origin.trim()) != without_user_info(expected_origin) {
         return Err(RuntimeError::Conflict(
             "repository",
             "mirror origin does not match registration",
@@ -1010,23 +1171,7 @@ fn validate_existing_mirror(mirror: &Path, expected_origin: &str) -> Result<(), 
 }
 
 fn validate_ref(value: &str) -> Result<(), RuntimeError> {
-    if value.is_empty()
-        || value.len() > 255
-        || value == "@"
-        || value.starts_with('-')
-        || value.starts_with('/')
-        || value.ends_with('/')
-        || value.ends_with('.')
-        || value.contains("//")
-        || value.contains("..")
-        || value.contains("@{")
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/'))
-        || value.split('/').any(|component| {
-            component.is_empty() || component.starts_with('.') || component.ends_with(".lock")
-        })
-    {
+    if !agent_workspace_host_protocol::git_ref::is_safe_ref(value) {
         return Err(RuntimeError::Invalid("unsafe Git reference"));
     }
     Ok(())
@@ -1098,11 +1243,27 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    run_git_on_index(arguments, input, None)
+}
+
+/// `run_git_with_input`, reading and writing `index` instead of the
+/// repository's own index when one is given.
+fn run_git_on_index<I, S>(
+    arguments: I,
+    input: Option<&[u8]>,
+    index: Option<&Path>,
+) -> Result<Output, RuntimeError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
     let _process_permit = GitProcessPermit::try_acquire()?;
     let mut command = Command::new("/usr/bin/git");
+    command.args(arguments).env_clear();
+    if let Some(index) = index {
+        command.env("GIT_INDEX_FILE", index);
+    }
     command
-        .args(arguments)
-        .env_clear()
         .env("PATH", "/usr/local/bin:/usr/bin:/bin")
         .env("LANG", "C.UTF-8")
         .env("LC_ALL", "C.UTF-8")
@@ -1365,10 +1526,11 @@ impl Drop for RepositoryLock {
 mod tests {
     use super::{
         RegisteredRepository, RepositoryPreparationMode, TemporaryAskpass, create_worktree,
-        expected_repository_mirror_path, inspect_publishable_worktree, inspect_worktree,
-        managed_worktree_path, prepare_repository, prepare_repository_with_token,
+        expected_repository_mirror_path, inspect_prepared_repository, inspect_publishable_worktree,
+        inspect_worktree, managed_worktree_path, prepare_repository, prepare_repository_with_token,
         remove_clean_worktree, remove_published_worktree, repair_and_prune_worktrees,
-        reserve_process_slot, unique_run_branch, validate_branch, validate_ref, worktree_is_dirty,
+        reserve_process_slot, unique_run_branch, validate_branch, validate_ref, without_user_info,
+        worktree_is_dirty,
     };
     use std::{
         fs, os::unix::fs::PermissionsExt, path::Path, process::Command, sync::atomic::AtomicUsize,
@@ -1669,6 +1831,84 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn clone_addresses_lose_their_user_information() {
+        assert_eq!(
+            without_user_info("https://x-access-token:secret@example.test/o/r.git"),
+            "https://example.test/o/r.git"
+        );
+        assert_eq!(
+            without_user_info("git@example.test:o/r.git"),
+            "example.test:o/r.git"
+        );
+    }
+
+    /// A start command carries the clone address without user information;
+    /// a mirror prepared from an older registration that had it still
+    /// passes, and one for another address still doesn't.
+    #[test]
+    fn a_mirror_whose_origin_has_user_information_matches_its_bare_address() {
+        let temporary = tempfile::tempdir().expect("temporary Git runtime root");
+        let data_root = temporary.path().join("data");
+        let source = temporary.path().join("source");
+        fs::create_dir(&source).expect("create source repository");
+        git(&source, ["init", "-b", "main"]);
+        fs::write(source.join("known.txt"), "known\n").expect("write known file");
+        git(&source, ["add", "known.txt"]);
+        git(
+            &source,
+            [
+                "-c",
+                "user.name=Agent Workspace",
+                "-c",
+                "user.email=agent-workspace@example.invalid",
+                "commit",
+                "-m",
+                "baseline",
+            ],
+        );
+        let repository_id = Uuid::now_v7();
+        let mirror = expected_repository_mirror_path(&data_root, repository_id)
+            .expect("expected mirror path");
+        let mirror_path = mirror.to_str().expect("mirror path");
+        git(
+            temporary.path(),
+            [
+                "clone",
+                "--mirror",
+                "--no-local",
+                source.to_str().expect("source path"),
+                mirror_path,
+            ],
+        );
+        git(
+            temporary.path(),
+            [
+                "--git-dir",
+                mirror_path,
+                "remote",
+                "set-url",
+                "origin",
+                "https://git@example.test/team/app.git",
+            ],
+        );
+        let repository = |clone_url: &str| RegisteredRepository {
+            id: repository_id,
+            clone_url: clone_url.to_owned(),
+            default_branch: "main".to_owned(),
+            mirror_path: mirror.clone(),
+        };
+        inspect_prepared_repository(&data_root, &repository("https://example.test/team/app.git"))
+            .expect("the bare address matches");
+        assert!(
+            inspect_prepared_repository(
+                &data_root,
+                &repository("https://example.test/team/other.git")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn verifies_an_imported_private_mirror_without_network_credentials() {
         let temporary = tempfile::tempdir().expect("temporary Git runtime root");
         let data_root = temporary.path().join("data");
@@ -1785,9 +2025,34 @@ mod tests {
         std::fs::write(repository.join("kept.txt"), "one\n2\nthree\n").expect("write");
         std::fs::remove_file(repository.join("gone.txt")).expect("remove");
         std::fs::write(repository.join("new.txt"), "hi\n").expect("write");
-        // New files show once they're staged, as a harness's result is.
+        // A new file counts whether or not it was staged, and listing it
+        // leaves what was staged alone.
         git(repository, ["add", "-A"]);
+        std::fs::write(repository.join("unstaged.txt"), "made\n").expect("write");
+        std::fs::write(repository.join(".gitignore"), "ignored.txt\n").expect("write");
+        std::fs::write(repository.join("ignored.txt"), "skip\n").expect("write");
+        let staged_before = staged(repository);
         let diff = super::run_diff(repository, false, &base, None, 1 << 20).expect("diff");
+        assert_eq!(staged(repository), staged_before);
+        assert_eq!(
+            diff.files
+                .iter()
+                .find(|file| file.path == "unstaged.txt")
+                .map(|file| (file.status.as_str(), file.added)),
+            Some(("added", Some(1)))
+        );
+        assert!(diff.patch.contains("+made"));
+        assert!(diff.files.iter().all(|file| file.path != "ignored.txt"));
+        let scratch_left = std::fs::read_dir(repository.join(".git"))
+            .expect("git dir")
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("index.diff-")
+            });
+        assert!(!scratch_left);
         let find = |path: &str| diff.files.iter().find(|file| file.path == path).cloned();
         assert_eq!(
             find("kept.txt").map(|file| (file.status, file.added, file.removed)),
@@ -1803,8 +2068,68 @@ mod tests {
         );
         assert!(diff.patch.contains("+three") && !diff.truncated);
         let small = super::run_diff(repository, false, &base, None, 10).expect("diff");
-        assert!(small.truncated && small.patch.is_empty() && small.files.len() == 3);
+        assert!(small.truncated && small.patch.is_empty() && small.files.len() == 5);
         assert!(super::run_diff(repository, false, "not-a-commit", None, 10).is_err());
+
+        // A name that looks like pathspec magic is still a name.
+        std::fs::write(repository.join(":(notes).txt"), "odd\n").expect("write");
+        let odd = super::run_diff(repository, false, &base, None, 1 << 20).expect("diff");
+        assert!(odd.files.iter().any(|file| file.path == ":(notes).txt"));
+        assert!(!odd.truncated);
+
+        // A nested repository with a commit shows as added (a link to it).
+        std::fs::create_dir(repository.join("library")).expect("nested");
+        let library = repository.join("library");
+        git(&library, ["init", "--quiet"]);
+        std::fs::write(library.join("lib.rs"), "\n").expect("write");
+        git(&library, ["add", "-A"]);
+        git(
+            &library,
+            [
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "library",
+            ],
+        );
+        let linked = super::run_diff(repository, false, &base, None, 1 << 20).expect("diff");
+        assert_eq!(
+            linked
+                .files
+                .iter()
+                .find(|file| file.path == "library")
+                .map(|file| file.status.clone()),
+            Some("added".to_owned())
+        );
+        assert!(!linked.truncated);
+
+        // A nested repository with no commit can't be marked: the run's
+        // other changes still show, and the diff says it left some out.
+        std::fs::create_dir(repository.join("prototype")).expect("nested");
+        git(&repository.join("prototype"), ["init", "--quiet"]);
+        std::fs::write(repository.join("prototype/main.rs"), "fn main() {}\n").expect("write");
+        let nested = super::run_diff(repository, false, &base, None, 1 << 20).expect("diff");
+        assert!(nested.files.iter().any(|file| file.path == "kept.txt"));
+        assert!(nested.files.iter().any(|file| file.path == "unstaged.txt"));
+        assert!(nested.files.iter().any(|file| file.path == "library"));
+        assert!(nested.truncated);
+    }
+
+    #[cfg(unix)]
+    fn staged(repository: &Path) -> Vec<u8> {
+        Command::new("/usr/bin/git")
+            .current_dir(repository)
+            .args(["diff", "--cached", "--name-status"])
+            .env_clear()
+            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+            .env("HOME", "/dev/null")
+            .output()
+            .expect("staged")
+            .stdout
     }
 
     #[cfg(unix)]

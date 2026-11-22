@@ -3,11 +3,11 @@
 //!
 //! - **Fixtures** ([`fixtures`]): an example of every shape the server
 //!   sends: the event envelope, a poll page, a catalogue entry, a stream,
-//!   and a signed webhook in each format with the secret that signed it.
+//!   and a signed webhook with the secret that signed it.
 //!   They live in `sdks/fixtures/delivery/` for SDKs in any language.
-//! - **Verification** ([`webhook`]): checking a pushed webhook's signature,
-//!   the Standard Webhooks way or the older `x-workspace-signature` way,
-//!   written from the published scheme, not from the server's code.
+//! - **Verification** ([`webhook`]): checking a pushed webhook's Standard
+//!   Webhooks signature, written from the published scheme, not from the
+//!   server's code.
 //! - **The suite** ([`check_server`], and [`webhook::check_webhook`] for a
 //!   received push): reads a real server's catalogue, polls, long-polls,
 //!   streams and resumes, and checks every event it sees against the
@@ -36,10 +36,6 @@ pub mod fixtures {
     pub const STREAM: &str = include_str!("../../../sdks/fixtures/delivery/stream.txt");
     pub const WEBHOOK_STANDARD: &str =
         include_str!("../../../sdks/fixtures/delivery/webhook-standard.json");
-    pub const WEBHOOK_TYPED_V1: &str =
-        include_str!("../../../sdks/fixtures/delivery/webhook-typed_v1.json");
-    pub const WEBHOOK_INBOX_V1: &str =
-        include_str!("../../../sdks/fixtures/delivery/webhook-inbox_v1.json");
 
     /// A fixture parsed; they are checked to parse by this crate's tests.
     pub fn parse(fixture: &str) -> serde_json::Value {
@@ -303,8 +299,6 @@ mod tests {
             fixtures::POLL_PAGE,
             fixtures::CATALOGUE_ENTRY,
             fixtures::WEBHOOK_STANDARD,
-            fixtures::WEBHOOK_TYPED_V1,
-            fixtures::WEBHOOK_INBOX_V1,
         ] {
             assert!(!fixtures::parse(fixture).is_null(), "{fixture}");
         }

@@ -160,14 +160,14 @@ async fn log_db(name: &str) -> Option<(super::support::db::Db, Uuid)> {
         &app,
         browser.request(
             "POST",
-            "/api/v1/projects",
+            &format!("/api/v2/w/{}/ops/space_create", owner.organization_id),
             Some("log-project"),
-            json!({"organizationId": owner.organization_id, "key": "LOG", "name": "Log"}),
+            json!({"key": "LOG", "name": "Log"}),
         ),
     )
     .await;
     assert!(status.is_success(), "{project}");
-    let project = project["id"]
+    let project = project["value"]["id"]
         .as_str()
         .expect("project")
         .parse()
@@ -556,7 +556,7 @@ async fn quiet_writes_emit_their_events() {
         .expect("task")
         .to_owned();
     call(
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": task, "text": "secret plan", "clientRequestId": "k3-8-comment"}),
     )
     .await;
@@ -566,12 +566,12 @@ async fn quiet_writes_emit_their_events() {
     )
     .await;
     call(
-        "milestone_write",
+        "milestone_create",
         json!({"projectId": project, "name": "Spring"}),
     )
     .await;
     call(
-        "label_write",
+        "label_create",
         json!({"projectId": project, "name": "Paintwork"}),
     )
     .await;
@@ -692,8 +692,8 @@ async fn the_router_loses_and_repeats_no_delivery() {
         &world.app,
         &helper.token,
         &helper.session,
-        "automation_write",
-        json!({"projectId": "HOOK", "operation": "create", "name": "Router test",
+        "automation_create",
+        json!({"projectId": "HOOK", "name": "Router test",
                "trigger": {"kind": "message_posted"},
                "actions": [{"kind": "notify", "recipients": "owner", "message": "Heard"}]}),
     )

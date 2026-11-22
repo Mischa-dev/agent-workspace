@@ -54,7 +54,7 @@ async fn records_are_searched_and_opened_like_any_other_thing() {
     let task_key = task["value"]["key"].as_str().expect("key").to_owned();
 
     let created = call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": "WORK",
             "name": "Playtest notes",
@@ -67,7 +67,7 @@ async fn records_are_searched_and_opened_like_any_other_thing() {
     .await;
     assert_eq!(created["outcome"], "ok", "{created}");
     let written = call(
-        "record_write",
+        "record_create_many",
         json!({
             "projectId": "WORK",
             "collection": "Playtest notes",
@@ -84,7 +84,7 @@ async fn records_are_searched_and_opened_like_any_other_thing() {
     let checkpoint = records[0]["id"].as_str().expect("id").to_owned();
     let old = &records[1];
     let archived = call(
-        "record_write",
+        "record_update_many",
         json!({
             "projectId": "WORK",
             "collection": "Playtest notes",
@@ -131,7 +131,11 @@ async fn records_are_searched_and_opened_like_any_other_thing() {
             .is_some_and(|path| path.starts_with("/w/") && path.ends_with(&href)),
         "{found}"
     );
-    let by_agent = call("search", json!({"query": "zeppelin", "kinds": ["records"]})).await;
+    let by_agent = call(
+        "workspace_search",
+        json!({"query": "zeppelin", "kinds": ["records"]}),
+    )
+    .await;
     assert_eq!(by_agent["outcome"], "ok", "{by_agent}");
     assert_eq!(
         by_agent["value"]["results"].as_array().map(Vec::len),
@@ -284,7 +288,7 @@ async fn record_events_reach_rules_and_webhooks_for_their_collection() {
     let mut collections = Vec::new();
     for name in ["Requests", "Other"] {
         let created = call(
-            "collection_write",
+            "collection_create",
             json!({"projectId": "WORK", "name": name, "fields": [{"name": "Notes", "type": "text"}]}),
         )
         .await;
@@ -315,7 +319,6 @@ async fn record_events_reach_rules_and_webhooks_for_their_collection() {
     ] {
         let mut arguments = json!({
             "projectId": "WORK",
-            "operation": "create",
             "name": "Refused",
             "trigger": {"kind": "record_created", "collectionId": requests},
             "actions": actions,
@@ -323,14 +326,13 @@ async fn record_events_reach_rules_and_webhooks_for_their_collection() {
         for (key, value) in extra.as_object().expect("extra") {
             arguments[key] = value.clone();
         }
-        let refused = call("automation_write", arguments).await;
+        let refused = call("automation_create", arguments).await;
         assert_ne!(refused["outcome"], "ok", "{refused}");
     }
     let rule = call(
-        "automation_write",
+        "automation_create",
         json!({
             "projectId": "WORK",
-            "operation": "create",
             "name": "New requests",
             "trigger": {"kind": "record_created", "collectionId": requests},
             "actions": [{"kind": "notify", "recipients": "owner", "message": "New in {{collection.name}}: {{record.title}}"}],
@@ -354,21 +356,21 @@ async fn record_events_reach_rules_and_webhooks_for_their_collection() {
     assert_eq!(hook["outcome"], "ok", "{hook}");
 
     let written = call(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Requests", "records": [{"title": "Dark mode", "fields": {"Notes": "please"}}], "clientRequestId": "r1"}),
     )
     .await;
     assert_eq!(written["outcome"], "ok", "{written}");
     let record = written["value"]["records"][0].clone();
     let elsewhere = call(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Other", "records": [{"title": "Not a request"}], "clientRequestId": "o1"}),
     )
     .await;
     assert_eq!(elsewhere["outcome"], "ok", "{elsewhere}");
     pump(&state).await;
     let changed = call(
-        "record_write",
+        "record_update_many",
         json!({"projectId": "WORK", "collection": "Requests", "records": [{"record": record["id"], "expectedVersion": record["version"], "fields": {"Notes": "please, soon"}}], "clientRequestId": "r2"}),
     )
     .await;
@@ -430,7 +432,7 @@ async fn record_events_reach_rules_and_webhooks_for_their_collection() {
 
     // A firing queued before its collection is archived does nothing after.
     let late = call(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "WORK", "collection": "Requests", "records": [{"title": "Too late"}], "clientRequestId": "r3"}),
     )
     .await;
@@ -474,25 +476,25 @@ async fn link_fields_point_at_another_collections_records() {
     };
 
     let customers = call(
-        "collection_write",
+        "collection_create",
         json!({"projectId": "LINKS", "name": "Customers", "fields": [{"name": "Plan", "type": "text"}]}),
     )
     .await;
     assert_eq!(customers["outcome"], "ok", "{customers}");
     let other = call(
-        "collection_write",
+        "collection_create",
         json!({"projectId": "LINKS", "name": "Vendors", "fields": [{"name": "Plan", "type": "text"}]}),
     )
     .await;
     assert_eq!(other["outcome"], "ok", "{other}");
     let missing = call(
-        "collection_write",
+        "collection_create",
         json!({"projectId": "LINKS", "name": "Broken", "fields": [{"name": "Who", "type": "link", "target": "record:Nobody"}]}),
     )
     .await;
     assert_ne!(missing["outcome"], "ok", "{missing}");
     let requests = call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": "LINKS",
             "name": "Requests",
@@ -503,7 +505,7 @@ async fn link_fields_point_at_another_collections_records() {
     assert_eq!(requests["outcome"], "ok", "{requests}");
 
     let acme = call(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "LINKS", "collection": "Customers", "records": [{"title": "Acme"}], "clientRequestId": "acme"}),
     )
     .await;
@@ -513,7 +515,7 @@ async fn link_fields_point_at_another_collections_records() {
         .expect("id")
         .to_owned();
     let vendor = call(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "LINKS", "collection": "Vendors", "records": [{"title": "Globex"}], "clientRequestId": "globex"}),
     )
     .await;
@@ -521,14 +523,14 @@ async fn link_fields_point_at_another_collections_records() {
 
     // Another collection's record isn't one this field can hold.
     let wrong = call(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "LINKS", "collection": "Requests", "records": [{"title": "Bad", "fields": {"Customer": "Globex"}}], "clientRequestId": "wrong"}),
     )
     .await;
     assert_ne!(wrong["outcome"], "ok", "{wrong}");
 
     let request = call(
-        "record_write",
+        "record_create_many",
         json!({"projectId": "LINKS", "collection": "Requests", "records": [{"title": "Dark mode", "fields": {"Customer": "acme"}}], "clientRequestId": "dark"}),
     )
     .await;
@@ -563,7 +565,7 @@ async fn link_fields_point_at_another_collections_records() {
     // A view filters the link field by a record, and the definition
     // collection_describe gives replays as no change.
     let viewed = call(
-        "collection_write",
+        "collection_update",
         json!({
             "projectId": "LINKS",
             "collection": "Requests",
@@ -573,7 +575,7 @@ async fn link_fields_point_at_another_collections_records() {
     .await;
     assert_eq!(viewed["outcome"], "ok", "{viewed}");
     let described = call(
-        "collection_describe",
+        "collection_get",
         json!({"projectId": "LINKS", "collection": "Requests"}),
     )
     .await;
@@ -586,11 +588,11 @@ async fn link_fields_point_at_another_collections_records() {
     replay["projectId"] = json!("LINKS");
     replay["collection"] = json!("Requests");
     replay.as_object_mut().expect("definition").remove("name");
-    let again = call("collection_write", replay).await;
+    let again = call("collection_update", replay).await;
     assert_eq!(again["outcome"], "ok", "{again}");
     assert_eq!(again["value"]["changes"], json!([]), "{again}");
     let retarget = call(
-        "collection_write",
+        "collection_update",
         json!({
             "projectId": "LINKS",
             "collection": "Requests",

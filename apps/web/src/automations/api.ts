@@ -19,7 +19,7 @@ export const automationKeys = {
 
 // Automation rules
 
-/** A field filter on a record rule, as record_query takes one. */
+/** A field filter on a record rule, as record_list takes one. */
 export type RecordFilter = { field: string; op: string; values?: string[] }
 
 export type Trigger =

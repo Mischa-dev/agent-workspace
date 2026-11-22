@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
-    config::AppConfig, error::AppError, git_runtime::expected_repository_mirror_path,
+    config::AppConfig, error::AppError, hosts::builtin::repositories::mirror_path,
     profile_runtime::prepare_private_profile_directory,
 };
 
@@ -217,7 +217,7 @@ async fn dev_seed_here(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, App
     .fetch_optional(&mut *transaction)
     .await?
     .unwrap_or_else(Uuid::now_v7);
-    let mirror_path = expected_repository_mirror_path(&config.data_root, repository_id)?;
+    let mirror_path = mirror_path(&config.data_root, repository_id)?;
     let repository_id = sqlx::query_scalar::<_, Uuid>(
         r#"
         INSERT INTO repositories (
@@ -315,7 +315,7 @@ async fn dev_seed_here(pool: &PgPool, config: &AppConfig) -> Result<DevSeed, App
     .await?;
 
     crate::execution_setup::lock_project_setup(&mut transaction, project_id).await?;
-    let codex_manifest = crate::provider::codex_manifest();
+    let codex_manifest = crate::hosts::builtin::default_manifest();
     // Upgrade tests seed schemas from before provider accounts (S6), where
     // the profile itself held the private home directory, and from before
     // connections recorded a binary version.

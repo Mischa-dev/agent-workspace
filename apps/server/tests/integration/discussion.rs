@@ -90,7 +90,7 @@ async fn things_have_discussions_as_visible_as_they_are() {
         app,
         &rook.token,
         &rook.session,
-        "sheet_write",
+        "sheet_create",
         json!({
             "projectId": work,
             "name": "Budget",
@@ -544,14 +544,13 @@ async fn comments_that_mention_agents_tell_them() {
     assert!(mentioned_events(app, pool, rook).await.is_empty());
     assert!(mentioned_events(app, pool, kite).await.is_empty());
 
-    let (status, task) = send(
+    let (status, task) = crate::support::tasks::send(
         app,
-        lena.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{work}/work-items"),
-            Some(&Uuid::now_v7().to_string()),
-            json!({"title": "Ship it"}),
-        ),
+        &lena.browser,
+        "POST",
+        &format!("/api/v1/projects/{work}/work-items"),
+        Some(&Uuid::now_v7().to_string()),
+        json!({"title": "Ship it"}),
     )
     .await;
     assert!(status.is_success(), "{task}");
@@ -564,15 +563,15 @@ async fn comments_that_mention_agents_tell_them() {
         app,
         lena.browser.request(
             "POST",
-            &format!("/api/v1/projects/{work}/work-items/{task_id}/comments"),
+            "/api/v2/ops/task_comment_create",
             Some(&Uuid::now_v7().to_string()),
-            json!({"content": mention(rook.actor, "can you look, ")}),
+            json!({"taskId": task_id, "content": mention(rook.actor, "can you look, ")}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{posted}");
+    assert_eq!(status, StatusCode::OK, "{posted}");
     let comment_id =
-        Uuid::parse_str(posted["comment"]["id"].as_str().expect("comment")).expect("id");
+        Uuid::parse_str(posted["value"]["resultId"].as_str().expect("comment")).expect("id");
     let events = mentioned_events(app, pool, rook).await;
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0].0, "task");
@@ -585,11 +584,11 @@ async fn comments_that_mention_agents_tell_them() {
         app,
         &rook.token,
         &rook.session,
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": task_id, "text": "@rook and @kite on it", "clientRequestId": "rook-1"}),
     )
     .await;
-    assert_eq!(own["outcome"], "applied", "{own}");
+    assert_eq!(own["outcome"], "ok", "{own}");
     assert_eq!(mentioned_events(app, pool, rook).await.len(), 1);
     assert!(mentioned_events(app, pool, kite).await.is_empty());
 
@@ -650,7 +649,7 @@ async fn sheet_anchor_follows_a_row_insert() {
         app,
         &rook.token,
         &rook.session,
-        "sheet_write",
+        "sheet_create",
         json!({
             "projectId": work,
             "name": "Budget",
@@ -695,7 +694,7 @@ async fn sheet_anchor_follows_a_row_insert() {
         app,
         &rook.token,
         &rook.session,
-        "sheet_write",
+        "sheet_update",
         json!({
             "projectId": work,
             "sheet": sheet,
@@ -1141,12 +1140,12 @@ async fn task_discussions_keep_the_task_limit() {
     assert_eq!(upload["outcome"], "ok", "{upload}");
     let file = upload["value"]["fileId"].as_str().expect("file").to_owned();
     let commented = call(
-        "task_comment",
+        "task_comment_create",
         json!({"taskId": task, "text": "Trace attached", "clientRequestId": "limit-comment",
                "attachmentIds": [file]}),
     )
     .await;
-    assert_eq!(commented["outcome"], "applied", "{commented}");
+    assert_eq!(commented["outcome"], "ok", "{commented}");
     let listed = call(
         "comment_list",
         json!({"thing": {"kind": "task", "id": task}}),
@@ -1163,7 +1162,7 @@ async fn task_discussions_keep_the_task_limit() {
     assert_eq!(fetched["outcome"], "ok", "{fetched}");
     // A record of a collection that acts like a task is that task.
     let chores = call(
-        "collection_write",
+        "collection_create",
         json!({"projectId": "WORK", "name": "Chores", "actsLikeTask": true}),
     )
     .await;
@@ -1298,12 +1297,12 @@ async fn every_document_kind_gets_every_service() {
 
     // The three kinds, each holding "Alpha" and named for search.
     let page = as_ed(
-        "page_write",
+        "page_create",
         json!({"projectId": "WORK", "title": "Quillpage", "body": "Alpha"}),
     )
     .await;
     let sheet = as_ed(
-        "sheet_write",
+        "sheet_create",
         json!({"projectId": "WORK", "name": "Quillsheet", "cells": [{"cell": "A1", "input": "Alpha"}],
                "clientRequestId": "contract-sheet"}),
     )
@@ -1339,7 +1338,7 @@ async fn every_document_kind_gets_every_service() {
             "page" => as_ed("page_get", json!({"pageId": id})).await,
             "sheet" => {
                 as_ed(
-                    "sheet_read",
+                    "sheet_get",
                     json!({"projectId": "WORK", "sheet": id, "range": "A1:A1"}),
                 )
                 .await
@@ -1380,10 +1379,10 @@ async fn every_document_kind_gets_every_service() {
 
         // A suggest-only role proposes; accepting applies.
         let proposed = match kind {
-            "page" => as_sug("page_write", json!({"pageId": id, "body": "Beta"})).await,
+            "page" => as_sug("page_update", json!({"pageId": id, "body": "Beta"})).await,
             "sheet" => {
                 as_sug(
-                    "sheet_write",
+                    "sheet_update",
                     json!({"projectId": "WORK", "sheet": id, "cells": [{"cell": "A1", "input": "Beta"}],
                            "clientRequestId": "contract-propose"}),
                 )
@@ -1418,10 +1417,10 @@ async fn every_document_kind_gets_every_service() {
 
         // Ed's own change undoes in one step.
         let changed = match kind {
-            "page" => as_ed("page_write", json!({"pageId": id, "body": "Gamma"})).await,
+            "page" => as_ed("page_update", json!({"pageId": id, "body": "Gamma"})).await,
             "sheet" => {
                 as_ed(
-                    "sheet_write",
+                    "sheet_update",
                     json!({"projectId": "WORK", "sheet": id, "cells": [{"cell": "A1", "input": "Gamma"}],
                            "clientRequestId": "contract-change"}),
                 )
@@ -1491,7 +1490,7 @@ async fn every_document_kind_gets_every_service() {
             logged.iter().any(|kind_of| kind_of.starts_with(kind)),
             "{kind}: {logged:?}"
         );
-        let found = as_ed("search", json!({"query": title})).await;
+        let found = as_ed("workspace_search", json!({"query": title})).await;
         assert!(found.to_string().contains(&id), "{kind}: {found}");
 
         // Someone outside the space gets nothing.

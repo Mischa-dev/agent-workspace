@@ -276,7 +276,7 @@ async fn planning_tools_fill_the_gaps_agents_hit() {
 
     // A criterion added already checked, and the list's progress counts.
     let first = &loose[0];
-    let opened = call("task_open", json!({"taskId": first})).await;
+    let opened = call("task_get", json!({"taskId": first})).await;
     let version = opened["value"]["version"]
         .as_i64()
         .or_else(|| opened["value"]["task"]["version"].as_i64())
@@ -321,7 +321,7 @@ async fn planning_tools_fill_the_gaps_agents_hit() {
 
     // The graph narrows to a label, keeps what links to it, and names keys.
     let graph = call(
-        "dependency_graph",
+        "dependency_graph_get",
         json!({"projectId": "PLN", "label": "graph"}),
     )
     .await;
@@ -365,7 +365,7 @@ async fn planning_tools_fill_the_gaps_agents_hit() {
         .expect("parent")
         .to_owned();
     let graph = call(
-        "dependency_graph",
+        "dependency_graph_get",
         json!({"projectId": "PLN", "parentId": parent}),
     )
     .await;
@@ -377,7 +377,7 @@ async fn planning_tools_fill_the_gaps_agents_hit() {
         .collect::<Vec<_>>();
     assert_eq!(titles, ["Child a", "Child b"]);
     let unknown = call(
-        "dependency_graph",
+        "dependency_graph_get",
         json!({"projectId": "PLN", "label": "No such label"}),
     )
     .await;
@@ -420,7 +420,8 @@ async fn a_plan_import_updates_the_tasks_a_space_already_has() {
         "tasks": [
             {"ref": "parser", "title": "write the parser", "description": "Now with tables.",
              "criteria": ["Parses headings", "Parses tables"], "labels": ["Import"], "milestone": "m"},
-            {"ref": "renamed", "key": "IMP-2", "title": "New name", "blockedBy": ["parser"]},
+            {"ref": "renamed", "key": "IMP-2", "title": "New name", "blockedBy": ["parser"],
+             "parent": "fresh"},
             {"ref": "fresh", "title": "Something new", "milestone": "m"},
         ],
     });
@@ -510,4 +511,18 @@ async fn a_plan_import_updates_the_tasks_a_space_already_has() {
         (2, 1, 1),
         "the missing criterion and label were added, the dependency joined the existing tasks"
     );
+    // A matched task goes under the parent its draft names, here one the
+    // same batch made.
+    let parent = sqlx::query_scalar::<_, Option<i64>>(
+        r#"
+        SELECT parent.number FROM task_rows item
+        LEFT JOIN task_rows parent ON parent.id = item.parent_work_item_id
+        WHERE item.project_id = $1 AND item.number = 2
+        "#,
+    )
+    .bind(space)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("parent");
+    assert_eq!(parent, Some(3));
 }

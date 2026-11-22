@@ -3,7 +3,7 @@
 //! rule functions the web routes call (`automations::create` and the
 //! rest), as the caller the dispatcher checked; those keep the rule's own
 //! checks (who may edit whose rule) and write their own audit rows. The
-//! old `automation_write` and `automation_runs` tools are aliases.
+//! old `automation_write` and `automation_runs` tools are retired.
 
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
@@ -33,10 +33,21 @@ pub fn register_ops(registry: &mut Registry) {
 }
 
 /// The caller as the rule functions read it, in the space the call acts in.
+/// Who makes or runs a rule, by the edge the call came through: a person in
+/// the browser isn't acting through an app, so their apps' limit doesn't
+/// apply to the rule (`automations::through_app`).
 fn caller_and_space(call: &OpCall<'_>) -> (Caller, Uuid) {
     let principal = principal_for(call.ctx, None);
     let space = principal.project_id;
-    (Caller::mcp(&principal), space)
+    let mut caller = Caller::mcp(&principal);
+    if let crate::ops::Edge::Web { session_id } = call.ctx.edge {
+        caller.session_id = Some(session_id);
+        caller.channel = "browser";
+        caller.authentication_class = "password_session";
+        caller.client_name = None;
+        caller.token_project_id = None;
+    }
+    (caller, space)
 }
 
 fn space(project_id: &str) -> Target {
@@ -318,7 +329,9 @@ impl Operation for AutomationRunStart {
     const KIND: OpKind = OpKind::Create;
     const MODULE: &'static str = "automations";
     const PERMISSION: Option<Perm> = Some(Perm::TasksEdit);
-    const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    // The run keeps the request id itself (its dedupe key), so the run and
+    // its queued firing commit together and a retry finds them.
+    const IDEMPOTENCY: Idempotency = Idempotency::Command;
     const TITLE: &'static str = "Try automation";
     const DESCRIPTION: &'static str = "Fire an automation rule now, to try it, optionally on \
         one task. automation_history shows what it did.";
@@ -337,16 +350,32 @@ impl Operation for AutomationRunStart {
             None => None,
         };
         let (caller, space) = caller_and_space(call);
+        let request_key = match call.ctx.request_id.as_deref() {
+            Some(id) => Some(crate::idempotency::IdempotencyKey::parse(id).map_err(|_| {
+                OpError::Invalid {
+                    field: "clientRequestId".into(),
+                    message: "Use letters, numbers, dashes or dots, up to 128 characters.".into(),
+                }
+            })?),
+            None => None,
+        };
+        if request_key.is_some() {
+            call.key_honoured();
+        }
         // Boxed: a firing runs its actions, which can run operations.
-        let ran = Box::pin(super::run_now(
+        let (ran, replayed) = Box::pin(super::run_now(
             call.state,
             &caller,
             space,
             rule,
-            RunNow { work_item_id },
+            RunNow {
+                work_item_id,
+                request_key,
+            },
         ))
         .await
         .map_err(refused)?;
+        call.mark_replayed(replayed);
         to_value(ran)
     }
 }
@@ -383,9 +412,18 @@ impl Operation for AutomationPreview {
             None => None,
         };
         let (caller, space) = caller_and_space(call);
-        super::preview(call.state, &caller, space, rule, RunNow { work_item_id })
-            .await
-            .map_err(refused)
+        super::preview(
+            call.state,
+            &caller,
+            space,
+            rule,
+            RunNow {
+                work_item_id,
+                ..RunNow::default()
+            },
+        )
+        .await
+        .map_err(refused)
     }
 }
 

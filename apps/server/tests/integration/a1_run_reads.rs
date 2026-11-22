@@ -31,7 +31,7 @@ async fn run_get_and_run_list_show_a_self_reported_run_with_its_stage() {
     };
 
     let opened = call(
-        "run_open",
+        "run_create",
         json!({"projectId": "WORK", "title": "Triage new feedback",
                "cause": {"kind": "manual"}}),
     )

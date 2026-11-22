@@ -82,8 +82,12 @@ async fn later(setup: &Setup, browser: &Browser, view: &str) -> Value {
     page
 }
 
+/// Saves through later_save, from the fields the page has: a message, a
+/// note and a reminder time.
 async fn save(setup: &Setup, browser: &Browser, body: Value) -> (StatusCode, Value) {
-    call(setup, browser, "POST", "/api/v1/later", None, body).await
+    let input =
+        json!({"messageId": body["messageId"], "text": body["note"], "at": body["remindAt"]});
+    browser.op(&setup.app, "later_save", input).await
 }
 
 async fn group(setup: &Setup, key: &str, members: &[Uuid]) -> String {
@@ -212,10 +216,13 @@ async fn a_saved_private_message_vanishes_and_stays_silent_after_leaving() {
         json!({"messageId": message, "note": "Read this", "remindAt": in_an_hour()}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{saved}");
+    assert_eq!(status, StatusCode::OK, "{saved}");
     let item = saved["item"]["id"].as_str().expect("item").to_owned();
-    assert_eq!(
-        saved["item"]["message"]["preview"], "Secret plan",
+    // The preview says whose message it is and where, as Later lists it.
+    assert!(
+        saved["item"]["preview"]
+            .as_str()
+            .is_some_and(|preview| preview.ends_with("Secret plan")),
         "{saved}"
     );
     // Saving again is the same item.
@@ -249,15 +256,13 @@ async fn a_saved_private_message_vanishes_and_stays_silent_after_leaving() {
         assert!(!page.to_string().contains("Secret plan"), "{page}");
     }
     assert_eq!(later(setup, &mara_browser, "open").await["openCount"], 0);
-    let (status, body) = call(
-        setup,
-        &mara_browser,
-        "PATCH",
-        &format!("/api/v1/later/{item}"),
-        None,
-        json!({"note": "Still mine?"}),
-    )
-    .await;
+    let (status, body) = mara_browser
+        .op(
+            &setup.app,
+            "later_update",
+            json!({"id": item, "text": "Still mine?"}),
+        )
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     run_jobs(&fixture).await;
     assert_eq!(
@@ -265,15 +270,13 @@ async fn a_saved_private_message_vanishes_and_stays_silent_after_leaving() {
         0
     );
     // Someone else can't touch it either.
-    let (status, _) = call(
-        setup,
-        &zoe_browser,
-        "DELETE",
-        &format!("/api/v1/later/{item}"),
-        None,
-        Value::Null,
-    )
-    .await;
+    let (status, _) = zoe_browser
+        .op(
+            &setup.app,
+            "later_update",
+            json!({"id": item, "remove": true}),
+        )
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -284,7 +287,7 @@ async fn a_plain_note_can_be_saved_without_scheduling_a_reminder() {
     };
     let setup = &fixture.setup;
     let (status, saved) = save(setup, &setup.browser, json!({"note": "Buy milk"})).await;
-    assert_eq!(status, StatusCode::CREATED, "{saved}");
+    assert_eq!(status, StatusCode::OK, "{saved}");
     let id = saved["item"]["id"].as_str().expect("saved note");
     assert_eq!(remind_at(&setup.pool, id).await, None);
     let listed = later(setup, &setup.browser, "open").await;
@@ -296,6 +299,25 @@ async fn a_plain_note_can_be_saved_without_scheduling_a_reminder() {
             .await
             .expect("notifications");
     assert_eq!(notifications, 0, "an untimed note sends no notification");
+
+    // A note lives in the workspace's own space; it can still be marked done
+    // and removed there.
+    let (status, done) = setup
+        .browser
+        .op(&setup.app, "later_update", json!({"id": id, "done": true}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["item"]["done"], true, "{done}");
+    let (status, removed) = setup
+        .browser
+        .op(
+            &setup.app,
+            "later_update",
+            json!({"id": id, "remove": true}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert_eq!(removed["removed"], true, "{removed}");
 }
 
 #[tokio::test]
@@ -322,7 +344,7 @@ async fn a_due_reminder_notifies_once_and_done_or_snooze_work_from_the_push() {
         json!({"note": "Call the printer", "remindAt": in_an_hour()}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{saved}");
+    assert_eq!(status, StatusCode::OK, "{saved}");
     let item = saved["item"]["id"].as_str().expect("item").to_owned();
     assert_eq!(saved["item"]["kind"], "reminder");
 
@@ -432,15 +454,15 @@ async fn a_scheduled_send_posts_once_as_its_author_and_fails_cleanly_after_acces
             cookie: browser.cookie.clone(),
             csrf: browser.csrf.clone(),
         };
-        let uri = format!("/api/v1/conversations/{channel}/scheduled-messages");
+        let channel = channel.clone();
         async move {
             call(
                 setup,
                 &browser,
                 "POST",
-                &uri,
-                None,
-                json!({"content": content, "sendAt": send_at}),
+                "/api/v2/ops/message_schedule",
+                Some(&Uuid::now_v7().to_string()),
+                json!({"conversationId": channel, "content": content, "sendAt": send_at}),
             )
             .await
         }
@@ -464,8 +486,8 @@ async fn a_scheduled_send_posts_once_as_its_author_and_fails_cleanly_after_acces
         in_an_hour(),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{scheduled}");
-    let first = scheduled["scheduledMessage"]["id"]
+    assert_eq!(status, StatusCode::OK, "{scheduled}");
+    let first = scheduled["value"]["scheduled"]["id"]
         .as_str()
         .expect("scheduled")
         .to_owned();
@@ -478,10 +500,10 @@ async fn a_scheduled_send_posts_once_as_its_author_and_fails_cleanly_after_acces
     let (status, _) = call(
         setup,
         &setup.browser,
-        "DELETE",
-        &format!("/api/v1/scheduled-messages/{first}"),
-        None,
-        Value::Null,
+        "POST",
+        "/api/v2/ops/scheduled_message_update",
+        Some(&Uuid::now_v7().to_string()),
+        json!({"id": first, "cancel": true}),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -511,8 +533,8 @@ async fn a_scheduled_send_posts_once_as_its_author_and_fails_cleanly_after_acces
 
     // Once Mara loses the project, the next one fails, says so, and posts nothing.
     let (status, scheduled) = schedule(&mara_browser, text("After I leave"), in_an_hour()).await;
-    assert_eq!(status, StatusCode::CREATED, "{scheduled}");
-    let second = scheduled["scheduledMessage"]["id"]
+    assert_eq!(status, StatusCode::OK, "{scheduled}");
+    let second = scheduled["value"]["scheduled"]["id"]
         .as_str()
         .expect("scheduled")
         .to_owned();
@@ -564,10 +586,10 @@ async fn forwarding_posts_only_where_the_sender_can_and_quotes_only_to_who_can_s
             cookie: browser.cookie.clone(),
             csrf: browser.csrf.clone(),
         };
-        let uri = format!("/api/v1/messages/{message}/forward");
-        let body = json!({"conversationId": into, "text": "FYI"});
+        let uri = "/api/v2/ops/message_forward";
+        let body = json!({"messageId": message, "conversationId": into, "text": "FYI"});
         let key = key.to_owned();
-        async move { call(setup, &browser, "POST", &uri, Some(&key), body).await }
+        async move { call(setup, &browser, "POST", uri, Some(&key), body).await }
     };
 
     // Pat can't forward what they can't see, nor into a group they aren't in.
@@ -580,11 +602,7 @@ async fn forwarding_posts_only_where_the_sender_can_and_quotes_only_to_who_can_s
     // Mara forwards the group's message to the channel: the quote is read
     // live, for people who can see the group only.
     let (status, sent) = forward(&mara_browser, &secret, &channel, "f3").await;
-    assert_eq!(status, StatusCode::CREATED, "{sent}");
-    assert_eq!(
-        sent["message"]["forwarded"]["text"], "Secret plan",
-        "{sent}"
-    );
+    assert_eq!(status, StatusCode::OK, "{sent}");
     let (status, again) = forward(&mara_browser, &secret, &channel, "f3").await;
     assert!(status.is_success(), "{again}");
     assert_eq!(messages_by(pool, mara, "FYI").await, 1);
@@ -633,7 +651,7 @@ async fn forwarding_posts_only_where_the_sender_can_and_quotes_only_to_who_can_s
     .await;
     assert_eq!(status, StatusCode::CREATED, "{task}");
     let links = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM work_item_links WHERE target_kind = 'message' AND target_id = $1",
+        "SELECT count(*) FROM task_links WHERE target_kind = 'message' AND target_id = $1",
     )
     .bind(open.parse::<Uuid>().expect("message"))
     .fetch_one(pool)

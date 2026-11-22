@@ -41,12 +41,12 @@ test('triages twenty tasks without the mouse, then undoes a change with ⌘Z', a
   // A project of its own, so turning on triage leaves the others alone.
   const projects = (await (await request.get('/api/v1/projects')).json()) as { projects: Project[] }
   const home = projects.projects.find((project) => project.id === seededProject)
-  const made = await request.post('/api/v1/projects', {
+  const made = await request.post(`/api/v2/w/${home?.organizationId}/ops/space_create`, {
     headers: headers(`keys-project-${run}`),
-    data: { organizationId: home?.organizationId, key: `KB${run}`, name: `Keyboard ${run}` },
+    data: { key: `KB${run}`, name: `Keyboard ${run}` },
   })
   expect(made.ok(), await made.text()).toBe(true)
-  const projectId = ((await made.json()) as Project).id
+  const projectId = ((await made.json()) as { value: Project }).value.id
   await op('triage_enable', { spaceId: projectId })
   // One task to point duplicates at, then twenty waiting in triage.
   const original = await op<{ tasks: Array<{ id?: string | null; key: string }> }>('task_create_many', {

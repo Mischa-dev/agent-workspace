@@ -21,10 +21,13 @@ import './templates.css'
  */
 export function TemplatePicker({
   confirm,
+  leads = true,
   onApplied,
   organizationId,
 }: {
   confirm: boolean
+  /** False where something else on the view holds the one primary button (setup). */
+  leads?: boolean
   onApplied?: (applied: Applied) => void
   organizationId: string
 }) {
@@ -75,20 +78,14 @@ export function TemplatePicker({
               {template.builtIn ? null : <StatusChip>Saved here</StatusChip>}
             </div>
             {template.description ? <p className="aw-templates__description">{template.description}</p> : null}
-            {template.whatItDoes.length ? (
-              <ul className="aw-templates__does">
-                {template.whatItDoes.map((line) => (
-                  <li key={line}>{line}</li>
-                ))}
-              </ul>
-            ) : null}
+            {template.whatItDoes.length ? <WhatItDoes lines={template.whatItDoes} /> : null}
             {canUse ? (
               <div className="aw-templates__actions">
                 <Button
                   disabled={apply.isPending}
                   onClick={() => use(template)}
                   size="sm"
-                  variant={template.id === 'everything' ? 'primary' : undefined}
+                  variant={leads && template.id === 'everything' ? 'primary' : undefined}
                 >
                   {apply.isPending && apply.variables?.id === template.id ? 'Setting up…' : `Use ${template.name}`}
                 </Button>
@@ -133,5 +130,24 @@ export function TemplatePicker({
         Nothing it set up changes. Only the saved template goes.
       </ConfirmDialog>
     </>
+  )
+}
+
+/** What using a template changes. A long list (every module it turns on and
+ * off) folds away, so the cards stay a glance apart. */
+function WhatItDoes({ lines }: { lines: string[] }) {
+  const list = (
+    <ul className="aw-templates__does">
+      {lines.map((line) => (
+        <li key={line}>{line}</li>
+      ))}
+    </ul>
+  )
+  if (lines.join(' ').length <= 120) return list
+  return (
+    <details className="aw-templates__more">
+      <summary>What it changes</summary>
+      {list}
+    </details>
   )
 }

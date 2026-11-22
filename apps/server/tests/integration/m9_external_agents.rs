@@ -472,7 +472,7 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &application,
         &first_token,
         &session_id,
-        "task_open",
+        "task_get",
         json!({"taskId":external_work_item_id.to_string()}),
     )
     .await;
@@ -482,9 +482,9 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         actor_id.to_string()
     );
 
-    let browser_created = application
-        .clone()
-        .oneshot(write_request_with_idempotency(
+    let (browser_created_status, browser_created) = crate::support::tasks::send_built(
+        &application,
+        write_request_with_idempotency(
             "POST",
             &format!("/api/v1/projects/{}/work-items", seed.project_id),
             &cookie,
@@ -498,19 +498,18 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
                 "priority":"medium",
                 "assigneeActorId":actor_id
             }),
-        ))
-        .await
-        .expect("browser Work Item create response");
-    assert_eq!(browser_created.status(), StatusCode::CREATED);
-    let browser_created = response_json(browser_created).await;
+        ),
+    )
+    .await;
+    assert_eq!(browser_created_status, StatusCode::CREATED);
     let browser_work_item_id = browser_created["id"]
         .as_str()
         .expect("browser Work Item id")
         .parse::<Uuid>()
         .expect("browser Work Item UUID");
-    let browser_updated = application
-        .clone()
-        .oneshot(write_request_with_idempotency(
+    let (browser_updated, _) = crate::support::tasks::send_built(
+        &application,
+        write_request_with_idempotency(
             "PATCH",
             &format!(
                 "/api/v1/projects/{}/work-items/{browser_work_item_id}",
@@ -520,28 +519,25 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
             &csrf,
             "m9-browser-work-item-update",
             json!({"expectedVersion":1,"priority":"high"}),
-        ))
-        .await
-        .expect("browser Work Item update response");
-    assert_eq!(browser_updated.status(), StatusCode::OK);
+        ),
+    )
+    .await;
+    assert_eq!(browser_updated, StatusCode::OK);
     let browser_comment = application
         .clone()
         .oneshot(write_request_with_idempotency(
             "POST",
-            &format!(
-                "/api/v1/projects/{}/work-items/{browser_work_item_id}/comments",
-                seed.project_id
-            ),
+            "/api/v2/ops/task_comment_create",
             &cookie,
             &csrf,
             "m9-browser-work-item-comment",
-            json!({"content":{"version":1,"nodes":[
+            json!({"taskId": browser_work_item_id, "content":{"version":1,"nodes":[
                 {"type":"text","text":"Browser-authored update fixture"}
             ]}}),
         ))
         .await
         .expect("browser Work Item comment response");
-    assert_eq!(browser_comment.status(), StatusCode::CREATED);
+    assert_eq!(browser_comment.status(), StatusCode::OK);
     // The assignee is told the task is theirs, on its own; the update and
     // the comment reach it as the task's own events (it follows the task).
     agent_workspace_server::events::catch_up(&pool)
@@ -1740,12 +1736,13 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     sqlx::query("INSERT INTO project_memberships(id,project_id,actor_id,role,display_name,handle) SELECT $1,$2,actor_id,role,display_name,handle FROM project_memberships WHERE project_id=$3 AND actor_id=$4").bind(Uuid::now_v7()).bind(other_project).bind(seed.project_id).bind(seed.human_actor_id).execute(&pool).await.expect("other project owner");
     let cross_org = application
         .clone()
-        .oneshot(write_request(
+        .oneshot(write_request_with_idempotency(
             "POST",
-            &format!("/api/v1/projects/{other_project}/members"),
+            "/api/v2/ops/space_member_add",
             &cookie,
             &csrf,
-            json!({"actorId":actor,"role":"member"}),
+            "cross-org-add",
+            json!({"spaceId":other_project,"account":actor,"role":"member"}),
         ))
         .await
         .expect("cross organization request");
@@ -1795,19 +1792,20 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     );
     let add = application
         .clone()
-        .oneshot(write_request(
+        .oneshot(write_request_with_idempotency(
             "POST",
-            &format!("/api/v1/projects/{second}/members"),
+            "/api/v2/ops/space_member_add",
             &cookie,
             &csrf,
-            json!({"actorId":actor,"role":"member"}),
+            "second-add",
+            json!({"spaceId":second,"account":actor,"role":"member"}),
         ))
         .await
         .expect("account fixture operation");
     assert_eq!(add.status(), StatusCode::OK);
     let added = response_json(add).await;
-    assert_eq!(added["actorKind"], "external_agent");
-    assert_eq!(added["handle"], "shared_agent");
+    assert_eq!(added["value"]["accountId"], actor.to_string());
+    assert_eq!(added["value"]["handle"], "shared_agent");
     let mentions = application
         .clone()
         .oneshot(read_request(
@@ -1951,12 +1949,12 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     let elevated = application
         .clone()
         .oneshot(write_request_with_idempotency(
-            "PATCH",
-            &format!("/api/v1/projects/{second}/members/{actor}"),
+            "POST",
+            "/api/v2/ops/space_member_update",
             &cookie,
             &csrf,
             "agent-admin",
-            json!({"expectedVersion":1,"role":"admin"}),
+            json!({"spaceId":second,"account":actor,"expectedVersion":1,"role":"admin"}),
         ))
         .await
         .expect("account fixture operation");
@@ -1965,12 +1963,12 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     let removed = application
         .clone()
         .oneshot(write_request_with_idempotency(
-            "PATCH",
-            &format!("/api/v1/projects/{second}/members/{actor}"),
+            "POST",
+            "/api/v2/ops/space_member_remove",
             &cookie,
             &csrf,
             "remove-agent",
-            json!({"expectedVersion":2,"enabled":false}),
+            json!({"spaceId":second,"account":actor,"expectedVersion":2}),
         ))
         .await
         .expect("account fixture operation");
@@ -2022,12 +2020,13 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
         .to_owned();
     let joined = application
         .clone()
-        .oneshot(write_request(
+        .oneshot(write_request_with_idempotency(
             "POST",
-            &format!("/api/v1/projects/{}/members", seed.project_id),
+            "/api/v2/ops/space_member_add",
             &cookie,
             &csrf,
-            json!({"actorId":approver_actor,"role":"member"}),
+            "approver-add",
+            json!({"spaceId":seed.project_id,"account":approver_actor,"role":"member"}),
         ))
         .await
         .expect("add approver to seed project");
@@ -2110,15 +2109,12 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     let removed = application
         .clone()
         .oneshot(write_request_with_idempotency(
-            "PATCH",
-            &format!(
-                "/api/v1/projects/{}/members/{approver_actor}",
-                seed.project_id
-            ),
+            "POST",
+            "/api/v2/ops/space_member_remove",
             &cookie,
             &csrf,
             "remove-approver",
-            json!({"expectedVersion":member_version,"enabled":false}),
+            json!({"spaceId":seed.project_id,"account":approver_actor,"expectedVersion":member_version}),
         ))
         .await
         .expect("remove approver from seed project");
@@ -2139,15 +2135,12 @@ async fn existing_agent_joins_another_project_without_another_identity_or_token(
     let rejoined = application
         .clone()
         .oneshot(write_request_with_idempotency(
-            "PATCH",
-            &format!(
-                "/api/v1/projects/{}/members/{approver_actor}",
-                seed.project_id
-            ),
+            "POST",
+            "/api/v2/ops/space_member_add",
             &cookie,
             &csrf,
             "restore-approver",
-            json!({"expectedVersion":member_version.as_i64().expect("version") + 1,"enabled":true}),
+            json!({"spaceId":seed.project_id,"account":approver_actor}),
         ))
         .await
         .expect("restore approver in seed project");

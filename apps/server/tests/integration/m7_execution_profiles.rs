@@ -238,6 +238,16 @@ async fn team_runs_use_only_invoker_owned_profiles_and_missing_setup_has_no_effe
                 .expect("canonical personal profile data root"),
         )
     );
+    // The server doesn't make the home; the built-in host does, private,
+    // the first time it reaches the account.
+    assert!(!std::path::Path::new(&profile_path).exists());
+    let (status, _) = get_json(
+        &application,
+        &member_cookie,
+        &format!("{profiles_uri}/{member_profile_id}/account"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(
         std::fs::metadata(&profile_path)
             .expect("personal profile metadata")

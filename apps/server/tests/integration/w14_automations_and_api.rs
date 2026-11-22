@@ -17,7 +17,7 @@ use agent_workspace_server::{
     config::AppConfig,
     domain::RunState,
     events,
-    git_runtime::expected_repository_mirror_path,
+    hosts::builtin::git::expected_repository_mirror_path,
     jobs::{self, WorkerOptions},
     launch,
     outbox::{self, AgentRunUpdatedPayload, OutboxEventPayload},
@@ -32,9 +32,7 @@ use axum::{
     body::Body,
     http::{HeaderMap, Request, StatusCode, header},
 };
-use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
-use sha2::Sha256;
 use sqlx::{Executor, PgPool};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -43,7 +41,7 @@ use crate::{
     m3_scheduler_http::{
         create_test_mirror, integration_pool, response_json, schema_pool, uuid_field,
     },
-    w2_harness_platform::{MEMBER_LOGIN, insert_member, login, send},
+    w2_harness_platform::{MEMBER_LOGIN, insert_member, login, send, send_op},
 };
 
 const OWNER_LOGIN: &str = "w14-owner";
@@ -133,18 +131,22 @@ async fn bearer(
 }
 
 fn signature_ok(secret: &str, headers: &HeaderMap, body: &str) -> bool {
-    let timestamp = headers["x-workspace-timestamp"]
-        .to_str()
-        .expect("timestamp");
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("hmac");
-    mac.update(timestamp.as_bytes());
-    mac.update(b".");
-    mac.update(body.as_bytes());
-    let expected = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
-    headers["x-workspace-signature"]
-        .to_str()
-        .expect("signature")
-        == expected
+    let header = |name: &str| headers[name].to_str().expect("header");
+    header("webhook-signature")
+        == agent_workspace_server::delivery::sign::standard(
+            secret,
+            header("webhook-id"),
+            header("webhook-timestamp"),
+            body,
+        )
+        .expect("sign")
+}
+
+fn event_type(body: &str) -> String {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|body| body["type"].as_str().map(str::to_owned))
+        .unwrap_or_default()
 }
 
 // The walk is one long async body, and an unoptimized build polls it in a
@@ -296,13 +298,12 @@ async fn webhooks_and_automations_walk() {
         let done = send(&application, owner, "POST", &path, key, body).await;
         assert!(done.0.is_success(), "{path}: {}", done.1);
     }
-    let environment = send(
+    let environment = send_op(
         &application,
         owner,
-        "POST",
-        &format!("{project}/environments"),
+        "environment_create",
         "environment",
-        json!({"name": "Demo here", "harness": "demo"}),
+        json!({"projectId": seed.project_id, "name": "Demo here", "harness": "demo"}),
     )
     .await;
     assert!(environment.0.is_success(), "environment: {}", environment.1);
@@ -546,19 +547,19 @@ async fn webhooks_and_automations_walk() {
     );
     let (message_headers, message_body) = deliveries
         .iter()
-        .find(|(headers, _)| headers["x-workspace-event"] == "message.created")
+        .find(|(_, body)| event_type(body) == "message.created")
         .expect("the public message was delivered");
     // Ids only: the receiver reads the text with its own access.
     assert!(!message_body.contains("Public hello"), "{message_body}");
     assert!(signature_ok(&secret, message_headers, message_body));
     let finished = deliveries
         .iter()
-        .find(|(headers, _)| headers["x-workspace-event"] == "run.finished")
+        .find(|(_, body)| event_type(body) == "run.finished")
         .expect("the finished run was delivered");
     assert!(finished.1.contains(&run_id.to_string()), "{}", finished.1);
     assert!(signature_ok(&secret, &finished.0, &finished.1));
     // Redelivering keeps the delivery's id.
-    let delivery_id = message_headers["x-workspace-delivery"]
+    let delivery_id = message_headers["webhook-id"]
         .to_str()
         .expect("delivery id")
         .to_owned();
@@ -597,7 +598,7 @@ async fn webhooks_and_automations_walk() {
         .lock()
         .expect("received")
         .iter()
-        .filter(|(headers, _)| headers["x-workspace-delivery"] == delivery_id.as_str())
+        .filter(|(headers, _)| headers["webhook-id"] == delivery_id.as_str())
         .count();
     assert_eq!(same_id, 2, "the redelivery carries the same id");
 
@@ -607,10 +608,9 @@ async fn webhooks_and_automations_walk() {
         &application,
         Some(&token),
         "POST",
-        "/api/public/v1/automation_write",
+        "/api/public/v1/automation_create",
         json!({
             "projectId": seed.project_id,
-            "operation": "create",
             "name": "Fix failing checks",
             "trigger": {"kind": "pull_request_checks_failed"},
             "actions": [{"kind": "launch"}],
@@ -658,7 +658,7 @@ async fn webhooks_and_automations_walk() {
         &application,
         Some(&token),
         "POST",
-        "/api/public/v1/automation_runs",
+        "/api/public/v1/automation_history",
         json!({"projectId": seed.project_id, "ruleId": rule_id}),
     )
     .await;
@@ -702,10 +702,9 @@ async fn webhooks_and_automations_walk() {
         &application,
         Some(&token),
         "POST",
-        "/api/public/v1/automation_write",
+        "/api/public/v1/automation_create",
         json!({
             "projectId": seed.project_id,
-            "operation": "create",
             "name": "Raise everything",
             "trigger": {"kind": "task_created"},
             "actions": [{"kind": "set_field", "field": "priority", "value": "urgent"}],
@@ -841,9 +840,9 @@ async fn webhooks_and_automations_walk() {
         &application,
         owner,
         "POST",
-        &format!("/api/v1/scheduled-messages/{scheduled_id}/send-now"),
+        "/api/v2/ops/scheduled_message_update",
         "script-message-now",
-        json!({}),
+        json!({"id": scheduled_id, "sendNow": true}),
     )
     .await;
     assert!(sent.0.is_success(), "{}", sent.1);
@@ -871,10 +870,9 @@ async fn webhooks_and_automations_walk() {
         &application,
         Some(&token),
         "POST",
-        "/api/public/v1/automation_write",
+        "/api/public/v1/automation_create",
         json!({
             "projectId": seed.project_id,
-            "operation": "create",
             "name": "Launch new tasks",
             "trigger": {"kind": "task_created"},
             "actions": [{"kind": "launch"}],
@@ -1138,10 +1136,9 @@ async fn webhooks_and_automations_walk() {
         &application,
         Some(&token),
         "POST",
-        "/api/public/v1/automation_write",
+        "/api/public/v1/automation_create",
         json!({
             "projectId": seed.project_id,
-            "operation": "create",
             "name": "Announce new tasks",
             "trigger": {"kind": "task_created"},
             "actions": [{"kind": "post_message", "conversationId": seed.channel_id, "text": "New: {{task.title}}"}],
@@ -1313,17 +1310,18 @@ async fn webhooks_and_automations_walk() {
         &application,
         member,
         "POST",
-        &format!("{project}/automations"),
+        "/api/v2/ops/automation_create",
         "members-rule",
         json!({
+            "projectId": seed.project_id,
             "name": "Raise new tasks",
             "trigger": {"kind": "task_created"},
             "actions": [{"kind": "set_field", "field": "priority", "value": "urgent"}],
         }),
     )
     .await;
-    assert_eq!(members_rule.0, StatusCode::CREATED, "{}", members_rule.1);
-    let members_rule_id = uuid_field(&members_rule.2, "id");
+    assert_eq!(members_rule.0, StatusCode::OK, "{}", members_rule.1);
+    let members_rule_id = uuid_field(&members_rule.2["value"], "id");
     sqlx::query(
         "UPDATE project_memberships SET enabled = false WHERE project_id = $1 AND actor_id = $2",
     )

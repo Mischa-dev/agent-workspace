@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
 import { storageStatePath } from './environment'
+import { at } from './addresses'
 
 test.use({ storageState: storageStatePath })
 
@@ -11,7 +12,7 @@ test('draws on a whiteboard and the other tab sees it live', async ({ browser, p
   page.on('pageerror', (error) => errors.push(error.message))
   const title = `Smoke board ${Date.now()}`
 
-  await page.goto('/whiteboards')
+  await page.goto(at('/whiteboards'))
   await expect(page.getByRole('heading', { name: 'Whiteboards', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'New whiteboard' }).first().click()
   const dialog = page.getByRole('dialog', { name: 'New whiteboard' })
@@ -23,7 +24,7 @@ test('draws on a whiteboard and the other tab sees it live', async ({ browser, p
 
   const other = await browser.newContext({ storageState: storageStatePath })
   const watcher = await other.newPage()
-  await watcher.goto(`/whiteboards/${boardId}`)
+  await watcher.goto(at(`/whiteboards/${boardId}`))
   await expect(canvas(watcher)).toBeVisible()
   // The second tab learns of the change from the live stream and pulls it.
   const pulled = watcher.waitForResponse(

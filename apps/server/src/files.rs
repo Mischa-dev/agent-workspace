@@ -28,6 +28,7 @@ pub mod migrate;
 pub mod object;
 pub mod ops;
 pub mod store;
+pub mod tool_ops;
 pub mod upload;
 pub mod workspace_store;
 

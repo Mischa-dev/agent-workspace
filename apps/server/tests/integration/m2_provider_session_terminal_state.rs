@@ -4,7 +4,7 @@ use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
-    git_runtime::expected_repository_mirror_path,
+    hosts::builtin::git::expected_repository_mirror_path,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
     router,
@@ -50,12 +50,12 @@ async fn authenticated_interrupt_idles_only_an_unowned_provider_session() {
     let interrupted_run_id = insert_working_run(&harness, provider_session_id).await;
     let response = interrupt(&harness, interrupted_run_id).await;
     assert_eq!(response.status(), StatusCode::OK);
+    // The run as run_stop answers it; the stored states are checked below.
     let response = response_json(response).await;
-    assert_eq!(response["id"], interrupted_run_id.to_string());
-    assert_eq!(response["state"], "interrupted");
     assert_eq!(
-        response["providerSessionId"],
-        provider_session_id.to_string()
+        response["value"]["id"],
+        interrupted_run_id.to_string(),
+        "{response}"
     );
 
     let (run_state, session_state, finished, interruption_entries, outbox_events) =
@@ -424,12 +424,16 @@ async fn interrupt(harness: &TestHarness, run_id: Uuid) -> axum::response::Respo
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/agent-runs/{run_id}/interrupt"))
+                .uri("/api/v2/ops/run_stop")
                 .header("origin", ORIGIN)
                 .header("cookie", &harness.cookie)
                 .header("x-csrf-token", &harness.csrf)
                 .header("idempotency-key", format!("interrupt-{run_id}"))
-                .body(Body::empty())
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&serde_json::json!({"runId": run_id}))
+                        .expect("serialize stop"),
+                ))
                 .expect("build interrupt request"),
         )
         .await

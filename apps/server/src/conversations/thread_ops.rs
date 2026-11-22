@@ -1,7 +1,7 @@
 //! Threads and conversations as operations (K2.8): start and update a
 //! thread, make a channel, change a conversation, pin, change a group's
 //! members, and let a group's agents continue. Agents call them as tools of
-//! the same names (`conversation_members` stays as an alias), scripts
+//! the same names (the old `conversation_members` is retired), scripts
 //! through the v2 route, and rules as actions. Each runs the command the
 //! hand-written tool ran (`mcp::talk`, `mcp::channels`, `mcp::groups`), as
 //! the caller the dispatcher checked, which keeps its own checks inside:
@@ -107,21 +107,51 @@ impl Targeted for ThreadStartArguments {
     }
 }
 
-conversation_op!(ThreadStart {
-    name: "thread_start",
-    kind: Create,
-    module: "channels",
-    permission: Some(Perm::ChannelsPost),
-    destructive: false,
-    title: "Start thread",
-    description: "Move a topic into its own thread, usually from the message where it started \
-        (fromMessageId), in a channel, DM or group. Optionally post the first message. Starting \
-        from the same message again returns the existing thread.",
-    emits: "thread.started",
-    input: ThreadStartArguments,
-    output: ThreadValue,
-    run: talk::thread_start
-});
+/// Starting a thread keeps the caller's request id itself: the thread and
+/// its opening message are made in two steps, so a retry finds both again
+/// by their keys rather than through the dispatcher's one transaction.
+pub(crate) struct ThreadStart;
+
+impl Operation for ThreadStart {
+    const NAME: &'static str = "thread_start";
+    const KIND: OpKind = OpKind::Create;
+    const MODULE: &'static str = "channels";
+    const PERMISSION: Option<Perm> = Some(Perm::ChannelsPost);
+    const IDEMPOTENCY: Idempotency = Idempotency::Command;
+    const DESTRUCTIVE: bool = false;
+    const TITLE: &'static str = "Start thread";
+    const DESCRIPTION: &'static str = "Move a topic into its own thread, usually from the message \
+        where it started (fromMessageId), in a channel, DM or group. Optionally post the first \
+        message. Starting from the same message again returns the existing thread.";
+    const EMITS: &'static [&'static str] = &["thread.started"];
+
+    type Input = ThreadStartArguments;
+    type Output = ThreadValue;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ThreadStartArguments,
+    ) -> Result<ThreadValue, OpError> {
+        let key = match call.ctx.request_id.as_deref() {
+            Some(id) => Some(crate::idempotency::IdempotencyKey::parse(id).map_err(|_| {
+                OpError::Invalid {
+                    field: "clientRequestId".into(),
+                    message: "Use letters, numbers, dashes or dots, up to 128 characters.".into(),
+                }
+            })?),
+            None => None,
+        };
+        if key.is_some() {
+            call.key_honoured();
+        }
+        let principal = principal_for(call.ctx, None);
+        let (answer, replayed) = talk::thread_start(call.state, &principal, input, key).await;
+        let answer = tool_answer(answer)?;
+        call.mark_replayed(replayed);
+        call.audited_by_command();
+        Ok(answer)
+    }
+}
 
 impl Targeted for ThreadUpdateArguments {
     fn target(&self) -> Target {

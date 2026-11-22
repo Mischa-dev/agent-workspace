@@ -21,7 +21,7 @@ use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
-    git_runtime::expected_repository_mirror_path,
+    hosts::builtin::git::expected_repository_mirror_path,
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
@@ -283,7 +283,7 @@ async fn an_agent_takes_an_empty_project_from_goal_to_finished_run_through_mcp_a
     let goal_message = string(&goal, "/message/id");
 
     // 1. The agent finds the goal and gets oriented.
-    let oriented = f.call("project_open", json!({"projectId": project})).await;
+    let oriented = f.call("project_get", json!({"projectId": project})).await;
     assert_eq!(string(&oriented, "/value/project/key"), "AW", "{oriented}");
     let read = f
         .call("conversation_read", json!({"conversationId": channel}))
@@ -293,7 +293,7 @@ async fn an_agent_takes_an_empty_project_from_goal_to_finished_run_through_mcp_a
     // 2. It writes the plan page.
     let page = f
         .call(
-            "page_write",
+            "page_create",
             json!({
                 "projectId": project,
                 "title": "Plan: proof-line release",
@@ -303,14 +303,14 @@ async fn an_agent_takes_an_empty_project_from_goal_to_finished_run_through_mcp_a
         .await;
     let page_id = string(&page, "/value/id");
     // ... and changes one block of it, without rewriting the page.
-    let blocks = f.call("page_blocks", json!({"pageId": page_id})).await;
+    let blocks = f.call("page_blocks_get", json!({"pageId": page_id})).await;
     let last = blocks["value"]["blocks"]
         .as_array()
         .and_then(|blocks| blocks.last())
         .cloned()
         .unwrap_or_else(|| panic!("no blocks: {blocks}"));
     f.call(
-        "page_edit",
+        "page_update_blocks",
         json!({"pageId": page_id, "edits": [{
             "op": "insertAfter",
             "blockId": last["id"],
@@ -322,7 +322,7 @@ async fn an_agent_takes_an_empty_project_from_goal_to_finished_run_through_mcp_a
 
     // 3. It builds a collection for the risks and fills it in.
     f.call(
-        "collection_write",
+        "collection_create",
         json!({
             "projectId": project,
             "name": "Risks",
@@ -338,7 +338,7 @@ async fn an_agent_takes_an_empty_project_from_goal_to_finished_run_through_mcp_a
     .await;
     let records = f
         .call(
-            "record_write",
+            "record_create_many",
             json!({
                 "projectId": project,
                 "collection": "Risks",
@@ -396,12 +396,12 @@ async fn an_agent_takes_an_empty_project_from_goal_to_finished_run_through_mcp_a
         .collect::<Vec<_>>();
     assert_eq!(keys.len(), 3, "{tasks}");
     f.call(
-        "task_depend",
+        "task_link",
         json!({"taskId": keys[1], "blockedBy": [keys[0]]}),
     )
     .await;
     f.call(
-        "task_depend",
+        "task_link",
         json!({"taskId": keys[2], "blockedBy": [keys[1]]}),
     )
     .await;
@@ -495,7 +495,7 @@ async fn an_agent_takes_an_empty_project_from_goal_to_finished_run_through_mcp_a
         json!({"threadId": thread_id, "status": "done", "outcome": "The proof line is written."}),
     )
     .await;
-    let opened = f.call("task_open", json!({"taskId": keys[0]})).await;
+    let opened = f.call("task_get", json!({"taskId": keys[0]})).await;
     let mut version = opened["value"]["task"]["version"]
         .as_i64()
         .unwrap_or_else(|| panic!("no version: {opened}"));
@@ -850,7 +850,7 @@ async fn an_agent_writes_task_templates_and_uses_them() {
 
     let made = f
         .call(
-            "template_write",
+            "template_create",
             json!({
                 "projectId": project,
                 "name": "Bug report",
@@ -881,7 +881,7 @@ async fn an_agent_writes_task_templates_and_uses_them() {
         &f.app,
         &f.token,
         &f.session,
-        "template_write",
+        "template_create",
         json!({"projectId": project, "name": "bug report", "title": "Again"}),
     )
     .await;
@@ -890,7 +890,7 @@ async fn an_agent_writes_task_templates_and_uses_them() {
     // Changing one field keeps the rest.
     let changed = f
         .call(
-            "template_write",
+            "template_update",
             json!({"projectId": project, "template": "Bug report", "priority": "urgent", "expectedVersion": template["version"]}),
         )
         .await;
@@ -904,7 +904,7 @@ async fn an_agent_writes_task_templates_and_uses_them() {
         &f.app,
         &f.token,
         &f.session,
-        "template_write",
+        "template_update",
         json!({"projectId": project, "template": template_id, "title": "Stale", "expectedVersion": made["value"]["template"]["version"]}),
     )
     .await;
@@ -952,7 +952,7 @@ async fn an_agent_writes_task_templates_and_uses_them() {
     // Archived, it can't be used until it's restored.
     let archived = f
         .call(
-            "template_write",
+            "template_update",
             json!({"projectId": project, "template": "Bug report", "archived": true}),
         )
         .await;
@@ -970,7 +970,7 @@ async fn an_agent_writes_task_templates_and_uses_them() {
     .await;
     assert_eq!(refused["outcome"], "not_found", "{refused}");
     f.call(
-        "template_write",
+        "template_update",
         json!({"projectId": project, "template": template_id, "archived": false}),
     )
     .await;
@@ -992,7 +992,7 @@ async fn an_agent_schedules_recurring_tasks() {
     };
     let project = f.seed.project_id.to_string();
     f.call(
-        "template_write",
+        "template_create",
         json!({"projectId": project, "name": "Weekly review", "title": "Review the week"}),
     )
     .await;
@@ -1002,7 +1002,7 @@ async fn an_agent_schedules_recurring_tasks() {
         json!({"projectId": project, "template": "Weekly review"}),
         json!({"projectId": project, "template": "Weekly review", "frequency": "daily", "enabled": false}),
     ] {
-        let refused = tool(&f.app, &f.token, &f.session, "recurring_write", arguments).await;
+        let refused = tool(&f.app, &f.token, &f.session, "recurring_create", arguments).await;
         assert_eq!(refused["outcome"], "invalid_request", "{refused}");
     }
     let none = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM recurring_tasks")
@@ -1013,7 +1013,7 @@ async fn an_agent_schedules_recurring_tasks() {
 
     let made = f
         .call(
-            "recurring_write",
+            "recurring_create",
             json!({
                 "projectId": project,
                 "template": "Weekly review",
@@ -1045,7 +1045,7 @@ async fn an_agent_schedules_recurring_tasks() {
     // Changing the time keeps the day; an old version is a conflict.
     let changed = f
         .call(
-            "recurring_write",
+            "recurring_update",
             json!({"projectId": project, "recurring": schedule_id, "timeOfDay": "08:00", "clearDueInDays": true}),
         )
         .await;
@@ -1058,7 +1058,7 @@ async fn an_agent_schedules_recurring_tasks() {
         &f.app,
         &f.token,
         &f.session,
-        "recurring_write",
+        "recurring_update",
         json!({"projectId": project, "recurring": schedule_id, "every": 2, "expectedVersion": made["value"]["recurring"]["version"]}),
     )
     .await;
@@ -1067,14 +1067,14 @@ async fn an_agent_schedules_recurring_tasks() {
     // Paused, it has no next run; archiving its template keeps it paused.
     let paused = f
         .call(
-            "recurring_write",
+            "recurring_update",
             json!({"projectId": project, "recurring": schedule_id, "enabled": false}),
         )
         .await;
     assert_eq!(paused["value"]["recurring"]["enabled"], false, "{paused}");
     assert!(paused["value"]["recurring"]["nextRunAt"].is_null());
     f.call(
-        "template_write",
+        "template_update",
         json!({"projectId": project, "template": "Weekly review", "archived": true}),
     )
     .await;
@@ -1082,7 +1082,7 @@ async fn an_agent_schedules_recurring_tasks() {
         &f.app,
         &f.token,
         &f.session,
-        "recurring_write",
+        "recurring_update",
         json!({"projectId": project, "recurring": schedule_id, "enabled": true}),
     )
     .await;
@@ -1106,7 +1106,7 @@ async fn an_agent_schedules_recurring_tasks() {
     );
     let deleted = f
         .call(
-            "recurring_write",
+            "recurring_update",
             json!({"projectId": project, "recurring": schedule_id, "delete": true}),
         )
         .await;
@@ -1115,7 +1115,7 @@ async fn an_agent_schedules_recurring_tasks() {
         &f.app,
         &f.token,
         &f.session,
-        "recurring_write",
+        "recurring_update",
         json!({"projectId": project, "recurring": schedule_id, "enabled": false}),
     )
     .await;
@@ -1408,7 +1408,7 @@ async fn people_save_project_templates_and_start_projects_from_them() {
     };
 
     let saved = person(
-        "project_template_write",
+        "project_template_create",
         json!({"projectId": project, "name": "Release setup", "description": "How we ship"}),
     )
     .await;
@@ -1422,7 +1422,7 @@ async fn people_save_project_templates_and_start_projects_from_them() {
         "{saved}"
     );
     let again = person(
-        "project_template_write",
+        "project_template_create",
         json!({"projectId": project, "name": "release setup"}),
     )
     .await;
@@ -1439,7 +1439,7 @@ async fn people_save_project_templates_and_start_projects_from_them() {
         &f.app,
         &f.token,
         &f.session,
-        "project_template_write",
+        "project_template_update",
         json!({"projectId": project, "template": template_id, "archived": true}),
     )
     .await;
@@ -1448,13 +1448,13 @@ async fn people_save_project_templates_and_start_projects_from_them() {
     // A stale version is refused; then the person archives it, and an
     // archived template starts nothing.
     let stale = person(
-        "project_template_write",
+        "project_template_update",
         json!({"projectId": project, "template": "Release setup", "archived": true, "expectedVersion": 0}),
     )
     .await;
     assert_eq!(stale["outcome"], "conflict", "{stale}");
     let archived = person(
-        "project_template_write",
+        "project_template_update",
         json!({"projectId": project, "template": "Release setup", "archived": true}),
     )
     .await;
@@ -1470,7 +1470,7 @@ async fn people_save_project_templates_and_start_projects_from_them() {
     .await;
     assert_eq!(blocked["outcome"], "not_found", "{blocked}");
     let restored = person(
-        "project_template_write",
+        "project_template_update",
         json!({"projectId": project, "template": "Release setup", "archived": false, "name": "Ship setup"}),
     )
     .await;
@@ -1525,7 +1525,7 @@ async fn people_invite_to_a_project_and_agents_never_do() {
     };
 
     let sent = person(
-        "invitation_write",
+        "invitation_create",
         json!({"projectId": project, "role": "viewer", "expiresInHours": 24}),
     )
     .await;
@@ -1551,11 +1551,11 @@ async fn people_invite_to_a_project_and_agents_never_do() {
     for (name, arguments) in [
         ("invitation_list", json!({"projectId": project})),
         (
-            "invitation_write",
+            "invitation_create",
             json!({"projectId": project, "role": "viewer"}),
         ),
         (
-            "invitation_write",
+            "invitation_update",
             json!({"projectId": project, "invitation": invitation, "revoke": true}),
         ),
     ] {
@@ -1566,13 +1566,13 @@ async fn people_invite_to_a_project_and_agents_never_do() {
     // A stale version is refused; replacing gives a new link and retires
     // the old one; then the new one is revoked.
     let stale = person(
-        "invitation_write",
+        "invitation_update",
         json!({"projectId": project, "invitation": invitation, "replace": true, "expectedVersion": 9}),
     )
     .await;
     assert_eq!(stale["outcome"], "conflict", "{stale}");
     let replaced = person(
-        "invitation_write",
+        "invitation_update",
         json!({"projectId": project, "invitation": invitation, "replace": true}),
     )
     .await;
@@ -1590,7 +1590,7 @@ async fn people_invite_to_a_project_and_agents_never_do() {
     .expect("old invitation");
     assert_eq!(old_status, "replaced");
     let revoked = person(
-        "invitation_write",
+        "invitation_update",
         json!({"projectId": project, "invitation": replacement, "revoke": true}),
     )
     .await;
@@ -1618,8 +1618,8 @@ async fn people_invite_to_a_project_and_agents_never_do() {
 
     // The same tool invites to the workspace, which can't be replaced.
     let to_workspace = person(
-        "invitation_write",
-        json!({"projectId": project, "workspace": true, "role": "member", "note": "For the launch"}),
+        "invitation_create",
+        json!({"projectId": project, "wholeWorkspace": true, "role": "member", "note": "For the launch"}),
     )
     .await;
     assert_eq!(to_workspace["outcome"], "ok", "{to_workspace}");
@@ -1634,7 +1634,7 @@ async fn people_invite_to_a_project_and_agents_never_do() {
     let workspace_invitation = string(&to_workspace, "/value/invitation/id");
     let workspace_list = person(
         "invitation_list",
-        json!({"projectId": project, "workspace": true}),
+        json!({"projectId": project, "wholeWorkspace": true}),
     )
     .await;
     assert_eq!(
@@ -1642,14 +1642,14 @@ async fn people_invite_to_a_project_and_agents_never_do() {
         "{workspace_list}"
     );
     let no_replace = person(
-        "invitation_write",
-        json!({"projectId": project, "workspace": true, "invitation": workspace_invitation, "replace": true}),
+        "invitation_update",
+        json!({"projectId": project, "wholeWorkspace": true, "invitation": workspace_invitation, "replace": true}),
     )
     .await;
     assert_eq!(no_replace["outcome"], "invalid_request", "{no_replace}");
     // A project invitation isn't found as a workspace one, nor the reverse.
     let crossed = person(
-        "invitation_write",
+        "invitation_update",
         json!({"projectId": project, "invitation": workspace_invitation, "revoke": true}),
     )
     .await;
@@ -1658,14 +1658,14 @@ async fn people_invite_to_a_project_and_agents_never_do() {
         &f.app,
         &f.token,
         &f.session,
-        "invitation_write",
-        json!({"projectId": project, "workspace": true, "invitation": workspace_invitation, "revoke": true}),
+        "invitation_update",
+        json!({"projectId": project, "wholeWorkspace": true, "invitation": workspace_invitation, "revoke": true}),
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
     let revoked = person(
-        "invitation_write",
-        json!({"projectId": project, "workspace": true, "invitation": workspace_invitation, "revoke": true}),
+        "invitation_update",
+        json!({"projectId": project, "wholeWorkspace": true, "invitation": workspace_invitation, "revoke": true}),
     )
     .await;
     assert_eq!(
@@ -1698,8 +1698,8 @@ async fn people_change_settings_and_agents_only_read_them() {
     };
 
     let workspace = person(
-        "settings_set",
-        json!({"projectId": project, "key": "run.model", "scope": "workspace", "value": "wide-model"}),
+        "setting_update",
+        json!({"spaceId": project, "key": "run.model", "scope": "workspace", "value": "wide-model"}),
     )
     .await;
     assert_eq!(workspace["outcome"], "ok", "{workspace}");
@@ -1708,8 +1708,8 @@ async fn people_change_settings_and_agents_only_read_them() {
         "{workspace}"
     );
     let changed = person(
-        "settings_set",
-        json!({"projectId": project, "key": "run.model", "value": "near-model", "expectedVersion": 0}),
+        "setting_update",
+        json!({"spaceId": project, "key": "run.model", "value": "near-model", "expectedVersion": 0}),
     )
     .await;
     assert_eq!(changed["value"]["done"], "changed", "{changed}");
@@ -1723,20 +1723,20 @@ async fn people_change_settings_and_agents_only_read_them() {
         "{changed}"
     );
     let stale = person(
-        "settings_set",
-        json!({"projectId": project, "key": "run.model", "value": "other-model", "expectedVersion": 0}),
+        "setting_update",
+        json!({"spaceId": project, "key": "run.model", "value": "other-model", "expectedVersion": 0}),
     )
     .await;
     assert_eq!(stale["outcome"], "conflict", "{stale}");
     let bad = person(
-        "settings_set",
-        json!({"projectId": project, "key": "run.model", "value": 7}),
+        "setting_update",
+        json!({"spaceId": project, "key": "run.model", "value": 7}),
     )
     .await;
     assert_eq!(bad["outcome"], "invalid_request", "{bad}");
     let layout = person(
-        "settings_set",
-        json!({"projectId": project, "key": "layout.preset", "value": "x"}),
+        "setting_update",
+        json!({"spaceId": project, "key": "layout.preset", "value": "x"}),
     )
     .await;
     assert_eq!(layout["outcome"], "invalid_request", "{layout}");
@@ -1744,8 +1744,8 @@ async fn people_change_settings_and_agents_only_read_them() {
     // Agents read what people set, and change nothing.
     let read = f
         .call(
-            "settings_get",
-            json!({"projectId": project, "keys": ["run.model"]}),
+            "setting_list",
+            json!({"spaceId": project, "keys": ["run.model"]}),
         )
         .await;
     assert_eq!(
@@ -1756,16 +1756,16 @@ async fn people_change_settings_and_agents_only_read_them() {
         &f.app,
         &f.token,
         &f.session,
-        "settings_set",
-        json!({"projectId": project, "key": "run.model", "value": "agent-model"}),
+        "setting_update",
+        json!({"spaceId": project, "key": "run.model", "value": "agent-model"}),
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
 
     // An explicit null chooses "not chosen" over the workspace's value.
     let cleared = person(
-        "settings_set",
-        json!({"projectId": project, "key": "run.model", "value": null}),
+        "setting_update",
+        json!({"spaceId": project, "key": "run.model", "value": null}),
     )
     .await;
     assert_eq!(cleared["outcome"], "ok", "{cleared}");
@@ -1781,15 +1781,15 @@ async fn people_change_settings_and_agents_only_read_them() {
 
     // Resetting the project's value falls back to the workspace's.
     let reset = person(
-        "settings_set",
-        json!({"projectId": project, "key": "run.model", "reset": true}),
+        "setting_update",
+        json!({"spaceId": project, "key": "run.model", "reset": true}),
     )
     .await;
     assert_eq!(reset["value"]["done"], "reset", "{reset}");
     assert_eq!(reset["value"]["setting"]["value"], "wide-model", "{reset}");
     let again = person(
-        "settings_set",
-        json!({"projectId": project, "key": "run.model", "reset": true}),
+        "setting_update",
+        json!({"spaceId": project, "key": "run.model", "reset": true}),
     )
     .await;
     assert_eq!(again["value"]["done"], "unchanged", "{again}");
@@ -1906,7 +1906,7 @@ async fn people_set_up_environments_and_agents_only_read_them() {
     };
 
     let first = person(
-        "environment_write",
+        "environment_create",
         json!({"projectId": project, "name": "Cloud", "harness": "codex_cloud", "providerEnvironmentId": "env-one"}),
     )
     .await;
@@ -1914,7 +1914,7 @@ async fn people_set_up_environments_and_agents_only_read_them() {
     assert_eq!(first["value"]["done"], "added", "{first}");
     assert_eq!(first["value"]["environment"]["isDefault"], true, "{first}");
     let missing = person(
-        "environment_write",
+        "environment_create",
         json!({"projectId": project, "name": "No id", "harness": "codex_cloud"}),
     )
     .await;
@@ -1922,13 +1922,13 @@ async fn people_set_up_environments_and_agents_only_read_them() {
 
     // A change keeps what it doesn't name; a stale version is refused.
     let stale = person(
-        "environment_write",
+        "environment_update",
         json!({"projectId": project, "environment": "Cloud", "branch": "main", "expectedVersion": 9}),
     )
     .await;
     assert_eq!(stale["outcome"], "conflict", "{stale}");
     let changed = person(
-        "environment_write",
+        "environment_update",
         json!({"projectId": project, "environment": "cloud", "branch": "main"}),
     )
     .await;
@@ -1943,7 +1943,7 @@ async fn people_set_up_environments_and_agents_only_read_them() {
     );
 
     let second = person(
-        "environment_write",
+        "environment_create",
         json!({"projectId": project, "name": "Other", "harness": "codex_cloud", "providerEnvironmentId": "env-two", "makeDefault": true}),
     )
     .await;
@@ -1952,7 +1952,7 @@ async fn people_set_up_environments_and_agents_only_read_them() {
         "{second}"
     );
     let back = person(
-        "environment_write",
+        "environment_update",
         json!({"projectId": project, "environment": "Cloud", "makeDefault": true}),
     )
     .await;
@@ -1961,8 +1961,8 @@ async fn people_set_up_environments_and_agents_only_read_them() {
 
     // Checking runs as the person; with no account signed in it says so.
     let checked = person(
-        "environment_write",
-        json!({"projectId": project, "environment": "Cloud", "check": true}),
+        "environment_check",
+        json!({"projectId": project, "environment": "Cloud"}),
     )
     .await;
     assert_eq!(checked["value"]["done"], "checked", "{checked}");
@@ -1981,15 +1981,15 @@ async fn people_set_up_environments_and_agents_only_read_them() {
         &f.app,
         &f.token,
         &f.session,
-        "environment_write",
-        json!({"projectId": project, "environment": "Other", "archive": true}),
+        "environment_archive",
+        json!({"projectId": project, "environment": "Other"}),
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
 
     let archived = person(
-        "environment_write",
-        json!({"projectId": project, "environment": "Other", "archive": true}),
+        "environment_archive",
+        json!({"projectId": project, "environment": "Other"}),
     )
     .await;
     assert_eq!(archived["value"]["done"], "archived", "{archived}");
@@ -2048,7 +2048,7 @@ async fn people_make_agents_and_agents_only_read_them() {
     };
 
     let made = person(
-        "agent_profile_write",
+        "agent_profile_set",
         json!({"projectId": project, "template": "reviewer"}),
     )
     .await;
@@ -2057,13 +2057,13 @@ async fn people_make_agents_and_agents_only_read_them() {
     assert_eq!(made["value"]["profile"]["handle"], "reviewer", "{made}");
 
     let stale = person(
-        "agent_profile_write",
+        "agent_profile_set",
         json!({"projectId": project, "profile": "@reviewer", "description": "Strict", "expectedVersion": 9}),
     )
     .await;
     assert_eq!(stale["outcome"], "conflict", "{stale}");
     let changed = person(
-        "agent_profile_write",
+        "agent_profile_set",
         json!({"projectId": project, "profile": "@reviewer", "description": "Strict", "enabled": false}),
     )
     .await;
@@ -2086,20 +2086,13 @@ async fn people_make_agents_and_agents_only_read_them() {
         json!({"projectId": project, "template": "planner"}),
         json!({"projectId": project, "profile": "@reviewer", "remove": true}),
     ] {
-        let refused = tool(
-            &f.app,
-            &f.token,
-            &f.session,
-            "agent_profile_write",
-            arguments,
-        )
-        .await;
+        let refused = tool(&f.app, &f.token, &f.session, "agent_profile_set", arguments).await;
         assert_eq!(refused["outcome"], "permission_denied", "{refused}");
     }
 
     // One that never did anything is deleted outright.
     let removed = person(
-        "agent_profile_write",
+        "agent_profile_set",
         json!({"projectId": project, "profile": "reviewer", "remove": true}),
     )
     .await;
@@ -2146,28 +2139,28 @@ async fn people_add_and_archive_repositories_and_agents_only_read_them() {
     // From the GitHub installation: GitHub names it, so owner and the rest
     // don't go with it; without GitHub set up here, it's a conflict.
     let mixed = person(
-        "repository_write",
+        "repository_create",
         json!({"projectId": project, "installationId": 7, "githubRepositoryId": 4242, "owner": "octo-org", "trustAcknowledged": true}),
     )
     .await;
     assert_eq!(mixed["outcome"], "invalid_request", "{mixed}");
     let picked = person(
-        "repository_write",
+        "repository_create",
         json!({"projectId": project, "installationId": 7, "githubRepositoryId": 4242, "trustAcknowledged": true}),
     )
     .await;
     assert_eq!(picked["outcome"], "conflict", "{picked}");
 
-    let untrusted = person("repository_write", adding.clone()).await;
+    let untrusted = person("repository_create", adding.clone()).await;
     assert_eq!(untrusted["outcome"], "invalid_request", "{untrusted}");
     let mut add_and_prepare = adding.clone();
     add_and_prepare["trustAcknowledged"] = json!(true);
     add_and_prepare["prepare"] = json!(true);
-    let both = person("repository_write", add_and_prepare).await;
+    let both = person("repository_create", add_and_prepare).await;
     assert_eq!(both["outcome"], "invalid_request", "{both}");
     let mut trusted = adding.clone();
     trusted["trustAcknowledged"] = json!(true);
-    let added = person("repository_write", trusted.clone()).await;
+    let added = person("repository_create", trusted.clone()).await;
     assert_eq!(added["outcome"], "ok", "{added}");
     assert_eq!(added["value"]["done"], "added", "{added}");
     assert_eq!(
@@ -2175,7 +2168,7 @@ async fn people_add_and_archive_repositories_and_agents_only_read_them() {
         "{added}"
     );
     let repository = string(&added, "/value/repository/id");
-    let again = person("repository_write", trusted).await;
+    let again = person("repository_create", trusted).await;
     assert_eq!(again["outcome"], "conflict", "{again}");
 
     // Agents read repositories and change none.
@@ -2183,21 +2176,21 @@ async fn people_add_and_archive_repositories_and_agents_only_read_them() {
         &f.app,
         &f.token,
         &f.session,
-        "repository_write",
-        json!({"projectId": project, "repository": repository, "archive": true}),
+        "repository_archive",
+        json!({"projectId": project, "repository": repository}),
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
 
     let stale = person(
-        "repository_write",
-        json!({"projectId": project, "repository": repository, "archive": true, "expectedVersion": 99}),
+        "repository_archive",
+        json!({"projectId": project, "repository": repository, "expectedVersion": 99}),
     )
     .await;
     assert_eq!(stale["outcome"], "conflict", "{stale}");
     let archived = person(
-        "repository_write",
-        json!({"projectId": project, "repository": repository, "archive": true}),
+        "repository_archive",
+        json!({"projectId": project, "repository": repository}),
     )
     .await;
     assert_eq!(archived["value"]["done"], "archived", "{archived}");
@@ -2207,8 +2200,8 @@ async fn people_add_and_archive_repositories_and_agents_only_read_them() {
     );
     // An archived repository isn't prepared.
     let prepared = person(
-        "repository_write",
-        json!({"projectId": project, "repository": repository, "prepare": true}),
+        "repository_prepare",
+        json!({"projectId": project, "repository": repository}),
     )
     .await;
     assert_eq!(prepared["outcome"], "not_found", "{prepared}");
@@ -2243,7 +2236,7 @@ async fn people_switch_the_github_automation_and_agents_never_do() {
 
     // One switch at a time keeps the other as it was.
     let off = person(
-        "github_integration_write",
+        "github_automation_update",
         json!({"projectId": project, "pullRequestMerge": false}),
     )
     .await;
@@ -2253,7 +2246,7 @@ async fn people_switch_the_github_automation_and_agents_never_do() {
         .as_i64()
         .expect("version");
     let on = person(
-        "github_integration_write",
+        "github_automation_update",
         json!({"projectId": project, "pullRequestOpen": true, "expectedVersion": version}),
     )
     .await;
@@ -2261,7 +2254,7 @@ async fn people_switch_the_github_automation_and_agents_never_do() {
     assert_eq!(on["value"]["automation"]["pullRequestOpenEnabled"], true);
     assert_eq!(on["value"]["automation"]["pullRequestMergeEnabled"], false);
     let stale = person(
-        "github_integration_write",
+        "github_automation_update",
         json!({"projectId": project, "pullRequestOpen": false, "expectedVersion": version}),
     )
     .await;
@@ -2270,13 +2263,13 @@ async fn people_switch_the_github_automation_and_agents_never_do() {
     // A sync and a switch don't go in one call; without GitHub set up on
     // the server, a sync is a conflict, not a failure.
     let both = person(
-        "github_integration_write",
+        "github_installation_link",
         json!({"projectId": project, "installationId": 7, "repositories": [], "pullRequestOpen": true}),
     )
     .await;
     assert_eq!(both["outcome"], "invalid_request", "{both}");
     let unconfigured = person(
-        "github_integration_write",
+        "github_installation_link",
         json!({"projectId": project, "installationId": 7, "repositories": [Uuid::now_v7().to_string()]}),
     )
     .await;
@@ -2287,7 +2280,7 @@ async fn people_switch_the_github_automation_and_agents_never_do() {
         &f.app,
         &f.token,
         &f.session,
-        "github_integration_write",
+        "github_automation_update",
         json!({"projectId": project, "pullRequestOpen": false}),
     )
     .await;
@@ -2346,7 +2339,7 @@ async fn people_change_the_model_lists_and_agents_never_do() {
 
     // A refresh lists the models through the caller's own account.
     let unsigned = person(
-        "model_catalog_write",
+        "model_catalog_set",
         json!({"projectId": project, "harness": "demo", "refresh": true}),
     )
     .await;
@@ -2368,7 +2361,7 @@ async fn people_change_the_model_lists_and_agents_never_do() {
     )
     .await;
     let refreshed = person(
-        "model_catalog_write",
+        "model_catalog_set",
         json!({"projectId": project, "harness": "demo", "refresh": true}),
     )
     .await;
@@ -2376,13 +2369,13 @@ async fn people_change_the_model_lists_and_agents_never_do() {
     assert_eq!(refreshed["value"]["done"], "refreshed", "{refreshed}");
 
     let bad = person(
-        "model_catalog_write",
+        "model_catalog_set",
         json!({"projectId": project, "harness": "demo", "model": "house-model", "overrides": {"contextWindow": 0}}),
     )
     .await;
     assert_eq!(bad["outcome"], "invalid_request", "{bad}");
     let saved = person(
-        "model_catalog_write",
+        "model_catalog_set",
         json!({"projectId": project, "harness": "demo", "model": "house-model", "overrides": {"displayName": "House model", "contextWindow": 32000}}),
     )
     .await;
@@ -2403,25 +2396,18 @@ async fn people_change_the_model_lists_and_agents_never_do() {
         json!({"projectId": project, "harness": "demo", "refresh": true}),
         json!({"projectId": project, "harness": "demo", "model": "house-model", "remove": true}),
     ] {
-        let refused = tool(
-            &f.app,
-            &f.token,
-            &f.session,
-            "model_catalog_write",
-            arguments,
-        )
-        .await;
+        let refused = tool(&f.app, &f.token, &f.session, "model_catalog_set", arguments).await;
         assert_eq!(refused["outcome"], "permission_denied", "{refused}");
     }
 
     let removed = person(
-        "model_catalog_write",
+        "model_catalog_set",
         json!({"projectId": project, "harness": "demo", "model": "house-model", "remove": true}),
     )
     .await;
     assert_eq!(removed["value"]["done"], "removed", "{removed}");
     let gone = person(
-        "model_catalog_write",
+        "model_catalog_set",
         json!({"projectId": project, "harness": "demo", "model": "house-model", "remove": true}),
     )
     .await;
@@ -2459,7 +2445,7 @@ async fn bug_report_links_follow_the_role_for_any_account() {
     };
 
     let made = person(
-        "bug_report_link_write",
+        "bug_report_link_create",
         json!({"projectId": project, "name": "Game"}),
     )
     .await;
@@ -2469,20 +2455,20 @@ async fn bug_report_links_follow_the_role_for_any_account() {
     let link = string(&made, "/value/link/id");
 
     let paused = person(
-        "bug_report_link_write",
+        "bug_report_link_update",
         json!({"projectId": project, "linkId": link, "name": "Game beta", "state": "paused"}),
     )
     .await;
     assert_eq!(paused["value"]["state"], "paused", "{paused}");
     assert_eq!(paused["value"]["name"], "Game beta", "{paused}");
     let replaced = person(
-        "bug_report_link_write",
+        "bug_report_link_update",
         json!({"projectId": project, "linkId": link, "replace": true}),
     )
     .await;
     assert_ne!(string(&replaced, "/value/url"), first_url, "{replaced}");
     let both = person(
-        "bug_report_link_write",
+        "bug_report_link_update",
         json!({"projectId": project, "linkId": link, "replace": true, "delete": true}),
     )
     .await;
@@ -2500,7 +2486,7 @@ async fn bug_report_links_follow_the_role_for_any_account() {
         &f.app,
         &f.token,
         &f.session,
-        "bug_report_link_write",
+        "bug_report_link_create",
         json!({"projectId": project, "name": "Agent link"}),
     )
     .await;
@@ -2509,14 +2495,14 @@ async fn bug_report_links_follow_the_role_for_any_account() {
         &f.app,
         &f.token,
         &f.session,
-        "bug_report_link_write",
+        "bug_report_link_update",
         json!({"projectId": project, "linkId": link, "delete": true}),
     )
     .await;
     assert_eq!(refused["outcome"], "not_found", "{refused}");
 
     let deleted = person(
-        "bug_report_link_write",
+        "bug_report_link_update",
         json!({"projectId": project, "linkId": link, "delete": true}),
     )
     .await;
@@ -2616,9 +2602,9 @@ async fn an_agent_checks_the_ai_provider_settings() {
     };
     let project = f.seed.project_id.to_string();
     f.web(
-        "PUT",
-        "/api/v1/settings/values/ai.provider",
-        json!({"scope": "project", "projectId": project, "value": "fake"}),
+        "POST",
+        "/api/v2/ops/setting_update",
+        json!({"key": "ai.provider", "scope": "project", "spaceId": project, "value": "fake"}),
     )
     .await;
     let checked = f
@@ -2643,7 +2629,6 @@ async fn people_cap_their_apps_and_agents_never_do() {
     let Some(f) = fixture().await else {
         return;
     };
-    let project = f.seed.project_id.to_string();
     let me = f.seed.human_actor_id.to_string();
     let app = connect_app(&f.app, &f.browser, "Owner's app", "full").await;
     let session = initialize(&f.app, &app).await.expect("owner MCP");
@@ -2654,22 +2639,18 @@ async fn people_cap_their_apps_and_agents_never_do() {
         async move { tool(&router, &app, &session, name, arguments).await }
     };
 
-    let neither = person("role_assign", json!({"projectId": project, "person": me})).await;
+    let neither = person("app_limit_set", json!({})).await;
     assert_eq!(neither["outcome"], "invalid_request", "{neither}");
 
-    let capped = person(
-        "role_assign",
-        json!({"projectId": project, "person": me, "agentLimit": ["tasks.view"]}),
-    )
-    .await;
+    let capped = person("app_limit_set", json!({"permissions": ["tasks.view"]})).await;
     assert_eq!(capped["outcome"], "ok", "{capped}");
     assert!(
-        capped["value"]["agentLimit"]
+        capped["value"]["permissions"]
             .as_array()
             .is_some_and(|keys| keys.iter().any(|key| key == "tasks.view")),
         "{capped}"
     );
-    assert!(capped["value"]["workspaceRole"].is_string(), "{capped}");
+    assert_eq!(capped["value"]["accountId"], me.as_str(), "{capped}");
     let stored = sqlx::query_scalar::<_, Option<Vec<String>>>(
         "SELECT agent_limit FROM organization_memberships WHERE organization_id = $1 AND actor_id = $2",
     )
@@ -2685,26 +2666,19 @@ async fn people_cap_their_apps_and_agents_never_do() {
         &f.app,
         &f.token,
         &f.session,
-        "role_assign",
-        json!({"projectId": project, "person": me, "agentLimit": null}),
+        "app_limit_set",
+        json!({"account": me, "lift": true}),
     )
     .await;
     assert_eq!(refused["outcome"], "permission_denied", "{refused}");
 
     // The cap holds for the capped app too: lifting it takes the web.
-    let capped_out = person(
-        "role_assign",
-        json!({"projectId": project, "person": me, "agentLimit": null}),
-    )
-    .await;
+    let capped_out = person("app_limit_set", json!({"lift": true})).await;
     assert_eq!(capped_out["outcome"], "permission_denied", "{capped_out}");
     f.web(
-        "PUT",
-        &format!(
-            "/api/v1/organizations/{}/members/{me}/agent-limit",
-            f.seed.organization_id
-        ),
-        json!({"permissions": null}),
+        "POST",
+        &format!("/api/v2/w/{}/ops/app_limit_set", f.seed.organization_id),
+        json!({"account": me, "lift": true}),
     )
     .await;
     f.close().await;

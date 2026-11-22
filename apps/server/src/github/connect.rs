@@ -410,7 +410,13 @@ async fn start_connect(
 fn settings_redirect(project_id: Option<Uuid>, outcome: Result<(), &'static str>) -> String {
     let base = project_id.map_or_else(
         || "/settings".to_owned(),
-        |project_id| format!("/settings/projects/{project_id}/repositories"),
+        |project_id| {
+            crate::addresses::Target::SpaceSettings {
+                space: project_id,
+                section: "repositories",
+            }
+            .href()
+        },
     );
     match outcome {
         Ok(()) => format!("{base}?github=connected"),
@@ -1067,7 +1073,7 @@ mod tests {
         let project_id = Uuid::nil();
         assert_eq!(
             settings_redirect(Some(project_id), Ok(())),
-            format!("/settings/projects/{project_id}/repositories?github=connected")
+            format!("/w/-/settings/spaces/{project_id}/repositories?github=connected")
         );
         assert_eq!(
             settings_redirect(None, Err("expired")),

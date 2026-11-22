@@ -1,5 +1,5 @@
 import { apiUrl, requestJson } from '../api/client'
-import { callOp, type OpInput, type OpOutput } from '../api/ops'
+import { callOp, ranOrThrow, type OpInput, type OpOutput } from '../api/ops'
 import { projectLocationHref } from '../projects/locations'
 import { queryKeys } from '../api/queryKeys'
 import type { ProjectStatus } from '../work-items/projectStatusModel'
@@ -385,19 +385,26 @@ export function listProjectTemplates(organizationId: string, includeArchived = f
   )
 }
 
-export function saveAsProjectTemplate(projectId: string, input: { name: string; description: string }, idempotencyKey: string) {
-  return requestJson<ProjectTemplate>(projectPath(projectId, 'save-as-template'), { method: 'POST', idempotencyKey, json: input })
+export async function saveAsProjectTemplate(projectId: string, input: { name: string; description: string }, idempotencyKey: string) {
+  const { template } = await callOp('project_template_create', { projectId, ...input }, { requestId: idempotencyKey })
+  return template
 }
 
-export function updateProjectTemplate(
-  template: Pick<ProjectTemplate, 'id' | 'organizationId' | 'version'>,
+/** Renames, describes, archives or restores a project template, in its workspace's own space. */
+export async function updateProjectTemplate(
+  template: ProjectTemplate,
   changes: { name?: string; description?: string; archived?: boolean },
   idempotencyKey: string,
-) {
-  return requestJson<ProjectTemplate>(
-    `/api/v1/organizations/${encodeURIComponent(template.organizationId)}/project-templates/${encodeURIComponent(template.id)}`,
-    { method: 'PATCH', idempotencyKey, json: { expectedVersion: template.version, ...changes } },
+): Promise<ProjectTemplate> {
+  const { template: line } = ranOrThrow(
+    await callOp(
+      'project_template_update',
+      { projectId: 'workspace', template: template.id, expectedVersion: template.version, ...changes },
+      { workspaceId: template.organizationId, requestId: idempotencyKey },
+    ),
+    'Changing the template',
   )
+  return { ...template, name: line.name, description: line.description, archived: line.archived, canEdit: line.canEdit, version: line.version }
 }
 
 // Imports and export
@@ -484,8 +491,28 @@ export function getImport(projectId: string, importId: string) {
   return requestJson<TaskImport>(projectPath(projectId, `imports/${encodeURIComponent(importId)}`))
 }
 
+/** task_import's answer: the import as the page reads it. */
+async function importOp(projectId: string, input: OpInput<'task_import'>, requestId: string, what: string) {
+  const value = ranOrThrow(await callOp('task_import', { ...input, projectId }, { requestId }), what)
+  return value.import as unknown as TaskImport
+}
+
 export function createImport(projectId: string, draft: ImportDraft, idempotencyKey: string) {
-  return requestJson<TaskImport>(projectPath(projectId, 'imports'), { method: 'POST', idempotencyKey, json: draft })
+  const { options, ...rest } = draft
+  return importOp(
+    projectId,
+    {
+      projectId,
+      ...rest,
+      headingsAsMilestones: options?.headingsAsMilestones,
+      createLabels: options?.createLabels,
+      createMilestones: options?.createMilestones,
+      githubState: options?.githubState,
+      excludedRows: options?.excludedRows,
+    },
+    idempotencyKey,
+    'Starting the import',
+  )
 }
 
 export function updateImport(
@@ -494,19 +521,32 @@ export function updateImport(
   changes: { mapping?: Record<string, string>; options?: ImportOptions; cancel?: boolean },
   idempotencyKey: string,
 ) {
-  return requestJson<TaskImport>(projectPath(projectId, `imports/${encodeURIComponent(taskImport.id)}`), {
-    method: 'PATCH',
+  const { options } = changes
+  return importOp(
+    projectId,
+    {
+      projectId,
+      importId: taskImport.id,
+      expectedVersion: taskImport.version,
+      mapping: changes.mapping,
+      cancel: changes.cancel || undefined,
+      headingsAsMilestones: options?.headingsAsMilestones,
+      createLabels: options?.createLabels,
+      createMilestones: options?.createMilestones,
+      excludedRows: options ? (options.excludedRows ?? []) : undefined,
+    },
     idempotencyKey,
-    json: { expectedVersion: taskImport.version, ...changes },
-  })
+    'Changing the import',
+  )
 }
 
 export function commitImport(projectId: string, taskImport: Pick<TaskImport, 'id' | 'version'>, idempotencyKey: string) {
-  return requestJson<TaskImport>(projectPath(projectId, `imports/${encodeURIComponent(taskImport.id)}/commit`), {
-    method: 'POST',
+  return importOp(
+    projectId,
+    { projectId, importId: taskImport.id, expectedVersion: taskImport.version, commit: true },
     idempotencyKey,
-    json: { expectedVersion: taskImport.version },
-  })
+    'Starting the import',
+  )
 }
 
 export function exportHref(projectId: string, format: 'json' | 'csv', includeArchived = false) {

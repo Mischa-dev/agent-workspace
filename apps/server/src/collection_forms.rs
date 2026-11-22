@@ -7,7 +7,7 @@
 //! The page reads the form here (`GET /api/v1/forms/{token}`: the
 //! collection's name and the asked fields, never a record, a person or a
 //! task), then posts to the link's report URL like any bug report. Each
-//! answer becomes a record through `record_write`, as the person who made
+//! answer becomes a record through `record_create_many`, as the person who made
 //! the link, so it gets the same checks; only the asked fields are taken.
 //!
 //! People and links to tasks or pages are never asked on a public form:
@@ -558,7 +558,7 @@ fn text_of(value: &Value) -> Option<String> {
     }
 }
 
-/// One answer as `record_write` takes it for the field, or a message.
+/// One answer as `record_create_many` takes it for the field, or a message.
 fn value_for(field: &FieldDefinition, value: &Value) -> Result<Value, String> {
     let wrong = |what: &str| format!("\"{}\" takes {what}.", field.name);
     Ok(match field.field_type {
@@ -616,7 +616,7 @@ fn value_for(field: &FieldDefinition, value: &Value) -> Result<Value, String> {
             )
         }
         // On an internal form: a member's ID or handle, or several, or
-        // records by ID or title; `record_write` checks each.
+        // records by ID or title; `record_create_many` checks each.
         FieldType::Person => Value::String(text_of(value).ok_or_else(|| wrong("a person"))?),
         FieldType::People | FieldType::Relation => {
             let values = match value {
@@ -649,7 +649,7 @@ fn value_for(field: &FieldDefinition, value: &Value) -> Result<Value, String> {
 }
 
 /// A record from an answer: its title and the asked fields' values by
-/// field ID, for `record_write`. Answers are found by field ID or name
+/// field ID, for `record_create_many`. Answers are found by field ID or name
 /// (and the title as "title" or the title column's name); anything the
 /// form doesn't ask for is left out. The message says what's missing.
 pub fn record_from_answer(

@@ -1,9 +1,8 @@
 //! Decisions as operations (K2.5): the worked example every later module
 //! copies (`.claude/skills/add-operation/SKILL.md` walks through it).
 //! `decision_record` writes in the dispatcher's transaction; `decision_list`
-//! reads. The web routes (`POST` and `GET /api/v1/projects/{id}/decisions`),
-//! the MCP tools of the same names, the v2 route and automation rules all
-//! run these.
+//! reads. The web app (through the v2 route), the MCP tools of the same
+//! names and automation rules all run these.
 
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
@@ -250,7 +249,7 @@ impl Operation for PageTemplateList {
     const IDEMPOTENCY: Idempotency = Idempotency::None;
     const TITLE: &'static str = "List page templates";
     const DESCRIPTION: &'static str = "List what a new page in a space can start from: the \
-        built-in templates and pages marked as templates. Pass a template's id to page_write \
+        built-in templates and pages marked as templates. Pass a template's id to page_create \
         as fromTemplateId.";
 
     type Input = PageTemplateListInput;

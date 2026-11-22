@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
 import { describeError, toastError } from '../../app/mutations'
+import { isApiError } from '../../api/errors'
 import { queryKeys } from '../../api/queryKeys'
 import { ListPiece } from '../../pieces/ListPiece'
 import { listRepositories } from '../../repositories/api'
@@ -354,7 +355,7 @@ function ImportReview({ importId, onDone, projectId }: { importId: string; onDon
     },
     onError: (error, changes) => {
       if (changes.cancel) return
-      if (toastError('The import wasn’t changed', error)) void taskImport.refetch()
+      if (toastError('The import wasn’t changed', error) || changedMeanwhile(error)) void taskImport.refetch()
     },
   })
   const commit = useMutation({
@@ -367,7 +368,7 @@ function ImportReview({ importId, onDone, projectId }: { importId: string; onDon
       showToast({ title: `Importing ${countLabel(next.preview?.willCreate ?? next.rowCount, 'task')}` })
     },
     onError: (error) => {
-      if (toastError('The import didn’t start', error)) void taskImport.refetch()
+      if (toastError('The import didn’t start', error) || changedMeanwhile(error)) void taskImport.refetch()
     },
   })
 
@@ -543,4 +544,9 @@ function ImportReview({ importId, onDone, projectId }: { importId: string; onDon
       ) : null}
     </Section>
   )
+}
+
+/** A refusal because the import moved on (changed, started or stopped elsewhere): read it again. */
+function changedMeanwhile(error: unknown) {
+  return isApiError(error) && error.status === 409
 }
