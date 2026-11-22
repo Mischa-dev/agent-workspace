@@ -1,5 +1,5 @@
 import { requestJson } from '../api/client'
-import { callOp } from '../api/ops'
+import { callOp, ranOrThrow } from '../api/ops'
 
 /** Where a value came from: set on this launch, the project, you, the workspace, or the built-in default. */
 export type SettingSource = 'launch' | 'project' | 'user' | 'workspace' | 'default'
@@ -193,12 +193,9 @@ export function listLaunches(projectId: string) {
   return requestJson<LaunchList>(projectPath(projectId, 'launches'))
 }
 
-export function cancelLaunch(projectId: string, launchId: string) {
-  return requestJson<Launch>(projectPath(projectId, `launches/${encodeURIComponent(launchId)}/cancel`), {
-    method: 'POST',
-    json: {},
-    idempotencyKey: crypto.randomUUID(),
-  })
+/** Cancels a queued launch; the queue reads it again. */
+export async function cancelLaunch(launchId: string) {
+  return ranOrThrow(await callOp('launch_cancel', { launchId }), 'Cancelling it')
 }
 
 export function listEnvironments(projectId: string) {

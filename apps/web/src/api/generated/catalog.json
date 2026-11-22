@@ -2816,7 +2816,7 @@
     "long": false,
     "module": "runs",
     "name": "launch_cancel",
-    "permission": "runs.launch",
+    "permission": null,
     "preview": false,
     "proposable": false,
     "title": "Cancel launch"

@@ -25,7 +25,7 @@
   "inbox/api.ts": 3,
   "invitations/api.ts": 3,
   "later/api.ts": 4,
-  "launch/api.ts": 6,
+  "launch/api.ts": 5,
   "memory/api.ts": 11,
   "memory/discussion/api.ts": 5,
   "memory/embeds/EmbedPicker.tsx": 1,

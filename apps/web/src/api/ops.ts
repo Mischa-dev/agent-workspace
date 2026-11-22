@@ -82,6 +82,16 @@ export function heldForReview(value: unknown): string | null {
   return held.status === 'pending_review' && typeof held.requestId === 'string' ? held.requestId : null
 }
 
+/**
+ * An operation's answer once its command has run: a write a review guard
+ * held instead throws, so nothing reports it done. `what` names the write,
+ * as a sentence's subject ("Cancelling it").
+ */
+export function ranOrThrow<T>(value: T, what: string): T {
+  if (heldForReview(value)) throw new Error(`${what} waits for a reviewer to allow it. Once they have, try again.`)
+  return value
+}
+
 /** The query key of an operation's answer: workspace, name, input. */
 export function opKey<N extends OpName>(name: N, input: OpInput<N>, workspaceId?: string): QueryKey {
   return ['op', workspaceId ?? null, name, input]

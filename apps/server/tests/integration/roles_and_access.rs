@@ -3542,15 +3542,17 @@ async fn cancelling_a_launch_without_see_tasks_reveals_no_task() {
         app,
         bea_browser.request(
             "POST",
-            &format!("/api/v1/projects/{work}/launches/{}/cancel", launches[0]),
+            "/api/v2/ops/launch_cancel",
             Some("bea-cancel-blind"),
-            json!({}),
+            json!({"launchId": launches[0]}),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{cancelled}");
+    let cancelled = cancelled["value"].clone();
     assert_eq!(cancelled["state"], "cancelled", "{cancelled}");
-    assert!(cancelled["workItem"].is_null(), "{cancelled}");
+    assert!(cancelled["task"].is_null(), "{cancelled}");
+    assert!(cancelled["taskTitle"].is_null(), "{cancelled}");
     assert!(
         !cancelled.to_string().contains("Secret launch plan"),
         "{cancelled}"
@@ -3577,15 +3579,15 @@ async fn cancelling_a_launch_without_see_tasks_reveals_no_task() {
         app,
         bea_browser.request(
             "POST",
-            &format!("/api/v1/projects/{work}/launches/{}/cancel", launches[1]),
+            "/api/v2/ops/launch_cancel",
             Some("bea-cancel-seeing"),
-            json!({}),
+            json!({"launchId": launches[1]}),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{cancelled}");
     assert_eq!(
-        cancelled["workItem"]["title"], "Secret launch plan",
+        cancelled["value"]["taskTitle"], "Secret launch plan",
         "{cancelled}"
     );
 }
