@@ -201,19 +201,15 @@ async fn an_agent_asks_a_person_and_hears_their_answer() {
     agent_workspace_server::events::catch_up(&setup.pool)
         .await
         .expect("sequence events");
-    let events = scout_call(
-        "external_event_poll",
-        json!({"limit": 50, "waitSeconds": 0}),
-    )
-    .await;
-    let event = events["events"]
+    let events = scout_call("event_list", json!({"limit": 50, "waitSeconds": 0})).await;
+    let event = events["value"]["events"]
         .as_array()
         .unwrap_or_else(|| panic!("events: {events}"))
         .iter()
-        .find(|event| event["kind"] == "request.answered")
+        .find(|event| event["type"] == "request.answered")
         .unwrap_or_else(|| panic!("no answered event: {events}"))
         .clone();
-    assert_eq!(event["resourceId"], request.as_str());
+    assert_eq!(event["data"]["thing"]["id"], request.as_str());
     assert!(!event.to_string().contains("After lunch"), "{event}");
     let read = scout_call("request_get", json!({"requestId": request})).await;
     assert_eq!(read["outcome"], "ok", "{read}");
@@ -226,11 +222,7 @@ async fn an_agent_asks_a_person_and_hears_their_answer() {
     let others = other_call("request_list", json!({})).await;
     assert_eq!(others["outcome"], "ok", "{others}");
     assert!(!others.to_string().contains(&request), "{others}");
-    let other_events = other_call(
-        "external_event_poll",
-        json!({"limit": 50, "waitSeconds": 0}),
-    )
-    .await;
+    let other_events = other_call("event_list", json!({"limit": 50, "waitSeconds": 0})).await;
     assert!(
         !other_events.to_string().contains("request.answered"),
         "{other_events}"

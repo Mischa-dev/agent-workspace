@@ -635,32 +635,6 @@ impl McpServer {
             .await,
         )
     }
-
-    #[tool(
-        description = "Older agent event inbox, kept for existing connectors. New agents should use briefing_get and inbox_list.",
-        annotations(
-            title = "Poll events",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn external_event_poll(
-        &self,
-        Parameters(Scoped {
-            args: arguments, ..
-        }): Parameters<Scoped<collaboration::ExternalEventPollArguments>>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Json<collaboration::ExternalEventPollResult> {
-        let principal = principal_or!(
-            parts,
-            collaboration::ExternalEventPollResult::PermissionDenied {
-                retry_category: "reauthenticate".to_owned(),
-            }
-        );
-        Json(collaboration::poll_external_events(&self.state, principal, arguments).await)
-    }
 }
 
 #[prompt_router]

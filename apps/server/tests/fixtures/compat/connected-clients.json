@@ -29,7 +29,7 @@
       "tools": {
         "conversation_list": [],
         "conversation_read": ["conversationId"],
-        "external_event_poll": [],
+        "event_list": [],
         "message_send": ["conversationId", "text"],
         "people_search": [],
         "project_get": [],

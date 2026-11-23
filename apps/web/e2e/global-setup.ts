@@ -206,12 +206,12 @@ async function seed(password: string, databaseUrl: string) {
         'create the Project',
       )
     ).value ?? {}
-    const channel = await write(`/api/v1/projects/${project.id}/channels`, { name: seeded.channelName }, 'create a channel')
-    const channelId = channel.conversation?.id ?? channel.channel?.id ?? channel.id
+    const channel = await write('/api/v2/ops/channel_create', { projectId: project.id, name: seeded.channelName }, 'create a channel')
+    const channelId = channel.value?.id
     if (!project.id || !channelId) throw new Error('Project or channel creation returned no id')
     await write(
-      `/api/v1/channels/${channelId}/messages`,
-      { content: { version: 1, nodes: [{ type: 'text', text: 'Hello from the smoke tests.' }] } },
+      '/api/v2/ops/message_send',
+      { conversationId: channelId, content: { version: 1, nodes: [{ type: 'text', text: 'Hello from the smoke tests.' }] } },
       'post a message',
     )
     // So the list and board screenshots show a card, whichever spec runs first.

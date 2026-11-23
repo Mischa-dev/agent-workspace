@@ -18,9 +18,12 @@ export function UsageBatch({
   accountId,
   initiallyOpen,
   windowKey,
+  workspaceId,
 }: {
   accountId: string
   initiallyOpen: boolean
+  /** The account's workspace, which its batch launches in. */
+  workspaceId: string
   windowKey: string | null
 }) {
   const [open, setOpen] = useState(initiallyOpen)
@@ -50,6 +53,7 @@ export function UsageBatch({
       ) : (
         <BatchEditor
           accountId={accountId}
+          workspaceId={workspaceId}
           key={batch.dataUpdatedAt}
           more={batch.data.more}
           skipped={batch.data.skipped}
@@ -69,6 +73,7 @@ function BatchEditor({
   summary,
   tasks,
   windowKey,
+  workspaceId,
 }: {
   accountId: string
   more: BatchTask[]
@@ -76,6 +81,7 @@ function BatchEditor({
   summary: string
   tasks: BatchTask[]
   windowKey: string | null
+  workspaceId: string
 }) {
   const queryClient = useQueryClient()
   const [picked, setPicked] = useState(() => new Set(tasks.map((task) => task.id)))
@@ -86,7 +92,7 @@ function BatchEditor({
   const launch = useMutation({
     mutationFn: () =>
       launchBatch(
-        accountId,
+        { accountId, workspaceId },
         { tasks: chosen.map((task) => ({ projectId: task.projectId, workItemId: task.id })), windowKey },
         attempt,
       ),

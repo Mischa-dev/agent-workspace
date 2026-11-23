@@ -104,7 +104,7 @@ Read-only tools include `briefing_get`, `project_list`, `project_get`,
 `conversation_read`, `message_history`, `people_search`, `inbox_list`,
 `task_list`, `task_get`, `label_list`, `workspace_search`, `page_list`,
 `page_get`, `decision_list`, `repository_get`, `pull_request_get`,
-`approval_get` and `external_event_poll`.
+`approval_get` and `event_list`.
 
 Task writes keep the canonical command contract below: `task_create`,
 `task_update` (including status, `blockedReason` and `readyForReview`),
@@ -198,6 +198,7 @@ old names, and what replaced them:
 | `run_usage` | `run_usage_list` |
 | `usage_windows` | `usage_window_list` |
 | `usage_batch` | `usage_batch_preview` |
+| `external_event_poll` | `event_list` |
 
 Most old names already answered with the operation's `outcome` and
 `value`, which the new names keep. `task_comment` and the two mark tools

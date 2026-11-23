@@ -496,42 +496,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         CredentialManage
     ),
     policy_route!(
-        "conversations",
-        Post,
-        "/api/v1/projects/{id}/channels",
-        ChannelCreate
-    ),
-    policy_route!(
-        "conversations",
-        Post,
-        "/api/v1/channels/{id}/messages",
-        MessageSend
-    ),
-    policy_route!(
-        "conversations",
-        Post,
-        "/api/v1/threads/{id}/messages",
-        MessageSend
-    ),
-    policy_route!(
-        "conversations",
-        Post,
-        "/api/v1/channels/{id}/threads",
-        ThreadCreate
-    ),
-    policy_route!(
-        "conversations",
-        Post,
-        "/api/v1/conversations/{id}/messages",
-        MessageSend
-    ),
-    policy_route!(
-        "conversations",
-        Post,
-        "/api/v1/conversations/{id}/threads",
-        ThreadCreate
-    ),
-    policy_route!(
         "memory",
         Post,
         "/api/v1/projects/{id}/pages/import",
@@ -594,32 +558,8 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     policy_route!("direct", Post, "/api/v1/direct/dms", ChannelCreate),
     policy_route!("direct", Post, "/api/v1/direct/groups", ChannelCreate),
-    policy_route!(
-        "direct",
-        Post,
-        "/api/v1/conversations/{id}/members",
-        ChannelCreate
-    ),
-    policy_route!(
-        "direct",
-        Post,
-        "/api/v1/conversations/{id}/members/{actor_id}/remove",
-        ChannelCreate
-    ),
     // Editing and removing your own message needs MessageSend. Removing
     // someone else's also needs MessageModerate, checked in the handler.
-    policy_route!(
-        "message_edits",
-        Patch,
-        "/api/v1/conversations/{id}/messages/{message_id}",
-        MessageSend
-    ),
-    policy_route!(
-        "message_edits",
-        Delete,
-        "/api/v1/conversations/{id}/messages/{message_id}",
-        MessageSend
-    ),
     // Uploading a file for a message needs MessageSend in the conversation;
     // a task's files need WorkItemEdit on the task. Removing an unsent
     // upload is its uploader's; a task's own file, its uploader's or a task
@@ -727,12 +667,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         SessionAuthentication
     ),
     // A batch is a set of launches, each authorized in its own project.
-    policy_route!(
-        "usage",
-        Post,
-        "/api/v1/usage/accounts/{account_id}/batch",
-        WorkerInvoke
-    ),
     // The first-run path's progress is the caller's own.
     boundary_route!(
         "onboarding",
@@ -745,12 +679,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/projects/{project_id}/integrations/github/connect",
         GithubIntegrationManage
-    ),
-    policy_route!(
-        "github/connect",
-        Post,
-        "/api/v1/projects/{project_id}/integrations/github/repositories",
-        RepositoryManage
     ),
     boundary_route!(
         "github",

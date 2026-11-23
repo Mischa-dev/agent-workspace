@@ -11,6 +11,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::support::legacy::router;
 use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin},
@@ -24,7 +25,6 @@ use agent_workspace_server::{
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
-    router,
     secrets::{self, FileKeyring},
     seed::dev_seed,
 };

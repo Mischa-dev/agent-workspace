@@ -306,7 +306,7 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   const featuredTitleRef = `"${featuredTask.title.split(':')[0]}"`
 
   /** Posts the lines in order; returns each message's id. */
-  const post = async (conversationId: string, lines: Line[], url: (who: Session) => string) => {
+  const post = async (conversationId: string, lines: Line[]) => {
     const ids: string[] = []
     for (const [who, text] of lines) {
       const client = author(who)
@@ -316,8 +316,8 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
         }
         ids.push(String(sent.value?.messageId ?? sent.value?.message?.id ?? ''))
       } else {
-        const sent = (await client.write('POST', url(client), { content: nodes(text) })) as { message?: { id?: string } }
-        ids.push(String(sent.message?.id ?? ''))
+        const sent = (await client.op('message_send', { conversationId, content: nodes(text) })) as { messageId?: string }
+        ids.push(String(sent.messageId ?? ''))
       }
     }
     return ids
@@ -326,10 +326,9 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   // Channels.
   const channelIds = new Map<string, string>()
   for (const name of ['general', ...channels]) {
-    const created = (await me.write('POST', `/api/v1/projects/${projectId}/channels`, { name })) as { conversation?: { id?: string } }
-    channelIds.set(name, String(created.conversation?.id))
+    const created = (await me.op('channel_create', { projectId, name })) as { id?: string }
+    channelIds.set(name, String(created.id))
   }
-  const channelUrl = (id: string) => () => `/api/v1/channels/${id}/messages`
   const releases = channelIds.get('releases')!
   // A few mentions of the signed-in person and a task link, for the inbox.
   const releasesLines: Line[] = releasesChannel.map(([who, text], index) =>
@@ -337,15 +336,15 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
     index === 5 ? [who, `${text} See {task}.`] :
     index === 12 ? [who, `${text} @me can you confirm the priority?`] : [who, text],
   )
-  const releaseIds = await post(releases, releasesLines, channelUrl(releases))
-  await post(channelIds.get('design-crit')!, designCritChannel, channelUrl(channelIds.get('design-crit')!))
-  await post(channelIds.get('incidents')!, incidentsChannel, channelUrl(channelIds.get('incidents')!))
+  const releaseIds = await post(releases, releasesLines)
+  await post(channelIds.get('design-crit')!, designCritChannel)
+  await post(channelIds.get('incidents')!, incidentsChannel)
   await post(channelIds.get('general')!, [
     [0, 'Welcome to the Atlas platform project, Kenji and Léa! 👋'],
     [5, 'Thanks! Glad to be here.'],
     [6, 'Hi all. Where do I find the on-call runbook?'],
     [2, 'Pages → "On-call runbook: telemetry ingest". @lea ping me if anything is unclear.'],
-  ], channelUrl(channelIds.get('general')!))
+  ])
 
   // Reactions from several people on the busiest messages.
   const reactions: Array<[number, string, number[]]> = [
@@ -365,12 +364,13 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
 
   // A thread off the exports timeout message.
   const rootAuthor = author(releasesChannel[releasesThread.root][0]) as Session
-  const thread = (await rootAuthor.write('POST', `/api/v1/channels/${releases}/threads`, {
+  const thread = (await rootAuthor.op('thread_start', {
+    conversationId: releases,
     name: 'Exports timeout: missing index on the October partition',
-    originMessageId: releaseIds[releasesThread.root],
-  })) as { conversation?: { id?: string } }
-  const threadId = String(thread.conversation?.id)
-  await post(threadId, releasesThread.replies, () => `/api/v1/threads/${threadId}/messages`)
+    fromMessageId: releaseIds[releasesThread.root],
+  })) as { id?: string }
+  const threadId = String(thread.id)
+  await post(threadId, releasesThread.replies)
   await me.write('POST', '/api/v2/ops/thread_update', { threadId, status: 'Done', outcome: 'Index added; CI now checks every partition has its parent\'s indexes.' })
     .catch((error: unknown) => warn('thread status not set', error))
 
@@ -378,7 +378,7 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   const dm = (await team[0].write('POST', '/api/v1/direct/dms', { actorId: me.actorId })) as { conversation?: { id?: string } }
   const dmId = String(dm.conversation?.id)
   await me.write('PUT', `/api/v1/conversations/${dmId}/notification-level`, { level: 'all' })
-  await post(dmId, dmLines, () => `/api/v1/conversations/${dmId}/messages`)
+  await post(dmId, dmLines)
   const group = (await team[2].write('POST', '/api/v1/direct/groups', {
     name: 'Ingest perf crew',
     memberIds: [me.actorId, team[5].actorId, team[7].actorId],
@@ -387,18 +387,18 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   await post(groupId, [
     [2, 'p95 is 160 ms on staging now. Want to try the bigger batch size next week?'],
     [7, 'Yes, but after the release. I don\'t want two changes in the soak.'],
-  ], () => `/api/v1/conversations/${groupId}/messages`)
+  ])
   for (const [index, member] of team.entries()) {
     if (index === 0) continue
     const other = (await member.write('POST', '/api/v1/direct/dms', { actorId: me.actorId })) as { conversation?: { id?: string } }
-    if (index % 2 === 0) await member.write('POST', `/api/v1/conversations/${other.conversation?.id}/messages`, { content: nodes(index === 4 ? "I'm out Thursday and Friday, back Monday." : 'Got a minute later today?') })
+    if (index % 2 === 0) await member.op('message_send', { conversationId: String(other.conversation?.id), content: nodes(index === 4 ? "I'm out Thursday and Friday, back Monday." : 'Got a minute later today?') })
   }
 
   // Pages and a decision.
-  const planPage = await team[0].write('POST', `/api/v1/projects/${projectId}/pages`, { title: plan.title, body: plan.body })
+  const planPage = await team[0].op('page_create', { projectId, title: plan.title, body: plan.body })
   for (const [index, page] of otherPages.entries()) {
     const writer = index === 0 ? null : team[[4, 5, 7, 2][index]]
-    if (writer) await writer.write('POST', `/api/v1/projects/${projectId}/pages`, page)
+    if (writer) await writer.op('page_create', { projectId, ...page })
     else await bots.get('Muse')!.call('page_create', { projectId, title: page.title, body: page.body })
   }
   await team[0].write('POST', '/api/v2/ops/decision_record', {
@@ -520,9 +520,9 @@ async function seedRuns(context: SeedContext, me: Session, projectId: string, ch
   for (const [index, plan] of runPlans.entries()) {
     // A personal profile only runs for its owner, so the signed-in person asks for every run.
     const requester = me
-    const thread = (await requester.write('POST', `/api/v1/channels/${channelId}/threads`, { name: plan.name })) as { conversation?: { id?: string } }
-    const threadId = String(thread.conversation?.id)
-    await requester.write('POST', `/api/v1/threads/${threadId}/messages`, { content: { version: 1, nodes: [{ type: 'text', text: plan.prompt }] } })
+    const thread = (await requester.op('thread_start', { conversationId: channelId, name: plan.name })) as { id?: string }
+    const threadId = String(thread.id)
+    await requester.op('message_send', { conversationId: threadId, content: { version: 1, nodes: [{ type: 'text', text: plan.prompt }] } })
     const runId = randomUUID()
     const finished = ['completed', 'failed'].includes(plan.state)
     sql(db, `

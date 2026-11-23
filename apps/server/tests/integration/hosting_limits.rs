@@ -4,7 +4,8 @@
 
 use std::sync::Arc;
 
-use agent_workspace_server::{AppState, rate_limit::RateLimiters, router};
+use crate::support::legacy::router;
+use agent_workspace_server::{AppState, rate_limit::RateLimiters};
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},

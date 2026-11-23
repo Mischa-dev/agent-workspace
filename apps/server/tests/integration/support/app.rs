@@ -4,9 +4,10 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
+use super::legacy::router;
 use agent_workspace_server::{
     AppState, config::AppConfig, mcp::MCP_PATH, provider::SupervisorRegistry,
-    rate_limit::RateLimiters, realtime::RealtimeHub, router,
+    rate_limit::RateLimiters, realtime::RealtimeHub,
 };
 use axum::{
     body::{Body, to_bytes},
@@ -281,6 +282,14 @@ pub(crate) async fn initialize(app: &axum::Router, token: &str) -> Option<String
     (initialized.status() == StatusCode::ACCEPTED).then_some(session)
 }
 
+/// A JSON-RPC id no other call in this run has used. Ids must be unique among
+/// a session's calls in flight: two overlapping calls with the same id leave
+/// one of them waiting for an answer that went to the other.
+pub(crate) fn next_request_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(100);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 pub(crate) async fn tool(
     app: &axum::Router,
     token: &str,
@@ -293,7 +302,7 @@ pub(crate) async fn tool(
         token,
         Some(session),
         json!({
-            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "jsonrpc": "2.0", "id": next_request_id(), "method": "tools/call",
             "params": { "name": name, "arguments": arguments }
         }),
     )
@@ -366,7 +375,7 @@ pub(crate) async fn last_tool(
         token,
         Some(session),
         json!({
-            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "jsonrpc": "2.0", "id": next_request_id(), "method": "tools/call",
             "params": { "name": name, "arguments": arguments }
         }),
     )

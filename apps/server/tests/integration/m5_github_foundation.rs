@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use crate::support::legacy::router;
 use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin, bootstrap_development_member},
@@ -20,7 +21,6 @@ use agent_workspace_server::{
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
-    router,
     seed::dev_seed,
 };
 use axum::{

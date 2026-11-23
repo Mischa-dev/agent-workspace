@@ -43,7 +43,6 @@ pub(super) const TOOL_PERMISSIONS: &[(&str, Option<Permission>)] = &[
     ("ai_analyze", Some(TasksEdit)),
     ("ai_summarize", Some(TasksView)),
     ("run_request", Some(RunsLaunch)),
-    ("external_event_poll", None),
 ];
 
 /// Whether a caller holding `reach` may use a tool at all. A tool missing

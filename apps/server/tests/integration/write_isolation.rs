@@ -41,6 +41,7 @@ use std::{
     sync::Arc,
 };
 
+use crate::support::legacy::router;
 use agent_workspace_server::policy_inventory::{MUTATING_ENTRY_POINTS, MutationMethod};
 use agent_workspace_server::test_support::source::{
     routes as shared_routes, rust_files, server_src, strip_tests,
@@ -49,7 +50,6 @@ use agent_workspace_server::{
     AppState,
     limits::{Bucket, LimitKey, LimitSource},
     rate_limit::RateLimiters,
-    router,
 };
 use axum::{
     body::{Body, to_bytes},
@@ -97,17 +97,9 @@ const WRITE_ROUTES: &[&str] = &[
     "PUT /api/v1/account/default-workspace",
     "POST /api/v1/account/sessions/{session_id}/revoke",
     "POST /api/v1/agent-runs/{id}/retry",
-    "POST /api/v1/channels/{id}/messages",
-    "POST /api/v1/channels/{id}/threads",
     "POST /api/v1/conversations/{id}/ai/summary",
     "POST /api/v1/conversations/{id}/files",
-    "POST /api/v1/conversations/{id}/members",
-    "POST /api/v1/conversations/{id}/members/{actor_id}/remove",
-    "POST /api/v1/conversations/{id}/messages",
-    "DELETE /api/v1/conversations/{id}/messages/{message_id}",
-    "PATCH /api/v1/conversations/{id}/messages/{message_id}",
     "PUT /api/v1/conversations/{id}/notification-level",
-    "POST /api/v1/conversations/{id}/threads",
     "POST /api/v1/direct/dms",
     "POST /api/v1/direct/groups",
     "PUT /api/v1/notification-settings/channels",
@@ -131,7 +123,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/pages/{id}/document/sync",
     "POST /api/v1/pages/{id}/document/updates",
     "PUT /api/v1/projects/rail-order",
-    "POST /api/v1/projects/{id}/channels",
     "POST /api/v1/projects/{id}/execution-profiles",
     "PUT /api/v1/projects/{id}/navigation",
     "POST /api/v1/projects/{id}/pages/import",
@@ -158,7 +149,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/external-agents/{connection_id}/workos",
     "DELETE /api/v1/projects/{project_id}/external-agents/{connection_id}/workos/{binding_id}",
     "POST /api/v1/projects/{project_id}/integrations/github/connect",
-    "POST /api/v1/projects/{project_id}/integrations/github/repositories",
     "POST /api/v1/projects/{project_id}/collections",
     "PATCH /api/v1/projects/{project_id}/collections/{collection_id}",
     "POST /api/v1/projects/{project_id}/collections/{collection_id}/fields",
@@ -192,8 +182,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/push/subscriptions/{id}/test",
     "POST /api/v1/things/{kind}/{id}/files",
     "POST /api/v1/threads/{id}/agent-runs",
-    "POST /api/v1/threads/{id}/messages",
-    "POST /api/v1/usage/accounts/{account_id}/batch",
     "POST /api/v1/usage/accounts/{account_id}/refresh",
     "POST /api/v1/usage/accounts/{account_id}/reset-credits/spend",
     "PUT /api/v1/usage/accounts/{account_id}/rules/{rule}",
@@ -1034,13 +1022,6 @@ fn same(value: impl ToString) -> P {
     P::Same(value.to_string())
 }
 
-/// An ID the request takes out of the resource the other IDs name (a
-/// member, a pin). With only this one B's, there is nothing of A's to take
-/// out, and the route may say it's done; the digest still checks B's rows.
-fn removed(a: impl ToString, b: impl ToString) -> P {
-    P::Within(a.to_string(), b.to_string(), Expect::NoEffect)
-}
-
 /// An ID the route looks up inside the resource the other IDs name. With
 /// only this one B's, it isn't found there: any refusal will do, as for an
 /// ID that doesn't exist.
@@ -1406,10 +1387,7 @@ struct Targets {
     /// checks whose files they are.
     channel_upload: Uuid,
     comment_upload: Uuid,
-    /// The same in the thread and the DM, and the agent's own in the group
-    /// of the request it holds.
-    thread_upload: Uuid,
-    dm_upload: Uuid,
+    /// The agent's own in the group of the request it holds.
     claimed_upload: Uuid,
     /// A reply request the owner stopped, to retry.
     stopped_reply: Uuid,
@@ -1665,19 +1643,6 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         format!("Net unsent comment {tag}").into_bytes(),
     )
     .await;
-    let mut uploads = Vec::new();
-    for conversation in [&world.thread, &world.dm] {
-        uploads.push(
-            upload(
-                app,
-                browser,
-                &format!("/api/v1/conversations/{conversation}/files?name=net-unsent-{tag}.txt"),
-                "text/plain",
-                format!("Net unsent {tag}").into_bytes(),
-            )
-            .await,
-        );
-    }
     let agent_session = initialize(app, &world.agent_token)
         .await
         .expect("agent MCP");
@@ -2148,8 +2113,6 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
         claimed_conversation,
         channel_upload,
         comment_upload,
-        thread_upload: uploads[0],
-        dm_upload: uploads[1],
         claimed_upload,
         stopped_reply,
         run_threads: [run_threads[0], run_threads[1]],
@@ -3940,28 +3903,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         // Bug report links
         // Channels and threads
         path_case(
-            "POST /api/v1/channels/{id}/messages",
-            &[channel()],
-            json_body(json!({"content": text("Net message"), "attachments": [ax.channel_upload]})),
-        )
-        .rejecting(vec![
-            json!({"content": text("Net message"), "attachments": [bx.channel_upload]}),
-        ]),
-        path_case(
-            "POST /api/v1/channels/{id}/threads",
-            &[channel()],
-            json_body(json!({"name": "Net thread"})),
-        )
-        .rejecting(vec![json!({"name": "Net thread", "originMessageId": b.message})]),
-        path_case(
-            "POST /api/v1/threads/{id}/messages",
-            &[id(&a.thread, &b.thread)],
-            json_body(json!({"content": text("Net reply"), "attachments": [ax.thread_upload]})),
-        )
-        .rejecting(vec![
-            json!({"content": text("Net reply"), "attachments": [bx.thread_upload]}),
-        ]),
-        path_case(
             "POST /api/v1/threads/{id}/agent-runs",
             &[id(ax.run_threads[0], bx.run_threads[0])],
             json_body(json!({"prompt": "Net run"})),
@@ -3990,67 +3931,10 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         )
         .query("?name=net.png"),
         path_case(
-            "POST /api/v1/conversations/{id}/members",
-            &[id(&a.group, &b.group)],
-            |values| {
-                Payload::Json(json!({
-                    "actorId": if is_a(values, &a.group) { ax.agent } else { bx.agent }
-                }))
-            },
-        )
-        .rejecting(vec![json!({"actorId": bx.agent})]),
-        path_case(
-            "POST /api/v1/conversations/{id}/members/{actor_id}/remove",
-            &[id(&a.group, &b.group), removed(ax.wren, bx.wren)],
-            empty(),
-        ),
-        path_case(
-            "POST /api/v1/conversations/{id}/messages",
-            &[id(&a.dm, &b.dm)],
-            json_body(json!({"content": text("Net DM"), "attachments": [ax.dm_upload]})),
-        )
-        .rejecting(vec![
-            json!({"content": text("Net DM"), "attachments": [bx.dm_upload]}),
-        ])
-        .and(vec![
-            (
-                Call::new(
-                    "POST",
-                    format!("/api/v1/conversations/{}/messages", b.channel),
-                    Payload::Json(json!({"content": text("Net")})),
-                ),
-                Expect::Refused,
-            ),
-            (
-                Call::new(
-                    "POST",
-                    format!("/api/v1/conversations/{}/messages", b.group),
-                    Payload::Json(json!({"content": text("Net")})),
-                ),
-                Expect::Refused,
-            ),
-        ]),
-        path_case(
-            "PATCH /api/v1/conversations/{id}/messages/{message_id}",
-            &[channel(), id(&a.message, &b.message)],
-            json_body(json!({"content": text("Launch message, edited")})),
-        ),
-        path_case(
-            "DELETE /api/v1/conversations/{id}/messages/{message_id}",
-            &[channel(), id(&sp.messages[0], &b.message)],
-            empty(),
-        ),
-        path_case(
             "PUT /api/v1/conversations/{id}/notification-level",
             &[channel()],
             json_body(json!({"level": "all"})),
         ),
-        path_case(
-            "POST /api/v1/conversations/{id}/threads",
-            &[channel()],
-            json_body(json!({"name": "Net thread two"})),
-        )
-        .rejecting(vec![json!({"name": "Net thread two", "originMessageId": b.message})]),
         // Direct messages and groups
         body_case(
             "POST /api/v1/direct/dms",
@@ -4251,11 +4135,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         ]),
         // After the archive above, which runs first.
         path_case(
-            "POST /api/v1/projects/{id}/channels",
-            &[project()],
-            json_body(json!({"name": "net-channel"})),
-        ),
-        path_case(
             "POST /api/v1/projects/{id}/execution-profiles",
             &[project()],
             empty(),
@@ -4445,12 +4324,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             &[project()],
             json_body(json!({"mode": "install"})),
         ),
-        path_case(
-            "POST /api/v1/projects/{project_id}/integrations/github/repositories",
-            &[project()],
-            json_body(json!({"installationId": 1, "githubRepositoryId": 1})),
-        )
-        .without_own(NEEDS_GITHUB),
         // Invitations, labels, launches, members, milestones
         // Collections (AWD-90). A view or a record may only name A's fields,
         // people, tasks and pages.
@@ -4742,21 +4615,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         // Reply requests
         // Settings
         // Usage
-        path_case(
-            "POST /api/v1/usage/accounts/{account_id}/batch",
-            &[id(a.provider_account, b.provider_account)],
-            |values| {
-                let (project, task) = if is_a(values, &a.provider_account.to_string()) {
-                    (&a.project, a.subtask)
-                } else {
-                    (&b.project, b.subtask)
-                };
-                Payload::Json(json!({"tasks": [{"projectId": project, "workItemId": task}]}))
-            },
-        )
-        // A batch answers for each project; B's is listed as one the account
-        // doesn't run tasks in, and nothing launches.
-        .no_effect(vec![json!({"tasks": [{"projectId": b.project, "workItemId": b.task}]})]),
         path_case(
             "POST /api/v1/usage/accounts/{account_id}/refresh",
             &[id(a.provider_account, b.provider_account)],

@@ -840,7 +840,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/usage/accounts/{account_id}/batch",
-            get(batch::suggest_http).post(batch::launch_http),
+            get(batch::suggest_http),
         )
         .route(
             "/api/v1/usage/accounts/{account_id}/schedules",

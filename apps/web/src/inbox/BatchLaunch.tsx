@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
 import { toastError } from '../app/mutations'
+import { useWorkspaceId } from '../app/workspace'
 import { Button, Icon, showToast } from '../ui'
 import { launchBatch, usageKeys } from '../settings/account/usageApi'
 import { batchOutcome, launchLabel, newAttemptKey } from '../settings/account/usageModel'
@@ -15,10 +16,13 @@ import type { InboxNotification } from './api'
  */
 export function BatchLaunch({ batch, reviewHref }: { batch: NonNullable<InboxNotification['batch']>; reviewHref: string | null }) {
   const queryClient = useQueryClient()
+  // The alert's own workspace (the inbox lists every workspace's), else the open one.
+  const openWorkspace = useWorkspaceId()
+  const workspaceId = batch.workspaceId ?? openWorkspace
   // One key per alert while it's shown, so a double tap launches once.
   const [attempt] = useState(() => newAttemptKey('alert-batch'))
   const launch = useMutation({
-    mutationFn: () => launchBatch(batch.accountId, { windowKey: batch.windowKey }, attempt),
+    mutationFn: () => launchBatch({ accountId: batch.accountId, workspaceId }, { windowKey: batch.windowKey }, attempt),
     onSuccess: (result) => {
       showToast(result.launched === 0 && result.failed.length === 0 ? { tone: 'info', title: 'Already launched', description: 'Nothing new was ready to add.' } : batchOutcome(result))
       void queryClient.invalidateQueries({ queryKey: usageKeys.root })

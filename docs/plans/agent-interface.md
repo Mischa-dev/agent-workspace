@@ -232,7 +232,7 @@ phase added and why.
 | Views and data | `view_list` (saved views; `task_list` takes `view` by name or id), `my_work` (assigned, claimed by you or your agents, waiting for your review, across projects), `template_list` and `task_from_template` (task templates and recurring tasks), `task_import` (Markdown, CSV or GitHub issues: preview, then commit by import id), `project_export` (tasks as JSON, with download links for JSON and CSV) |
 | Planning | `task_depend` (blockers across projects of one workspace, cycles refused with the path), `task_relate` (relates to, duplicates), `task_watch`, `milestone_list`, `milestone_write`, and for owners and admins (people only) `workflow_update` |
 | Memory and search | `search`, `page_list`, `page_get`, `page_write`, `decision_record`, `decision_list` |
-| Code and approvals | `repository_get`, `pull_request_get`, `run_request`, `approval_get`, `approval_respond`, `external_event_poll` (for the older Hermes connector) |
+| Code and approvals | `repository_get`, `pull_request_get`, `run_request`, `approval_get`, `approval_respond`, `event_list` |
 
 The server instructions describe the workflow in a few lines:
 
@@ -331,8 +331,8 @@ Differences from the plan above:
 - **Grants made before this change keep their single project.** Reconnect an
   app to give it the whole account.
 - **Reply tools keep their names** (`inbox_list`, `reply_*`), so the Nyx
-  bridge and Muse need no change. `external_event_poll` stays for the older
-  Hermes connector.
+  bridge and Muse need no change. The older `external_event_poll` was later
+  replaced by `event_list`.
 - **Tool count is 40**, plus two prompts (`triage`, `tidy_up`).
 
 ## Decided (September 28, 2026)

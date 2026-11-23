@@ -17,21 +17,22 @@ async function editError(
   reason: unknown,
   conversationId: string,
   messageId: string,
+  expectedRevision: number,
 ): Promise<{ message: string; removedEntry?: ConversationTimelineEntry }> {
   if (!isApiError(reason)) return { message: describeError(reason).message }
   if (reason.status === 403) return { message: 'You can only edit your own messages.' }
   if (reason.status === 404) return { message: 'That message wasn’t found, or you can’t see it.' }
-  if (reason.code === 'version_conflict') {
-    return {
-      message:
-        'This message changed somewhere else, maybe through a connected app. Copy your text, then reopen the editor.',
-    }
+  const changedElsewhere = {
+    message: 'This message changed somewhere else, maybe through a connected app. Copy your text, then reopen the editor.',
   }
+  if (reason.code === 'version_conflict' || reason.code === 'version') return changedElsewhere
   if (reason.status === 409) {
-    // The server says "conflict" for a removed message, an archived
-    // conversation and the edit limit alike; look at the message to tell.
+    // The server says "conflict" for a removed message, a newer revision,
+    // an archived conversation and the edit limit alike; look at the
+    // message to tell.
     const entry = await getConversationMessage(conversationId, messageId).catch(() => null)
     if (entry?.message?.removed) return { message: 'This message was removed.', removedEntry: entry }
+    if (entry?.message && entry.message.revision > expectedRevision) return changedElsewhere
     return { message: 'This message can’t be edited any more.' }
   }
   if (reason.status === 422) return { message: 'That isn’t a message that can be saved. Check its length and mentions.' }
@@ -81,7 +82,7 @@ export function MessageEditor({
           })
           onSaved(result.entry)
         } catch (reason) {
-          const failure = await editError(reason, conversationId, message.id)
+          const failure = await editError(reason, conversationId, message.id, expectedRevision)
           if (failure.removedEntry) onSaved(failure.removedEntry)
           throw new Error(failure.message, { cause: reason })
         }

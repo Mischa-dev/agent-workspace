@@ -135,6 +135,31 @@ pub(crate) async fn why_closed(
     Ok(None)
 }
 
+/// [`why_closed`] for a DM or group known only by id, as an operation
+/// refused there asks.
+pub(crate) async fn why_direct_closed(
+    tx: &mut Transaction<'_, Postgres>,
+    conversation: Uuid,
+    sender: Uuid,
+) -> Result<Option<AppError>, AppError> {
+    // A thread in a DM goes by the DM.
+    let found = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT COALESCE(parent.id, conversation.id), COALESCE(parent.kind, conversation.kind) \
+         FROM conversations conversation \
+         LEFT JOIN conversations parent ON conversation.kind = 'thread' \
+           AND parent.id = conversation.parent_channel_id AND parent.kind IN ('dm', 'group') \
+         WHERE conversation.id = $1 AND conversation_visible_to(conversation.id, $2)",
+    )
+    .bind(conversation)
+    .bind(sender)
+    .fetch_optional(&mut **tx)
+    .await?;
+    match found {
+        Some((conversation, kind)) => why_closed(tx, conversation, &kind, sender).await,
+        None => Ok(None),
+    }
+}
+
 /// Checks a message `sender` is about to send into a conversation of
 /// `kind`, inside the send's transaction (the conversation is locked). The
 /// first message to someone who asks first opens a request; a reply from

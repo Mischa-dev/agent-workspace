@@ -1019,8 +1019,9 @@ fn every_account_route_is_walked_or_excused() {
     );
 }
 
-/// The account views a response can hold.
-const ACCOUNT_VIEWS: [&str; 3] = ["ActorView", "Person", "ProfileView"];
+/// The account views a response can hold (a member list's `MemberView`
+/// names the account it lists).
+const ACCOUNT_VIEWS: [&str; 4] = ["ActorView", "Person", "ProfileView", "MemberView"];
 
 /// GET routes whose handler returns a type that holds an account view.
 fn account_routes() -> BTreeSet<String> {

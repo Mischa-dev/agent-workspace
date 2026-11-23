@@ -124,6 +124,7 @@ mod mcp_code;
 mod mcp_groundwork;
 mod mcp_groups;
 mod mcp_labels;
+mod mcp_overlap;
 mod mcp_planning;
 mod mcp_revisions;
 mod mcp_task_batches;

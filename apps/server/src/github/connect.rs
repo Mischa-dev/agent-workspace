@@ -42,10 +42,6 @@ pub(super) fn routes(router: Router<AppState>) -> Router<AppState> {
             "/api/v1/projects/{project_id}/integrations/github/available-repositories",
             get(available_repositories),
         )
-        .route(
-            "/api/v1/projects/{project_id}/integrations/github/repositories",
-            post(add_repository),
-        )
         .route("/api/v1/integrations/github/callback", get(callback))
 }
 
@@ -155,13 +151,6 @@ struct AvailableRepository {
     private: bool,
     description: Option<String>,
     added: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AddRepositoryRequest {
-    installation_id: i64,
-    github_repository_id: i64,
 }
 
 #[derive(Debug, FromRow)]
@@ -1008,60 +997,6 @@ pub(crate) async fn add_picked_repository_as(
         repository_id,
         manage: role_allows_manage(role),
     })
-}
-
-async fn add_repository(
-    State(state): State<AppState>,
-    principal: AuthenticatedActor,
-    headers: HeaderMap,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<AddRepositoryRequest>,
-) -> Result<(StatusCode, Json<Value>), AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let PickedRepository {
-        mut transaction,
-        repository_id,
-        manage,
-    } = add_picked_repository_as(
-        &state,
-        principal.actor_id,
-        project_id,
-        request.installation_id,
-        request.github_repository_id,
-    )
-    .await?;
-    let request_id = headers
-        .get(crate::REQUEST_ID_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| value.len() <= 128);
-    sqlx::query(
-        r#"
-        INSERT INTO audit_events (
-            id, actor_id, project_id, session_id, authentication_class,
-            action, target_kind, target_id, outcome, request_id, channel, metadata
-        ) VALUES (
-            $1, $2, $3, $4, 'password_session', 'github.repository_connect',
-            'repository', $5, 'succeeded', $6, 'browser',
-            jsonb_build_object('installation_id', $7::bigint, 'github_repository_id', $8::bigint)
-        )
-        "#,
-    )
-    .bind(Uuid::now_v7())
-    .bind(principal.actor_id)
-    .bind(project_id)
-    .bind(principal.session_id)
-    .bind(repository_id)
-    .bind(request_id)
-    .bind(request.installation_id)
-    .bind(request.github_repository_id)
-    .execute(&mut *transaction)
-    .await?;
-    let view =
-        crate::repositories::repository_json(&mut transaction, project_id, repository_id, manage)
-            .await?;
-    transaction.commit().await?;
-    crate::repositories::prepare_in_background(state.clone(), project_id, repository_id);
-    Ok((StatusCode::CREATED, Json(view)))
 }
 
 #[cfg(test)]

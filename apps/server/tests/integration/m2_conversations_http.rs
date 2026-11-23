@@ -1,12 +1,12 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use crate::support::legacy::router;
 use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
-    router,
 };
 use axum::{
     body::{Body, to_bytes},
@@ -261,7 +261,7 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
         ))
         .await
         .expect("replay Message");
-    assert_eq!(message_replay.status(), StatusCode::CREATED);
+    assert_eq!(message_replay.status(), StatusCode::OK);
     assert_eq!(
         uuid_field(&response_json(message_replay).await["message"], "id"),
         first_message_id

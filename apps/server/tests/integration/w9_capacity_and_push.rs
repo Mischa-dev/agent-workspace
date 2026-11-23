@@ -7,6 +7,7 @@
 
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
+use crate::support::legacy::router;
 use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin},
@@ -20,7 +21,6 @@ use agent_workspace_server::{
     push,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
-    router,
     secrets::{self, FileKeyring},
     usage,
 };

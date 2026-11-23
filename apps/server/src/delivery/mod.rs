@@ -50,10 +50,6 @@ pub struct Page {
     /// The connection read through.
     #[schemars(with = "String")]
     pub connection_id: Uuid,
-    /// Each event's place in the log, for the older feed's `sequence`.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub positions: Vec<i64>,
 }
 
 /// A read of a caller's connection: after `cursor` (else where it last
@@ -174,11 +170,6 @@ pub async fn poll(
                 ),
                 has_more: batch.has_more,
                 connection_id: delivery.id,
-                positions: batch
-                    .delivered
-                    .iter()
-                    .map(|item| item.event.position)
-                    .collect(),
             });
         }
         // Nothing yet: wait for the log to move, holding no transaction.

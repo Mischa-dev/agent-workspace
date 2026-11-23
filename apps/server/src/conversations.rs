@@ -13,9 +13,8 @@ use std::{
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header::LOCATION},
-    response::{IntoResponse, Response},
-    routing::{get, post},
+    http::{HeaderMap, StatusCode},
+    routing::get,
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
@@ -25,9 +24,9 @@ use uuid::Uuid;
 use crate::{
     AppState,
     addresses::Target,
-    auth::{AuthenticatedActor, require_authenticated_write},
+    auth::AuthenticatedActor,
     domain::allocate_conversation_sequence,
-    error::{ApiJson, ApiPath, ApiQuery, AppError},
+    error::{ApiPath, ApiQuery, AppError},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, IdempotencyReservation, RequestHash},
     message_content::{MessageContent, MessageContentError},
     outbox::{
@@ -57,10 +56,7 @@ const MAX_THREADS_PER_SIDEBAR: i64 = 1_000;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route(
-            "/api/v1/projects/{id}/channels",
-            get(list_channels).post(create_channel),
-        )
+        .route("/api/v1/projects/{id}/channels", get(list_channels))
         .route(
             "/api/v1/projects/{id}/mentionable-actors",
             get(search_mentionable_actors),
@@ -69,17 +65,7 @@ pub fn router() -> Router<AppState> {
             "/api/v1/projects/{id}/conversation-sidebar",
             get(project_conversation_sidebar),
         )
-        .route("/api/v1/channels/{id}/messages", post(send_channel_message))
-        .route("/api/v1/threads/{id}/messages", post(send_thread_message))
-        .route(
-            "/api/v1/conversations/{id}/messages",
-            post(send_direct_message),
-        )
-        .route("/api/v1/channels/{id}/threads", post(create_thread))
-        .route(
-            "/api/v1/conversations/{id}/threads",
-            get(list_threads).post(create_thread),
-        )
+        .route("/api/v1/conversations/{id}/threads", get(list_threads))
         .route(
             "/api/v1/conversations/{id}/timeline",
             get(conversation_timeline),
@@ -279,43 +265,6 @@ impl ConversationAccessRow {
             action,
         ))
     }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CreateChannelRequest {
-    name: String,
-    /// A private channel: its members only, starting with whoever makes it
-    /// (C2.6). Left out of the request's hash when false, so retries of
-    /// older requests still replay.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    private: bool,
-    /// A public channel: whether everyone in the space joins it, and
-    /// everyone who arrives later (C2.7). Left out, they do.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    auto_join: Option<bool>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CreateThreadRequest {
-    /// Left out (or blank), the thread goes by the message it starts from, or
-    /// its first message, until someone names it.
-    #[serde(default)]
-    name: Option<String>,
-    origin_message_id: Option<Uuid>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SendMessageRequest {
-    content: serde_json::Value,
-    /// Files uploaded to this conversation for this message, in order.
-    #[serde(default)]
-    attachments: Vec<Uuid>,
-    /// The message in this conversation it replies to, quoted above it (AWD-70).
-    #[serde(default)]
-    reply_to_message_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1011,98 +960,6 @@ async fn list_channels(
     }))
 }
 
-async fn create_channel(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<CreateChannelRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let name = normalize_conversation_name(&request.name)?;
-    let command = CreateChannelRequest {
-        name,
-        private: request.private,
-        auto_join: request.auto_join,
-    };
-    let request_hash = RequestHash::for_value(&command)?;
-    let scope = idempotency::resource_bound_scope("project", project_id, "channel_create")?;
-
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let access = lock_project_access(
-        &mut transaction,
-        &principal,
-        project_id,
-        Action::ChannelCreate,
-    )
-    .await?;
-    if access.project_archived {
-        return Err(AppError::NotFound("project"));
-    }
-    let reservation = match idempotency::reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let body: ConversationCreateResponse = replay.decode()?;
-            transaction.commit().await?;
-            return created_conversation_response(replay.status(), &body);
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-
-    let conversation_id = insert_channel(
-        &mut transaction,
-        project_id,
-        principal.actor_id,
-        &command.name,
-        NewChannel {
-            private: command.private,
-            auto_join: command.auto_join.unwrap_or(true),
-        },
-    )
-    .await?;
-    insert_audit_event(
-        &mut transaction,
-        &headers,
-        &principal,
-        project_id,
-        "conversation.channel_created",
-        conversation_id,
-        serde_json::json!({ "private": command.private }),
-    )
-    .await?;
-    let body = ConversationCreateResponse {
-        conversation: ConversationView {
-            id: conversation_id,
-            project_id,
-            kind: "channel".to_owned(),
-            parent_channel_id: None,
-            origin_message_id: None,
-            name: command.name,
-            archived_at: None,
-            version: 1,
-            thread_status: None,
-            thread_outcome: None,
-            parent_kind: None,
-            private: command.private,
-        },
-        read_state: ReadStateView {
-            highest_seen_sequence: 0,
-            version: 1,
-        },
-    };
-    finish_idempotent_command(&mut transaction, &reservation, StatusCode::CREATED, &body).await?;
-    transaction.commit().await?;
-    created_conversation_response(StatusCode::CREATED, &body)
-}
-
 /// Someone arriving in a space joins its auto-join channels (C2.7).
 pub(crate) async fn join_auto_channels(
     transaction: &mut Transaction<'_, Postgres>,
@@ -1246,103 +1103,6 @@ pub(crate) async fn insert_channel(
     )
     .await?;
     Ok(conversation_id)
-}
-
-async fn create_thread(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(channel_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<CreateThreadRequest>,
-) -> Result<Response, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let command = CreateThreadRequest {
-        name: request
-            .name
-            .as_deref()
-            .filter(|name| !name.trim().is_empty())
-            .map(normalize_conversation_name)
-            .transpose()?,
-        origin_message_id: request.origin_message_id,
-    };
-    let request_hash = RequestHash::for_value(&command)?;
-    let scope = idempotency::resource_bound_scope("channel", channel_id, "thread_create")?;
-
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let channel = lock_conversation_access(
-        &mut transaction,
-        &principal,
-        channel_id,
-        Action::ThreadCreate,
-        false,
-    )
-    .await?;
-    if !matches!(channel.kind.as_str(), "channel" | "dm" | "group") {
-        return Err(AppError::NotFound("conversation"));
-    }
-    require_active_conversation(&channel)?;
-    let reservation = match idempotency::reserve(
-        &mut transaction,
-        principal.actor_id,
-        &scope,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let body: ConversationCreateResponse = replay.decode()?;
-            transaction.commit().await?;
-            return created_conversation_response(replay.status(), &body);
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-
-    let creator = threads::ThreadCreator::browser(&principal, &headers)?;
-    let name = match &command.name {
-        Some(name) => threads::ThreadName::Given(name.clone()),
-        None => threads::ThreadName::Derived,
-    };
-    let created = match threads::create(
-        &mut transaction,
-        &creator,
-        channel.id,
-        threads::ThreadSpec::new(name).opened_from(command.origin_message_id),
-    )
-    .await
-    {
-        Ok(created) => created,
-        Err(AppError::NotFound("message")) => {
-            return Err(AppError::Validation("Thread origin Message"));
-        }
-        Err(error) => return Err(error),
-    };
-    let thread_id = created.id;
-    let name = created.name;
-    let body = ConversationCreateResponse {
-        conversation: ConversationView {
-            id: thread_id,
-            project_id: channel.place(),
-            kind: "thread".to_owned(),
-            parent_channel_id: Some(channel.id),
-            origin_message_id: command.origin_message_id,
-            name,
-            archived_at: None,
-            version: 1,
-            thread_status: Some("Open".to_owned()),
-            thread_outcome: None,
-            parent_kind: Some(channel.kind.clone()),
-            private: channel.private,
-        },
-        read_state: ReadStateView {
-            highest_seen_sequence: 0,
-            version: 1,
-        },
-    };
-    finish_idempotent_command(&mut transaction, &reservation, StatusCode::CREATED, &body).await?;
-    transaction.commit().await?;
-    created_conversation_response(StatusCode::CREATED, &body)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1684,111 +1444,6 @@ pub(crate) async fn rename_conversation(
     Ok(view)
 }
 
-async fn send_channel_message(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(conversation_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<SendMessageRequest>,
-) -> Result<Response, AppError> {
-    send_message(
-        &state,
-        &headers,
-        &principal,
-        conversation_id,
-        "channel",
-        request,
-    )
-    .await
-}
-
-async fn send_thread_message(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(conversation_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<SendMessageRequest>,
-) -> Result<Response, AppError> {
-    send_message(
-        &state,
-        &headers,
-        &principal,
-        conversation_id,
-        "thread",
-        request,
-    )
-    .await
-}
-
-async fn send_direct_message(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(conversation_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<SendMessageRequest>,
-) -> Result<Response, AppError> {
-    // DMs and groups have no kind-specific route. Access still goes through
-    // the shared visibility check in `lock_message_conversation`.
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let outcome = append_message_command_with(
-        &state,
-        MessageCommandActor {
-            actor_id: principal.actor_id,
-            actor_kind: principal.actor_kind.clone(),
-            mcp_credential: None,
-            via_grant_id: None,
-            run_id: None,
-        },
-        conversation_id,
-        None,
-        idempotency_key,
-        request.content,
-        &request.attachments,
-        None,
-        AppendExtras {
-            reply_to_message_id: request.reply_to_message_id,
-            ..AppendExtras::default()
-        },
-    )
-    .await?;
-    created_message_response(outcome.status, &outcome.body)
-}
-
-async fn send_message(
-    state: &AppState,
-    headers: &HeaderMap,
-    principal: &AuthenticatedActor,
-    conversation_id: Uuid,
-    expected_kind: &'static str,
-    request: SendMessageRequest,
-) -> Result<Response, AppError> {
-    require_authenticated_write(state, headers, principal).await?;
-    let idempotency_key = IdempotencyKey::from_headers(headers)?;
-    let outcome = append_message_command_with(
-        state,
-        MessageCommandActor {
-            actor_id: principal.actor_id,
-            actor_kind: principal.actor_kind.clone(),
-            mcp_credential: None,
-            via_grant_id: None,
-            run_id: None,
-        },
-        conversation_id,
-        Some(expected_kind),
-        idempotency_key,
-        request.content,
-        &request.attachments,
-        None,
-        AppendExtras {
-            reply_to_message_id: request.reply_to_message_id,
-            ..AppendExtras::default()
-        },
-    )
-    .await?;
-    created_message_response(outcome.status, &outcome.body)
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct MessageCommandActor {
     pub(crate) actor_id: Uuid,
@@ -1818,7 +1473,6 @@ pub(crate) struct ReplyCompletion {
 }
 
 pub(crate) struct MessageAppendOutcome {
-    pub(crate) status: StatusCode,
     pub(crate) body: MessageAppendResponse,
     pub(crate) idempotent_replay: bool,
 }
@@ -1967,7 +1621,6 @@ pub(crate) async fn append_message_command_with(
             .await?;
             transaction.commit().await?;
             return Ok(MessageAppendOutcome {
-                status: replay.status(),
                 body,
                 idempotent_replay: true,
             });
@@ -2309,7 +1962,6 @@ pub(crate) async fn append_message_command_with(
     finish_idempotent_command(&mut transaction, &reservation, StatusCode::CREATED, &stored).await?;
     transaction.commit().await?;
     Ok(MessageAppendOutcome {
-        status: StatusCode::CREATED,
         body,
         idempotent_replay: false,
     })
@@ -3705,50 +3357,6 @@ async fn authorized_project(
     Ok(row)
 }
 
-async fn lock_project_access(
-    transaction: &mut Transaction<'_, Postgres>,
-    principal: &AuthenticatedActor,
-    project_id: Uuid,
-    action: Action,
-) -> Result<ProjectAccessRow, AppError> {
-    let row = sqlx::query_as::<_, ProjectAccessRow>(
-        r#"
-        SELECT
-            project.id AS project_id,
-            project.archived_at IS NOT NULL AS project_archived,
-            membership.role AS membership_role,
-            workspace_role_permissions(membership.role_id) AS membership_role_permissions,
-            space_group_permissions($2, project.id) AS membership_group_permissions,
-            membership.enabled AS membership_enabled
-        FROM projects project
-        JOIN organization_memberships organization_membership
-          ON organization_membership.organization_id = project.organization_id
-         AND organization_membership.actor_id = $2
-         AND organization_membership.enabled
-        JOIN project_memberships membership
-          ON membership.project_id = project.id
-         AND membership.actor_id = $2
-        WHERE project.id = $1
-        FOR SHARE OF project, organization_membership, membership
-        "#,
-    )
-    .bind(project_id)
-    .bind(principal.actor_id)
-    .fetch_optional(&mut **transaction)
-    .await?
-    .ok_or(AppError::NotFound("project"))?;
-    require_policy(
-        principal,
-        &row.membership_role,
-        row.membership_role_permissions.as_deref(),
-        row.membership_group_permissions.as_deref(),
-        row.membership_enabled,
-        row.project_id,
-        action,
-    )?;
-    Ok(row)
-}
-
 async fn authorized_conversation(
     state: &AppState,
     principal: &AuthenticatedActor,
@@ -3788,23 +3396,6 @@ pub(crate) async fn read_conversation_access<'e>(
     .bind(actor_id)
     .fetch_optional(executor)
     .await?)
-}
-
-pub(crate) async fn lock_conversation_access(
-    transaction: &mut Transaction<'_, Postgres>,
-    principal: &AuthenticatedActor,
-    conversation_id: Uuid,
-    action: Action,
-    include_archived: bool,
-) -> Result<ConversationAccessRow, AppError> {
-    lock_conversation_for(
-        transaction,
-        principal.actor_id,
-        conversation_id,
-        action,
-        include_archived,
-    )
-    .await
 }
 
 /// Serialize conversation writes with project and parent changes before
@@ -4627,29 +4218,6 @@ pub(crate) async fn finish_idempotent_command<T: Serialize>(
     body: &T,
 ) -> Result<(), AppError> {
     idempotency::complete(transaction, reservation, status, body).await
-}
-
-fn created_conversation_response(
-    status: StatusCode,
-    body: &ConversationCreateResponse,
-) -> Result<Response, AppError> {
-    let kind = if body.conversation.kind == "channel" {
-        "channels"
-    } else {
-        "threads"
-    };
-    let location = HeaderValue::from_str(&format!("/api/v1/{kind}/{}", body.conversation.id))
-        .map_err(|_| AppError::Internal("construct Conversation Location"))?;
-    Ok((status, [(LOCATION, location)], Json(body.clone())).into_response())
-}
-
-fn created_message_response(
-    status: StatusCode,
-    body: &MessageAppendResponse,
-) -> Result<Response, AppError> {
-    let location = HeaderValue::from_str(&format!("/api/v1/messages/{}", body.message.id))
-        .map_err(|_| AppError::Internal("construct Message Location"))?;
-    Ok((status, [(LOCATION, location)], Json(body.clone())).into_response())
 }
 
 fn map_conversation_insert(

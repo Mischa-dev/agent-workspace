@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, fs, path::Path, process::Command, sync::Arc, time::Duration};
 
+use crate::support::legacy::router;
 use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin},
@@ -7,7 +8,6 @@ use agent_workspace_server::{
     hosts::builtin::git::expected_repository_mirror_path,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
-    router,
     seed::{DevSeed, dev_seed},
 };
 use axum::{

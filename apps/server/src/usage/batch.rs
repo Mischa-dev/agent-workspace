@@ -13,11 +13,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use axum::{
-    Json,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-};
+use axum::{Json, extract::State};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -26,9 +22,9 @@ use super::{UsageAccount, WindowView, alerts::countdown, history, owned_account,
 use crate::{
     AppState,
     ai::ready::{self as ranking, RankFilter, RankScope},
-    auth::{AuthenticatedActor, require_authenticated_write},
+    auth::AuthenticatedActor,
     environments::{self, EnvironmentRow},
-    error::{ApiJson, ApiPath, ApiQuery, AppError},
+    error::{ApiPath, ApiQuery, AppError},
     idempotency::IdempotencyKey,
     launch::{self, LaunchCaller, LaunchOverrides, LaunchRequest, LaunchView, StartWhen},
     policy::Action,
@@ -649,21 +645,6 @@ pub(super) async fn suggest_http(
         )
         .await?,
     ))
-}
-
-pub(super) async fn launch_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(account_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<BatchLaunchRequest>,
-) -> Result<(StatusCode, Json<BatchResult>), AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let key = IdempotencyKey::from_headers(&headers)?;
-    let account = owned_account(&state.pool, principal.actor_id, account_id).await?;
-    let caller = LaunchCaller::browser(&principal, &headers)?;
-    let result = launch_batch(&state, &caller, &account, request, &key).await?;
-    Ok((StatusCode::CREATED, Json(result)))
 }
 
 #[cfg(test)]

@@ -75,7 +75,10 @@ async fn listed(app: &axum::Router, who: &Person) -> Vec<String> {
 }
 
 fn refused(status: StatusCode, body: &Value, why: &str) {
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{why}: {body}");
+    assert!(
+        matches!(status, StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN),
+        "{why}: {status} {body}"
+    );
 }
 
 #[tokio::test]

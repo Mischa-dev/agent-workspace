@@ -22,7 +22,6 @@
     "thread_update": "change"
   },
   "routes": [
-    "/api/v1/channels/*",
     "/api/v1/threads/*",
     "/api/v1/projects/{id}/channels",
     "/api/v1/projects/{id}/conversation-sidebar",

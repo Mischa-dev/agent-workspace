@@ -62,7 +62,7 @@ export type InboxNotification = {
   /** Capacity alerts: the ready tasks that could use the capacity. */
   launchHref: string | null
   /** Capacity alerts: the suggested batch, which Launch starts in one tap. */
-  batch: { accountId: string; size: number; windowKey: string | null } | null
+  batch: { accountId: string; workspaceId: string | null; size: number; windowKey: string | null } | null
   request: InboxRequest | null
   /** Whether it asks something of you or is for your information (from the server). */
   attention: 'needs_you' | 'fyi'
@@ -174,7 +174,7 @@ function normalizeBatch(value: unknown): InboxNotification['batch'] {
   const record = asRecord(value)
   const accountId = text(record.accountId)
   const size = typeof record.size === 'number' && record.size > 0 ? record.size : 0
-  return accountId && size ? { accountId, size, windowKey: text(record.windowKey) } : null
+  return accountId && size ? { accountId, workspaceId: text(record.workspaceId), size, windowKey: text(record.windowKey) } : null
 }
 
 export function normalizePage(value: unknown): InboxPage {

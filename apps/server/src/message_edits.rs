@@ -19,7 +19,6 @@ use std::collections::{BTreeSet, HashSet};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, State},
-    http::{HeaderMap, StatusCode},
     routing::get,
 };
 use serde::{Deserialize, Serialize};
@@ -28,17 +27,16 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
+    auth::AuthenticatedActor,
     conversations::{
         ActorView, ConversationAccessRow, MessageAppendResponse, MessageCommandActor, MessageView,
         ResolvedContent, TimelineEntryView, authorize_conversation_row_for, enqueue_event,
         enqueue_external_message_events, fetch_conversation_access, fetch_timeline_entry,
-        finish_idempotent_command, insert_audit_event_for, insert_message_projections,
-        lock_message_conversation, message_content_error, resolve_message_content,
+        insert_message_projections, lock_message_conversation, resolve_message_content,
         suggested_thread_name, web_suggested_thread_name,
     },
-    error::{ApiJson, ApiPath, AppError},
-    idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
+    error::{ApiPath, AppError},
+    idempotency::{self, RequestHash},
     message_content::MessageContent,
     outbox::{ConversationUpdatedPayload, MessageUpdatedPayload, OutboxEventPayload},
     policy::Action,
@@ -60,7 +58,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/api/v1/conversations/{id}/messages/{message_id}",
-            get(get_message).patch(edit_message).delete(remove_message),
+            get(get_message),
         )
         .route(
             "/api/v1/conversations/{id}/messages/{message_id}/revisions",
@@ -229,13 +227,6 @@ pub struct MessageRevisionView {
     /// via" setting is on.
     pub via: Option<String>,
     pub redacted: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct EditMessageRequest {
-    content: serde_json::Value,
-    expected_revision: Option<i32>,
 }
 
 /// The idempotency scope edits share on the web and through MCP.
@@ -943,8 +934,11 @@ async fn scrub_thread_replays(
 ) -> Result<(), AppError> {
     let scope =
         idempotency::resource_bound_scope("channel", locked.conversation.id, "thread_create")?;
-    // The thread's creation replay, and any status or name change through
-    // thread_update (which keeps its answer, with the name, for a retry).
+    let started =
+        idempotency::resource_bound_scope("conversation", locked.conversation.id, "thread_start")?;
+    // The thread's creation replay (from the old web route, or thread_start),
+    // and any status or name change through thread_update (which keeps its
+    // answer, with the name, for a retry).
     sqlx::query(
         r#"
         WITH thread AS (
@@ -958,6 +952,14 @@ async fn scrub_thread_replays(
             FROM thread
             WHERE replay.scope = $1
               AND replay.response_body->'conversation'->>'id' = thread.id::text
+        ),
+        started AS (
+            UPDATE idempotency_keys replay
+            SET response_body = jsonb_set(replay.response_body, '{name}', to_jsonb(thread.name)),
+                request_hash = $3
+            FROM thread
+            WHERE replay.scope = $5
+              AND replay.response_body->>'id' = thread.id::text
         )
         UPDATE idempotency_keys replay
         SET response_body = jsonb_set(replay.response_body, '{value,name}', to_jsonb(thread.name)),
@@ -971,6 +973,7 @@ async fn scrub_thread_replays(
     .bind(locked.id)
     .bind(tombstone_request_hash()?.as_bytes().as_slice())
     .bind(locked.conversation.id)
+    .bind(started)
     .execute(&mut **transaction)
     .await?;
     Ok(())
@@ -1136,16 +1139,6 @@ pub(crate) async fn message_revisions_in(
     }))
 }
 
-fn browser_actor(principal: &AuthenticatedActor) -> MessageCommandActor {
-    MessageCommandActor {
-        actor_id: principal.actor_id,
-        actor_kind: principal.actor_kind.clone(),
-        mcp_credential: None,
-        via_grant_id: None,
-        run_id: None,
-    }
-}
-
 /// A conversation the principal can see, archived or not, for reading one of
 /// its messages.
 async fn readable_conversation(
@@ -1214,142 +1207,6 @@ async fn message_revisions(
         .await?
         .ok_or(AppError::NotFound("message"))?;
     Ok(Json(revisions))
-}
-
-async fn edit_message(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((conversation_id, message_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<EditMessageRequest>,
-) -> Result<(StatusCode, Json<MessageEditResponse>), AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let idempotency_key = IdempotencyKey::from_headers(&headers)?;
-    let content = MessageContent::from_json(request.content).map_err(message_content_error)?;
-    let request_hash = edit_request_hash(&content, request.expected_revision)?;
-    let actor = browser_actor(&principal);
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let locked = lock_message_for_change(
-        &mut transaction,
-        &actor,
-        Some(conversation_id),
-        message_id,
-        Change::Edit,
-    )
-    .await?;
-    let reservation = match idempotency::reserve(
-        &mut transaction,
-        principal.actor_id,
-        &edit_scope(message_id)?,
-        &idempotency_key,
-        request_hash,
-    )
-    .await?
-    {
-        IdempotencyOutcome::Replay(replay) => {
-            let mut body: MessageEditResponse = replay.decode()?;
-            // Kept without quote text: read the quote again, as it is now.
-            crate::forwarding::refresh_reply_quote(
-                &mut *transaction,
-                &mut body.message,
-                &mut body.entry,
-                principal.actor_id,
-            )
-            .await?;
-            transaction.commit().await?;
-            return Ok((replay.status(), Json(body)));
-        }
-        IdempotencyOutcome::Reserved(reservation) => reservation,
-    };
-    let edit = apply_edit(
-        &mut transaction,
-        &locked,
-        &actor,
-        content,
-        request.expected_revision,
-    )
-    .await?;
-    let body = MessageEditResponse {
-        conversation_id: locked.conversation.id,
-        message: edit
-            .entry
-            .message
-            .clone()
-            .ok_or(AppError::Internal("edited entry has no message"))?,
-        entry: edit.entry,
-        changed: edit.changed,
-    };
-    finish_idempotent_command(
-        &mut transaction,
-        &reservation,
-        StatusCode::OK,
-        &stored_edit(&body),
-    )
-    .await?;
-    if edit.changed {
-        insert_audit_event_for(
-            &mut transaction,
-            &headers,
-            &principal,
-            locked.project_id,
-            "conversation.message_edited",
-            "message",
-            locked.id,
-            serde_json::json!({
-                "conversation_id": locked.conversation.id,
-                "from_revision": edit.from_revision,
-                "to_revision": body.message.revision,
-                "newly_mentioned": edit.newly_mentioned.len(),
-            }),
-        )
-        .await?;
-    }
-    transaction.commit().await?;
-    Ok((StatusCode::OK, Json(body)))
-}
-
-async fn remove_message(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((conversation_id, message_id)): ApiPath<(Uuid, Uuid)>,
-) -> Result<Json<MessageRemoveResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let actor = browser_actor(&principal);
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let locked = lock_message_for_change(
-        &mut transaction,
-        &actor,
-        Some(conversation_id),
-        message_id,
-        Change::Remove,
-    )
-    .await?;
-    let removal = apply_removal(&mut transaction, &locked, &actor).await?;
-    if !removal.already_removed {
-        insert_audit_event_for(
-            &mut transaction,
-            &headers,
-            &principal,
-            locked.project_id,
-            "conversation.message_removed",
-            "message",
-            locked.id,
-            removal_audit_metadata(&locked, &removal),
-        )
-        .await?;
-    }
-    transaction.commit().await?;
-    Ok(Json(MessageRemoveResponse {
-        conversation_id: locked.conversation.id,
-        message: removal
-            .entry
-            .message
-            .clone()
-            .ok_or(AppError::Internal("removed entry has no message"))?,
-        entry: removal.entry,
-        already_removed: removal.already_removed,
-    }))
 }
 
 /// Audit metadata for a removal: IDs and counts only, never text or names.

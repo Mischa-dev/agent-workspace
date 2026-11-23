@@ -483,15 +483,27 @@ async fn admit<O: Operation>(
     let need = crate::access::Need::maybe(O::PERMISSION)
         .writing(writes)
         .in_module(module);
-    let _grant = crate::access::check(
+    let checked = crate::access::check(
         &mut connection,
         caller,
         need,
         access_target(target, &located),
     )
     .await
-    .map_err(|error| OpError::logged(O::NAME, &error))?
-    .map_err(|denied| denied_error::<O>(denied, caller, &located))?;
+    .map_err(|error| OpError::logged(O::NAME, &error))?;
+    if let Err(denied) = checked {
+        // A DM whose two no longer share a workspace (or who blocked one
+        // another) is still read, but says why it takes nothing new.
+        if let Some(direct) = located.direct.filter(|_| writes)
+            && let Some(refused) =
+                crate::direct_rules::why_direct_closed(&mut connection, direct, caller.account_id)
+                    .await
+                    .map_err(|error| OpError::logged(O::NAME, &error))?
+        {
+            return Err(refused.into());
+        }
+        return Err(denied_error::<O>(denied, caller, &located));
+    }
     // H1.24: a suspended workspace, or one being deleted, refuses every
     // call but the ones that still work then (keeping it).
     crate::workspace::lifecycle::ensure_open(&mut connection, located.workspace_id, O::NAME)

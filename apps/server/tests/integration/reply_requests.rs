@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use crate::support::legacy::router;
 use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin},
@@ -8,7 +9,6 @@ use agent_workspace_server::{
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
-    router,
 };
 use axum::{
     body::{Body, to_bytes},
@@ -2149,7 +2149,7 @@ impl AgentSession {
             &self.token,
             Some(&self.session_id),
             json!({
-                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "jsonrpc": "2.0", "id": crate::support::app::next_request_id(), "method": "tools/call",
                 "params": { "name": name, "arguments": arguments }
             }),
         )

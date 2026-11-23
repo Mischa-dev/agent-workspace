@@ -1,8 +1,9 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use crate::support::legacy::router;
 use agent_workspace_server::{
     AppState, config::AppConfig, provider::SupervisorRegistry, rate_limit::RateLimiters,
-    realtime::RealtimeHub, router, seed::dev_seed,
+    realtime::RealtimeHub, seed::dev_seed,
 };
 use axum::{
     body::{Body, to_bytes},

@@ -2063,7 +2063,6 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "environment_list",
     "event_kind_list",
     "event_list",
-    "external_event_poll",
     "file_list",
     "file_read",
     "file_link_get",
@@ -2211,10 +2210,7 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
     ) -> McpCase {
         McpCase {
             tool,
-            agent_only: matches!(
-                tool,
-                "inbox_list" | "external_event_poll" | "credential_list"
-            ),
+            agent_only: matches!(tool, "inbox_list" | "credential_list"),
             own,
             foreign,
             filtered,
@@ -3314,7 +3310,6 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             ],
             vec![],
         ),
-        case("external_event_poll", vec![json!({})], vec![], vec![]),
         // A2: the caller's own events and connections; B's agent isn't
         // one A's caller manages.
         case(
@@ -3971,7 +3966,7 @@ pub(super) async fn call_tool(
         token,
         session,
         json!({
-            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "jsonrpc": "2.0", "id": crate::support::app::next_request_id(), "method": "tools/call",
             "params": { "name": name, "arguments": arguments }
         }),
     )

@@ -1,6 +1,6 @@
 import { isSpaceAddress } from '../app/href'
 import { requestJson } from '../api/client'
-import { callOp, newRequestId } from '../api/ops'
+import { callOp, newRequestId, ranOrThrow } from '../api/ops'
 import { asRecord, capability, integer, normalizeConversationActor, nullableString, REMOVED_MESSAGE_CONTENT, string } from './sidebarApi'
 import type { FileAttachment } from '../files/model'
 import {
@@ -391,25 +391,25 @@ export async function sendConversationMessage(input: {
   /** The message in this conversation it replies to. */
   replyTo?: { messageId: string }
 }) {
-  const collection =
-    input.kind === 'channel'
-      ? 'channels'
-      : input.kind === 'thread'
-        ? 'threads'
-        : 'conversations'
-  return timed('message_send', requestJson<unknown>(
-    `/api/v1/${collection}/${encodeURIComponent(input.conversationId)}/messages`,
-    {
-      method: 'POST',
-      idempotencyKey: input.idempotencyKey,
-      // JSON leaves out `attachments` and `replyToMessageId` when there are none.
-      json: {
-        content: input.content,
-        attachments: input.attachments?.map((file) => file.id),
-        replyToMessageId: input.replyTo?.messageId,
-      },
-    },
-  ))
+  return timed('message_send', (async () => {
+    const sent = ranOrThrow(
+      await callOp(
+        'message_send',
+        {
+          conversationId: input.conversationId,
+          content: input.content,
+          // Left out when there are none.
+          ...(input.attachments?.length ? { attachmentIds: input.attachments.map((file) => file.id) } : {}),
+          ...(input.replyTo ? { replyToMessageId: input.replyTo.messageId } : {}),
+        },
+        { requestId: input.idempotencyKey },
+      ),
+      'Sending it',
+    )
+    // The timeline's own reading of it, shown at once before any refetch.
+    const entry = await getConversationMessage(input.conversationId, sent.messageId)
+    return { conversationId: input.conversationId, entry }
+  })())
 }
 
 /** The entry a send returns, when it's for this conversation: shown at once, before any refetch. */
@@ -446,27 +446,26 @@ export async function editConversationMessage(input: {
   expectedRevision: number
   idempotencyKey: string
 }) {
-  const root = asRecord(
-    await requestJson<unknown>(messagePath(input.conversationId, input.messageId), {
-      method: 'PATCH',
-      idempotencyKey: input.idempotencyKey,
-      json: { content: input.content, expectedRevision: input.expectedRevision },
-    }),
+  const saved = ranOrThrow(
+    await callOp(
+      'message_update',
+      { messageId: input.messageId, content: input.content, expectedRevision: input.expectedRevision },
+      { requestId: input.idempotencyKey },
+    ),
+    'The edit',
   )
   return {
-    entry: changedEntry(root, input.conversationId, input.messageId),
-    changed: root.changed !== false,
+    entry: await getConversationMessage(input.conversationId, input.messageId),
+    changed: saved.changed,
   }
 }
 
 /** Remove a message for everyone. Its text and earlier versions are deleted. */
 export async function removeConversationMessage(input: { conversationId: string; messageId: string }) {
-  const root = asRecord(
-    await requestJson<unknown>(messagePath(input.conversationId, input.messageId), { method: 'DELETE' }),
-  )
+  const removed = ranOrThrow(await callOp('message_delete', { messageId: input.messageId }, { requestId: newRequestId() }), 'Removing it')
   return {
-    entry: changedEntry(root, input.conversationId, input.messageId),
-    alreadyRemoved: root.alreadyRemoved === true,
+    entry: await getConversationMessage(input.conversationId, input.messageId),
+    alreadyRemoved: removed.alreadyRemoved,
   }
 }
 
@@ -557,24 +556,19 @@ export async function createThread(input: {
   originMessageId?: string
   idempotencyKey: string
 }) {
-  const payload = asRecord(await requestJson<unknown>(
-    `/api/v1/channels/${encodeURIComponent(input.channelId)}/threads`,
-    {
-      method: 'POST',
-      idempotencyKey: input.idempotencyKey,
-      json: {
+  const thread = ranOrThrow(
+    await callOp(
+      'thread_start',
+      {
+        conversationId: input.channelId,
         ...(input.name ? { name: input.name } : {}),
-        ...(input.originMessageId
-          ? { originMessageId: input.originMessageId }
-          : {}),
+        ...(input.originMessageId ? { fromMessageId: input.originMessageId } : {}),
       },
-    },
-  ))
-  const conversation = asRecord(payload.conversation ?? payload.thread ?? payload)
-  if (typeof conversation.id !== 'string') {
-    throw new Error('Created Thread response is malformed.')
-  }
-  return { id: conversation.id, name: string(conversation.name, input.name ?? '') }
+      { requestId: input.idempotencyKey },
+    ),
+    'Starting the thread',
+  )
+  return { id: thread.id, name: thread.name || (input.name ?? '') }
 }
 
 export async function archiveConversation(input: {

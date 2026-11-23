@@ -8,6 +8,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::support::legacy::router;
 use agent_workspace_server::{
     AppState,
     config::AppConfig,
@@ -15,7 +16,6 @@ use agent_workspace_server::{
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
-    router,
 };
 use axum::http::StatusCode;
 use serde_json::{Value, json};

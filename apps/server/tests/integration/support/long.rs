@@ -22,7 +22,7 @@ pub(crate) fn second_process(
         realtime: agent_workspace_server::realtime::RealtimeHub::new(32),
         supervisors,
     };
-    (agent_workspace_server::router(state.clone()), state)
+    (super::legacy::router(state.clone()), state)
 }
 
 pub(crate) async fn run_jobs(state: &agent_workspace_server::AppState) -> usize {

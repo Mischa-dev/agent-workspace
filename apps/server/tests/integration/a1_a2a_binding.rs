@@ -9,9 +9,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::support::legacy::router;
 use agent_workspace_server::{
     AppState, config::AppConfig, hosts, provider::SupervisorRegistry, rate_limit::RateLimiters,
-    realtime::RealtimeHub, router,
+    realtime::RealtimeHub,
 };
 use axum::{Json, Router, extract::State, http::StatusCode, routing::get, routing::post};
 use serde_json::{Value, json};

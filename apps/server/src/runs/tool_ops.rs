@@ -126,6 +126,11 @@ tool_op!(UsageBatchLaunch {
     run: |call, input| {
         let mut input = input;
         input.client_request_id = Some(command_request_id(call.ctx));
+        // A launch from a person's browser is theirs, not an app's.
+        input.browser_session = match call.ctx.edge {
+            crate::ops::Edge::Web { session_id } => Some(session_id),
+            _ => None,
+        };
         if call.ctx.request_id.is_some() {
             call.key_honoured();
         }

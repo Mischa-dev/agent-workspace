@@ -1680,6 +1680,9 @@ pub struct NotificationView {
 #[serde(rename_all = "camelCase")]
 pub struct BatchAction {
     pub account_id: Uuid,
+    /// The workspace the alert (and its provider account) is in, which the
+    /// launch goes to: the inbox lists every workspace's alerts.
+    pub workspace_id: Uuid,
     /// How many tasks the batch held when the alert fired.
     pub size: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2435,6 +2438,7 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
                 .get("accountId")
                 .and_then(serde_json::Value::as_str)
                 .and_then(|id| Uuid::parse_str(id).ok())?,
+            workspace_id: row.workspace_id,
             size: batch.get("size").and_then(serde_json::Value::as_u64)?,
             window_key: batch
                 .get("windowKey")
