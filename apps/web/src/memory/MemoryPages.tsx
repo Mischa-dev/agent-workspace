@@ -78,6 +78,7 @@ import '../styles/pages.css'
 import { here, spaceHref } from '../app/href'
 
 const MovePageDialog = lazy(() => import('./MovePageDialog').then((module) => ({ default: module.MovePageDialog })))
+const SharedPageDetail = lazy(() => import('./SharedPageDetail'))
 const SharePageDialog = lazy(() => import('./SharePageDialog').then((module) => ({ default: module.SharePageDialog })))
 
 /** A collection's view, or whatever else a page embeds, live where the page is read. */
@@ -364,6 +365,14 @@ export function PageDetailPage() {
   // A moved page's old link leads to where it is now (C1.37), even for a
   // reader who can't open the space it left: the page is read by its id.
   const page = useQuery({ queryKey: memoryKeys.page(projectId, pageId), queryFn: () => getPage(pageId) })
+  // Shared with them on its own (C1.27): the page alone, without its space.
+  if (page.data?.sharedLevel) {
+    return (
+      <Suspense fallback={<DocumentSkeleton label="Loading page" />}>
+        <SharedPageDetail key={pageId} level={page.data.sharedLevel} page={page.data} />
+      </Suspense>
+    )
+  }
   if (page.data && page.data.projectId !== projectId) {
     return <Navigate replace to={projectLocationHref(page.data.projectId, { kind: 'page', pageId })} />
   }

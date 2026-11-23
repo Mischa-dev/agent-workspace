@@ -154,6 +154,11 @@ pub struct PageView {
     /// The pages inside it, in order.
     #[sqlx(skip)]
     pub children: Vec<PageCrumb>,
+    /// Set when the reader isn't in its space and it was shared with them
+    /// on its own: what the share lets them do.
+    #[sqlx(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared_level: Option<crate::access::sharing::ShareLevel>,
 }
 
 /// A page named in a breadcrumb or a list of children.
@@ -1751,11 +1756,10 @@ async fn get_page_http(
     )
     .await
     .is_err()
-        && !shared_page(&state.pool, principal.actor_id, page_id).await?
     {
-        if !shared_page(&state.pool, principal.actor_id, page_id).await? {
+        let Some(level) = shared_page(&state.pool, principal.actor_id, page_id).await? else {
             return Err(AppError::NotFound("page"));
-        }
+        };
         // Shared on its own: the page and nothing else from its space, so
         // not the pages around it or who changed it.
         let mut page = get_page(&state.pool, page_id, principal.actor_id)
@@ -1765,6 +1769,7 @@ async fn get_page_http(
         page.ancestors.clear();
         page.children.clear();
         page.updated_by = None;
+        page.shared_level = Some(level);
         return Ok(Json(page));
     }
     get_page(&state.pool, page_id, principal.actor_id)
@@ -1773,16 +1778,14 @@ async fn get_page_http(
         .ok_or(AppError::NotFound("page"))
 }
 
-/// Whether the page was shared with `account` on its own (K1.32).
+/// What the page was shared with `account` on its own for (K1.32), if it
+/// was.
 pub(crate) async fn shared_page(
     pool: &PgPool,
     account: Uuid,
     page_id: Uuid,
-) -> Result<bool, AppError> {
-    crate::db::scoped_one(pool, async |connection| {
-        crate::access::sharing::shared_with(connection, account, "page", page_id).await
-    })
-    .await
+) -> Result<Option<crate::access::sharing::ShareLevel>, AppError> {
+    crate::access::sharing::page_level(pool, account, page_id).await
 }
 
 /// A page as a link opens it: its words, and nothing from around it.

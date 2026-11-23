@@ -478,19 +478,45 @@ async fn admit<O: Operation>(
             spans,
         });
     }
-    let located = target::locate(&mut connection, target, caller.account_id, *workspace).await?;
+    // A page shared with someone on its own (K1.32) opens to them for what
+    // its share lets them do, though it is in a space they aren't in.
+    let (located, shared) =
+        match target::locate(&mut connection, target, caller.account_id, *workspace).await {
+            Ok(located) => (located, false),
+            Err(error) => (
+                by_share::<O>(&mut connection, caller, target, *workspace)
+                    .await?
+                    .ok_or(error)?,
+                true,
+            ),
+        };
     let module = module_here::<O>(&mut connection, caller, &located).await?;
     let need = crate::access::Need::maybe(O::PERMISSION)
         .writing(writes)
         .in_module(module);
-    let checked = crate::access::check(
-        &mut connection,
-        caller,
-        need,
-        access_target(target, &located),
-    )
-    .await
-    .map_err(|error| OpError::logged(O::NAME, &error))?;
+    let checked = if shared {
+        Ok(())
+    } else {
+        crate::access::check(
+            &mut connection,
+            caller,
+            need,
+            access_target(target, &located),
+        )
+        .await
+        .map_err(|error| OpError::logged(O::NAME, &error))?
+        .map(|_| ())
+    };
+    let checked = match checked {
+        Err(_)
+            if by_share::<O>(&mut connection, caller, target, *workspace)
+                .await?
+                .is_some() =>
+        {
+            Ok(())
+        }
+        other => other,
+    };
     if let Err(denied) = checked {
         // A DM whose two no longer share a workspace (or who blocked one
         // another) is still read, but says why it takes nothing new.
@@ -1080,6 +1106,58 @@ fn access_target(target: &Target, located: &target::Located) -> crate::access::T
 }
 
 /// `access`'s refusal in the words the operation layer uses.
+/// Where a page shared with the caller on its own is, when its share lets
+/// them run `O` and their credential allows it; `None` otherwise.
+async fn by_share<O: Operation>(
+    connection: &mut sqlx::PgConnection,
+    caller: &Caller,
+    target: &Target,
+    named: Option<Uuid>,
+) -> Result<Option<target::Located>, OpError> {
+    let Target::Thing { kind, id, .. } = target else {
+        return Ok(None);
+    };
+    if *kind != crate::access::sharing::ThingKind::Page.key() {
+        return Ok(None);
+    }
+    let level = crate::access::sharing::level_for(connection, caller.account_id, kind, *id)
+        .await
+        .map_err(|error| OpError::logged(O::NAME, &error))?;
+    if !level.is_some_and(|level| level.admits(O::NAME)) {
+        return Ok(None);
+    }
+    // The credential still decides whether it may read or write at all.
+    let credential = crate::access::check(
+        connection,
+        caller,
+        crate::access::Need::SEE.writing(O::KIND.writes()),
+        crate::access::Target::Account,
+    )
+    .await
+    .map_err(|error| OpError::logged(O::NAME, &error))?;
+    if credential.is_err() {
+        return Ok(None);
+    }
+    // A conversation's memory page follows its conversation; no share
+    // opens it.
+    let place = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT project.organization_id, project.id FROM project_pages page \
+         JOIN projects project ON project.id = page.project_id \
+         WHERE page.id = $1 AND page.memory_for_kind IS DISTINCT FROM 'conversation'",
+    )
+    .bind(id)
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(|error| OpError::logged(O::NAME, &error.into()))?;
+    Ok(place
+        .filter(|(workspace, _)| named.is_none_or(|named| named == *workspace))
+        .map(|(workspace_id, space_id)| target::Located {
+            workspace_id,
+            space_id: Some(space_id),
+            direct: None,
+        }))
+}
+
 fn denied_error<O: Operation>(
     denied: crate::access::Denied,
     caller: &Caller,

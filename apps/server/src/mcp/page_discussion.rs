@@ -12,6 +12,7 @@ use super::{
     common::{ToolResult, insert_audit, link_url, parse_id},
     memory_tools::{page_write_mode, writer},
 };
+use crate::access::sharing::{self, ShareLevel};
 use crate::{
     AppState,
     error::AppError,
@@ -23,15 +24,27 @@ use crate::{
     policy::Action,
 };
 
-/// Whether the caller may comment on pages in `project_id`
-/// (`pages.comment`, which a role that only suggests keeps).
+/// Whether the caller may comment on `page_id` in `project_id`
+/// (`pages.comment`, which a role that only suggests keeps, or a share of
+/// the page on its own that lets them comment, K1.32).
 async fn may_comment(
     state: &AppState,
     principal: &McpPrincipal,
     project_id: Uuid,
+    page_id: Uuid,
 ) -> Result<bool, AppError> {
     if !principal.can_write() {
         return Ok(false);
+    }
+    if sharing::page_allows(
+        &state.pool,
+        principal.actor_id,
+        page_id,
+        ShareLevel::Comment,
+    )
+    .await?
+    {
+        return Ok(true);
     }
     let (_, limits) = super::caller_reach(state, principal).await?;
     let caller = crate::access::Caller::of_principal(principal, limits);
@@ -65,6 +78,13 @@ async fn readable(
     if memory::project_access(&state.pool, principal.actor_id, project_id, Action::McpRead)
         .await
         .is_err()
+        && !sharing::page_allows(
+            &state.pool,
+            principal.actor_id,
+            page_id,
+            ShareLevel::Comment,
+        )
+        .await?
     {
         return Ok(None);
     }
@@ -242,7 +262,7 @@ pub(crate) async fn page_comment(
     };
     let result = async {
         let project_id = principal.project_id;
-        if !may_comment(state, principal, project_id).await? {
+        if !may_comment(state, principal, project_id, page_id).await? {
             return Ok(ToolResult::denied(
                 "You can't comment on pages in that project.",
             ));
@@ -362,7 +382,7 @@ pub(crate) async fn page_comment_update(
     };
     let result = async {
         let project_id = principal.project_id;
-        if !may_comment(state, principal, project_id).await? {
+        if !may_comment(state, principal, project_id, page_id).await? {
             return Ok(ToolResult::denied(
                 "You can't comment on pages in that project.",
             ));

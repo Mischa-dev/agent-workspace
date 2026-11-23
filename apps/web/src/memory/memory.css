@@ -86,6 +86,29 @@
   color: var(--content-fg);
 }
 
+.aw-share__add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: var(--space-2);
+}
+
+.aw-share__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+@media (max-width: 640px) {
+  .aw-share__add {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .aw-share__row {
+    flex-wrap: wrap;
+  }
+}
+
 .aw-share__muted {
   margin: 0;
   font: var(--t-small);

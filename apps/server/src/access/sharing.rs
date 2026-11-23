@@ -56,35 +56,113 @@ impl ThingKind {
     }
 }
 
-/// Whether `thing` of `kind` is shared with `account`, who is still an
-/// active member of its workspace.
-pub async fn shared_with(
+/// What a share with one person lets them do, each including the ones
+/// before it. A link is always `See`.
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema, Eq, PartialEq, PartialOrd, Ord,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ShareLevel {
+    /// Read it.
+    #[default]
+    See,
+    /// Read it and its comments, and comment.
+    Comment,
+    /// Comment, and change its words.
+    Edit,
+}
+
+impl ShareLevel {
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::See => "see",
+            Self::Comment => "comment",
+            Self::Edit => "edit",
+        }
+    }
+
+    fn from_key(key: &str) -> Self {
+        match key {
+            "edit" => Self::Edit,
+            "comment" => Self::Comment,
+            _ => Self::See,
+        }
+    }
+
+    /// Whether this level lets someone outside the space run `operation`
+    /// on the shared thing. Only these: nothing that lists, moves, shares or
+    /// deletes it.
+    pub fn admits(self, operation: &str) -> bool {
+        let needs = match operation {
+            "page_get" | "page_blocks_get" => Self::See,
+            "page_comment_list"
+            | "page_comment_create"
+            | "page_comment_update"
+            | "page_suggestion_list" => Self::Comment,
+            "page_update_blocks" => Self::Edit,
+            _ => return false,
+        };
+        self >= needs
+    }
+}
+
+/// What `thing` of `kind` is shared with `account` for, while they are
+/// still an active member of its workspace.
+pub async fn level_for(
     connection: &mut PgConnection,
     account: Uuid,
     kind: &str,
     thing: Uuid,
-) -> Result<bool, AppError> {
-    Ok(sqlx::query_scalar::<_, bool>(
+) -> Result<Option<ShareLevel>, AppError> {
+    let level = sqlx::query_scalar::<_, String>(
         r#"
-        SELECT EXISTS (
-            SELECT 1 FROM thing_grants grant_row
-            JOIN organization_memberships membership
-              ON membership.organization_id = grant_row.workspace_id
-             AND membership.actor_id = grant_row.grantee_account_id
-             AND membership.enabled
-            JOIN actors account ON account.id = membership.actor_id AND account.status = 'active'
-            WHERE grant_row.thing_kind = $1 AND grant_row.thing_id = $2
-              AND grant_row.grantee_account_id = $3
-              AND grant_row.revoked_at IS NULL
-              AND (grant_row.expires_at IS NULL OR grant_row.expires_at > now())
-        )
+        SELECT grant_row.level FROM thing_grants grant_row
+        JOIN organization_memberships membership
+          ON membership.organization_id = grant_row.workspace_id
+         AND membership.actor_id = grant_row.grantee_account_id
+         AND membership.enabled
+        JOIN actors account ON account.id = membership.actor_id AND account.status = 'active'
+        WHERE grant_row.thing_kind = $1 AND grant_row.thing_id = $2
+          AND grant_row.grantee_account_id = $3
+          AND grant_row.revoked_at IS NULL
+          AND (grant_row.expires_at IS NULL OR grant_row.expires_at > now())
+          -- A conversation's memory page follows its conversation; no
+          -- share opens it.
+          AND NOT EXISTS (SELECT 1 FROM project_pages page
+                          WHERE grant_row.thing_kind = 'page' AND page.id = grant_row.thing_id
+                            AND page.memory_for_kind = 'conversation')
         "#,
     )
     .bind(kind)
     .bind(thing)
     .bind(account)
-    .fetch_one(&mut *connection)
-    .await?)
+    .fetch_optional(&mut *connection)
+    .await?;
+    Ok(level.as_deref().map(ShareLevel::from_key))
+}
+
+/// Whether a page is shared with `account` for at least `needs`.
+pub async fn page_allows(
+    pool: &PgPool,
+    account: Uuid,
+    page: Uuid,
+    needs: ShareLevel,
+) -> Result<bool, AppError> {
+    Ok(page_level(pool, account, page)
+        .await?
+        .is_some_and(|level| level >= needs))
+}
+
+/// What a page is shared with `account` for, read on its own connection.
+pub async fn page_level(
+    pool: &PgPool,
+    account: Uuid,
+    page: Uuid,
+) -> Result<Option<ShareLevel>, AppError> {
+    crate::db::scoped_one(pool, async |connection| {
+        level_for(connection, account, ThingKind::Page.key(), page).await
+    })
+    .await
 }
 
 /// What a working link opens.
@@ -144,6 +222,8 @@ pub struct SharedAccount {
     pub account: Uuid,
     /// Their name.
     pub display_name: String,
+    /// What they may do with it.
+    pub level: ShareLevel,
     #[schemars(with = "Option<String>")]
     pub expires_at: Option<DateTime<Utc>>,
 }
@@ -171,6 +251,7 @@ async fn shares(
             Option<Uuid>,
             Option<String>,
             bool,
+            String,
             Option<DateTime<Utc>>,
         ),
     >(
@@ -179,7 +260,7 @@ async fn shares(
                     (SELECT profile.display_name \
                      FROM account_profile(grant_row.grantee_account_id, grant_row.workspace_id) profile) \
                 END, \
-                grant_row.public, grant_row.expires_at \
+                grant_row.public, grant_row.level, grant_row.expires_at \
          FROM thing_grants grant_row \
          WHERE grant_row.thing_kind = $1 AND grant_row.thing_id = $2 \
            AND grant_row.revoked_at IS NULL \
@@ -196,11 +277,12 @@ async fn shares(
         accounts: Vec::new(),
         links: Vec::new(),
     };
-    for (grant, account, name, public, expires_at) in rows {
+    for (grant, account, name, public, level, expires_at) in rows {
         match account {
             Some(account) => view.accounts.push(SharedAccount {
                 account,
                 display_name: name.unwrap_or_default(),
+                level: ShareLevel::from_key(&level),
                 expires_at,
             }),
             None => view.links.push(SharedLink {
@@ -292,6 +374,11 @@ pub struct ThingShareInput {
     pub id: IdRef,
     /// The account to share it with: a member of this workspace.
     pub account: IdRef,
+    /// What they may do: `see` (read it, the default), `comment` (read it
+    /// and its comments, and comment) or `edit` (comment and change its
+    /// words). Never more than reading for anything else in its space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<ShareLevel>,
     /// When the share stops (RFC 3339). Leave out to keep it until it is
     /// unshared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -317,9 +404,10 @@ impl Operation for ThingShare {
     const PERMISSION: Option<Perm> = Some(Perm::PagesEdit);
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
     const TITLE: &'static str = "Share one thing";
-    const DESCRIPTION: &'static str = "Let one member of this workspace read one page that is \
-        in a space they aren't in, without giving them anything else there. Sharing again \
-        changes when it stops. Needs the right to edit the page. Undo it with thing_share_remove.";
+    const DESCRIPTION: &'static str = "Let one member of this workspace read, comment on or edit \
+        one page that is in a space they aren't in (level), without giving them anything else \
+        there. Sharing again changes the level and when it stops. Needs the right to edit the \
+        page. Undo it with thing_share_remove.";
 
     type Input = ThingShareInput;
     type Output = ThingSharesView;
@@ -330,6 +418,7 @@ impl Operation for ThingShare {
     ) -> Result<ThingSharesView, OpError> {
         let (workspace_id, space_id) = located(call)?;
         let (kind, id, account) = (input.kind, input.id.id(), input.account.id());
+        let level = input.level.unwrap_or_default();
         if input.expires_at.is_some_and(|at| at <= Utc::now()) {
             return Err(OpError::invalid("expiresAt", "Pick a time in the future."));
         }
@@ -363,7 +452,7 @@ impl Operation for ThingShare {
         sqlx::query(
             "INSERT INTO thing_grants (id, workspace_id, space_id, thing_kind, thing_id, \
                  grantee_account_id, level, expires_at, granted_by_account_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'see', $7, $8)",
+             VALUES ($1, $2, $3, $4, $5, $6, $9, $7, $8)",
         )
         .bind(Uuid::now_v7())
         .bind(workspace_id)
@@ -373,10 +462,15 @@ impl Operation for ThingShare {
         .bind(account)
         .bind(input.expires_at)
         .bind(by)
+        .bind(level.key())
         .execute(&mut **tx)
         .await
         .map_err(AppError::from)?;
-        call.audit_target(kind.key(), id, json!({ "sharedWith": account }));
+        call.audit_target(
+            kind.key(),
+            id,
+            json!({ "sharedWith": account, "level": level.key() }),
+        );
         share_changed(call, kind, id).await?;
         let tx = call.tx().await?;
         Ok(shares(tx, kind, id).await?)

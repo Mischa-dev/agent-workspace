@@ -13825,6 +13825,26 @@
         ],
         "type": "object"
       },
+      "ShareLevel": {
+        "description": "What a share with one person lets them do, each including the ones\nbefore it. A link is always `See`.",
+        "oneOf": [
+          {
+            "const": "see",
+            "description": "Read it.",
+            "type": "string"
+          },
+          {
+            "const": "comment",
+            "description": "Read it and its comments, and comment.",
+            "type": "string"
+          },
+          {
+            "const": "edit",
+            "description": "Comment, and change its words.",
+            "type": "string"
+          }
+        ]
+      },
       "SharedAccount": {
         "properties": {
           "account": {
@@ -13839,11 +13859,16 @@
               "string",
               "null"
             ]
+          },
+          "level": {
+            "$ref": "#/components/schemas/ShareLevel",
+            "description": "What they may do with it."
           }
         },
         "required": [
           "account",
-          "displayName"
+          "displayName",
+          "level"
         ],
         "type": "object"
       },
@@ -185027,7 +185052,7 @@
     },
     "/api/v2/w/{workspace}/ops/thing_share_add": {
       "post": {
-        "description": "Let one member of this workspace read one page that is in a space they aren't in, without giving them anything else there. Sharing again changes when it stops. Needs the right to edit the page. Undo it with thing_share_remove. Needs \"Edit pages and decisions\" where it acts.",
+        "description": "Let one member of this workspace read, comment on or edit one page that is in a space they aren't in (level), without giving them anything else there. Sharing again changes the level and when it stops. Needs the right to edit the page. Undo it with thing_share_remove. Needs \"Edit pages and decisions\" where it acts.",
         "operationId": "thing_share_add",
         "parameters": [
           {
@@ -185076,6 +185101,17 @@
                   "kind": {
                     "$ref": "#/components/schemas/ThingKind",
                     "description": "What kind of thing: `page`."
+                  },
+                  "level": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/ShareLevel"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "What they may do: `see` (read it, the default), `comment` (read it\nand its comments, and comment) or `edit` (comment and change its\nwords). Never more than reading for anything else in its space."
                   }
                 },
                 "required": [

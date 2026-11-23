@@ -3092,6 +3092,200 @@ async fn a_shared_page_opens_only_itself() {
     world.finish().await;
 }
 
+/// C1.27: a page shared on its own does what its level says and no more:
+/// `see` reads it, `comment` reads and writes its comments, `edit` changes
+/// its words too. None of them lists, renames, shares or reaches another
+/// page of the space.
+#[tokio::test]
+async fn a_shared_page_allows_only_its_level() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("SECRET")
+        .person("lena", "member")
+        .build("privacy_share_levels")
+        .await
+    else {
+        return;
+    };
+    let secret = world.project("SECRET").to_owned();
+    let lena = &world.people["lena"];
+    sqlx::query("DELETE FROM project_memberships WHERE project_id = $1 AND actor_id = $2")
+        .bind(secret.parse::<Uuid>().expect("space"))
+        .bind(lena.actor)
+        .execute(world.pool())
+        .await
+        .expect("lena isn't in SECRET");
+    let mut pages = Vec::new();
+    for title in ["Plan", "Other"] {
+        let (status, page) = send(
+            &world.app,
+            world.owner.browser.request(
+                "POST",
+                &format!("/api/v1/projects/{secret}/pages"),
+                None,
+                json!({"title": title, "body": "first words"}),
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "{status} {page}");
+        pages.push(page["id"].as_str().expect("page").to_owned());
+    }
+    let (plan, other) = (pages[0].clone(), pages[1].clone());
+    let read = |uri: String| lena.browser.request("GET", &uri, None, Value::Null);
+    let op = |browser: &Browser, name: &str, key: &str, body: Value| {
+        browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/{name}", world.organization),
+            Some(key),
+            body,
+        )
+    };
+    let share = |level: &'static str| {
+        op(
+            &world.owner.browser,
+            "thing_share_add",
+            level,
+            json!({"kind": "page", "id": plan, "account": lena.actor, "level": level}),
+        )
+    };
+    let comment = |key: &str, page: &str| {
+        op(
+            &lena.browser,
+            "page_comment_create",
+            key,
+            json!({"pageId": page, "text": "a thought"}),
+        )
+    };
+    let append = |key: &str, page: &str| {
+        op(
+            &lena.browser,
+            "page_update_blocks",
+            key,
+            json!({"pageId": page, "edits": [{"op": "append", "markdown": "more words"}]}),
+        )
+    };
+
+    // see: the page, its document, nothing else.
+    let (_, shared) = send(&world.app, share("see")).await;
+    assert_eq!(shared["outcome"], "ok", "{shared}");
+    assert_eq!(shared["value"]["accounts"][0]["level"], "see", "{shared}");
+    let (status, page) = send(&world.app, read(format!("/api/v1/pages/{plan}"))).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["sharedLevel"], "see", "{page}");
+    let (status, document) = send(&world.app, read(format!("/api/v1/pages/{plan}/document"))).await;
+    assert_eq!(status, StatusCode::OK, "{document}");
+    assert_eq!(document["canEdit"], false, "{document}");
+    let (status, _) = send(&world.app, read(format!("/api/v1/pages/{plan}/discussion"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "see doesn't read comments");
+    let (_, refused) = send(&world.app, comment("see-comment", &plan)).await;
+    assert_ne!(refused["outcome"], "ok", "see doesn't comment: {refused}");
+    let (_, refused) = send(&world.app, append("see-edit", &plan)).await;
+    assert_ne!(refused["outcome"], "ok", "see doesn't edit: {refused}");
+
+    // comment: its discussion too, and still nothing of the space's.
+    let (_, shared) = send(&world.app, share("comment")).await;
+    assert_eq!(shared["outcome"], "ok", "{shared}");
+    let (_, commented) = send(&world.app, comment("comment-comment", &plan)).await;
+    assert_eq!(commented["outcome"], "ok", "{commented}");
+    let (status, discussion) =
+        send(&world.app, read(format!("/api/v1/pages/{plan}/discussion"))).await;
+    assert_eq!(status, StatusCode::OK, "{discussion}");
+    assert_eq!(discussion["canComment"], true, "{discussion}");
+    let (_, listed) = send(
+        &world.app,
+        op(
+            &lena.browser,
+            "page_comment_list",
+            "comment-list",
+            json!({"pageId": plan}),
+        ),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(listed.to_string().contains("a thought"), "{listed}");
+    let (_, refused) = send(&world.app, comment("comment-other", &other)).await;
+    assert_ne!(refused["outcome"], "ok", "only the shared page: {refused}");
+    let (_, refused) = send(&world.app, append("comment-edit", &plan)).await;
+    assert_ne!(refused["outcome"], "ok", "comment doesn't edit: {refused}");
+
+    // edit: its words too, but not its title, its shares or another page.
+    let (_, shared) = send(&world.app, share("edit")).await;
+    assert_eq!(shared["outcome"], "ok", "{shared}");
+    let (status, document) = send(&world.app, read(format!("/api/v1/pages/{plan}/document"))).await;
+    assert_eq!(status, StatusCode::OK, "{document}");
+    assert_eq!(document["canEdit"], true, "{document}");
+    let (_, edited) = send(&world.app, append("edit-edit", &plan)).await;
+    assert_eq!(edited["outcome"], "ok", "{edited}");
+    let body: String = sqlx::query_scalar("SELECT body FROM project_pages WHERE id = $1::uuid")
+        .bind(&plan)
+        .fetch_one(world.pool())
+        .await
+        .expect("body");
+    assert!(body.contains("more words"), "{body}");
+    let (_, refused) = send(&world.app, append("edit-other", &other)).await;
+    assert_ne!(refused["outcome"], "ok", "only the shared page: {refused}");
+    for (name, body) in [
+        ("page_update", json!({"pageId": plan, "title": "Mine now"})),
+        (
+            "thing_share_add",
+            json!({"kind": "page", "id": plan, "account": world.owner.actor}),
+        ),
+        ("thing_share_list", json!({"kind": "page", "id": plan})),
+        ("page_list", json!({"projectId": secret})),
+    ] {
+        let (_, refused) = send(&world.app, op(&lena.browser, name, name, body)).await;
+        assert_ne!(refused["outcome"], "ok", "{name}: {refused}");
+    }
+    let title: String = sqlx::query_scalar("SELECT title FROM project_pages WHERE id = $1::uuid")
+        .bind(&plan)
+        .fetch_one(world.pool())
+        .await
+        .expect("title");
+    assert_eq!(title, "Plan");
+
+    // A link only reads.
+    let violated = sqlx::query(
+        "UPDATE thing_grants SET level = 'edit' WHERE thing_id = $1::uuid AND link_digest IS NULL",
+    )
+    .bind(&plan)
+    .execute(world.pool())
+    .await;
+    assert!(violated.is_ok(), "a person's share may edit");
+    let (_, link) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "thing_link_create",
+            "owner-link",
+            json!({"kind": "page", "id": plan}),
+        ),
+    )
+    .await;
+    assert_eq!(link["outcome"], "ok", "{link}");
+    let refused = sqlx::query("UPDATE thing_grants SET level = 'edit' WHERE id = $1::uuid")
+        .bind(link["value"]["id"].as_str().expect("link id"))
+        .execute(world.pool())
+        .await;
+    assert!(refused.is_err(), "a link stays read-only");
+
+    // Unshared, all of it stops.
+    let (_, unshared) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "thing_share_remove",
+            "owner-unshare",
+            json!({"kind": "page", "id": plan, "account": lena.actor}),
+        ),
+    )
+    .await;
+    assert_eq!(unshared["outcome"], "ok", "{unshared}");
+    let (_, refused) = send(&world.app, comment("after-comment", &plan)).await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    let (status, _) = send(&world.app, read(format!("/api/v1/pages/{plan}/document"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    world.finish().await;
+}
+
 /// A2.11: a follow-up is its account's alone, and only about what that
 /// account can see. Another member can't change, cancel or list it, nor set
 /// one about a DM they aren't in.

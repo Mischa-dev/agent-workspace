@@ -95,8 +95,8 @@
   ],
   "web": { "folder": "memory" },
   "slots": {
-    "pages": ["/pages", "/projects/:projectId/pages", "/projects/:projectId/pages/:pageId", "/projects/:projectId/decisions"],
-    "parts": ["area.pages", "area.decisions", "page.live_editing", "page.comments", "page.import_export", "page.nesting", "page.recent_edits", "page.move", "talk.channel_memory", "channel.tabs"],
+    "pages": ["/pages", "/projects/:projectId/pages", "/projects/:projectId/pages/:pageId", "/projects/:projectId/decisions", "/p/:token"],
+    "parts": ["area.pages", "area.decisions", "page.live_editing", "page.comments", "page.import_export", "page.nesting", "page.recent_edits", "page.move", "page.sharing", "talk.channel_memory", "channel.tabs"],
     "sidebar": [],
     "home": [],
     "settings": [],

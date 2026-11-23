@@ -676,7 +676,9 @@ export type ShapeChannel = { name: string; private?: boolean }
 
 export type ShapePage = { guide?: boolean; markdown?: string; title: string }
 
-export type SharedAccount = { account: string; displayName: string; expiresAt?: string | null }
+export type ShareLevel = "see" | "comment" | "edit"
+
+export type SharedAccount = { account: string; displayName: string; expiresAt?: string | null; level: ShareLevel }
 
 export type SharedLink = { expiresAt?: string | null; id: string; public: boolean }
 
@@ -2472,7 +2474,7 @@ export type ThingLinkCreateInput = { expiresInHours?: number | null; id: string;
 
 export type ThingLinkCreateOutput = { expiresAt: string; id: string; token?: string | null }
 
-export type ThingShareAddInput = { account: string; expiresAt?: string | null; id: string; kind: ThingKind }
+export type ThingShareAddInput = { account: string; expiresAt?: string | null; id: string; kind: ThingKind; level?: ShareLevel | null }
 
 export type ThingShareAddOutput = { accounts: SharedAccount[]; id: string; kind: ThingKind; links: SharedLink[] }
 

@@ -464,21 +464,9 @@ pub(crate) async fn page_get(
         return ToolResult::invalid("pageId", "Pass a page ID or link.");
     };
     let result = async {
-        let Some(page) = memory::get_page(&state.pool, page_id, principal.actor_id).await? else {
+        let Some(page) = readable_page(state, principal, page_id).await? else {
             return Ok(ToolResult::not_found("That page"));
         };
-        if page.project_id != principal.project_id
-            || memory::project_access(
-                &state.pool,
-                principal.actor_id,
-                page.project_id,
-                Action::McpRead,
-            )
-            .await
-            .is_err()
-        {
-            return Ok(ToolResult::not_found("That page"));
-        }
         let (title, body) = match arguments.version {
             Some(version) if version != page.version => {
                 match memory::get_revision(&state.pool, page_id, version, principal.actor_id)
@@ -1134,20 +1122,32 @@ async fn readable_page(
     principal: &McpPrincipal,
     page_id: Uuid,
 ) -> Result<Option<memory::PageView>, AppError> {
-    let Some(page) = memory::get_page(&state.pool, page_id, principal.actor_id).await? else {
+    let Some(mut page) = memory::get_page(&state.pool, page_id, principal.actor_id).await? else {
         return Ok(None);
     };
-    if page.project_id != principal.project_id
-        || memory::project_access(
-            &state.pool,
-            principal.actor_id,
-            page.project_id,
-            Action::McpRead,
-        )
-        .await
-        .is_err()
-    {
+    if page.project_id != principal.project_id {
         return Ok(None);
+    }
+    if memory::project_access(
+        &state.pool,
+        principal.actor_id,
+        page.project_id,
+        Action::McpRead,
+    )
+    .await
+    .is_err()
+    {
+        // Shared on its own (K1.32): the page and nothing from around it.
+        let Some(level) =
+            crate::access::sharing::page_level(&state.pool, principal.actor_id, page_id).await?
+        else {
+            return Ok(None);
+        };
+        page.revisions.clear();
+        page.ancestors.clear();
+        page.children.clear();
+        page.updated_by = None;
+        page.shared_level = Some(level);
     }
     Ok(Some(page))
 }
@@ -1546,9 +1546,20 @@ pub(crate) async fn page_edit(
     let result = async {
         let project_id = principal.project_id;
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-        if page_write_mode(state, principal, &mut transaction, project_id, true)
+        // Shared on its own to edit (K1.32): this page's words, directly.
+        let shared_edit = principal.can_write()
+            && crate::access::sharing::level_for(
+                &mut transaction,
+                principal.actor_id,
+                "page",
+                page_id,
+            )
             .await?
-            .is_none()
+                == Some(crate::access::sharing::ShareLevel::Edit);
+        if !shared_edit
+            && page_write_mode(state, principal, &mut transaction, project_id, true)
+                .await?
+                .is_none()
         {
             return Ok(ToolResult::denied("You can't edit pages in that project."));
         }
@@ -1599,14 +1610,18 @@ pub(crate) async fn page_edit(
         };
         let writer = writer(principal);
         let creator = suggestions::page_creator(&mut transaction, page_id).await?;
-        let mode = page_write_mode(
-            state,
-            principal,
-            &mut transaction,
-            project_id,
-            creator == Some(principal.actor_id),
-        )
-        .await?;
+        let mode = if shared_edit {
+            Some(access::WriteMode::Direct)
+        } else {
+            page_write_mode(
+                state,
+                principal,
+                &mut transaction,
+                project_id,
+                creator == Some(principal.actor_id),
+            )
+            .await?
+        };
         if arguments.suggest == Some(true) || mode == Some(access::WriteMode::Propose) {
             let stored_edits = match suggestions::resolve(&current, &edits) {
                 Ok(stored) => stored,

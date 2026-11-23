@@ -58,10 +58,14 @@ describe('the web module registry', () => {
   it('puts every registered page in the route table, once', () => {
     const paths = routePaths()
     for (const module of WEB_MODULES) {
-      for (const route of [...(module.routes ?? []), ...(module.publicRoutes ?? [])]) {
+      for (const route of module.routes ?? []) {
         // A workspace page lives at its workspace address (W1.14d); the rest at their own.
         const at = isWorkspacePath(route.path) ? `/w/:ws${workspaceRoutePath(route.path)}` : route.path
         expect(paths.filter((path) => path === at)).toEqual([at])
+      }
+      // A public page is opened without a workspace, at its own address.
+      for (const route of module.publicRoutes ?? []) {
+        expect(paths.filter((path) => path === route.path)).toEqual([route.path])
       }
     }
   })

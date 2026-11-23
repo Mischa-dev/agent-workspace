@@ -6,10 +6,29 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { publicPageUrl } from '../app/href'
 import { callOp, newRequestId } from '../api/ops'
-import { Banner, Button, Checkbox, Dialog, TextField, describeError, formatDateTime, showToast } from '../ui'
+import { Banner, Button, Checkbox, Dialog, SelectField, TextField, describeError, formatDateTime, showToast } from '../ui'
+import type { ShareLevel } from './api'
 
 const sharesKey = (pageId: string) => ['page-shares', pageId] as const
 const peopleKey = (search: string) => ['page-share-people', search] as const
+
+const LEVELS: { value: ShareLevel; label: string }[] = [
+  { value: 'see', label: 'Can read' },
+  { value: 'comment', label: 'Can comment' },
+  { value: 'edit', label: 'Can edit' },
+]
+
+function LevelPicker({ label, onChange, value }: { label: string; onChange: (level: ShareLevel) => void; value: ShareLevel }) {
+  return (
+    <SelectField aria-label={label} compact onChange={(event) => onChange(event.target.value as ShareLevel)} value={value}>
+      {LEVELS.map((level) => (
+        <option key={level.value} value={level.value}>
+          {level.label}
+        </option>
+      ))}
+    </SelectField>
+  )
+}
 
 export function SharePageDialog({ onClose, page }: { onClose: () => void; page: { id: string; title: string } }) {
   const queryClient = useQueryClient()
@@ -28,6 +47,7 @@ export function SharePageDialog({ onClose, page }: { onClose: () => void; page: 
     queryFn: ({ signal }) => callOp('people_search', { query: search, limit: 6 }, { signal }),
     enabled: search.length > 0,
   })
+  const [level, setLevel] = useState<ShareLevel>('comment')
   const [publicLink, setPublicLink] = useState(true)
   const [made, setMade] = useState<{ url: string; public: boolean } | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -43,15 +63,16 @@ export function SharePageDialog({ onClose, page }: { onClose: () => void; page: 
       .catch((reason: unknown) => setError(`${failed} ${describeError(reason).message}`))
       .finally(() => setBusy(null))
   }
-  const share = (accountId: string, name: string) =>
+  const share = (accountId: string, name: string, as: ShareLevel, changing = false) =>
     run(
       `share-${accountId}`,
       async () => {
-        changed(await callOp('thing_share_add', { kind: 'page', id: page.id, account: accountId }, { requestId: newRequestId() }))
+        changed(await callOp('thing_share_add', { kind: 'page', id: page.id, account: accountId, level: as }, { requestId: newRequestId() }))
+        if (changing) return
         setQuery('')
         showToast({ tone: 'success', title: `Shared with ${name}` })
       },
-      'It wasn’t shared.',
+      changing ? 'It wasn’t changed.' : 'It wasn’t shared.',
     )
   const unshare = (input: { account?: string; link?: string }) =>
     run(
@@ -81,7 +102,7 @@ export function SharePageDialog({ onClose, page }: { onClose: () => void; page: 
   const matches = (people.data?.people ?? []).filter((person) => !shared.has(person.id)).slice(0, 6)
   return (
     <Dialog
-      description="They can read this page and nothing else in its project."
+      description="They get this page and nothing else in its project."
       footer={<Button onClick={onClose}>Done</Button>}
       onClose={onClose}
       open
@@ -93,7 +114,10 @@ export function SharePageDialog({ onClose, page }: { onClose: () => void; page: 
         <h3 className="aw-share__heading" id="share-people">
           People
         </h3>
-        <TextField label="Add someone from this workspace" onChange={(event) => setQuery(event.target.value)} placeholder="Name or @handle" value={query} />
+        <div className="aw-share__add">
+          <TextField label="Add someone from this workspace" onChange={(event) => setQuery(event.target.value)} placeholder="Name or @handle" value={query} />
+          <LevelPicker label="What they can do" onChange={setLevel} value={level} />
+        </div>
         {search && matches.length ? (
           <ul className="aw-share__list">
             {matches.map((person) => (
@@ -101,7 +125,7 @@ export function SharePageDialog({ onClose, page }: { onClose: () => void; page: 
                 <span>
                   {person.name} <span className="aw-share__muted">@{person.handle}</span>
                 </span>
-                <Button busy={busy === `share-${person.id}`} onClick={() => share(person.id, person.name)} size="sm">
+                <Button busy={busy === `share-${person.id}`} onClick={() => share(person.id, person.name, level)} size="sm">
                   Share
                 </Button>
               </li>
@@ -118,14 +142,28 @@ export function SharePageDialog({ onClose, page }: { onClose: () => void; page: 
                   {account.displayName || 'Someone'}
                   {account.expiresAt ? <span className="aw-share__muted"> · until {formatDateTime(account.expiresAt)}</span> : null}
                 </span>
-                <Button busy={busy === `remove-${account.account}`} onClick={() => unshare({ account: account.account })} size="sm" variant="ghost">
-                  Stop sharing
-                </Button>
+                <span className="aw-share__actions">
+                  <LevelPicker
+                    label={`What ${account.displayName || 'they'} can do`}
+                    onChange={(next) => share(account.account, account.displayName, next, true)}
+                    value={account.level}
+                  />
+                  <Button busy={busy === `remove-${account.account}`} onClick={() => unshare({ account: account.account })} size="sm" variant="ghost">
+                    Stop sharing
+                  </Button>
+                </span>
               </li>
             ))}
           </ul>
         ) : shares.isSuccess ? (
           <p className="aw-share__muted">Not shared with anyone on its own.</p>
+        ) : null}
+        {shares.data?.accounts.length ? (
+          <div>
+            <Button icon="copy" onClick={() => copy(window.location.href.split('?')[0])} size="sm" variant="ghost">
+              Copy the page’s address to send them
+            </Button>
+          </div>
         ) : null}
       </section>
       <section aria-labelledby="share-links" className="aw-share">
