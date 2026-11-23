@@ -32,16 +32,17 @@ function withCitations(answer: Answer): ReactNode[] {
 
 /** Asks for an answer on demand: a model call costs the workspace, so it never runs by itself. */
 export function SearchAnswer({ projectId, query }: { projectId: string; query: string }) {
-  const [asked, setAsked] = useState<{ query: string; answer: Answer } | null>(null)
+  const [asked, setAsked] = useState<{ query: string; projectId: string; answer: Answer } | null>(null)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
-  const answer = asked?.query === query ? asked.answer : null
+  // An answer belongs to the words and the place it was asked in.
+  const answer = asked?.query === query && asked.projectId === projectId ? asked.answer : null
   const ask = async () => {
     setBusy(true)
     setProblem(null)
     try {
       const value = await callOp('search_answer', { question: query, ...(projectId ? { projectId } : {}) })
-      setAsked({ query, answer: value })
+      setAsked({ query, projectId, answer: value })
     } catch (error) {
       setProblem(describeError(error).message)
     } finally {

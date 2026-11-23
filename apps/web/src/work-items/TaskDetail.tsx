@@ -375,14 +375,14 @@ function TaskDetailBody({
           Someone who edits this task accepts or rejects each one.
         </TaskNotice>
       ) : null}
-      <ProposedChanges
+      {experience.shows('thing.proposals') ? <ProposedChanges
         canDecide={changeable && item.capabilities.edit}
         enabled={changeable && (item.capabilities.edit || suggesting)}
         kind="task"
         onDecided={() => void queryClient.invalidateQueries({ queryKey: queryKeys.workItem(item.projectId, item.id) })}
         thingId={item.id}
         viewerId={actorId}
-      />
+      /> : null}
       {saveStopped ? (
         <Suspense fallback={null}>
           <TaskSaveNotices item={item} save={save} />

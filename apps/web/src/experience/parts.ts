@@ -47,6 +47,7 @@ export const PART_IDS = [
   'talk.typing',
   'talk.channel_memory',
   'thing.comments',
+  'thing.proposals',
   'page.live_editing',
   'page.comments',
   'page.import_export',

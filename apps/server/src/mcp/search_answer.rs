@@ -106,7 +106,8 @@ pub(crate) async fn answer_tool(
             &parsed,
             &[],
             SearchFilter {
-                confined: confined_project(principal).is_some(),
+                // A space picked by name keeps the workspace's own boards out too.
+                confined: principal.project_explicit || confined_project(principal).is_some(),
                 ..SearchFilter::default()
             },
         )
@@ -173,17 +174,7 @@ pub(crate) async fn answer_tool(
             Err(error) => return Ok(refusal(error)),
         };
         let read = hits.len();
-        let mut cited = Vec::new();
-        for number in answer.value.sources {
-            let Some(index) = usize::try_from(number)
-                .ok()
-                .and_then(|number| number.checked_sub(1))
-                .filter(|index| *index < read && !cited.contains(index))
-            else {
-                continue;
-            };
-            cited.push(index);
-        }
+        let (text, cited) = renumber(&answer.value.answer, &answer.value.sources, read);
         let sources = cited
             .into_iter()
             .map(|index| {
@@ -204,7 +195,7 @@ pub(crate) async fn answer_tool(
             })
             .collect();
         Ok::<_, AppError>(ToolResult::ok(AnswerValue {
-            answer: answer.value.answer,
+            answer: text,
             sources,
             read,
             provider: answer.provider.to_owned(),
@@ -213,6 +204,45 @@ pub(crate) async fn answer_tool(
     }
     .await;
     result.unwrap_or_else(|error| ToolResult::from_error(error, "search_answer"))
+}
+
+/// The sources in the order the answer first cites them (then any it lists
+/// but never cites), and the answer with each "[n]" renumbered to its place
+/// in that list. A number naming no result loses its brackets' link: it's
+/// dropped from the text.
+fn renumber(answer: &str, listed: &[i64], read: usize) -> (String, Vec<usize>) {
+    let valid = |number: &str| {
+        number
+            .parse::<usize>()
+            .ok()
+            .and_then(|number| number.checked_sub(1))
+            .filter(|index| *index < read)
+    };
+    let citation = regex_lite::Regex::new(r"\[(\d{1,2})\]").expect("citation pattern");
+    let mut order = Vec::new();
+    for found in citation.captures_iter(answer) {
+        if let Some(index) = valid(&found[1])
+            && !order.contains(&index)
+        {
+            order.push(index);
+        }
+    }
+    for number in listed {
+        if let Some(index) = valid(&number.to_string())
+            && !order.contains(&index)
+        {
+            order.push(index);
+        }
+    }
+    let text = citation
+        .replace_all(answer, |found: &regex_lite::Captures<'_>| {
+            valid(&found[1])
+                .and_then(|index| order.iter().position(|cited| *cited == index))
+                .map(|position| format!("[{}]", position + 1))
+                .unwrap_or_default()
+        })
+        .into_owned();
+    (text, order)
 }
 
 /// Nothing the asker can see matches: said without asking a model.
@@ -224,4 +254,21 @@ fn nothing() -> ToolResult<AnswerValue> {
         provider: String::new(),
         model: String::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::renumber;
+
+    #[test]
+    fn citations_follow_the_sources_they_link_to() {
+        // Cited out of rank order and skipping the first result.
+        let (text, order) = renumber("B is so [3]. A too [2], and B again [3].", &[3, 2], 4);
+        assert_eq!(order, vec![2, 1]);
+        assert_eq!(text, "B is so [1]. A too [2], and B again [1].");
+        // A number naming no result is dropped; a listed but uncited source comes last.
+        let (text, order) = renumber("Said [9], seen [1].", &[4, 1], 4);
+        assert_eq!(order, vec![0, 3]);
+        assert_eq!(text, "Said , seen [1].");
+    }
 }

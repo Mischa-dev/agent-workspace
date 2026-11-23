@@ -491,7 +491,12 @@ fn search_answer(input: &Value) -> Value {
         let Some(n) = result.get("n").and_then(Value::as_i64) else {
             continue;
         };
-        parts.push(format!("{} [{n}]", text(result, "snippet")));
+        // Each result's opening words: the reply schema caps an answer at 1,500.
+        let words = text(result, "snippet")
+            .chars()
+            .take(160)
+            .collect::<String>();
+        parts.push(format!("{words} [{n}]"));
         sources.push(n);
     }
     json!({"answer": parts.join(" "), "sources": sources})

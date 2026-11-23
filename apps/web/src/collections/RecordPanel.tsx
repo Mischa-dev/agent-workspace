@@ -151,14 +151,14 @@ export function RecordPanel({
         onSave={(title) => void (suggesting ? suggest({ title }) : edits.save(current, { title }))}
         title={current.title}
       />
-      <ProposedChanges
+      {experience.shows('thing.proposals') ? <ProposedChanges
         canDecide={editable}
         enabled={editable || suggesting}
         kind="record"
         onDecided={() => void record.refetch()}
         thingId={current.id}
         viewerId={viewerId}
-      />
+      /> : null}
       <dl className="aw-recordpanel__fields">
         {fields.map((field) => {
           const value = current.values[field.id]

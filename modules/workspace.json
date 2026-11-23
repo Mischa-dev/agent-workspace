@@ -17,6 +17,7 @@
     "proposal_list": "query",
     "proposal_decide": "change",
     "workspace_search": "query",
+    "search_answer": "query",
     "status_set": "change",
     "status_delete": "change",
     "status_list": "query",
@@ -226,7 +227,7 @@
       "/design-system/pieces",
       "*"
     ],
-    "parts": ["tech.ids", "thing.activity", "page.references", "workspace.spend_limits"],
+    "parts": ["tech.ids", "thing.activity", "thing.proposals", "page.references", "workspace.spend_limits"],
     "sidebar": ["rail.home", "rail.search", "rail.settings", "home.home"],
     "home": ["setup"],
     "settings": [
