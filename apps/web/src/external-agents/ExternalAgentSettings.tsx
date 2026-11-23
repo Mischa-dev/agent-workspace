@@ -90,9 +90,10 @@ const FALLBACK_RECIPES: SetupRecipe[] = [{ id: 'other', title: 'Another app' }]
 
 /** The apps a setup link can be made for; the first is the default. */
 function useSetupRecipes(): SetupRecipe[] {
+  const workspaceId = useWorkspaceId() ?? undefined
   const recipes = useQuery({
-    queryKey: queryKeys.agentRecipes(),
-    queryFn: listSetupRecipes,
+    queryKey: queryKeys.agentRecipes(workspaceId),
+    queryFn: () => listSetupRecipes(workspaceId),
     staleTime: Infinity,
   })
   return recipes.data?.length ? recipes.data : FALLBACK_RECIPES

@@ -197,10 +197,12 @@ function PagesList({ projectId, space }: { projectId: string; space?: boolean })
   const base = pagesHref(projectId)
   const hasGuide = Boolean(pages.data?.pages.some((page) => page.isGuide))
   const canEdit = Boolean(pages.data?.canEdit)
-  const transfers = useProjectExperience(projectId).shows('page.import_export')
+  const experience = useProjectExperience(projectId)
+  const transfers = experience.shows('page.import_export')
   // T1.36: the space's pages as a collection, to give them fields and list
-  // them through views.
-  const collections = useCollections(projectId)
+  // them through views. Only where collections are on: the workspace's own
+  // space has them off, and asking there is refused.
+  const collections = useCollections(experience.moduleOn('collections') ? projectId : '')
   const asCollection = collections.data?.collections.find((collection) => collection.builtin === 'pages')
   return (
     <>
