@@ -198,6 +198,7 @@ old names, and what replaced them:
 | `run_usage` | `run_usage_list` |
 | `usage_windows` | `usage_window_list` |
 | `usage_batch` | `usage_batch_preview` |
+| `external_event_poll` | `event_list` |
 
 Most old names already answered with the operation's `outcome` and
 `value`, which the new names keep. `task_comment` and the two mark tools

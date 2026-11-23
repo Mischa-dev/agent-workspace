@@ -125,6 +125,7 @@ pub const RETIRED: &[Retired] = &[
     retired("run_usage", &["run_usage_list"]),
     retired("usage_windows", &["usage_window_list"]),
     retired("usage_batch", &["usage_batch_preview"]),
+    retired("external_event_poll", &["event_list"]),
 ];
 
 /// The retired name `name`, unless an operation of that name exists now.
