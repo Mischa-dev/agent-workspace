@@ -104,6 +104,7 @@ pub(crate) mod repository_tools;
 pub(crate) mod resources;
 pub(crate) mod run_pages;
 pub(crate) mod runs;
+pub(crate) mod search_answer;
 pub(crate) mod sheet_tools;
 pub(crate) mod talk;
 pub(crate) mod task_batch;

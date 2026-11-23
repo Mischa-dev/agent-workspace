@@ -28,6 +28,7 @@ import {
 } from '../ui'
 import { useListKeys } from '../ui/listKeys'
 import { useTimeToShow } from '../telemetry/useTimeToShow'
+import { SearchAnswer } from './SearchAnswer'
 import { savedSearchName, useSavedSearches, useSetSavedSearch } from './savedSearches'
 import { describeFilter, parseSearchQuery, queryFilters, withToken, withoutToken } from './searchQuery'
 import '../styles/pages.css'
@@ -286,6 +287,7 @@ export function SearchPage() {
               {filters.length ? 'Try fewer filters or different words.' : 'Try fewer or different words.'}
             </EmptyState>
           ) : null}
+          {results.data && results.data.hits.length > 0 ? <SearchAnswer projectId={projectId} query={query} /> : null}
           {results.data && results.data.hits.length > 0 ? (
             <RowList label="Results">
               {results.data.hits.map((hit, _index, hits) => {

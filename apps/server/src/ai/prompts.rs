@@ -117,8 +117,18 @@ pub static SUMMARY: Prompt = Prompt::new(
     1_500,
 );
 
+/// C2.27: answers a question from search results, citing them.
+pub static SEARCH_ANSWER: Prompt = Prompt::new(
+    "search_answer",
+    1,
+    include_str!("prompts/search_answer.v1.md"),
+    include_str!("prompts/search_answer.v1.schema.json"),
+    include_str!("prompts/fixtures/search_answer.v1.json"),
+    1_200,
+);
+
 /// Every prompt, for the tests and the fake provider.
-pub fn all() -> [&'static Prompt; 7] {
+pub fn all() -> [&'static Prompt; 8] {
     [
         &PING,
         &DEPENDENCY_JUDGE,
@@ -127,6 +137,7 @@ pub fn all() -> [&'static Prompt; 7] {
         &PLAN_TO_TASKS,
         &CRITERIA,
         &SUMMARY,
+        &SEARCH_ANSWER,
     ]
 }
 

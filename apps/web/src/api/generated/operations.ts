@@ -2198,6 +2198,10 @@ export type ScheduledMessageUpdateInput = { cancel?: boolean | null; content?: M
 
 export type ScheduledMessageUpdateOutput = { canceled: boolean; scheduled?: ScheduledLine | null }
 
+export type SearchAnswerInput = { projectId?: string | null; question: string }
+
+export type SearchAnswerOutput = { answer: string; model: string; provider: string; read: number; sources: SearchResult[] }
+
 export type SettingListInput = { keys?: string[] | null; spaceId?: string | null }
 
 export type SettingListOutput = { capabilities: SettingCapabilities; organizationId: string; projectId?: string | null; settings: Resolved[] }
@@ -3005,6 +3009,7 @@ export type Operations = {
   schedule_list: { input: ScheduleListInput; output: ScheduleListOutput }
   schedule_update: { input: ScheduleUpdateInput; output: ScheduleUpdateOutput }
   scheduled_message_update: { input: ScheduledMessageUpdateInput; output: ScheduledMessageUpdateOutput }
+  search_answer: { input: SearchAnswerInput; output: SearchAnswerOutput }
   setting_list: { input: SettingListInput; output: SettingListOutput }
   setting_update: { input: SettingUpdateInput; output: SettingUpdateOutput }
   sheet_chart_get: { input: SheetChartGetInput; output: SheetChartGetOutput }

@@ -10418,7 +10418,7 @@
             "type": "integer"
           },
           "change": {
-            "description": "The change in the kind's shape: for a page, `{\"edits\": [...]}` by\nlasting block id, each with the Markdown it replaces (`before`); for\na sheet, `{\"cells\": [...]}`, each with its tab, row, column, the\ninput it read (`before`) and the one proposed (`after`); for a\nwhiteboard, `{\"elements\": [...]}`, likewise."
+            "description": "The change in the kind's shape: for a page, `{\"edits\": [...]}` by\nlasting block id, each with the Markdown it replaces (`before`); for\na sheet, `{\"cells\": [...]}`, each with its tab, row, column, the\ninput it read (`before`) and the one proposed (`after`); for a\nwhiteboard, `{\"elements\": [...]}`, likewise; for a record or a task,\n`{\"changes\": [...]}`, each with its field, name, and how it reads\n`before` and `after`."
           },
           "createdAt": {
             "type": "string"
@@ -123828,7 +123828,7 @@
                               "type": "integer"
                             },
                             "change": {
-                              "description": "The change in the kind's shape: for a page, `{\"edits\": [...]}` by\nlasting block id, each with the Markdown it replaces (`before`); for\na sheet, `{\"cells\": [...]}`, each with its tab, row, column, the\ninput it read (`before`) and the one proposed (`after`); for a\nwhiteboard, `{\"elements\": [...]}`, likewise."
+                              "description": "The change in the kind's shape: for a page, `{\"edits\": [...]}` by\nlasting block id, each with the Markdown it replaces (`before`); for\na sheet, `{\"cells\": [...]}`, each with its tab, row, column, the\ninput it read (`before`) and the one proposed (`after`); for a\nwhiteboard, `{\"elements\": [...]}`, likewise; for a record or a task,\n`{\"changes\": [...]}`, each with its field, name, and how it reads\n`before` and `after`."
                             },
                             "createdAt": {
                               "type": "string"
@@ -124059,7 +124059,7 @@
                               "type": "integer"
                             },
                             "change": {
-                              "description": "The change in the kind's shape: for a page, `{\"edits\": [...]}` by\nlasting block id, each with the Markdown it replaces (`before`); for\na sheet, `{\"cells\": [...]}`, each with its tab, row, column, the\ninput it read (`before`) and the one proposed (`after`); for a\nwhiteboard, `{\"elements\": [...]}`, likewise."
+                              "description": "The change in the kind's shape: for a page, `{\"edits\": [...]}` by\nlasting block id, each with the Markdown it replaces (`before`); for\na sheet, `{\"cells\": [...]}`, each with its tab, row, column, the\ninput it read (`before`) and the one proposed (`after`); for a\nwhiteboard, `{\"elements\": [...]}`, likewise; for a record or a task,\n`{\"changes\": [...]}`, each with its field, name, and how it reads\n`before` and `after`."
                             },
                             "createdAt": {
                               "type": "string"
@@ -124246,7 +124246,7 @@
     },
     "/api/v2/w/{workspace}/ops/proposal_list": {
       "post": {
-        "description": "List proposed changes waiting for someone who edits the thing: pass thingKind (page, sheet or whiteboard) and thingId for one thing's, or nothing for the ones you made. Each says what it changes and what it read. Decide one with proposal_decide.",
+        "description": "List proposed changes waiting for someone who edits the thing: pass thingKind (page, sheet, whiteboard, record or task) and thingId for one thing's, or nothing for the ones you made. Each says what it changes and what it read. Decide one with proposal_decide.",
         "operationId": "proposal_list",
         "parameters": [
           {
@@ -124288,7 +124288,7 @@
                     ]
                   },
                   "thingKind": {
-                    "description": "page, sheet or whiteboard, with thingId.\nLeave both out to list the proposals you made.",
+                    "description": "page, sheet, whiteboard, record or task, with thingId.\nLeave both out to list the proposals you made.",
                     "type": [
                       "string",
                       "null"
@@ -154887,6 +154887,390 @@
           "messages"
         ],
         "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/search_answer": {
+      "post": {
+        "description": "Answer a question from what search finds for you in this workspace, citing each statement's sources by number ([1] is the first source). It reads only what you can see, and uses the workspace's model, so it fails when the workspace has none set up. Narrow it with search filters in the question or a space (projectId).",
+        "operationId": "search_answer",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "projectId": {
+                    "description": "Only this space.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "question": {
+                    "description": "The question, in plain words (1 to 200 characters). Search filters\nsuch as in:#channel or kind:page narrow what it reads.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "question"
+                ],
+                "title": "AnswerArguments",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "answer": {
+                              "description": "The answer, citing sources by number in square brackets: [1] is the\nfirst of `sources`.",
+                              "type": "string"
+                            },
+                            "model": {
+                              "type": "string"
+                            },
+                            "provider": {
+                              "type": "string"
+                            },
+                            "read": {
+                              "description": "How many results it read.",
+                              "format": "uint",
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "sources": {
+                              "description": "The results the answer cites, in the order of their numbers.",
+                              "items": {
+                                "$ref": "#/components/schemas/SearchResult"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "answer",
+                            "sources",
+                            "read",
+                            "provider",
+                            "model"
+                          ],
+                          "title": "AnswerValue",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "answer": {
+                              "description": "The answer, citing sources by number in square brackets: [1] is the\nfirst of `sources`.",
+                              "type": "string"
+                            },
+                            "model": {
+                              "type": "string"
+                            },
+                            "provider": {
+                              "type": "string"
+                            },
+                            "read": {
+                              "description": "How many results it read.",
+                              "format": "uint",
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "sources": {
+                              "description": "The results the answer cites, in the order of their numbers.",
+                              "items": {
+                                "$ref": "#/components/schemas/SearchResult"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "answer",
+                            "sources",
+                            "read",
+                            "provider",
+                            "model"
+                          ],
+                          "title": "AnswerValue",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Answer from search",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "query"
       }
     },
     "/api/v2/w/{workspace}/ops/setting_list": {

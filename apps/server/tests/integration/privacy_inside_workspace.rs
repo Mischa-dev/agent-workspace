@@ -3318,6 +3318,100 @@ async fn a_shared_page_allows_only_its_level() {
     world.finish().await;
 }
 
+/// C2.27: an answer from search reads only what the asker can see. A page
+/// in a space they aren't in never reaches the model, so never the answer.
+#[tokio::test]
+async fn search_answers_read_only_what_the_asker_sees() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .project("SECRET")
+        .person("lena", "member")
+        .build("privacy_search_answers")
+        .await
+    else {
+        return;
+    };
+    let (work, secret) = (
+        world.project("WORK").to_owned(),
+        world.project("SECRET").to_owned(),
+    );
+    let lena = &world.people["lena"];
+    sqlx::query("DELETE FROM project_memberships WHERE project_id = $1 AND actor_id = $2")
+        .bind(secret.parse::<Uuid>().expect("space"))
+        .bind(lena.actor)
+        .execute(world.pool())
+        .await
+        .expect("lena isn't in SECRET");
+    for (space, title, body) in [
+        (&work, "Zebra plan", "The zebra launch is on Friday."),
+        (&secret, "Zebra vault", "The zebra launch code is 4242."),
+    ] {
+        let (status, page) = send(
+            &world.app,
+            world.owner.browser.request(
+                "POST",
+                &format!("/api/v1/projects/{space}/pages"),
+                None,
+                json!({"title": title, "body": body}),
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "{status} {page}");
+    }
+    let op = |browser: &Browser, name: &str, body: Value| {
+        browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/{name}", world.organization),
+            Some(&Uuid::now_v7().to_string()),
+            body,
+        )
+    };
+    let (_, set) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "setting_update",
+            json!({"key": "ai.provider", "scope": "workspace", "value": "fake"}),
+        ),
+    )
+    .await;
+    assert_eq!(set["outcome"], "ok", "{set}");
+
+    let (_, answered) = send(
+        &world.app,
+        op(
+            &lena.browser,
+            "search_answer",
+            json!({"question": "zebra launch"}),
+        ),
+    )
+    .await;
+    assert_eq!(answered["outcome"], "ok", "{answered}");
+    let text = answered.to_string();
+    assert!(text.contains("Friday"), "{answered}");
+    assert!(
+        !text.contains("4242") && !text.contains("Zebra vault"),
+        "{answered}"
+    );
+    let sources = answered["value"]["sources"].as_array().expect("sources");
+    assert_eq!(sources.len(), 1, "{answered}");
+    assert_eq!(sources[0]["title"], "Zebra plan", "{answered}");
+
+    // The owner sees both, so both are read.
+    let (_, answered) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "search_answer",
+            json!({"question": "zebra launch"}),
+        ),
+    )
+    .await;
+    assert_eq!(answered["outcome"], "ok", "{answered}");
+    assert_eq!(answered["value"]["read"], 2, "{answered}");
+    world.finish().await;
+}
+
 /// A2.11: a follow-up is its account's alone, and only about what that
 /// account can see. Another member can't change, cancel or list it, nor set
 /// one about a DM they aren't in.

@@ -167,6 +167,7 @@ fn answer(prompt_id: &str, input: &Value) -> Result<Value, ProviderError> {
         "plan_to_tasks" => plan_to_tasks(input),
         "criteria" => criteria(input),
         "summary" => summary(input),
+        "search_answer" => search_answer(input),
         _ => return Err(ProviderError::BadRequest("unknown prompt".to_owned())),
     })
 }
@@ -475,6 +476,25 @@ fn summary(input: &Value) -> Value {
         "outcome": outcome,
         "status": if thread { json!("Open") } else { Value::Null },
     })
+}
+
+/// C2.27 by rules: each result's words, cited, so a test sees exactly what
+/// was sent.
+fn search_answer(input: &Value) -> Value {
+    let results = list(input, "results");
+    if results.is_empty() {
+        return json!({"answer": "Nothing found answers that.", "sources": []});
+    }
+    let mut parts = Vec::new();
+    let mut sources = Vec::new();
+    for result in results.iter().take(8) {
+        let Some(n) = result.get("n").and_then(Value::as_i64) else {
+            continue;
+        };
+        parts.push(format!("{} [{n}]", text(result, "snippet")));
+        sources.push(n);
+    }
+    json!({"answer": parts.join(" "), "sources": sources})
 }
 
 #[cfg(test)]

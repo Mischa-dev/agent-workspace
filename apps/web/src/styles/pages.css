@@ -1015,6 +1015,57 @@
   color: inherit;
 }
 
+/* An answer from the results (C2.27). */
+.aw-search__ask {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.aw-search__answer {
+  display: grid;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.aw-search__answertext {
+  margin: 0;
+  font: var(--t-body);
+  white-space: pre-line;
+}
+
+.aw-search__cite {
+  margin: 0 1px;
+  font: var(--t-caption);
+  color: var(--accent);
+  vertical-align: super;
+  text-decoration: none;
+}
+
+.aw-search__cite:hover {
+  text-decoration: underline;
+}
+
+.aw-search__sources {
+  margin: 0;
+  padding-left: var(--space-5);
+  font: var(--t-small);
+}
+
+.aw-search__sourcemeta,
+.aw-search__answernote {
+  color: var(--content-fg-muted);
+}
+
+.aw-search__answernote {
+  margin: 0;
+  font: var(--t-caption);
+}
+
 .aw-formcard {
   max-width: none;
   gap: var(--space-4);
