@@ -217,7 +217,7 @@ pub async fn update_document(
     )
     .await
     .is_err()
-        && sharing::level_for(&mut *transaction, writer.actor_id, "page", page_id).await?
+        && sharing::level_for(&mut transaction, writer.actor_id, "page", page_id).await?
             != Some(ShareLevel::Edit)
     {
         return Err(AppError::NotFound("page"));
