@@ -121,7 +121,7 @@ async fn the_alert_launches_its_batch_on_the_account_in_each_projects_environmen
     let alpha_environment = environment(setup, &alpha, "demo").await;
     let urgent = ready_task(setup, &alpha, "Fix the outage", "urgent").await;
     ready_task(setup, &alpha, "Tidy the docs", "low").await;
-    ready_task(setup, &beta, "Beta work", "high").await;
+    let beta_task = ready_task(setup, &beta, "Beta work", "high").await;
 
     // 62% used, resetting in a bit over two hours: the alert fires with the batch.
     let demo = state.supervisors.demo().expect("demo harness");
@@ -230,13 +230,14 @@ async fn the_alert_launches_its_batch_on_the_account_in_each_projects_environmen
     // Someone else can neither see nor launch the owner's batch.
     let (status, body) = get(setup, &mara, &batch_uri).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let launch_uri = "/api/v2/ops/usage_batch_launch";
     let (status, body) = call(
         setup,
         &mara,
         "POST",
-        &batch_uri,
+        launch_uri,
         Some("their-batch"),
-        json!({}),
+        json!({"accountId": account}),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
@@ -246,31 +247,25 @@ async fn the_alert_launches_its_batch_on_the_account_in_each_projects_environmen
         setup,
         &setup.browser,
         "POST",
-        &batch_uri,
+        launch_uri,
         Some("review-batch"),
-        json!({"tasks": [
-            {"projectId": alpha, "workItemId": urgent},
-            {"projectId": beta, "workItemId": Uuid::now_v7()},
-        ]}),
+        json!({"accountId": account, "taskIds": [urgent, beta_task]}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{picked}");
+    assert_eq!(status, StatusCode::OK, "{picked}");
+    let picked = &picked["value"];
     assert_eq!(picked["launched"], 1, "{picked}");
     assert_eq!(
         picked["failed"].as_array().expect("failed").len(),
         1,
         "{picked}"
     );
-    let launch_id = picked["projects"][0]["launches"][0]["id"]
-        .as_str()
-        .expect("launch")
-        .parse::<Uuid>()
-        .expect("launch id");
     let (launched_account, launched_environment, launched_state) =
         sqlx::query_as::<_, (Option<Uuid>, Option<Uuid>, String)>(
-            "SELECT provider_account_id, environment_id, state FROM launches WHERE id = $1",
+            "SELECT provider_account_id, environment_id, state FROM launches \
+             WHERE provider_account_id = $1",
         )
-        .bind(launch_id)
+        .bind(account)
         .fetch_one(&setup.pool)
         .await
         .expect("launch row");
@@ -289,21 +284,21 @@ async fn the_alert_launches_its_batch_on_the_account_in_each_projects_environmen
         setup,
         &setup.browser,
         "POST",
-        &batch_uri,
+        launch_uri,
         Some("one-tap"),
-        json!({}),
+        json!({"accountId": account}),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{tapped}");
-    assert_eq!(tapped["launched"], 1, "{tapped}");
+    assert_eq!(status, StatusCode::OK, "{tapped}");
+    assert_eq!(tapped["value"]["launched"], 1, "{tapped}");
     // The same tap again is the same launch, not a second one.
     let (status, again) = call(
         setup,
         &setup.browser,
         "POST",
-        &batch_uri,
+        launch_uri,
         Some("one-tap"),
-        json!({}),
+        json!({"accountId": account}),
     )
     .await;
     assert!(

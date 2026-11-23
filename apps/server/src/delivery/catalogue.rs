@@ -3,7 +3,7 @@
 //! (read marks, live saves, board signals) is for browsers and consumers.
 //!
 //! `feed_name` is the name the older agent event feed used for the same
-//! happening, which `external_event_poll` still answers with.
+//! happening; a subscription may still name a type by it.
 
 use rmcp::schemars::{self, JsonSchema};
 use serde::Serialize;
@@ -22,7 +22,7 @@ pub struct Entry {
     pub addressed: bool,
     /// What happened, in a few words.
     pub summary: &'static str,
-    /// The older feed's name for it (`external_event_poll`).
+    /// The older feed's name for it, which a subscription may still use.
     #[serde(skip)]
     pub feed_name: &'static str,
 }

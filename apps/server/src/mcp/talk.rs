@@ -180,7 +180,8 @@ pub(crate) struct ThreadStartArguments {
     /// when a topic starts running long). Starting again from the same
     /// message returns the same thread.
     pub from_message_id: Option<String>,
-    /// The thread's name. Defaults to the start of the message.
+    /// The thread's name. Left out, it goes by the start of the message it
+    /// starts from, else its first message, until someone names it.
     pub name: Option<String>,
     /// An optional first message in the thread.
     pub text: Option<String>,
@@ -2212,15 +2213,10 @@ async fn thread_start_once(
             Ok(name) => ThreadName::Composed(name),
             Err(_) => return ToolResult::invalid("name", "Use a name up to 120 characters."),
         },
-        // Named from the message until someone names it, so removing the
-        // message takes its words out of the name too.
-        None if origin_id.is_some() => ThreadName::Derived,
-        None => {
-            return ToolResult::invalid(
-                "name",
-                "Give the thread a name, or start it from a message.",
-            );
-        }
+        // Named from its origin message, else its first message, until
+        // someone names it, so removing that message takes its words out of
+        // the name too.
+        None => ThreadName::Derived,
     };
     let result = async {
         let mut transaction = crate::db::scoped_tx(&state.pool).await?;

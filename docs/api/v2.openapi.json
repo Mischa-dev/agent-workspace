@@ -187019,7 +187019,7 @@
                     ]
                   },
                   "name": {
-                    "description": "The thread's name. Defaults to the start of the message.",
+                    "description": "The thread's name. Left out, it goes by the start of the message it\nstarts from, else its first message, until someone names it.",
                     "type": [
                       "string",
                       "null"

@@ -348,22 +348,20 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &application,
         &first_token,
         &session_id,
-        "external_event_poll",
+        "event_list",
         json!({"limit":10,"waitSeconds":0}),
     )
     .await;
-    assert_eq!(first_poll["outcome"], "events", "{first_poll}");
-    assert_eq!(
-        first_poll["events"][0]["kind"], "message.mentioned",
-        "{first_poll}"
-    );
-    assert_eq!(first_poll["events"][0]["resourceKind"], "message");
-    assert!(first_poll["events"][0].get("body").is_none());
+    assert_eq!(first_poll["outcome"], "ok", "{first_poll}");
+    let first_event = &first_poll["value"]["events"][0];
+    assert_eq!(first_event["type"], "message.mentioned", "{first_poll}");
+    assert_eq!(first_event["data"]["thing"]["kind"], "message");
+    assert!(first_event["data"].get("body").is_none());
     assert!(
         !first_poll.to_string().contains("Please inspect"),
         "ids only: {first_poll}"
     );
-    let first_cursor = first_poll["nextCursor"]
+    let first_cursor = first_poll["value"]["nextCursor"]
         .as_str()
         .expect("external event cursor")
         .to_owned();
@@ -371,20 +369,20 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &application,
         &first_token,
         &session_id,
-        "external_event_poll",
+        "event_list",
         json!({"limit":10,"waitSeconds":0}),
     )
     .await;
-    assert_eq!(replayed["events"][0]["id"], first_poll["events"][0]["id"]);
+    assert_eq!(replayed["value"]["events"][0]["id"], first_event["id"]);
     let empty = call_mcp_tool(
         &application,
         &first_token,
         &session_id,
-        "external_event_poll",
-        json!({"afterCursor":first_cursor,"limit":10,"waitSeconds":0}),
+        "event_list",
+        json!({"cursor":first_cursor,"limit":10,"waitSeconds":0}),
     )
     .await;
-    assert_eq!(empty["events"], json!([]));
+    assert_eq!(empty["value"]["events"], json!([]));
 
     let created_work_item = call_mcp_tool(
         &application,
@@ -824,21 +822,21 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &application,
         &first_token,
         &session_id,
-        "external_event_poll",
-        json!({"afterCursor":first_cursor,"limit":100,"waitSeconds":0}),
+        "event_list",
+        json!({"cursor":first_cursor,"limit":100,"waitSeconds":0}),
     )
     .await;
-    let event_kinds = sponsored_events["events"]
+    let event_kinds = sponsored_events["value"]["events"]
         .as_array()
         .expect("M9 event list")
         .iter()
-        .filter_map(|event| event["kind"].as_str())
+        .filter_map(|event| event["type"].as_str())
         .collect::<Vec<_>>();
     for expected in [
-        "work_item.assigned",
-        "work_item.changed",
+        "task.assigned",
+        "task.updated",
         "request.answered",
-        "agent_run.terminal",
+        "run.finished",
     ] {
         assert!(
             event_kinds.contains(&expected),
@@ -886,14 +884,14 @@ async fn external_agent_onboarding_rotation_disable_and_removal_fail_closed() {
         &application,
         &second_token,
         &second_session,
-        "external_event_poll",
-        json!({"afterCursor":first_poll["nextCursor"],"limit":10,"waitSeconds":0}),
+        "event_list",
+        json!({"cursor":first_poll["value"]["nextCursor"],"limit":10,"waitSeconds":0}),
     )
     .await;
     // The cursor is the connection's, not the credential's: a rotated
     // credential reads on from where the old one stopped.
     assert_eq!(
-        old_cursor_after_rotation["outcome"], "events",
+        old_cursor_after_rotation["outcome"], "ok",
         "{old_cursor_after_rotation}"
     );
     terminate_mcp(&application, &second_token, &second_session).await;

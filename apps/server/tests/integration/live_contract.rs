@@ -151,12 +151,12 @@ async fn channel(world: &World, browser: &Browser, workspace: Uuid, key: &str) -
         world.api(),
         browser,
         "POST",
-        &format!("/api/v1/projects/{project}/channels"),
+        "/api/v2/ops/channel_create",
         Some(&format!("{key}-channel")),
-        json!({"name": "General"}),
+        json!({"projectId": project, "name": "General"}),
     )
     .await;
-    let channel = channel["conversation"]["id"]
+    let channel = channel["value"]["id"]
         .as_str()
         .expect("channel")
         .parse()
@@ -169,12 +169,15 @@ async fn say(world: &World, browser: &Browser, conversation: Uuid, key: &str) ->
         world.api(),
         browser,
         "POST",
-        &format!("/api/v1/conversations/{conversation}/messages"),
+        "/api/v2/ops/message_send",
         Some(key),
-        json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "Hello"}]}}),
+        json!({
+            "conversationId": conversation,
+            "content": {"version": 1, "nodes": [{"type": "text", "text": "Hello"}]},
+        }),
     )
     .await;
-    sent["message"]["id"]
+    sent["value"]["messageId"]
         .as_str()
         .expect("message")
         .parse()

@@ -146,10 +146,6 @@ pub(crate) const ID_EXEMPT: &[(&str, &str)] = &[
         "a public report link by token, posted without a session; the gate answers only signed-in callers",
     ),
     (
-        "/api/v1/channels/",
-        "conversations follow the Messages switch, checked by their handlers",
-    ),
-    (
         "/api/v1/conversations/",
         "conversations follow the Messages switch, checked by their handlers",
     ),

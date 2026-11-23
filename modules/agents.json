@@ -39,7 +39,6 @@
     "agent_register_decide": "change",
     "agent_action_run": "change",
     "agent_action_get": "describe",
-    "external_event_poll": "query",
     "event_list": "query",
     "app_consent_set": "change",
     "event_kind_list": "query",
