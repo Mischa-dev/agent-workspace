@@ -360,11 +360,15 @@ export async function listCollections(projectId: string, includeArchived = false
 }
 
 /** Makes a collection (`collection_create`) and reads it back whole. */
-export async function createCollection(projectId: string, input: { name: string; description: string; titleName: string; idempotencyKey: string }) {
+export async function createCollection(
+  projectId: string,
+  input: { name: string; description: string; titleName: string; idempotencyKey: string; actsLikeTask?: boolean },
+) {
+  // One write, task mode with it: a review that holds it holds all of it.
   const made = ranOrThrow(
     await callOp(
       'collection_create',
-      { projectId, name: input.name, description: input.description, titleName: input.titleName },
+      { projectId, name: input.name, description: input.description, titleName: input.titleName, ...(input.actsLikeTask ? { actsLikeTask: true } : {}) },
       { requestId: input.idempotencyKey },
     ),
     'Making it',

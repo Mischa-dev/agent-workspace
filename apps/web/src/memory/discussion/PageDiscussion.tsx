@@ -121,7 +121,7 @@ export default function PageDiscussion({ active, discussion, draft, onActivate, 
         <ul aria-label="Suggested changes" className="aw-discussion__list">
           {pending.map((suggestion) => (
             <SuggestionCard
-              canDecide={discussion.canComment}
+              canDecide={discussion.canDecide ?? discussion.canComment}
               key={suggestion.id}
               onDecided={async () => {
                 await queryClient.invalidateQueries({ queryKey: memoryKeys.page(projectId, pageId) })

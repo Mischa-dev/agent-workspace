@@ -328,7 +328,15 @@ pub(crate) async fn lock_message_for_change(
     // As sending does: in a thing's discussion, writing is that thing's
     // "comment on" permission, not posting in channels.
     let can_write = match crate::discussion::subject_kind_of(transaction, conversation.id).await? {
-        Some(kind) => conversation.allows_permission(actor.actor_id, kind.comment_permission())?,
+        Some(kind) => {
+            conversation.allows_permission(actor.actor_id, kind.comment_permission())?
+                // A page shared with them to comment (C1.27).
+                || sqlx::query_scalar::<_, bool>("SELECT page_discussion_shared($1, $2)")
+                    .bind(conversation.id)
+                    .bind(actor.actor_id)
+                    .fetch_one(&mut **transaction)
+                    .await?
+        }
         None => conversation.allows(actor.actor_id, Action::MessageSend)?,
     };
     let as_moderator = match change {

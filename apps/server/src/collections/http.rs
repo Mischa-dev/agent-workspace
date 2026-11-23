@@ -389,6 +389,7 @@ struct CollectionBody {
     can_change_fields: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn collection_body(
     connection: &mut PgConnection,
     project_id: Uuid,

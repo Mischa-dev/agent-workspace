@@ -1138,6 +1138,14 @@ async fn by_share<O: Operation>(
     if credential.is_err() {
         return Ok(None);
     }
+    // And it reaches the page as it would the page's space (a token kept to
+    // one space, an app's limits, a run's own space).
+    if !crate::access::sharing::credential_reaches(connection, caller, *id)
+        .await
+        .map_err(|error| OpError::logged(O::NAME, &error))?
+    {
+        return Ok(None);
+    }
     // A conversation's memory page follows its conversation; no share
     // opens it.
     let place = sqlx::query_as::<_, (Uuid, Uuid)>(

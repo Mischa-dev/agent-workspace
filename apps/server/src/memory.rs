@@ -1800,6 +1800,28 @@ pub struct SharedPageView {
 }
 
 async fn shared_page_view(pool: &PgPool, page_id: Uuid) -> Result<SharedPageView, AppError> {
+    let mut connection = crate::db::scoped_tx(pool).await?;
+    // A link stops working while Pages is off in the page's workspace or
+    // space.
+    let Some((workspace, space)) = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT project.organization_id, project.id FROM project_pages page \
+         JOIN projects project ON project.id = page.project_id WHERE page.id = $1",
+    )
+    .bind(page_id)
+    .fetch_optional(&mut *connection)
+    .await?
+    else {
+        return Err(AppError::NotFound("link"));
+    };
+    // The module reading a page belongs to.
+    let module = crate::modules::registry::Registry::global().module_of_tool("page_get");
+    if let Some(module) = module
+        && !crate::modules::state::in_space(&mut connection, workspace, space)
+            .await?
+            .contains(&module.id)
+    {
+        return Err(AppError::NotFound("link"));
+    }
     // A conversation's memory page follows its conversation; no link opens it.
     sqlx::query_as::<_, SharedPageView>(
         "SELECT id, title, body, updated_at::text AS updated_at FROM project_pages \
@@ -1808,7 +1830,7 @@ async fn shared_page_view(pool: &PgPool, page_id: Uuid) -> Result<SharedPageView
            AND module_part_on('page', id)",
     )
     .bind(page_id)
-    .fetch_optional(crate::db::scoped(pool))
+    .fetch_optional(&mut *connection)
     .await?
     .ok_or(AppError::NotFound("link"))
 }

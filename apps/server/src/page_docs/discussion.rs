@@ -48,6 +48,8 @@ pub struct DiscussionView {
     pub suggestions: Vec<SuggestionView>,
     /// Whether the caller may comment, resolve and decide suggestions.
     pub can_comment: bool,
+    /// Accepts and rejects suggestions: edits the page in its space.
+    pub can_decide: bool,
     pub viewer_id: Uuid,
 }
 
@@ -58,36 +60,37 @@ pub async fn get_discussion(
 ) -> Result<Json<DiscussionView>, AppError> {
     let project_id = memory::page_project(&state.pool, page_id, principal.actor_id).await?;
     // A member of its space reads the discussion; someone it was shared
-    // with on its own (K1.32) only when the share lets them comment.
-    let can_comment = if memory::project_access(
+    // with on its own (K1.32) only when the share lets them comment. A share
+    // to comment lets a member who only views comment too; deciding
+    // suggestions stays with those who edit the page.
+    let member = memory::project_access(
         &state.pool,
         principal.actor_id,
         project_id,
         Action::ProjectView,
     )
     .await
-    .is_ok()
-    {
-        memory::project_access(
+    .is_ok();
+    let can_decide = member
+        && memory::project_access(
             &state.pool,
             principal.actor_id,
             project_id,
             Action::PageEdit,
         )
         .await
-        .is_ok()
-    } else if sharing::page_allows(
+        .is_ok();
+    let shared = sharing::page_allows(
         &state.pool,
         principal.actor_id,
         page_id,
         ShareLevel::Comment,
     )
-    .await?
-    {
-        true
-    } else {
+    .await?;
+    if !member && !shared {
         return Err(AppError::NotFound("page"));
-    };
+    }
+    let can_comment = can_decide || shared;
     let blocks = comments::current_blocks(&state.pool, page_id).await?;
     let threads = comments::list(&state.pool, page_id, blocks.as_deref(), true).await?;
     let suggestions = suggestions::list(&state.pool, page_id, true)
@@ -100,6 +103,7 @@ pub async fn get_discussion(
         threads,
         suggestions,
         can_comment,
+        can_decide,
         viewer_id: principal.actor_id,
     }))
 }

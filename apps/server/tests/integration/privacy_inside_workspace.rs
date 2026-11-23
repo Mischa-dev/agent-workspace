@@ -3241,6 +3241,38 @@ async fn a_shared_page_allows_only_its_level() {
         .await
         .expect("title");
     assert_eq!(title, "Plan");
+    // Its history stays with its space: no earlier version by number.
+    let (_, refused) = send(
+        &world.app,
+        op(
+            &lena.browser,
+            "page_get",
+            "edit-old-version",
+            json!({"pageId": plan, "version": 1}),
+        ),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "no earlier version: {refused}");
+    // An archived space takes no changes, shared or not.
+    sqlx::query(
+        "UPDATE projects SET archived_at = now(), archived_by_actor_id = $2 WHERE id = $1::uuid",
+    )
+    .bind(&secret)
+    .bind(world.owner.actor)
+    .execute(world.pool())
+    .await
+    .expect("archive SECRET");
+    let (_, refused) = send(&world.app, append("archived-edit", &plan)).await;
+    assert_ne!(refused["outcome"], "ok", "archived: {refused}");
+    let (_, document) = send(&world.app, read(format!("/api/v1/pages/{plan}/document"))).await;
+    assert_ne!(document["canEdit"], true, "archived: {document}");
+    sqlx::query(
+        "UPDATE projects SET archived_at = NULL, archived_by_actor_id = NULL WHERE id = $1::uuid",
+    )
+    .bind(&secret)
+    .execute(world.pool())
+    .await
+    .expect("restore SECRET");
 
     // A link only reads.
     let violated = sqlx::query(

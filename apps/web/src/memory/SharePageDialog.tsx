@@ -5,7 +5,8 @@ import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { publicPageUrl } from '../app/href'
-import { callOp, newRequestId } from '../api/ops'
+import { callOp, newRequestId, ranOrThrow } from '../api/ops'
+import { projectLocationHref } from '../projects/locations'
 import { Banner, Button, Checkbox, Dialog, SelectField, TextField, describeError, formatDateTime, showToast } from '../ui'
 import type { ShareLevel } from './api'
 
@@ -30,7 +31,7 @@ function LevelPicker({ label, onChange, value }: { label: string; onChange: (lev
   )
 }
 
-export function SharePageDialog({ onClose, page }: { onClose: () => void; page: { id: string; title: string } }) {
+export function SharePageDialog({ onClose, page }: { onClose: () => void; page: { id: string; projectId: string; title: string } }) {
   const queryClient = useQueryClient()
   const shares = useQuery({
     queryKey: sharesKey(page.id),
@@ -63,11 +64,17 @@ export function SharePageDialog({ onClose, page }: { onClose: () => void; page: 
       .catch((reason: unknown) => setError(`${failed} ${describeError(reason).message}`))
       .finally(() => setBusy(null))
   }
-  const share = (accountId: string, name: string, as: ShareLevel, changing = false) =>
+  // A level changed keeps the share's end date.
+  const share = (accountId: string, name: string, as: ShareLevel, changing = false, expiresAt?: string | null) =>
     run(
       `share-${accountId}`,
       async () => {
-        changed(await callOp('thing_share_add', { kind: 'page', id: page.id, account: accountId, level: as }, { requestId: newRequestId() }))
+        changed(
+          ranOrThrow(
+            await callOp('thing_share_add', { kind: 'page', id: page.id, account: accountId, level: as, ...(expiresAt ? { expiresAt } : {}) }, { requestId: newRequestId() }),
+            'Sharing it',
+          ),
+        )
         if (changing) return
         setQuery('')
         showToast({ tone: 'success', title: `Shared with ${name}` })
@@ -77,14 +84,14 @@ export function SharePageDialog({ onClose, page }: { onClose: () => void; page: 
   const unshare = (input: { account?: string; link?: string }) =>
     run(
       `remove-${input.account ?? input.link}`,
-      async () => changed(await callOp('thing_share_remove', { kind: 'page', id: page.id, ...input }, { requestId: newRequestId() })),
+      async () => changed(ranOrThrow(await callOp('thing_share_remove', { kind: 'page', id: page.id, ...input }, { requestId: newRequestId() }), 'Stopping it')),
       'It wasn’t stopped.',
     )
   const makeLink = () =>
     run(
       'link',
       async () => {
-        const link = await callOp('thing_link_create', { kind: 'page', id: page.id, public: publicLink }, { requestId: newRequestId() })
+        const link = ranOrThrow(await callOp('thing_link_create', { kind: 'page', id: page.id, public: publicLink }, { requestId: newRequestId() }), 'The link')
         if (link.token) setMade({ url: publicPageUrl(link.token), public: publicLink })
         await queryClient.invalidateQueries({ queryKey: sharesKey(page.id) })
       },
@@ -145,7 +152,7 @@ export function SharePageDialog({ onClose, page }: { onClose: () => void; page: 
                 <span className="aw-share__actions">
                   <LevelPicker
                     label={`What ${account.displayName || 'they'} can do`}
-                    onChange={(next) => share(account.account, account.displayName, next, true)}
+                    onChange={(next) => share(account.account, account.displayName, next, true, account.expiresAt)}
                     value={account.level}
                   />
                   <Button busy={busy === `remove-${account.account}`} onClick={() => unshare({ account: account.account })} size="sm" variant="ghost">
@@ -160,7 +167,7 @@ export function SharePageDialog({ onClose, page }: { onClose: () => void; page: 
         ) : null}
         {shares.data?.accounts.length ? (
           <div>
-            <Button icon="copy" onClick={() => copy(window.location.href.split('?')[0])} size="sm" variant="ghost">
+            <Button icon="copy" onClick={() => copy(`${window.location.origin}${projectLocationHref(page.projectId, { kind: 'page', pageId: page.id })}`)} size="sm" variant="ghost">
               Copy the page’s address to send them
             </Button>
           </div>

@@ -514,15 +514,18 @@ export default function BoardCanvas({
   // one, and a board that went quiet without saying goodbye drops away.
   useEffect(() => {
     const timer = window.setInterval(() => {
+      // A board nobody has pointed at yet still says it's open, with its view.
       if (room && mine.current) controls.awareness(room, mine.current)
+      else if (room) present({})
       if (prunePeers(peers.current, Date.now())) drawRef.current()
     }, HEARTBEAT_MS)
     return () => window.clearInterval(timer)
-  }, [controls, room])
-  // After a reconnect the room is joined again: say where this board is.
+  }, [controls, present, room])
+  // On joining, and after a reconnect joins the room again: say where this
+  // board is.
   useEffect(() => {
-    if (resync > 0 && mine.current) present({})
-  }, [present, resync])
+    if (room) present({})
+  }, [present, resync, room])
 
   return (
     <Excalidraw

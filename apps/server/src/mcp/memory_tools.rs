@@ -468,6 +468,11 @@ pub(crate) async fn page_get(
             return Ok(ToolResult::not_found("That page"));
         };
         let (title, body) = match arguments.version {
+            // A page shared on its own shows as it is now: its history
+            // stays with its space.
+            Some(version) if version != page.version && page.shared_level.is_some() => {
+                return Ok(ToolResult::not_found("That version"));
+            }
             Some(version) if version != page.version => {
                 match memory::get_revision(&state.pool, page_id, version, principal.actor_id)
                     .await?
@@ -1143,6 +1148,9 @@ async fn readable_page(
         else {
             return Ok(None);
         };
+        if !super::common::share_reaches(state, principal, page_id).await? {
+            return Ok(None);
+        }
         page.revisions.clear();
         page.ancestors.clear();
         page.children.clear();
@@ -1555,7 +1563,8 @@ pub(crate) async fn page_edit(
                 page_id,
             )
             .await?
-                == Some(crate::access::sharing::ShareLevel::Edit);
+                == Some(crate::access::sharing::ShareLevel::Edit)
+            && super::common::share_reaches(state, principal, page_id).await?;
         if !shared_edit
             && page_write_mode(state, principal, &mut transaction, project_id, true)
                 .await?

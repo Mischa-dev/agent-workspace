@@ -114,23 +114,25 @@ pub async fn level_for(
     kind: &str,
     thing: Uuid,
 ) -> Result<Option<ShareLevel>, AppError> {
-    let level = sqlx::query_scalar::<_, String>(
+    let level = sqlx::query_as::<_, (String, bool)>(
         r#"
-        SELECT grant_row.level FROM thing_grants grant_row
+        SELECT grant_row.level, COALESCE(project.archived_at IS NOT NULL, false)
+        FROM thing_grants grant_row
         JOIN organization_memberships membership
           ON membership.organization_id = grant_row.workspace_id
          AND membership.actor_id = grant_row.grantee_account_id
          AND membership.enabled
         JOIN actors account ON account.id = membership.actor_id AND account.status = 'active'
+        LEFT JOIN project_pages page
+          ON grant_row.thing_kind = 'page' AND page.id = grant_row.thing_id
+        LEFT JOIN projects project ON project.id = page.project_id
         WHERE grant_row.thing_kind = $1 AND grant_row.thing_id = $2
           AND grant_row.grantee_account_id = $3
           AND grant_row.revoked_at IS NULL
           AND (grant_row.expires_at IS NULL OR grant_row.expires_at > now())
           -- A conversation's memory page follows its conversation; no
           -- share opens it.
-          AND NOT EXISTS (SELECT 1 FROM project_pages page
-                          WHERE grant_row.thing_kind = 'page' AND page.id = grant_row.thing_id
-                            AND page.memory_for_kind = 'conversation')
+          AND page.memory_for_kind IS DISTINCT FROM 'conversation'
         "#,
     )
     .bind(kind)
@@ -138,7 +140,64 @@ pub async fn level_for(
     .bind(account)
     .fetch_optional(&mut *connection)
     .await?;
-    Ok(level.as_deref().map(ShareLevel::from_key))
+    // An archived space takes no changes from anyone, so a share there
+    // only reads.
+    Ok(level.map(|(level, closed)| {
+        let level = ShareLevel::from_key(&level);
+        if closed {
+            level.min(ShareLevel::See)
+        } else {
+            level
+        }
+    }))
+}
+
+/// Whether the credential a call came through reaches a page shared with
+/// its account, as it would reach the page's space: a run's credential
+/// stays in its run's space, an older space credential in its own space, an
+/// app acting for the account in the workspaces its limits name, and an
+/// agent's connection in its connection's workspace. The browser reaches
+/// every share.
+pub async fn credential_reaches(
+    connection: &mut PgConnection,
+    caller: &crate::access::Caller,
+    page: Uuid,
+) -> Result<bool, AppError> {
+    let Some((workspace, space)) = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT project.organization_id, project.id FROM project_pages page \
+         JOIN projects project ON project.id = page.project_id WHERE page.id = $1",
+    )
+    .bind(page)
+    .fetch_optional(&mut *connection)
+    .await?
+    else {
+        return Ok(false);
+    };
+    if caller.for_run
+        || caller
+            .confined_space
+            .is_some_and(|confined| confined != space)
+    {
+        return Ok(false);
+    }
+    if caller
+        .limits
+        .as_ref()
+        .is_some_and(|limits| !limits.organizations.contains_key(&workspace))
+    {
+        return Ok(false);
+    }
+    if let Some(connection_id) = caller.connection_id {
+        return Ok(sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM external_agent_connections \
+             WHERE id = $1 AND status = 'active' AND workspace_id = $2)",
+        )
+        .bind(connection_id)
+        .bind(workspace)
+        .fetch_one(&mut *connection)
+        .await?);
+    }
+    Ok(true)
 }
 
 /// Whether a page is shared with `account` for at least `needs`.

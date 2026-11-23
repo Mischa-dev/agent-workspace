@@ -43,6 +43,7 @@ async fn may_comment(
         ShareLevel::Comment,
     )
     .await?
+        && super::common::share_reaches(state, principal, page_id).await?
     {
         return Ok(true);
     }
@@ -78,13 +79,14 @@ async fn readable(
     if memory::project_access(&state.pool, principal.actor_id, project_id, Action::McpRead)
         .await
         .is_err()
-        && !sharing::page_allows(
+        && !(sharing::page_allows(
             &state.pool,
             principal.actor_id,
             page_id,
             ShareLevel::Comment,
         )
         .await?
+            && super::common::share_reaches(state, principal, page_id).await?)
     {
         return Ok(None);
     }

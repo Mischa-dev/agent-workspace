@@ -118,8 +118,8 @@ BEGIN
            AND membership.actor_id = NEW.actor_id
            FOR KEY SHARE OF membership, actor;
         -- C1.27: a page's comments, read by someone the page was shared
-        -- with to comment, who isn't in its space.
-        IF reader_enabled IS NULL THEN
+        -- with to comment, who has no enabled membership in its space.
+        IF reader_enabled IS DISTINCT FROM true THEN
             SELECT actor.status = 'active'
                    AND page_discussion_shared(NEW.conversation_id, NEW.actor_id)
               INTO reader_enabled

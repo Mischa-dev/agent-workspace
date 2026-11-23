@@ -17,11 +17,16 @@ export function PublicPage() {
   const [loaded, setLoaded] = useState<Loaded>({ state: 'loading' })
   useEffect(() => {
     let live = true
-    void fetch(apiUrl(`/api/v1/public/pages/${encodeURIComponent(token)}`), { credentials: 'omit' })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(String(response.status))
-        return (await response.json()) as SharedPage
-      })
+    const read = async (path: string, credentials: RequestCredentials) => {
+      const response = await fetch(apiUrl(path), { credentials })
+      if (!response.ok) throw new Error(String(response.status))
+      return (await response.json()) as SharedPage
+    }
+    const named = encodeURIComponent(token)
+    // A public link opens without signing in; a link for people signed in
+    // here opens with the reader's session.
+    void read(`/api/v1/public/pages/${named}`, 'omit')
+      .catch(() => read(`/api/v1/shared/${named}`, 'include'))
       .then(
         (page) => {
           if (!live) return
@@ -47,7 +52,10 @@ export function PublicPage() {
         ) : loaded.state === 'gone' ? (
           <>
             <h1 className="aw-ppage__title">This link doesn’t work</h1>
-            <p className="aw-ppage__quiet">It may have expired or been turned off. Ask whoever sent it for a new one.</p>
+            <p className="aw-ppage__quiet">
+              It may have expired or been turned off, or it opens only for people signed in here. Ask whoever sent it for a new one, or{' '}
+              <a href={`/sign-in?returnTo=${encodeURIComponent(`/p/${token}`)}`}>sign in</a>.
+            </p>
           </>
         ) : (
           <>
