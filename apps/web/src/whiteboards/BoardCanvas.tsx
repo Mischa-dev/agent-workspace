@@ -157,13 +157,14 @@ export default function BoardCanvas({
       if (presence) {
         peers.current.set(frame.connection, { accountId: frame.accountId, presence, seen: Date.now() })
         nameFor(frame.accountId)
-        if (following.current === frame.connection) follow(presence)
+        // Nobody hidden by the layout moves this view.
+        if (showPeers && following.current === frame.connection) follow(presence)
       } else {
         peers.current.delete(frame.connection)
       }
       drawRef.current()
     },
-    [follow, nameFor],
+    [follow, nameFor, showPeers],
   )
   // In the board's live room while it is open (W1.6).
   useWatchDocument(room, onFrame)

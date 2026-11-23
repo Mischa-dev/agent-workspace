@@ -13,6 +13,8 @@ import { workspaceId, writer } from '../support/done'
 test.use({ storageState: storageStatePath })
 
 async function fromMenu(page: Page, text: string, item: RegExp) {
+  // On a phone the last toast can sit over the message, and stays while the pointer is on it.
+  for (const dismiss of await page.getByRole('region', { name: 'Notifications' }).getByRole('button', { name: 'Dismiss' }).all()) await dismiss.click()
   const message = page.getByRole('article').filter({ hasText: text }).last()
   await message.hover()
   await message.getByRole('toolbar', { name: 'Message actions' }).getByRole('button', { name: /more/i }).click()

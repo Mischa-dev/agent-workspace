@@ -4237,6 +4237,7 @@ async fn an_export_is_for_its_requester_alone() {
 async fn channel_writes_keep_to_private_channels() {
     let Some(world) = super::support::world::WorldBuilder::default()
         .project("WORK")
+        .project("SIDE")
         .person("lena", "member")
         .person("omar", "member")
         .person("nate", "member")
@@ -4633,6 +4634,39 @@ async fn channel_writes_keep_to_private_channels() {
             .expect("chips")
             .contains(&json!({"kind": "sticky", "id": quiet_board})),
         "{chips}"
+    );
+    // A thing in another space that links back to the message names nothing
+    // here: this channel's readers needn't be in that space.
+    let (status, elsewhere) = op(
+        &lena.browser,
+        "whiteboard_create",
+        json!({"title": "Side plans", "projectId": world.project("SIDE")}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{elsewhere}");
+    let elsewhere = elsewhere["value"]["whiteboard"]["id"].clone();
+    sqlx::query(
+        "INSERT INTO links (workspace_id, from_thing_id, to_thing_id, kind, origin) \
+         VALUES ($1, $2::uuid, $3::uuid, 'made_from', 'explicit')",
+    )
+    .bind(workspace)
+    .bind(elsewhere.as_str().expect("board id"))
+    .bind(&shown)
+    .execute(pool)
+    .await
+    .expect("a link from another space");
+    let request = lena.browser.request(
+        "GET",
+        &format!("/api/v1/conversations/{open}/timeline"),
+        None,
+        Value::Null,
+    );
+    let (_, timeline) = send(app, request).await;
+    assert!(
+        !timeline
+            .to_string()
+            .contains(elsewhere.as_str().expect("board id")),
+        "{timeline}"
     );
     // Someone who may make tasks but not post in the channel makes one from
     // a message quietly: saySo posts nothing for them.

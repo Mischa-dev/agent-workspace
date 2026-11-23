@@ -232,7 +232,10 @@ where
             FROM collection_records record
             WHERE record.source_message_id = ANY($1) AND record.archived_at IS NULL
             UNION ALL
-            -- A sticky, a sheet row or a page made quietly: its link back.
+            -- A sticky, a sheet row or a page made quietly: its link back,
+            -- when the thing is in this conversation's own space, which the
+            -- conversation's readers are in. One made elsewhere (from a DM,
+            -- into a space of the maker's) stays unnamed to the others.
             SELECT link.to_thing_id,
                    CASE source.kind::text WHEN 'whiteboard' THEN 'sticky'
                         WHEN 'sheet' THEN 'sheet_row' ELSE source.kind::text END,
@@ -242,6 +245,7 @@ where
             WHERE link.kind = 'made_from' AND link.to_thing_id = ANY($1)
               AND source.kind::text IN ('whiteboard', 'sheet', 'page')
               AND source.deleted_at IS NULL
+              AND source.space_id = (SELECT place.space_id FROM things place WHERE place.id = $2)
             UNION ALL
             SELECT (entry.system_event->>'messageId')::uuid,
                    entry.system_event->>'thingKind',

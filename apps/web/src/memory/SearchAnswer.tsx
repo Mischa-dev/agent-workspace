@@ -11,8 +11,8 @@ type Answer = OpOutput<'search_answer'>
 function withCitations(answer: Answer): ReactNode[] {
   const parts: ReactNode[] = []
   let last = 0
-  // Brackets right after a word (`rows[1]`, quoted from a result) are an index, not a citation.
-  for (const match of answer.answer.matchAll(/(?<![\p{L}\p{N}_])\[(\d{1,2})\]/gu)) {
+  // A number that names no source (`retries[19]`, quoted from a result) stays as written.
+  for (const match of answer.answer.matchAll(/\[(\d{1,2})\]/g)) {
     const at = match.index ?? 0
     if (at > last) parts.push(answer.answer.slice(last, at))
     const source = answer.sources[Number(match[1]) - 1]

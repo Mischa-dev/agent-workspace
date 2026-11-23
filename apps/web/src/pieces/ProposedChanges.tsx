@@ -5,7 +5,7 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
-import { callOp } from '../api/ops'
+import { callOp, ranOrThrow } from '../api/ops'
 import { Banner, Button, describeError, formatFullDate, formatRelative } from '../ui'
 import { proposalsKey, useFieldProposals, type FieldProposal, type ProposableKind } from './proposedChanges'
 import './proposed.css'
@@ -40,7 +40,8 @@ export function ProposedChanges({
     setBusy(`${proposal.id}:${decision}`)
     setProblem(null)
     try {
-      await callOp('proposal_decide', { proposalId: proposal.id, decision })
+      // A decision a review guard holds hasn't happened: say so instead of looking done.
+      ranOrThrow(await callOp('proposal_decide', { proposalId: proposal.id, decision }), 'The decision')
       await client.invalidateQueries({ queryKey: proposalsKey(kind, thingId) })
       if (decision === 'accept') onDecided()
     } catch (error) {
