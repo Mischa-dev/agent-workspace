@@ -149,8 +149,6 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/projects/{project_id}/external-agents/{connection_id}/workos",
     "DELETE /api/v1/projects/{project_id}/external-agents/{connection_id}/workos/{binding_id}",
     "POST /api/v1/projects/{project_id}/integrations/github/connect",
-    "POST /api/v1/projects/{project_id}/collections",
-    "PATCH /api/v1/projects/{project_id}/collections/{collection_id}",
     "POST /api/v1/projects/{project_id}/collections/{collection_id}/fields",
     "PATCH /api/v1/projects/{project_id}/collections/{collection_id}/fields/{field_id}",
     "POST /api/v1/projects/{project_id}/collections/{collection_id}/records",
@@ -4328,38 +4326,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         // Collections (AWD-90). A view or a record may only name A's fields,
         // people, tasks and pages.
         path_case(
-            "POST /api/v1/projects/{project_id}/collections",
-            &[project()],
-            json_body(json!({
-                "name": "Net collection",
-                "fields": [{"name": "Who", "type": "person"}],
-                "views": [{"name": "Mine", "filters": [{"field": "Who", "op": "is", "values": ["me"]}]}],
-            })),
-        )
-        .rejecting(vec![
-            json!({
-                "name": "Net collection",
-                "fields": [{"name": "Who", "type": "person"}],
-                "views": [{"name": "Theirs", "filters": [{"field": "Who", "op": "is", "values": [b.rook]}]}],
-            }),
-            json!({
-                "name": "Net collection",
-                "fields": [{"name": "Built", "type": "link", "target": "task"}],
-                "views": [{"name": "Theirs", "filters": [{"field": "Built", "op": "is", "values": [b.task]}]}],
-            }),
-            json!({
-                "name": "Net collection",
-                "fields": [{"name": "Spec", "type": "link", "target": "page"}],
-                "views": [{"name": "Theirs", "filters": [{"field": "Spec", "op": "is", "values": [b.page]}]}],
-            }),
-            json!({"name": "Net collection", "fields": [{"field": b.collection_field, "name": "Net"}]}),
-        ]),
-        path_case(
-            "PATCH /api/v1/projects/{project_id}/collections/{collection_id}",
-            &[project(), id(a.collection, b.collection)],
-            versioned("collections", 1, json!({"description": "Net"})),
-        ),
-        path_case(
             "POST /api/v1/projects/{project_id}/collections/{collection_id}/fields",
             &[project(), id(a.collection, b.collection)],
             json_body(json!({"name": "Net field", "type": "text"})),
@@ -6093,7 +6059,30 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
                 "fields": [{"name": "Net mcp field", "type": "number"}],
             }),
             vec![json!({"projectId": b.project, "name": "Net mcp collection"})],
-        ),
+        )
+        // A view or field may only name the space's own workspace's
+        // people, tasks, pages and fields (AWD-90).
+        .rejecting(vec![
+            json!({
+                "projectId": a.project,
+                "name": "Net collection",
+                "fields": [{"name": "Who", "type": "person"}],
+                "views": [{"name": "Theirs", "filters": [{"field": "Who", "op": "is", "values": [b.rook]}]}],
+            }),
+            json!({
+                "projectId": a.project,
+                "name": "Net collection",
+                "fields": [{"name": "Built", "type": "link", "target": "task"}],
+                "views": [{"name": "Theirs", "filters": [{"field": "Built", "op": "is", "values": [b.task]}]}],
+            }),
+            json!({
+                "projectId": a.project,
+                "name": "Net collection",
+                "fields": [{"name": "Spec", "type": "link", "target": "page"}],
+                "views": [{"name": "Theirs", "filters": [{"field": "Spec", "op": "is", "values": [b.page]}]}],
+            }),
+            json!({"projectId": a.project, "name": "Net collection", "fields": [{"field": b.collection_field, "name": "Net"}]}),
+        ]),
         mcp_case(
             "collection_update",
             json!({

@@ -1,7 +1,7 @@
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query'
 
 import { requestJson } from '../api/client'
-import { callOp, type OpInput, type OpOutput } from '../api/ops'
+import { callOp, ranOrThrow, type OpInput, type OpOutput } from '../api/ops'
 import { normalizeField, normalizeReferences, normalizeValues, type DateBucket, type FieldClause, type FieldDefinition, type FieldReference, type FieldValue, type FieldValues } from '../fields/fieldModel'
 import type { ViewKind } from '../views/kinds'
 import { collectionKeys } from './keys'
@@ -356,9 +356,17 @@ export async function listCollections(projectId: string, includeArchived = false
   return { collections: asArray(payload.collections).map(normalizeCollection), canBuild: payload.canBuild === true }
 }
 
+/** Makes a collection (`collection_create`) and reads it back whole. */
 export async function createCollection(projectId: string, input: { name: string; description: string; titleName: string; idempotencyKey: string }) {
-  const { idempotencyKey, ...json } = input
-  return normalizeBody(await requestJson<unknown>(projectPath(projectId), { method: 'POST', idempotencyKey, json }))
+  const made = ranOrThrow(
+    await callOp(
+      'collection_create',
+      { projectId, name: input.name, description: input.description, titleName: input.titleName },
+      { requestId: input.idempotencyKey },
+    ),
+    'Making it',
+  )
+  return getCollection(projectId, made.collection.id)
 }
 
 export async function getCollection(projectId: string, collectionId: string) {
@@ -379,7 +387,22 @@ export async function updateCollection(
     workflow?: { statuses: string[]; startStatusId: string | null }
   },
 ) {
-  return normalizeBody(await requestJson<unknown>(collectionPath(projectId, collectionId), { method: 'PATCH', idempotencyKey: crypto.randomUUID(), json: input }))
+  const { expectedVersion, workflow, ...change } = input
+  ranOrThrow(
+    await callOp(
+      'collection_update',
+      {
+        projectId,
+        collection: collectionId,
+        ...change,
+        // [] uses all the space's statuses; "" starts new tasks in its default.
+        ...(workflow ? { taskStatuses: workflow.statuses, startStatus: workflow.startStatusId ?? '' } : {}),
+      },
+      { expectedVersion },
+    ),
+    'The change',
+  )
+  return getCollection(projectId, collectionId)
 }
 
 /** A view's settings as the server stores them: no empty parts. */

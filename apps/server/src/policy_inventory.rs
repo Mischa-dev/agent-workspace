@@ -907,18 +907,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "collections/http",
         Post,
-        "/api/v1/projects/{project_id}/collections",
-        CollectionBuild
-    ),
-    policy_route!(
-        "collections/http",
-        Patch,
-        "/api/v1/projects/{project_id}/collections/{collection_id}",
-        CollectionBuild
-    ),
-    policy_route!(
-        "collections/http",
-        Post,
         "/api/v1/projects/{project_id}/collections/{collection_id}/fields",
         CollectionBuild
     ),

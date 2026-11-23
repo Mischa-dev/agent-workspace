@@ -18,6 +18,9 @@ struct Translated {
     name: &'static str,
     input: Value,
     read_back: fn(&Value) -> Option<String>,
+    /// Where a relative read-back address is, for a thing the operation's
+    /// answer names only by id (a collection in its space).
+    under: Option<String>,
     shape: fn(&Value, Value) -> (StatusCode, Value),
 }
 
@@ -137,6 +140,11 @@ fn with(body: &Value, extra: &[(&str, Value)]) -> Value {
     Value::Object(input)
 }
 
+/// A collection the operation names by id, read under its space.
+fn collection_of(value: &Value) -> Option<String> {
+    value["collection"]["id"].as_str().map(str::to_owned)
+}
+
 fn page_of(value: &Value) -> Option<String> {
     value["id"].as_str().map(|id| format!("/api/v1/pages/{id}"))
 }
@@ -152,12 +160,61 @@ fn translate(method: &str, path: &str, body: &Value) -> Option<Translated> {
             name: "page_create",
             input: with(body, &[("projectId", Value::from(*project))]),
             read_back: page_of,
+            under: None,
             shape: as_read,
         }),
+        ("POST", ["projects", project, "collections"]) => Some(Translated {
+            name: "collection_create",
+            input: with(body, &[("projectId", Value::from(*project))]),
+            read_back: collection_of,
+            under: Some(format!("/api/v1/projects/{project}/collections/")),
+            shape: |value, read| {
+                let status = if value["idempotentReplay"] == true {
+                    StatusCode::OK
+                } else {
+                    StatusCode::CREATED
+                };
+                (status, read)
+            },
+        }),
+        ("PATCH", ["projects", project, "collections", collection]) => {
+            let mut input = picked(
+                body,
+                &[
+                    ("expectedVersion", "expectedVersion"),
+                    ("name", "name"),
+                    ("description", "description"),
+                    ("titleName", "titleName"),
+                    ("position", "position"),
+                    ("archived", "archived"),
+                    ("actsLikeTask", "actsLikeTask"),
+                    ("fields", "fields"),
+                    ("views", "views"),
+                ],
+                &[
+                    ("projectId", Value::from(*project)),
+                    ("collection", Value::from(*collection)),
+                ],
+            );
+            if let Some(workflow) = body.get("workflow").filter(|value| value.is_object()) {
+                input["taskStatuses"] = workflow["statuses"].clone();
+                input["startStatus"] = workflow["startStatusId"]
+                    .as_str()
+                    .map_or_else(|| Value::from(""), Value::from);
+            }
+            Some(Translated {
+                name: "collection_update",
+                input,
+                read_back: collection_of,
+                under: Some(format!("/api/v1/projects/{project}/collections/")),
+                shape: as_read,
+            })
+        }
         ("PATCH", ["pages", page]) => Some(Translated {
             name: "page_update",
             input: with(body, &[("pageId", Value::from(*page))]),
             read_back: page_of,
+            under: None,
             shape: as_read,
         }),
         (
@@ -177,6 +234,7 @@ fn translate(method: &str, path: &str, body: &Value) -> Option<Translated> {
                 ],
             ),
             read_back: |_| None,
+            under: None,
             shape: |value, _| (StatusCode::OK, value.clone()),
         }),
         (
@@ -198,6 +256,7 @@ fn translate(method: &str, path: &str, body: &Value) -> Option<Translated> {
                 &[("conversationId", Value::from(*conversation))],
             ),
             read_back: message_of,
+            under: None,
             shape: sent,
         }),
         ("POST", ["channels" | "conversations", conversation, "threads"]) => Some(Translated {
@@ -212,6 +271,7 @@ fn translate(method: &str, path: &str, body: &Value) -> Option<Translated> {
                     .as_str()
                     .map(|id| format!("/api/v1/conversations/{id}/timeline"))
             },
+            under: None,
             shape: started,
         }),
         ("POST", ["projects", project, "channels"]) => Some(Translated {
@@ -230,6 +290,7 @@ fn translate(method: &str, path: &str, body: &Value) -> Option<Translated> {
                     .as_str()
                     .map(|id| format!("/api/v1/conversations/{id}/timeline"))
             },
+            under: None,
             shape: started,
         }),
         ("POST", ["conversations", conversation, "members"]) => Some(Translated {
@@ -239,6 +300,7 @@ fn translate(method: &str, path: &str, body: &Value) -> Option<Translated> {
                 "add": [body["actorId"].clone()],
             }),
             read_back: |_| None,
+            under: None,
             shape: members,
         }),
         ("POST", ["conversations", conversation, "members", member, "remove"]) => {
@@ -249,6 +311,7 @@ fn translate(method: &str, path: &str, body: &Value) -> Option<Translated> {
                     "remove": [member],
                 }),
                 read_back: |_| None,
+                under: None,
                 shape: members,
             })
         }
@@ -263,12 +326,14 @@ fn translate(method: &str, path: &str, body: &Value) -> Option<Translated> {
                 &[("messageId", Value::from(*message))],
             ),
             read_back: message_of,
+            under: None,
             shape: edited,
         }),
         ("DELETE", ["conversations", _, "messages", message]) => Some(Translated {
             name: "message_delete",
             input: picked(body, &[], &[("messageId", Value::from(*message))]),
             read_back: message_of,
+            under: None,
             shape: removed,
         }),
         _ => None,
@@ -345,6 +410,10 @@ pub(crate) async fn send(
     let value = answer["value"].clone();
     let Some(address) = (op.read_back)(&value) else {
         return Ok((op.shape)(&value, Value::Null));
+    };
+    let address = match &op.under {
+        Some(base) => format!("{base}{address}"),
+        None => address,
     };
     let mut read = Request::builder().method("GET").uri(address);
     for name in ["origin", "cookie", "authorization"] {
