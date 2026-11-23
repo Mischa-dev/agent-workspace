@@ -11,7 +11,8 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
     (OpKind::Describe, &["get", "open", "show"]),
     (
         OpKind::Query,
-        &["list", "search", "history", "export", "preview"],
+        // `answer`: a written answer from what the caller can read (C2.27).
+        &["list", "search", "history", "export", "preview", "answer"],
     ),
     (
         OpKind::Create,
