@@ -14,7 +14,7 @@ import { secondWorkspace, workspaceId, writer } from '../support/done'
 test.use({ storageState: storageStatePath })
 
 test('an agent you manage joins your second workspace in one click, and its DM is one conversation from both', async ({ page, context }) => {
-  await page.goto('/w/-/home')
+  await page.goto('/w/smoke-org/home')
   const { request, headers } = await writer(context, page)
   const first = await workspaceId(request)
   // The second workspace first: an export taken after the agent exists would bring it along.

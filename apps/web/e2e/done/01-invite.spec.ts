@@ -13,7 +13,7 @@ import { storageStatePath } from '../environment'
 test('invite a teammate from Members: they join from the link and land in the workspace', async ({ browser, page }, info) => {
   const context = await browser.newContext({ storageState: storageStatePath, ...info.project.use })
   const admin = await context.newPage()
-  await admin.goto('/w/-/settings/members')
+  await admin.goto('/w/smoke-org/settings/members')
   await admin.getByRole('button', { name: 'Create invitation link' }).click()
   const card = admin.getByRole('complementary', { name: 'Invitation link ready' })
   await expect(card).toBeVisible()

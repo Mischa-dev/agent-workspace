@@ -14,7 +14,7 @@ import { workspaceId, writer } from '../support/done'
 test.use({ storageState: storageStatePath })
 
 test('picking a role in Members gives an agent exactly that role’s access', async ({ page, context }) => {
-  await page.goto('/w/-/settings/members')
+  await page.goto('/w/smoke-org/settings/members')
   const { request, headers } = await writer(context, page)
   const workspace = await workspaceId(request)
   const op = async <T,>(name: string, data: Record<string, unknown>) => {
@@ -41,7 +41,7 @@ test('picking a role in Members gives an agent exactly that role’s access', as
   const yours = roles.roles.find((role) => role.name === mine.workspace.roleName && role.key !== 'owner') ?? roles.roles.find((role) => role.key === 'admin')
   for (const role of [newHire, yours]) {
     expect(role).toBeTruthy()
-    await page.goto('/w/-/settings/members')
+    await page.goto('/w/smoke-org/settings/members')
     await page.getByLabel(`Role for Hire ${handle}`).selectOption({ label: role?.name ?? '' })
     await expect(page.getByLabel(`Role for Hire ${handle}`)).toHaveValue(role?.id ?? '')
     const its = await op<Permissions>('permissions_get', { account: agent })

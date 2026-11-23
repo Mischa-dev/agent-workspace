@@ -13,7 +13,7 @@ import { asAgent, workspaceId, writer } from '../support/done'
 test.use({ storageState: storageStatePath })
 
 test('Runs shows each agent’s work, its cost and what it waits on', async ({ page, context, playwright }) => {
-  await page.goto('/w/-/home')
+  await page.goto('/w/smoke-org/home')
   // Agents call with their own token only: a context with no session.
   const bare = await playwright.request.newContext({ baseURL: webOrigin, storageState: { cookies: [], origins: [] } })
   const { request, headers } = await writer(context, page)
@@ -60,7 +60,7 @@ test('Runs shows each agent’s work, its cost and what it waits on', async ({ p
     activities: [{ id: 'q1', kind: 'interrupt', payload: { request: { title: `May I archive 40 pages? ${tag}`, audience: { accounts: [me] } } } }],
   })
 
-  await page.goto('/w/-/runs')
+  await page.goto('/w/smoke-org/runs')
   const runs = page.getByRole('list', { name: 'Runs' })
   const workingRow = runs.getByRole('listitem').filter({ hasText: `Tidy the backlog ${tag}` })
   await expect(workingRow).toContainText(`Worker${tag}`)

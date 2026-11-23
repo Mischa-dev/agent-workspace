@@ -17,7 +17,7 @@ test.use({ storageState: storageStatePath })
 
 test('connect one you run with a setup message, and start this server’s assistant in one click', async ({ page, context }) => {
   const space = seededValue('E2E_PROJECT_ID')
-  await page.goto(`/w/-/settings/spaces/${space}/agents`)
+  await page.goto(`/w/smoke-org/settings/spaces/${space}/agents`)
   const tag = randomUUID().slice(0, 6)
 
   // One you run: its setup message, to paste into it.

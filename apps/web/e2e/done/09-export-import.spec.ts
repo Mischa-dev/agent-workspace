@@ -12,7 +12,7 @@ import { downloadExport, importArchive, workspaceId, workspaces, writer } from '
 test.use({ storageState: storageStatePath })
 
 test('export the workspace from Settings, import the archive as a new workspace, and find its spaces there', async ({ page, context }, info) => {
-  await page.goto('/w/-/settings/export')
+  await page.goto('/w/smoke-org/settings/export')
   await page.getByRole('button', { name: 'Export the workspace' }).click()
   await expect(page.getByRole('link', { name: 'Download' }).first()).toBeVisible({ timeout: 60_000 })
 

@@ -14,7 +14,7 @@ test.use({ storageState: storageStatePath })
 
 test('an agent’s sheet edit shows live, with its name, and one tap undoes it', async ({ page, context, playwright }, info) => {
   const space = seededValue('E2E_PROJECT_ID')
-  await page.goto('/w/-/home')
+  await page.goto('/w/smoke-org/home')
   const { request, headers } = await writer(context, page)
   const workspace = await workspaceId(request)
   const tag = randomUUID().slice(0, 6)

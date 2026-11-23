@@ -23,11 +23,13 @@ export async function writer(context: BrowserContext, page: Page) {
   return { request: page.request, headers }
 }
 
-/** The signed-in person's first workspace. */
+/** The seeded workspace, the one the specs work in. */
 export async function workspaceId(request: APIRequestContext): Promise<string> {
-  const session = (await (await request.get('/api/v1/auth/session')).json()) as { organizations?: Array<{ id: string }> }
-  const id = session.organizations?.[0]?.id
-  if (!id) throw new Error('The signed-in person has no workspace')
+  const session = (await (await request.get('/api/v1/auth/session')).json()) as { organizations?: Array<{ id: string; slug: string }> }
+  // The seeded workspace by its slug: specs that run earlier make others
+  // (shape walks, imports), and those can come first in the list.
+  const id = session.organizations?.find((organization) => organization.slug === 'smoke-org')?.id
+  if (!id) throw new Error('The signed-in person is not in the seeded workspace')
   return id
 }
 
