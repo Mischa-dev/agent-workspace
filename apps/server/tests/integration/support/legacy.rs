@@ -95,7 +95,7 @@ pub(crate) async fn send(
         return Err(request);
     }
     let (parts, body) = request.into_parts();
-    let bytes = to_bytes(body, 4_000_000).await.expect("request body");
+    let bytes = to_bytes(body, usize::MAX).await.expect("request body");
     let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     let Some(op) = translate(&method, &path, &body) else {
         return Err(Request::from_parts(parts, Body::from(bytes)));

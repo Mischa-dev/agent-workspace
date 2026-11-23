@@ -367,7 +367,7 @@ async fn open_in(state: &AppState, view: &WorkItemView) -> Result<Vec<OpenInView
     // visibility: the caller has just read this task in this space.
     let workspace = sqlx::query_scalar::<_, Uuid>("SELECT workspace_id FROM spaces WHERE id = $1")
         .bind(view.project_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(crate::db::scoped(&state.pool))
         .await?;
     let Some(workspace) = workspace else {
         return Ok(Vec::new());
