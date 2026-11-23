@@ -1219,6 +1219,14 @@ fn plan(
             }
         }
     }
+    // An order no foreign key shows still closes a loop (a task's milestone
+    // belongs to an initiative, a Tasks record, which goes after its task),
+    // so it counts as a reference that can't wait.
+    for (table, after) in AFTER {
+        if let (Some(table), Some(after)) = (tables.get(table), tables.get(after)) {
+            edges.entry(table).or_default().push((after, Vec::new()));
+        }
+    }
     // Tables that reach each other (strongly connected components).
     let reaches = |from: &str| {
         let mut seen = BTreeSet::new();
@@ -1237,11 +1245,6 @@ fn plan(
         .map(|table| (*table, reaches(table)))
         .collect::<BTreeMap<_, _>>();
     let mut hard: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-    for (table, after) in AFTER {
-        if let (Some(table), Some(after)) = (tables.get(table), tables.get(after)) {
-            hard.entry(table).or_default().insert(after);
-        }
-    }
     for (table, targets) in &edges {
         for (target, nullable) in targets {
             let cycle = reach[target].contains(table);
@@ -1547,6 +1550,59 @@ async fn drop_dangling(
     Ok((rows, lines, left))
 }
 
+/// The order `present` goes in, with each table's shape as this server has it.
+async fn plan_for(
+    pool: &sqlx::PgPool,
+    present: &[(&'static str, &'static str, &'static str)],
+) -> Result<(Vec<Step>, HashMap<&'static str, TableInfo>), ImportError> {
+    let mut info = HashMap::new();
+    let mut connection = crate::db::scoped_tx(pool).await?;
+    for (_, _, table) in present {
+        info.insert(*table, table_info(&mut connection, table).await?);
+    }
+    connection.commit().await?;
+    let steps = plan(present, &info)?;
+    Ok((steps, info))
+}
+
+/// Checks that an archive has an order whatever kinds it holds: all of
+/// them, and many smaller sets, since an archive carries only the kinds
+/// the workspace has rows of and a loop can show only when a table that
+/// would have broken it is missing. Returns how many sets were planned.
+pub async fn plan_any_kinds(pool: &sqlx::PgPool) -> Result<usize, ImportError> {
+    let every = DECLARATIONS
+        .iter()
+        .flat_map(|declaration| {
+            declaration
+                .kinds
+                .iter()
+                .map(move |kind| (declaration.module, kind.kind, kind.table))
+        })
+        .collect::<Vec<_>>();
+    let (_, info) = plan_for(pool, &every).await?;
+    // The same sets every run: a fixed sequence, not a random one.
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let mut planned = 1;
+    for round in 0..2000 {
+        // Small sets as well as large: one kind in eight up to seven in eight.
+        let keep = 1 + round % 7;
+        let present = every
+            .iter()
+            .filter(|_| next() % 8 < keep)
+            .copied()
+            .collect::<Vec<_>>();
+        plan(&present, &info)?;
+        planned += 1;
+    }
+    Ok(planned)
+}
+
 async fn fill(
     state: &AppState,
     transfer: Uuid,
@@ -1566,15 +1622,7 @@ async fn fill(
         })
         .filter(|(module, kind, _)| kind_file(folder, module, kind).exists())
         .collect::<Vec<_>>();
-    let mut info = HashMap::new();
-    {
-        let mut connection = crate::db::scoped_tx(&state.pool).await?;
-        for (_, _, table) in &present {
-            info.insert(*table, table_info(&mut connection, table).await?);
-        }
-        connection.commit().await?;
-    }
-    let steps = plan(&present, &info)?;
+    let (steps, info) = plan_for(&state.pool, &present).await?;
     let carried = present
         .iter()
         .map(|(_, _, table)| *table)
@@ -2280,6 +2328,64 @@ mod tests {
         let steps = plan(&[("tasks", "tasks", "work_items")], &info).expect("plan");
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].deferred, vec!["parent_id".to_owned()]);
+    }
+
+    #[test]
+    fn an_order_no_key_shows_still_breaks_a_loop() {
+        // A task's milestone belongs to an initiative, a Tasks record, which
+        // goes after its task: the loop shows only with that order.
+        let table = |fks: Vec<Fk>| TableInfo {
+            columns: HashSet::from(["id".to_owned(), "project_id".to_owned()]),
+            has_id: true,
+            tenant: "organization_id",
+            primary: vec!["id".to_owned()],
+            keys: Vec::new(),
+            fks,
+            checked: HashSet::new(),
+            deferred_unique: false,
+        };
+        let fk = |target: &str, column: &str| Fk {
+            target: target.to_owned(),
+            columns: vec!["project_id".to_owned(), column.to_owned()],
+            nullable: vec![column.to_owned()],
+            referenced: vec!["project_id".to_owned(), "id".to_owned()],
+        };
+        let info = HashMap::from([
+            (
+                "work_items",
+                table(vec![fk("project_milestones", "milestone_id")]),
+            ),
+            (
+                "project_milestones",
+                table(vec![fk("collection_records", "initiative_id")]),
+            ),
+            ("collection_records", table(Vec::new())),
+        ]);
+        let steps = plan(
+            &[
+                ("tasks", "tasks", "work_items"),
+                ("tasks", "milestones", "project_milestones"),
+                ("collections", "records", "collection_records"),
+            ],
+            &info,
+        )
+        .expect("plan");
+        let at = |name: &str| {
+            steps
+                .iter()
+                .position(|step| step.table == name)
+                .expect(name)
+        };
+        assert!(at("work_items") < at("collection_records"));
+        let deferred = steps
+            .iter()
+            .flat_map(|step| step.deferred.iter().cloned())
+            .collect::<Vec<_>>();
+        assert!(
+            deferred.contains(&"milestone_id".to_owned())
+                || deferred.contains(&"initiative_id".to_owned()),
+            "{steps:?}"
+        );
     }
 
     #[test]
