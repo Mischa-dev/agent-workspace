@@ -1,6 +1,6 @@
 import { isSpaceAddress } from '../app/href'
 import { requestJson } from '../api/client'
-import { callOp } from '../api/ops'
+import { callOp, newRequestId } from '../api/ops'
 import { asRecord, capability, integer, normalizeConversationActor, nullableString, REMOVED_MESSAGE_CONTENT, string } from './sidebarApi'
 import type { FileAttachment } from '../files/model'
 import {
@@ -356,6 +356,11 @@ export async function retryReplyRequest(requestId: string) {
   await callOp('reply_retry', { requestId })
 }
 
+/** C2.35: stop every agent at work in a conversation and its threads. */
+export async function stopAllReplies(conversationId: string) {
+  await callOp('reply_stop_all', { conversationId })
+}
+
 /** Stop an agent's work on a request (and its follow-ups queued behind it). */
 export async function stopReplyRequest(requestId: string) {
   await callOp('reply_stop', { requestId })
@@ -478,15 +483,15 @@ export async function setMessageReaction(input: {
 }) {
   if (!REACTION_NAME.test(input.name)) throw new Error('That reaction isn’t one of the choices.')
   const root = asRecord(
-    await requestJson<unknown>(
-      `${messagePath(input.conversationId, input.messageId)}/reactions/${encodeURIComponent(input.name)}`,
-      { method: input.reacted ? 'PUT' : 'DELETE' },
-    ),
+    await callOp('message_react', { messageId: input.messageId, emoji: input.name, reacted: input.reacted }, { requestId: newRequestId() }),
   )
   if (root.conversationId !== input.conversationId || root.messageId !== input.messageId) {
     throw new Error('The reaction came back for a different message. Refresh to see it.')
   }
-  return { changed: root.changed !== false, reactions: normalizeReactions(root.reactions) }
+  // The operation answers in its agent-facing shape; the timeline's own
+  // reading carries what the web shows (images, who reacted).
+  const entry = await getConversationMessage(input.conversationId, input.messageId)
+  return { changed: root.changed !== false, reactions: entry.message?.reactions ?? normalizeReactions(root.reactions) }
 }
 
 /** One timeline entry as it is now, for refreshing a message on an older page. */

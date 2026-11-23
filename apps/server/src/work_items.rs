@@ -326,6 +326,101 @@ pub struct WorkItemView {
     /// whose fields its values follow; none for a plain task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     collection_id: Option<Uuid>,
+    /// Ways to open the task in a harness's own app on this computer
+    /// (W1.27c), from the harness manifests: filled in only on the task's
+    /// own page, for a task with one usable repository.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    open_in: Vec<OpenInView>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenInView {
+    label: String,
+    href: String,
+}
+
+/// The most a prompt handed to a harness's app may hold.
+const OPEN_IN_PROMPT_CHARS: usize = 2_000;
+
+/// What opening the task elsewhere offers (W1.27c): each enabled harness
+/// whose manifest names a link, when the task has exactly one linked
+/// repository that is trusted, ready and cloned over https. The prompt and
+/// addresses carry ids and links only.
+async fn open_in(state: &AppState, view: &WorkItemView) -> Result<Vec<OpenInView>, AppError> {
+    let [repository] = view.linked_repositories.as_slice() else {
+        return Ok(Vec::new());
+    };
+    let usable = view.capabilities.code
+        && view.archived_at.is_none()
+        && repository.trusted
+        && repository.available
+        && repository.archived_at.is_none()
+        && repository.clone_url.starts_with("https://")
+        && repository.clone_url.ends_with(".git");
+    let Some(origin) = state.config.public_origin.as_deref() else {
+        return Ok(Vec::new());
+    };
+    if !usable {
+        return Ok(Vec::new());
+    }
+    // visibility: the caller has just read this task in this space.
+    let workspace = sqlx::query_scalar::<_, Uuid>("SELECT workspace_id FROM spaces WHERE id = $1")
+        .bind(view.project_id)
+        .fetch_optional(crate::db::scoped(&state.pool))
+        .await?;
+    let Some(workspace) = workspace else {
+        return Ok(Vec::new());
+    };
+    let harnesses = crate::harness_catalog::Harnesses::of(state, workspace).await?;
+    if harnesses
+        .manifests()
+        .all(|manifest| manifest.open_locally.is_none())
+    {
+        return Ok(Vec::new());
+    }
+    use crate::addresses::{Place, Target, link};
+    let origin = origin.trim_end_matches('/');
+    let space_url = format!(
+        "{origin}{}",
+        link(
+            state,
+            Some(workspace),
+            &Target::space(view.project_id, Place::Home)
+        )
+    );
+    let task_url = format!(
+        "{origin}{}",
+        link(
+            state,
+            Some(workspace),
+            &Target::task(view.project_id, view.id)
+        )
+    );
+    let prompt: String = [
+        "Use the Agent Workspace MCP server.".to_owned(),
+        format!("Project ID: {}", view.project_id),
+        format!("Project URL: {space_url}"),
+        format!("Task ID: {}", view.id),
+        format!("Task URL: {task_url}"),
+        format!("Task key: {}", view.key),
+        "Load the task and its project instructions through MCP before changing anything.".to_owned(),
+        "Work in the repository matched by this Git origin. Set the task to In Progress only when meaningful work begins.".to_owned(),
+        "Post only useful progress or blocker updates. Respect the current version; refetch and make an informed retry after a version conflict.".to_owned(),
+        "When complete, link the canonical pull request through MCP and mark the task ready for review.".to_owned(),
+    ]
+    .join("\n")
+    .chars()
+    .take(OPEN_IN_PROMPT_CHARS)
+    .collect();
+    Ok(harnesses
+        .manifests()
+        .filter_map(|manifest| manifest.open_locally.as_ref())
+        .map(|open| OpenInView {
+            label: open.label.clone(),
+            href: open.fill(&repository.clone_url, &prompt),
+        })
+        .collect())
 }
 
 /// A task's place in the plan: parent, milestone, dates, estimate,
@@ -828,7 +923,9 @@ async fn get_work_item(
     let row = fetch_work_item(&state.pool, project_id, work_item_id, principal.actor_id)
         .await?
         .ok_or(AppError::NotFound("work_item"))?;
-    Ok(Json(work_item_view(row, capabilities(&membership)?)?))
+    let mut view = work_item_view(row, capabilities(&membership)?)?;
+    view.open_in = open_in(&state, &view).await?;
+    Ok(Json(view))
 }
 
 async fn get_work_item_by_key(
@@ -2437,6 +2534,7 @@ fn work_item_view(
         field_values: row.field_values,
         field_references: json_list(row.field_references)?,
         collection_id: row.collection_id,
+        open_in: Vec::new(),
     };
     // Someone who may change a task but not see it (a role with "archive
     // tasks" only, say) gets the outcome, not the task's contents.

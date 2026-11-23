@@ -33,5 +33,17 @@ export default {
     { kind: 'channel', label: 'Channel', icon: 'message' },
     { kind: 'thread', label: 'Thread', icon: 'message' },
   ],
+  embeds: [
+    {
+      // One thread: /projects/{projectId}/threads/{id}.
+      id: 'thread',
+      match: (path) => {
+        const found = /^\/projects\/[^/]+\/threads\/([^/]+)\/?$/.exec(path)
+        return found ? { kind: 'thread', id: decodeURIComponent(found[1]) } : null
+      },
+      view: () => import('../pieces/embeds/ThingEmbedView'),
+      loading: 'the thread',
+    },
+  ],
   phone: { id: 'chat', space: 'project', rank: 20, part: 'area.chat', icon: 'hash', label: 'Chat', path: '' },
 } satisfies WebModule

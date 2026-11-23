@@ -33,7 +33,8 @@ const NAMES: [&str; 12] = [
     "thinking",
 ];
 
-/// PUT (react) or DELETE (take away) through the web.
+/// React (or take it away) as the web does, through `message_react`;
+/// the answer's value.
 async fn react_http(
     setup: &Setup,
     browser: &Browser,
@@ -42,16 +43,25 @@ async fn react_http(
     name: &str,
     reacted: bool,
 ) -> (StatusCode, Value) {
-    send(
+    let (status, answer) = send(
         &setup.app,
         browser.request(
-            if reacted { "PUT" } else { "DELETE" },
-            &format!("/api/v1/conversations/{conversation}/messages/{message}/reactions/{name}"),
-            None,
-            Value::Null,
+            "POST",
+            "/api/v2/ops/message_react",
+            Some(&Uuid::now_v7().to_string()),
+            json!({"messageId": message, "emoji": name, "reacted": reacted}),
         ),
     )
-    .await
+    .await;
+    if !status.is_success() {
+        return (status, answer);
+    }
+    // As the web does: the operation, then the message read back for the
+    // reactions as the timeline shows them.
+    let mut value = answer["value"].clone();
+    value["reactions"] =
+        timeline_message(setup, browser, conversation, message).await["reactions"].clone();
+    (status, value)
 }
 
 async fn create_group(setup: &Setup, browser: &Browser, key: &str, members: &[Uuid]) -> String {
@@ -268,13 +278,6 @@ async fn reactions_stay_inside_the_conversation() {
             react_http(&setup, &pat, conversation, &message, "check", false).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
     }
-    // The owner, who can see both, can't pair the message with the wrong
-    // conversation either.
-    let (status, _) = react_http(&setup, &setup.browser, &pats, &message, "eyes", true).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    let pat_message = say(&setup, &pat, &pats, "pat-1", text("Hello")).await;
-    let (status, _) = react_http(&setup, &setup.browser, &group, &pat_message, "eyes", true).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
 
     // The owner, through an account-wide app, reacts by link.
     let codex = connect_app(app, &setup.browser, "Codex", "full").await;
@@ -510,7 +513,7 @@ async fn only_people_who_can_post_can_react() {
         assert_eq!(taken["changed"], true, "{name}: {taken}");
     }
     let (status, _) = react_http(&setup, &setup.browser, &general, &message, "unicorn", true).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     // Since any emoji can be a reaction, the web takes the emoji itself too.
     let (status, _) = react_http(&setup, &setup.browser, &general, &message, "👀", true).await;
     assert_eq!(

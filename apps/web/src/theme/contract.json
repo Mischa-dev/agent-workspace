@@ -593,6 +593,10 @@
       "label": "The table piece"
     },
     {
+      "class": "aw-membed",
+      "label": "Tasks or a thing embedded in a page"
+    },
+    {
       "class": "aw-list-piece",
       "label": "A list piece: rows of things"
     },

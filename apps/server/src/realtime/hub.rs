@@ -661,6 +661,20 @@ async fn serve_socket(
             "realtime presence not recorded"
         ),
     }
+    // C2.16: who is online already, so a page shows it before anyone moves.
+    let mut workspaces = subscription.workspaces.iter().copied().collect::<Vec<_>>();
+    workspaces.sort();
+    for workspace in workspaces {
+        let Ok(online) = super::presence::online_in(&state.pool, workspace).await else {
+            break;
+        };
+        for who in online {
+            let frame = wire::presence(workspace, who, true);
+            if socket.send(Message::Text(frame.into())).await.is_err() {
+                return;
+            }
+        }
+    }
     let mut live = LiveState::default();
 
     loop {

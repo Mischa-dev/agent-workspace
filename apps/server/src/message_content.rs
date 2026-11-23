@@ -10,10 +10,13 @@ pub const MAX_MESSAGE_TEXT_CHARACTERS: usize = 20_000;
 pub const MAX_MESSAGE_MENTIONS: usize = 32;
 pub const MAX_MESSAGE_WORK_ITEM_REFERENCES: usize = 32;
 
-/// `@everyone` or `@here` written as a word in a message's text, as a
-/// PostgreSQL case-insensitive regular expression. Either notifies every
-/// person who can see the conversation (notifications.rs).
-pub const EVERYONE_MENTION_PATTERN: &str = r"(^|[^[:alnum:]_@])@(everyone|here)($|[^[:alnum:]_])";
+/// `@everyone` written as a word in a message's text, as a PostgreSQL
+/// case-insensitive regular expression: it notifies every person who can see
+/// the conversation (notifications.rs).
+pub const EVERYONE_MENTION_PATTERN: &str = r"(^|[^[:alnum:]_@])@everyone($|[^[:alnum:]_])";
+/// `@here` written as a word: it notifies the people who can see the
+/// conversation, are online now and aren't away (C2.16).
+pub const HERE_MENTION_PATTERN: &str = r"(^|[^[:alnum:]_@])@here($|[^[:alnum:]_])";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]

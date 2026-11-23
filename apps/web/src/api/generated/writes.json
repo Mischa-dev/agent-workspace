@@ -926,6 +926,11 @@
   },
   {
     "kind": "change",
+    "name": "reply_stop_all",
+    "title": "Stop all agents"
+  },
+  {
+    "kind": "change",
     "name": "repository_archive",
     "title": "Archive repository"
   },

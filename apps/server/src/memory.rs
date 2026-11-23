@@ -13,7 +13,7 @@ use axum::{
     extract::{DefaultBodyLimit, State},
     http::HeaderMap,
     response::IntoResponse,
-    routing::{delete, get, patch, post},
+    routing::{get, post},
 };
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
@@ -22,9 +22,9 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
+    auth::AuthenticatedActor,
     conversations::{authorize_conversation_row_for, fetch_conversation_access, parse_actor_kind},
-    error::{ApiJson, ApiPath, ApiQuery, AppError},
+    error::{ApiPath, ApiQuery, AppError},
     page_docs,
     policy::{Action, ActorKind, RoleGrant},
 };
@@ -47,14 +47,8 @@ pub const STALE_AFTER_DAYS: i32 = 120;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route(
-            "/api/v1/projects/{id}/pages",
-            get(list_pages_http).post(create_page_http),
-        )
-        .route(
-            "/api/v1/pages/{id}",
-            get(get_page_http).patch(update_page_http),
-        )
+        .route("/api/v1/projects/{id}/pages", get(list_pages_http))
+        .route("/api/v1/pages/{id}", get(get_page_http))
         .route("/api/v1/shared/{token}", get(open_shared_http))
         .route(
             "/api/v1/pages/{id}/revisions/{version}",
@@ -88,31 +82,11 @@ pub fn router() -> Router<AppState> {
             get(page_docs::discussion::get_discussion),
         )
         .route(
-            "/api/v1/pages/{id}/comments",
-            post(page_docs::discussion::create_comment),
-        )
-        .route(
-            "/api/v1/pages/{id}/comments/{comment_id}",
-            patch(page_docs::discussion::update_comment)
-                .delete(page_docs::discussion::delete_comment),
-        )
-        .route(
-            "/api/v1/pages/{id}/suggestions/{suggestion_id}/decision",
-            post(page_docs::discussion::decide_suggestion),
-        )
-        .route(
             "/api/v1/organizations/{organization_id}/pages-space",
             get(workspace_pages_space_http),
         )
         .route("/api/v1/projects/{id}/decisions", get(list_decisions_http))
-        .route(
-            "/api/v1/conversations/{id}/pins",
-            get(list_pins_http).post(pin_http),
-        )
-        .route(
-            "/api/v1/conversations/{id}/pins/{kind}/{target_id}",
-            delete(unpin_http),
-        )
+        .route("/api/v1/conversations/{id}/pins", get(list_pins_http))
         .route(
             "/api/v1/projects/{project_id}/work-items/{work_item_id}/claim",
             get(get_claim_http),
@@ -1709,43 +1683,6 @@ async fn list_pages_http(
     }))
 }
 
-async fn create_page_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(input): ApiJson<PageInput>,
-) -> Result<Json<PageView>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let writer = browser_writer(&principal)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let direct = project_access(
-        &mut *transaction,
-        writer.actor_id,
-        project_id,
-        Action::PageEdit,
-    )
-    .await?;
-    if direct {
-        return Err(AppError::Validation("project"));
-    }
-    let page_id = create_page(&mut transaction, writer, project_id, &input).await?;
-    audit(
-        &mut transaction,
-        &principal,
-        project_id,
-        "page.created",
-        "page",
-        page_id,
-    )
-    .await?;
-    transaction.commit().await?;
-    get_page(&state.pool, page_id, principal.actor_id)
-        .await?
-        .map(Json)
-        .ok_or(AppError::NotFound("page"))
-}
-
 /// `title`, or `title (2)` and on when another active page in the project
 /// has it: an import or a page from a template never fails over a name.
 pub(crate) async fn free_page_title(
@@ -1854,166 +1791,6 @@ async fn open_shared_http(
         .ok_or(AppError::NotFound("link"))
 }
 
-/// A page as a save left it; with `suggestionId` when the save was kept
-/// as a suggestion instead (C1.8).
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PageSaved {
-    #[serde(flatten)]
-    page: PageView,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    suggestion_id: Option<Uuid>,
-}
-
-async fn update_page_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(page_id): ApiPath<Uuid>,
-    ApiJson(input): ApiJson<PageInput>,
-) -> Result<Json<PageSaved>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let writer = browser_writer(&principal)?;
-    let project_id = page_project(&state.pool, page_id, principal.actor_id).await?;
-    if let Some(version) = input.restore_version {
-        crate::history::cold::warm_page(&state, page_id, version).await?;
-    }
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    // The role decides (C1.8): edit saves; suggest-only keeps new text as
-    // a suggestion for someone who edits; neither is refused.
-    let creator = crate::page_docs::suggestions::page_creator(&mut transaction, page_id).await?;
-    let mode = crate::access::write_mode(
-        &mut transaction,
-        &crate::access::Caller::person(writer.actor_id, writer.actor_kind),
-        "page",
-        project_id,
-        creator == Some(writer.actor_id),
-        Some("pages"),
-    )
-    .await?
-    .map_err(|_| AppError::NotFound("page"))?
-    .mode;
-    if mode == crate::access::WriteMode::Propose {
-        let suggestion_id =
-            suggest_from_browser(&mut transaction, writer, project_id, page_id, &input).await?;
-        if let Some(id) = suggestion_id {
-            audit(
-                &mut transaction,
-                &principal,
-                project_id,
-                "page.suggestion_created",
-                "proposal",
-                id,
-            )
-            .await?;
-        }
-        transaction.commit().await?;
-        let page = get_page(&state.pool, page_id, principal.actor_id)
-            .await?
-            .ok_or(AppError::NotFound("page"))?;
-        return Ok(Json(PageSaved {
-            page,
-            suggestion_id,
-        }));
-    }
-    update_page(&mut transaction, writer, project_id, page_id, &input).await?;
-    audit(
-        &mut transaction,
-        &principal,
-        project_id,
-        "page.updated",
-        "page",
-        page_id,
-    )
-    .await?;
-    transaction.commit().await?;
-    let page = get_page(&state.pool, page_id, principal.actor_id)
-        .await?
-        .ok_or(AppError::NotFound("page"))?;
-    Ok(Json(PageSaved {
-        page,
-        suggestion_id: None,
-    }))
-}
-
-/// A suggest-only save from the web: new text becomes a suggestion; the
-/// title and settings need edit access.
-async fn suggest_from_browser(
-    transaction: &mut Transaction<'_, Postgres>,
-    writer: Writer,
-    in_space: Uuid,
-    page_id: Uuid,
-    input: &PageInput,
-) -> Result<Option<Uuid>, AppError> {
-    // The editor sends every field; only a change to one needs edit access.
-    let (title, is_guide, skill_description, archived, is_template) =
-        sqlx::query_as::<_, (String, bool, Option<String>, bool, bool)>(
-            "SELECT title, is_guide, skill_description, archived_at IS NOT NULL, is_template \
-             FROM project_pages WHERE id = $1",
-        )
-        .bind(page_id)
-        .fetch_one(&mut **transaction)
-        .await?;
-    let skill_now = skill_description.as_deref().unwrap_or("");
-    let changed = input
-        .title
-        .as_deref()
-        .is_some_and(|value| value.trim() != title)
-        || input.is_guide.is_some_and(|value| value != is_guide)
-        || input.is_template.is_some_and(|value| value != is_template)
-        || input.archived.is_some_and(|value| value != archived)
-        || input
-            .skill_description
-            .as_deref()
-            .is_some_and(|value| value.trim() != skill_now);
-    if changed {
-        return Err(AppError::Refused {
-            field: "page",
-            message: "You can suggest changes to this page's text, but not its title or settings. Ask someone who edits it.",
-        });
-    }
-    let markdown = match (input.restore_version, input.body.as_deref()) {
-        (_, Some(body)) => normalize_body(body, MAX_PAGE_BODY)?,
-        (Some(restore), None) => sqlx::query_scalar::<_, String>(
-            "SELECT body FROM project_page_revisions WHERE page_id = $1 AND version = $2",
-        )
-        .bind(page_id)
-        .bind(restore)
-        .fetch_optional(&mut **transaction)
-        .await?
-        .ok_or(AppError::NotFound("page version"))?,
-        (None, None) => return Ok(None),
-    };
-    let note = normalize_note(input.note.as_deref())?;
-    use crate::page_docs::suggestions::{Suggested, suggest_text};
-    match suggest_text(
-        transaction,
-        writer,
-        in_space,
-        page_id,
-        &markdown,
-        input.expected_version,
-        note.as_deref(),
-    )
-    .await?
-    {
-        Suggested::Made { id, .. } => Ok(Some(id)),
-        Suggested::Unchanged => Ok(None),
-        Suggested::Archived => Err(AppError::Refused {
-            field: "page",
-            message: "This page is archived. Bring it back to edit it.",
-        }),
-        Suggested::TooBig => Err(AppError::Refused {
-            field: "body",
-            message: "That changes too much of someone else's page at once. Suggest it in parts.",
-        }),
-        Suggested::Invalid(_) => Err(AppError::Refused {
-            field: "body",
-            message: "That text couldn't be kept as a suggestion. Read the page again and retry.",
-        }),
-    }
-}
-
 async fn get_revision_http(
     State(state): State<AppState>,
     principal: AuthenticatedActor,
@@ -2099,80 +1876,6 @@ async fn list_pins_http(
         .await?
         .ok_or(AppError::NotFound("conversation"))?;
     authorize_conversation_row_for(principal.actor_id, &row, Action::ProjectView, false)?;
-    Ok(Json(PinsResponse {
-        pins: list_pins(&state.pool, conversation_id, principal.actor_id).await?,
-    }))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PinRequest {
-    kind: String,
-    target_id: Uuid,
-}
-
-async fn pin_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(conversation_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<PinRequest>,
-) -> Result<Json<PinsResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let writer = browser_writer(&principal)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let project_id = set_pin(
-        &mut transaction,
-        writer,
-        conversation_id,
-        &request.kind,
-        request.target_id,
-        true,
-    )
-    .await?;
-    audit(
-        &mut transaction,
-        &principal,
-        project_id,
-        "conversation.pinned",
-        "conversation",
-        conversation_id,
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(Json(PinsResponse {
-        pins: list_pins(&state.pool, conversation_id, principal.actor_id).await?,
-    }))
-}
-
-async fn unpin_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((conversation_id, kind, target_id)): ApiPath<(Uuid, String, Uuid)>,
-) -> Result<Json<PinsResponse>, AppError> {
-    require_authenticated_write(&state, &headers, &principal).await?;
-    let writer = browser_writer(&principal)?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let project_id = set_pin(
-        &mut transaction,
-        writer,
-        conversation_id,
-        &kind,
-        target_id,
-        false,
-    )
-    .await?;
-    audit(
-        &mut transaction,
-        &principal,
-        project_id,
-        "conversation.unpinned",
-        "conversation",
-        conversation_id,
-    )
-    .await?;
-    transaction.commit().await?;
     Ok(Json(PinsResponse {
         pins: list_pins(&state.pool, conversation_id, principal.actor_id).await?,
     }))

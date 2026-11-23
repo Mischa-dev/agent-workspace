@@ -19,30 +19,19 @@
 
 use std::{collections::HashMap, sync::LazyLock};
 
-use axum::{
-    Json, Router,
-    extract::{DefaultBodyLimit, State},
-    http::HeaderMap,
-    routing::put,
-};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
-    AppState,
-    auth::{AuthenticatedActor, require_authenticated_write},
     conversations::{
         ActorView, ConversationAccessRow, MessageCommandActor, TimelineEntryView, enqueue_event,
         lock_message_conversation,
     },
-    error::{ApiPath, AppError},
+    error::AppError,
     outbox::{MessageReactionsUpdatedPayload, OutboxEventPayload},
     policy::Action,
 };
-
-// The routes take no body; this is the cap every message route uses.
-const MAX_HTTP_BODY_BYTES: usize = 131_072;
 
 /// One emoji people can react with.
 #[derive(Debug)]
@@ -606,110 +595,6 @@ where
         message.reactions = by_message.remove(&message.id).unwrap_or_default();
     }
     Ok(())
-}
-
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
-            put(add_reaction).delete(remove_reaction),
-        )
-        .layer(DefaultBodyLimit::max(MAX_HTTP_BODY_BYTES))
-}
-
-/// Every reaction on the message after the change, as the caller sees them.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MessageReactionsResponse {
-    pub conversation_id: Uuid,
-    pub message_id: Uuid,
-    /// False when the reaction was already that way.
-    pub changed: bool,
-    pub reactions: Vec<ReactionView>,
-}
-
-async fn add_reaction(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((conversation_id, message_id, name)): ApiPath<(Uuid, Uuid, String)>,
-) -> Result<Json<MessageReactionsResponse>, AppError> {
-    change_reaction(
-        &state,
-        &headers,
-        &principal,
-        conversation_id,
-        message_id,
-        &name,
-        true,
-    )
-    .await
-}
-
-async fn remove_reaction(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((conversation_id, message_id, name)): ApiPath<(Uuid, Uuid, String)>,
-) -> Result<Json<MessageReactionsResponse>, AppError> {
-    change_reaction(
-        &state,
-        &headers,
-        &principal,
-        conversation_id,
-        message_id,
-        &name,
-        false,
-    )
-    .await
-}
-
-async fn change_reaction(
-    state: &AppState,
-    headers: &HeaderMap,
-    principal: &AuthenticatedActor,
-    conversation_id: Uuid,
-    message_id: Uuid,
-    name: &str,
-    reacted: bool,
-) -> Result<Json<MessageReactionsResponse>, AppError> {
-    require_authenticated_write(state, headers, principal).await?;
-    if !could_be_reaction(name) {
-        return Err(AppError::Validation("reaction"));
-    }
-    let actor = MessageCommandActor {
-        actor_id: principal.actor_id,
-        actor_kind: principal.actor_kind.clone(),
-        mcp_credential: None,
-        via_grant_id: None,
-        run_id: None,
-    };
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let outcome = set_reaction(
-        &mut transaction,
-        &actor,
-        Some(conversation_id),
-        None,
-        message_id,
-        name,
-        reacted,
-    )
-    .await?;
-    transaction.commit().await?;
-    // The web doesn't audit reactions, just as it doesn't audit sends.
-    let mut by_message = reaction_rows(
-        &state.pool,
-        outcome.conversation.id,
-        &[message_id],
-        principal.actor_id,
-    )
-    .await?;
-    Ok(Json(MessageReactionsResponse {
-        conversation_id: outcome.conversation.id,
-        message_id,
-        changed: outcome.changed,
-        reactions: by_message.remove(&message_id).unwrap_or_default(),
-    }))
 }
 
 #[cfg(test)]

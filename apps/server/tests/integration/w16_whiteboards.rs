@@ -1860,3 +1860,56 @@ async fn board_images_live_in_the_file_store() {
     assert_eq!(status, StatusCode::OK, "{kept}");
     assert_eq!(kept["dataURL"], TINY_PNG);
 }
+
+/// Two uploads staging the same bytes share one pin: the one that is
+/// refused takes back only its own hold, and the bytes stay for the other
+/// until it is done with them too.
+#[tokio::test]
+async fn a_refused_upload_leaves_bytes_another_upload_staged() {
+    let Some(world) = crate::support::world::WorldBuilder::default()
+        .project("DRAW")
+        .build("w16_shared_stage")
+        .await
+    else {
+        return;
+    };
+    let state = &world.state;
+    let workspace = world.organization;
+    let bytes = b"the same picture, twice".to_vec();
+    let first = agent_workspace_server::test_support::stage_bytes(state, workspace, &bytes)
+        .await
+        .expect("first stage");
+    let second = agent_workspace_server::test_support::stage_bytes(state, workspace, &bytes)
+        .await
+        .expect("second stage");
+    assert_eq!(first.key(), second.key(), "the same bytes share a key");
+    let store = agent_workspace_server::files::store::FileStore::from_config(&state.config);
+
+    agent_workspace_server::test_support::abandon_bytes(state, &second).await;
+    let holders = sqlx::query_scalar::<_, i32>(
+        "SELECT holders FROM file_objects_pending WHERE storage_key = $1 AND deleting_since IS NULL",
+    )
+    .bind(first.key())
+    .fetch_optional(world.pool())
+    .await
+    .expect("pin");
+    assert_eq!(holders, Some(1), "the first upload still holds the pin");
+    assert_eq!(
+        store.read_all(first.key(), 1024).await.expect("bytes kept"),
+        bytes
+    );
+
+    agent_workspace_server::test_support::abandon_bytes(state, &first).await;
+    let left = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM file_objects_pending WHERE storage_key = $1",
+    )
+    .bind(first.key())
+    .fetch_one(world.pool())
+    .await
+    .expect("pins");
+    assert_eq!(left, 0, "nobody holds it now, so it goes");
+    assert!(
+        store.read_all(first.key(), 1024).await.is_err(),
+        "bytes gone"
+    );
+}

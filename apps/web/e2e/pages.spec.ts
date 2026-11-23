@@ -46,12 +46,12 @@ async function newPage(context: BrowserContext, page: Page, title: string) {
   const projectId = seededValue('E2E_PROJECT_ID')
   await page.goto(`/projects/${projectId}/pages`)
   const { request, headers } = await writer(context, page)
-  const created = await request.post(`/api/v1/projects/${projectId}/pages`, {
+  const created = await request.post('/api/v2/ops/page_create', {
     headers: headers(`page-${title.replace(/[^A-Za-z0-9]+/g, '-')}`),
-    data: { title, body: BODY },
+    data: { projectId, title, body: BODY },
   })
   expect(created.ok(), await created.text()).toBe(true)
-  const { id } = (await created.json()) as { id: string }
+  const { id } = ((await created.json()) as { value: { id: string } }).value
   return { id, href: `/projects/${projectId}/pages/${id}` }
 }
 
@@ -98,9 +98,9 @@ test('two people and an agent write one page at once', async ({ browser, context
 
   // An agent's change, written as Markdown through the API, reaches both.
   const before = await read()
-  const patched = await request.patch(`/api/v1/pages/${id}`, {
+  const patched = await request.post('/api/v2/ops/page_update', {
     headers: headers(`agent-${id}`),
-    data: { body: `${before.body}\nAdded by an agent.\n`, expectedVersion: before.version },
+    data: { pageId: id, body: `${before.body}\nAdded by an agent.\n`, expectedVersion: before.version },
   })
   expect(patched.ok(), await patched.text()).toBe(true)
   await expect(editor(page)).toContainText('Added by an agent.')
@@ -161,9 +161,10 @@ test('a page embeds a task and a task list, as their module declares them', asyn
   expect(created.ok(), await created.text()).toBe(true)
   const task = { id: ((await created.json()) as { value: { workItemId: string } }).value.workItemId }
   const current = (await (await request.get(`/api/v1/pages/${id}`)).json()) as { version: number; body: string }
-  const saved = await request.patch(`/api/v1/pages/${id}`, {
+  const saved = await request.post('/api/v2/ops/page_update', {
     headers: headers(`embed-page-${Date.now()}`),
     data: {
+      pageId: id,
       expectedVersion: current.version,
       body: `${current.body}\n[Tasks](/projects/${projectId}/work-items "embed")\n`,
     },

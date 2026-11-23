@@ -16,7 +16,7 @@ import { useShellPage } from '../shell/shellStore'
 import { Banner, Button, ConversationIntro, DocumentSkeleton, ErrorState, IconButton, MessageSkeleton, showToast } from '../ui'
 import { searchWorkItemReferences } from '../work-items/api'
 import { useTimeToShow } from '../telemetry/useTimeToShow'
-import { getConversationTimeline, retryReplyRequest, searchMentionableActors, stopReplyRequest } from './api'
+import { getConversationTimeline, retryReplyRequest, searchMentionableActors, stopAllReplies, stopReplyRequest } from './api'
 import { useArchiveConversation, useRestoreConversation } from './useArchiveConversation'
 import { useAutoMarkSeen } from './useAutoMarkSeen'
 import { ChannelDetails } from './ChannelDetails'
@@ -37,6 +37,7 @@ import { useSidebarPlacement } from './useSidebarPlacement'
 import { useMessageActions } from './MessageActions'
 import { useReplyTarget } from './replyTarget'
 import { StructuredComposer } from './StructuredComposer'
+import { AgentsAtWork } from './AgentsAtWork'
 import { ThreadBoard } from './threadBoard'
 import { ThreadChip } from './ThreadChip'
 import { threadChipFacts } from './threadChipModel'
@@ -570,6 +571,7 @@ export function ChannelPage() {
         />
         <PendingMessages entries={entries} items={sender.pending} viewer={viewer} />
         {typingShown ? <TypingNow conversationId={channelId} entries={entries} viewerId={viewer.actorId} /> : null}
+        <AgentsAtWork onStopAll={page?.capabilities.sendMessage ? () => stopAllReplies(channelId).then(() => timeline.refetch()) : undefined} requests={page?.replyRequests ?? []} />
       </ConversationTimeline>
 
       {canPost ? (

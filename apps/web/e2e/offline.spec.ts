@@ -46,12 +46,12 @@ test('a page and a channel opened earlier still read with no connection', async 
   await expect(toggle).toBeChecked()
 
   const headers = await writer(page)
-  const created = await page.request.post(`/api/v1/projects/${projectId}/pages`, {
+  const created = await page.request.post('/api/v2/ops/page_create', {
     headers: headers(`offline-page-${stamp}`),
-    data: { title: `Offline ${stamp}`, body: pageText },
+    data: { projectId, title: `Offline ${stamp}`, body: pageText },
   })
   expect(created.ok(), await created.text()).toBe(true)
-  const { id: pageId } = (await created.json()) as { id: string }
+  const { id: pageId } = ((await created.json()) as { value: { id: string } }).value
   const sent = await page.request.post('/api/v2/ops/message_send', {
     headers: headers(`offline-message-${stamp}`),
     data: { conversationId: channelId, text: messageText },

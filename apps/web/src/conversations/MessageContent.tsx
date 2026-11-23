@@ -23,7 +23,7 @@ function workItemState(statusCategory: string) {
   return 'todo'
 }
 
-/** `@everyone` or `@here` as a word, which notify everyone who can see the conversation. */
+/** `@everyone` or `@here` as a word: everyone who can see the conversation, or those of them online and not away. */
 const EVERYONE_MENTION = /(?<![\p{L}\p{N}_@])@(?:everyone|here)(?![\p{L}\p{N}_])/giu
 
 /** Text with `@everyone` and `@here` marked like mentions. */

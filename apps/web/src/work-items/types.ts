@@ -58,6 +58,8 @@ export type WorkItem = {
   linkedThreads: LinkedThread[]
   linkedRepositories: LinkedRepository[]
   linkedPullRequests: LinkedPullRequest[]
+  /** Ways to open it in a harness's own app on this computer (W1.27c), from the harness manifests. */
+  openIn: { label: string; href: string }[]
   capabilities: WorkItemCapabilities
   parent: TaskRef | null
   milestone: MilestoneRef | null

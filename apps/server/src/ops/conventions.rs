@@ -87,6 +87,8 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             // An agent passes on, or a person stops, a reply request (K2.9).
             "pass",
             "stop",
+            // Every open one in a conversation at once (C2.35).
+            "stop_all",
             // Something already sent goes out again, unchanged (a webhook delivery).
             "redeliver",
             // A saved query read and found right, or shared (T1.35).

@@ -197,15 +197,15 @@ async fn any_emoji_and_the_workspaces_own() {
     assert_eq!(reacted["outcome"], "ok", "{reacted}");
     let join = |message: &str, emoji: &str| {
         world.owner.browser.request(
-            "PUT",
-            &format!("/api/v1/conversations/{channel}/messages/{message}/reactions/{emoji}"),
-            None,
-            Value::Null,
+            "POST",
+            "/api/v2/ops/message_react",
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"messageId": message, "emoji": emoji}),
         )
     };
     let (status, joined) = send(app, join(&messages[0], &parrot)).await;
     assert_eq!(status, StatusCode::OK, "{joined}");
-    let parrots = joined["reactions"]
+    let parrots = joined["value"]["reactions"]
         .as_array()
         .expect("reactions")
         .iter()

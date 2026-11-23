@@ -97,24 +97,16 @@ const WRITE_ROUTES: &[&str] = &[
     "PUT /api/v1/account/default-workspace",
     "POST /api/v1/account/sessions/{session_id}/revoke",
     "POST /api/v1/agent-runs/{id}/retry",
-    "POST /api/v1/channels/{id}/archive",
     "POST /api/v1/channels/{id}/messages",
-    "POST /api/v1/channels/{id}/restore",
     "POST /api/v1/channels/{id}/threads",
     "POST /api/v1/conversations/{id}/ai/summary",
     "POST /api/v1/conversations/{id}/files",
-    "POST /api/v1/conversations/{id}/mark-seen",
     "POST /api/v1/conversations/{id}/members",
     "POST /api/v1/conversations/{id}/members/{actor_id}/remove",
     "POST /api/v1/conversations/{id}/messages",
     "DELETE /api/v1/conversations/{id}/messages/{message_id}",
     "PATCH /api/v1/conversations/{id}/messages/{message_id}",
-    "DELETE /api/v1/conversations/{id}/messages/{message_id}/link-previews/{preview_id}",
-    "DELETE /api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
-    "PUT /api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
     "PUT /api/v1/conversations/{id}/notification-level",
-    "POST /api/v1/conversations/{id}/pins",
-    "DELETE /api/v1/conversations/{id}/pins/{kind}/{target_id}",
     "POST /api/v1/conversations/{id}/threads",
     "POST /api/v1/direct/dms",
     "POST /api/v1/direct/groups",
@@ -136,18 +128,12 @@ const WRITE_ROUTES: &[&str] = &[
     "DELETE /api/v1/organizations/{organization_id}/secrets/{name}",
     "PUT /api/v1/organizations/{organization_id}/secrets/{name}",
     "POST /api/v1/organizations/{organization_id}/transfer-ownership",
-    "PATCH /api/v1/pages/{id}",
-    "POST /api/v1/pages/{id}/comments",
-    "DELETE /api/v1/pages/{id}/comments/{comment_id}",
-    "PATCH /api/v1/pages/{id}/comments/{comment_id}",
     "POST /api/v1/pages/{id}/document/sync",
     "POST /api/v1/pages/{id}/document/updates",
-    "POST /api/v1/pages/{id}/suggestions/{suggestion_id}/decision",
     "PUT /api/v1/projects/rail-order",
     "POST /api/v1/projects/{id}/channels",
     "POST /api/v1/projects/{id}/execution-profiles",
     "PUT /api/v1/projects/{id}/navigation",
-    "POST /api/v1/projects/{id}/pages",
     "POST /api/v1/projects/{id}/pages/import",
     "POST /api/v1/projects/{id}/switch",
     "POST /api/v1/projects/{project_id}/ai/analyze",
@@ -206,9 +192,7 @@ const WRITE_ROUTES: &[&str] = &[
     "POST /api/v1/push/subscriptions/{id}/test",
     "POST /api/v1/things/{kind}/{id}/files",
     "POST /api/v1/threads/{id}/agent-runs",
-    "POST /api/v1/threads/{id}/archive",
     "POST /api/v1/threads/{id}/messages",
-    "POST /api/v1/threads/{id}/restore",
     "POST /api/v1/usage/accounts/{account_id}/batch",
     "POST /api/v1/usage/accounts/{account_id}/refresh",
     "POST /api/v1/usage/accounts/{account_id}/reset-credits/spend",
@@ -219,7 +203,6 @@ const WRITE_ROUTES: &[&str] = &[
     "DELETE /api/v1/whiteboards/{id}",
     "POST /api/v1/whiteboards/{id}/files",
     "POST /api/v1/whiteboards/{id}/operations",
-    "POST /api/v1/whiteboards/{id}/revisions/{revision}/restore",
     "POST /api/v1/whiteboards/{id}/scene",
     "POST /connect/confirm",
     "POST /oauth/authorize",
@@ -639,6 +622,7 @@ const MCP_WRITE_TOOLS: &[&str] = &[
     "reply_release",
     "reply_send",
     "reply_stop",
+    "reply_stop_all",
     "reply_retry",
     "repository_archive",
     "repository_create",
@@ -1509,12 +1493,9 @@ async fn more_targets(app: &axum::Router, pool: &PgPool, world: &World) -> Targe
     // So refusing to remove these proves something: each exists in both.
     for (method, uri, body) in [
         (
-            "PUT",
-            format!(
-                "/api/v1/conversations/{}/messages/{}/reactions/thumbsup",
-                world.channel, world.message
-            ),
-            json!({}),
+            "POST",
+            format!("/api/v2/w/{organization}/ops/message_react"),
+            json!({"messageId": world.message, "emoji": "thumbsup", "reacted": true}),
         ),
         (
             "PUT",
@@ -2203,7 +2184,6 @@ async fn collection_field(pool: &PgPool, collection: Uuid, kind: &str) -> Uuid {
 /// once. B needs none, as nothing of B's may change.
 struct Spares {
     channel: String,
-    thread: String,
     /// Archived and restored, linked, then moved to `projects[0]`.
     task: Uuid,
     /// In the same column as `task`, to reorder after it.
@@ -2291,21 +2271,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     )
     .await;
     let channel = string_at(&channel, "/conversation/id");
-    ok(
-        app,
-        browser,
-        "POST",
-        &format!("/api/v1/channels/{}/threads", a.channel),
-        json!({"name": "Net spare thread"}),
-    )
-    .await;
-    let thread = scalar(
-        pool,
-        "SELECT id FROM conversations WHERE kind = 'thread' AND name = $1",
-        "Net spare thread",
-    )
-    .await
-    .to_string();
     ok(
         app,
         browser,
@@ -2851,7 +2816,6 @@ async fn spares(app: &axum::Router, pool: &PgPool, a: &World, ax: &Targets) -> S
     Spares {
         role,
         channel,
-        thread,
         task,
         second_task,
         projects: [projects[0].clone(), projects[1].clone()],
@@ -3976,16 +3940,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         // Bug report links
         // Channels and threads
         path_case(
-            "POST /api/v1/channels/{id}/archive",
-            &[id(&sp.channel, &b.channel)],
-            versioned("conversations", 0, json!({})),
-        ),
-        path_case(
-            "POST /api/v1/channels/{id}/restore",
-            &[id(&sp.channel, &b.channel)],
-            versioned("conversations", 0, json!({})),
-        ),
-        path_case(
             "POST /api/v1/channels/{id}/messages",
             &[channel()],
             json_body(json!({"content": text("Net message"), "attachments": [ax.channel_upload]})),
@@ -3999,16 +3953,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             json_body(json!({"name": "Net thread"})),
         )
         .rejecting(vec![json!({"name": "Net thread", "originMessageId": b.message})]),
-        path_case(
-            "POST /api/v1/threads/{id}/archive",
-            &[id(&sp.thread, &b.thread)],
-            versioned("conversations", 0, json!({})),
-        ),
-        path_case(
-            "POST /api/v1/threads/{id}/restore",
-            &[id(&sp.thread, &b.thread)],
-            versioned("conversations", 0, json!({})),
-        ),
         path_case(
             "POST /api/v1/threads/{id}/messages",
             &[id(&a.thread, &b.thread)],
@@ -4045,11 +3989,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             |_| Payload::Bytes("image/png", tiny_png()),
         )
         .query("?name=net.png"),
-        path_case(
-            "POST /api/v1/conversations/{id}/mark-seen",
-            &[channel()],
-            json_body(json!({"highestSeenSequence": 1})),
-        ),
         path_case(
             "POST /api/v1/conversations/{id}/members",
             &[id(&a.group, &b.group)],
@@ -4102,48 +4041,9 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             empty(),
         ),
         path_case(
-            "DELETE /api/v1/conversations/{id}/messages/{message_id}/link-previews/{preview_id}",
-            &[
-                channel(),
-                id(&a.file_message, &b.file_message),
-                id(a.link_preview, b.link_preview),
-            ],
-            empty(),
-        ),
-        path_case(
-            "PUT /api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
-            &[channel(), id(&a.message, &b.message), same("thumbsup")],
-            empty(),
-        ),
-        path_case(
-            "DELETE /api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
-            &[channel(), id(&a.message, &b.message), same("thumbsup")],
-            empty(),
-        ),
-        path_case(
             "PUT /api/v1/conversations/{id}/notification-level",
             &[channel()],
             json_body(json!({"level": "all"})),
-        ),
-        path_case(
-            "POST /api/v1/conversations/{id}/pins",
-            &[channel()],
-            |values| {
-                Payload::Json(json!({
-                    "kind": "message",
-                    "targetId": if is_a(values, &a.channel) { &a.file_message } else { &b.file_message }
-                }))
-            },
-        )
-        .rejecting(vec![
-            json!({"kind": "message", "targetId": b.message}),
-            json!({"kind": "page", "targetId": b.page}),
-            json!({"kind": "decision", "targetId": bx.decision}),
-        ]),
-        path_case(
-            "DELETE /api/v1/conversations/{id}/pins/{kind}/{target_id}",
-            &[channel(), same("message"), removed(&a.message, &b.message)],
-            empty(),
         ),
         path_case(
             "POST /api/v1/conversations/{id}/threads",
@@ -4312,37 +4212,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
         .rejecting(vec![json!({"actorId": b.rook})])
         .without_own("it would hand A to someone else; transfers are checked in the workspace tests"),
         // Pages
-        path_case(
-            "PATCH /api/v1/pages/{id}",
-            &[id(&a.page, &b.page)],
-            versioned("project_pages", 0, json!({"title": "Launch page"})),
-        ),
-        // Comments and suggestions on a page (AWD-53). Deleting the thread's
-        // comment comes last, after the tools reopen it.
-        path_case(
-            "POST /api/v1/pages/{id}/comments",
-            &[id(&a.page, &b.page)],
-            json_body(json!({"body": "Net comment"})),
-        ),
-        path_case(
-            "PATCH /api/v1/pages/{id}/comments/{comment_id}",
-            &[id(&a.page, &b.page), id(a.page_thread, b.page_thread)],
-            json_body(json!({"resolved": true})),
-        ),
-        path_case(
-            "DELETE /api/v1/pages/{id}/comments/{comment_id}",
-            &[id(&a.page, &b.page), id(a.page_thread, b.page_thread)],
-            empty(),
-        )
-        .last(),
-        path_case(
-            "POST /api/v1/pages/{id}/suggestions/{suggestion_id}/decision",
-            &[
-                id(&a.page, &b.page),
-                id(a.page_suggestions[0], b.page_suggestions[0]),
-            ],
-            json_body(json!({"decision": "reject"})),
-        ),
         // A page's live document: its generation is the page's ID (see the
         // fixture), and the change adds a paragraph to any document.
         path_case(
@@ -4405,11 +4274,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             "location": {"kind": "channel", "conversationId": b.channel},
             "expectedVersion": navigation_version(&a.project),
         })]),
-        path_case(
-            "POST /api/v1/projects/{id}/pages",
-            &[project()],
-            json_body(json!({"title": "Net page", "body": "Net"})),
-        ),
         path_case(
             "POST /api/v1/projects/{id}/pages/import",
             &[project()],
@@ -4944,11 +4808,6 @@ fn http_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> 
             "POST /api/v1/whiteboards/{id}/scene",
             &[id(a.project_whiteboard, b.project_whiteboard)],
             json_body(json!({"elements": []})),
-        ),
-        path_case(
-            "POST /api/v1/whiteboards/{id}/revisions/{revision}/restore",
-            &[id(a.whiteboard, b.whiteboard), same(1)],
-            empty(),
         ),
         // Before Empty trash, which would take this board too.
         path_case(
@@ -6087,6 +5946,11 @@ fn mcp_cases(a: &World, ax: &Targets, sp: &Spares, b: &World, bx: &Targets) -> V
             "reply_stop",
             json!({"requestId": sp.reply_stop_mcp}),
             vec![json!({"requestId": bx.reply})],
+        ),
+        mcp_case(
+            "reply_stop_all",
+            json!({"conversationId": sp.channel}),
+            vec![json!({"conversationId": b.channel})],
         ),
         mcp_case(
             "reply_retry",

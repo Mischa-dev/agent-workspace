@@ -307,9 +307,9 @@ async fn reading_a_conversation_reads_its_notifications() {
         &setup.app,
         mara_browser.request(
             "POST",
-            &format!("/api/v1/conversations/{general}/mark-seen"),
-            None,
-            json!({"highestSeenSequence": sequence}),
+            "/api/v2/ops/conversation_mark_read",
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"conversationId": general, "upToSequence": sequence}),
         ),
     )
     .await;
@@ -335,9 +335,9 @@ async fn reading_a_conversation_reads_its_notifications() {
         &setup.app,
         mara_browser.request(
             "POST",
-            &format!("/api/v1/conversations/{general}/mark-seen"),
-            None,
-            json!({"highestSeenSequence": sequence}),
+            "/api/v2/ops/conversation_mark_read",
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"conversationId": general, "upToSequence": sequence}),
         ),
     )
     .await;

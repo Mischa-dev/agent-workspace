@@ -1700,7 +1700,10 @@ async fn the_gate_covers_pages_and_boards_named_by_id() {
         async move { send(app, request).await }
     };
     let off = |(status, body): (StatusCode, Value)| {
-        status == StatusCode::FORBIDDEN && body["error"]["code"] == "module_off"
+        // A route answers with an error body; an operation names the code
+        // at the top.
+        status == StatusCode::FORBIDDEN
+            && (body["error"]["code"] == "module_off" || body["code"] == "module_off")
     };
     let listed_boards = |browser: &Browser| {
         let request = browser.request("GET", "/api/v1/whiteboards", None, Value::Null);

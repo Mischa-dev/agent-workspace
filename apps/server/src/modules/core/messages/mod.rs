@@ -16,7 +16,6 @@ impl CoreModule for Module {
         module.routes(crate::direct::router);
         module.routes(crate::replies::router);
         module.routes(crate::message_edits::router);
-        module.routes(crate::reactions::router);
         module.routes(crate::scheduled_messages::router);
         module.operations(crate::read_state::ops::register_ops);
         module.operations(crate::drafts::ops::register_ops);

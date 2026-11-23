@@ -136,12 +136,40 @@ pub fn prepare_repository_with_token(
     prepare_repository_inner(data_root, repository, mode, Some(token))
 }
 
+/// Whether a token may be sent to `url`: never in the clear over plain HTTP,
+/// except to this machine (a local test server).
+fn token_may_go_to(url: &str) -> bool {
+    let Some(rest) = url
+        .get(..7)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("http://"))
+        .map(|_| &url[7..])
+    else {
+        return true;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit('@').next().unwrap_or("");
+    let host = if let Some(bracketed) = host_port.strip_prefix('[') {
+        bracketed.split(']').next().unwrap_or("")
+    } else {
+        host_port.split(':').next().unwrap_or("")
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
+}
+
+const REFUSED_PLAIN_HTTP: &str = "a token is never sent over plain HTTP to another machine";
+
 fn prepare_repository_inner(
     data_root: &Path,
     repository: &RegisteredRepository,
     mode: RepositoryPreparationMode,
     token: Option<&SecretString>,
 ) -> Result<PreparedRepository, RuntimeError> {
+    if token.is_some() && !token_may_go_to(&repository.clone_url) {
+        return Err(RuntimeError::Conflict("repository", REFUSED_PLAIN_HTTP));
+    }
     let data_root = absolute_runtime_path(data_root)?;
     let repository_root = prepare_private_profile_directory(
         &data_root,
@@ -502,6 +530,9 @@ pub fn push_publishable_commit(request: PublishPush<'_>) -> Result<(), RuntimeEr
     }
     if !request.remote_is_safe {
         return Err(RuntimeError::Invalid("unsafe GitHub remote"));
+    }
+    if !token_may_go_to(request.remote_url) {
+        return Err(RuntimeError::Conflict("repository", REFUSED_PLAIN_HTTP));
     }
     let askpass = TemporaryAskpass::create(request.data_root)?;
     let refspec = format!(
@@ -1529,8 +1560,8 @@ mod tests {
         expected_repository_mirror_path, inspect_prepared_repository, inspect_publishable_worktree,
         inspect_worktree, managed_worktree_path, prepare_repository, prepare_repository_with_token,
         remove_clean_worktree, remove_published_worktree, repair_and_prune_worktrees,
-        reserve_process_slot, unique_run_branch, validate_branch, validate_ref, without_user_info,
-        worktree_is_dirty,
+        reserve_process_slot, token_may_go_to, unique_run_branch, validate_branch, validate_ref,
+        without_user_info, worktree_is_dirty,
     };
     use std::{
         fs, os::unix::fs::PermissionsExt, path::Path, process::Command, sync::atomic::AtomicUsize,
@@ -1580,6 +1611,17 @@ mod tests {
     #[test]
     fn rejects_missing_worktrees_during_inspection() {
         assert!(worktree_is_dirty(Path::new("/definitely/missing/worktree")).is_err());
+    }
+
+    #[test]
+    fn tokens_never_travel_over_plain_http_to_another_machine() {
+        assert!(token_may_go_to("https://example.test/o/r.git"));
+        assert!(token_may_go_to("http://localhost:8080/o/r.git"));
+        assert!(token_may_go_to("HTTP://127.0.0.1/o/r.git"));
+        assert!(token_may_go_to("http://[::1]:9000/o/r.git"));
+        assert!(!token_may_go_to("http://example.test/o/r.git"));
+        assert!(!token_may_go_to("http://localhost.example.test/o/r.git"));
+        assert!(!token_may_go_to("http://user@10.0.0.1/o/r.git"));
     }
 
     #[cfg(unix)]

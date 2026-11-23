@@ -220,7 +220,7 @@ export function LinkPreviews({
       preview.id,
       window.setTimeout(() => {
         pendingHides.delete(preview.id)
-        hideLinkPreview({ conversationId, messageId, previewId: preview.id }).catch((reason: unknown) => {
+        hideLinkPreview({ messageId, url: preview.url }).catch((reason: unknown) => {
           show(preview.id)
           toastError('The preview wasn’t removed', reason)
         })

@@ -767,7 +767,7 @@ async fn everyone_reaches_the_people_who_can_see_the_conversation() {
         &ben_browser,
         &general,
         "e1",
-        text("@here standup in 5"),
+        text("@everyone standup in 5"),
     )
     .await;
     drain(&setup).await;
@@ -778,6 +778,52 @@ async fn everyone_reaches_the_people_who_can_see_the_conversation() {
     }
     assert!(items(&inbox(&setup, &ben_browser, "").await).is_empty());
     assert!(items(&inbox(&setup, &pat_browser, "").await).is_empty());
+
+    // C2.16: @here reaches only the people online now who aren't away.
+    let standup = create_channel(&setup, &project, "standup").await;
+    let (sam, sam_browser) = add_person(&setup, &[&project], "sam").await;
+    let (_lee, lee_browser) = add_person(&setup, &[&project], "lee").await;
+    let owner = owner_id(&setup.pool).await;
+    for online in [owner, mara, sam] {
+        sqlx::query(
+            "INSERT INTO realtime_connections (id, account_id, instance_id) VALUES ($1, $2, $3)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(online)
+        .bind(Uuid::now_v7())
+        .execute(&setup.pool)
+        .await
+        .expect("online");
+    }
+    sqlx::query(
+        "INSERT INTO account_statuses (id, account_id, away_until) \
+         VALUES ($1, $2, now() + interval '1 hour')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(mara)
+    .execute(&setup.pool)
+    .await
+    .expect("away");
+    say(
+        &setup,
+        &ben_browser,
+        &standup,
+        "e1h",
+        text("@here quick one"),
+    )
+    .await;
+    drain(&setup).await;
+    assert_eq!(items(&inbox(&setup, &setup.browser, "").await).len(), 2);
+    assert_eq!(items(&inbox(&setup, &sam_browser, "").await).len(), 1);
+    assert_eq!(
+        items(&inbox(&setup, &mara_browser, "").await).len(),
+        1,
+        "away"
+    );
+    assert!(
+        items(&inbox(&setup, &lee_browser, "").await).is_empty(),
+        "offline"
+    );
 
     // In a group, only the people inside it, even though others share the
     // Messages space; naming someone as well notifies them once.
@@ -906,14 +952,17 @@ async fn page_comment_notifications_never_hold_the_words() {
         &setup.app,
         bea.request(
             "POST",
-            &format!("/api/v1/pages/{page}/comments"),
-            None,
-            json!({"body": "the budget is 40k"}),
+            "/api/v2/ops/page_comment_create",
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"pageId": page, "text": "the budget is 40k"}),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{comment}");
-    let comment_id = comment["id"].as_str().expect("comment id").to_owned();
+    let comment_id = comment["value"]["commentId"]
+        .as_str()
+        .expect("comment id")
+        .to_owned();
     drain(&setup).await;
 
     let owner = owner_id(&setup.pool).await;
@@ -941,10 +990,10 @@ async fn page_comment_notifications_never_hold_the_words() {
     let (status, removed) = send(
         &setup.app,
         bea.request(
-            "DELETE",
-            &format!("/api/v1/pages/{page}/comments/{comment_id}"),
-            None,
-            Value::Null,
+            "POST",
+            "/api/v2/ops/page_comment_update",
+            Some(&uuid::Uuid::now_v7().to_string()),
+            json!({"pageId": page, "commentId": comment_id, "delete": true}),
         ),
     )
     .await;

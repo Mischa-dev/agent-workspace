@@ -918,7 +918,7 @@ function ComposerBox({
               >
                 {suggestion.kind === 'mention' ? (
                   <>
-                    <Avatar kind={actorKind(suggestion.actor.kind)} name={suggestion.actor.displayName} seed={suggestion.actor.id} size={24} />
+                    <Avatar kind={actorKind(suggestion.actor.kind)} name={suggestion.actor.displayName} seed={suggestion.actor.id} showPresence size={24} />
                     <span className="aw-mentions__name">{suggestion.actor.displayName}</span>
                     <ActorTag kind={actorKind(suggestion.actor.kind)} />
                     <span className="aw-mentions__handle">@{suggestion.actor.handle}</span>

@@ -3,7 +3,7 @@
 // shell while the rest loads with the conversation pages. ./api re-exports
 // them; import from here only in code the shell loads.
 import { requestJson } from '../api/client'
-import { callOp } from '../api/ops'
+import { callOp, newRequestId } from '../api/ops'
 import type {
   ConversationActor,
   MessageContentV1,
@@ -196,13 +196,7 @@ export async function markConversationSeen(input: {
   conversationId: string
   highestSeenSequence: number
 }) {
-  return requestJson<unknown>(
-    `/api/v1/conversations/${encodeURIComponent(input.conversationId)}/mark-seen`,
-    {
-      method: 'POST',
-      json: { highestSeenSequence: input.highestSeenSequence },
-    },
-  )
+  return callOp('conversation_mark_read', { conversationId: input.conversationId, upToSequence: input.highestSeenSequence }, { requestId: newRequestId() })
 }
 
 export async function createChannel(input: {

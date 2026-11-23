@@ -19,7 +19,7 @@ import {
 } from '../ui'
 import { useAuthenticatedSession } from '../auth/session'
 import { useProjectExperience } from '../experience/layout'
-import { buildOpenInCodexLink } from './codexDeepLink'
+import { ThingDetail } from '../pieces/ThingDetail'
 import { useTaskFiles, useWorkItem, useWorkItemWorkflow } from './hooks'
 import { workItemHref, workItemsHref } from './links'
 import { DependencyMenu, TaskDependencies, TaskSubtasks, type DependencyRequest, type OpenTask } from './TaskConnections'
@@ -122,35 +122,30 @@ export function TaskDetail({
 }
 
 function TaskFrame({ children, layout, onClose, projectId }: { children: ReactNode; layout: TaskLayout; onClose?: () => void; projectId: string }) {
+  const experience = useProjectExperience(projectId)
   return (
-    <div className={`aw-task aw-task--${layout}`}>
-      <TaskBar layout={layout} onClose={onClose} projectId={projectId} />
+    <ThingDetail
+      as={layout}
+      busy
+      className={`aw-task aw-task--${layout}`}
+      eyebrow={<TaskWhere layout={layout} projectId={projectId} />}
+      label={experience.label('task')}
+      onClose={onClose}
+    >
       <div className="aw-task__body">
         <div className="aw-task__column">{children}</div>
       </div>
-    </div>
+    </ThingDetail>
   )
 }
 
-/** The bar along the top: where the task is, then its actions. It stays put while the task scrolls. */
-function TaskBar({
-  children,
-  item,
-  layout,
-  onClose,
-  projectId,
-}: {
-  children?: ReactNode
-  item?: WorkItem
-  layout: TaskLayout
-  onClose?: () => void
-  projectId: string
-}) {
+/** Where the task is, in the detail's bar: the way back to the list and its key, and whether it's archived. */
+function TaskWhere({ item, layout, projectId }: { item?: WorkItem; layout: TaskLayout; projectId: string }) {
   const experience = useProjectExperience(projectId)
   // Without keys the crumb is just the way back to the list; the title says which task this is.
   const keys = experience.shows('tech.task_keys')
   return (
-    <div className="aw-task__bar">
+    <>
       {layout === 'page' ? (
         <nav aria-label="Breadcrumb" className="aw-crumbs">
           <Link className="aw-crumbs__link" to={workItemsHref(projectId)}>
@@ -170,10 +165,7 @@ function TaskBar({
         <span className="aw-task__key">{item.key}</span>
       ) : null}
       {item?.archivedAt ? <StatusChip icon="archive">Archived</StatusChip> : null}
-      <span className="aw-task__spacer" />
-      {children}
-      {onClose ? <IconButton icon="x" label="Close panel" onClick={onClose} shortcut="Esc" side="bottom" /> : null}
-    </div>
+    </>
   )
 }
 
@@ -273,8 +265,8 @@ function TaskDetailBody({
       .catch(() => showToast({ tone: 'danger', title: 'That didn’t copy. Try again.' }))
   }
 
-  // Opens the coding app on this computer with the task ready; offered only when the task's one repository allows it.
-  const local = projectArchived || !experience.shows('area.code') ? null : buildOpenInCodexLink(item, window.location.origin).href
+  // Opens a harness's own app on this computer with the task ready (W1.27c): the server offers these from the harness manifests.
+  const openIn = projectArchived || !experience.shows('area.code') ? [] : item.openIn
 
   const menu: MenuEntry[] = [
     { label: 'Copy link', icon: 'link', onSelect: () => copy(`${window.location.origin}${workItemHref(item.projectId, item.id)}`, 'Link copied') },
@@ -305,7 +297,9 @@ function TaskDetailBody({
       })
     }
   }
-  if (local) menu.push({ separator: true }, { label: 'Open locally', icon: 'terminal', onSelect: () => window.location.assign(local) })
+  if (openIn.length) {
+    menu.push({ separator: true }, ...openIn.map((open) => ({ label: open.label, icon: 'terminal' as const, onSelect: () => window.location.assign(open.href) })))
+  }
   if (archive.allowed) {
     menu.push({ separator: true })
     // A move archives the task here, so it takes the same permission; the
@@ -327,8 +321,8 @@ function TaskDetailBody({
     )
   }
 
-  const bar = (
-    <TaskBar item={item} layout={layout} onClose={onClose} projectId={item.projectId}>
+  const actions = (
+    <>
       <span aria-live="polite" className="aw-task__saving">
         {save.saving ? (
           'Saving…'
@@ -348,7 +342,7 @@ function TaskDetailBody({
       <span className="aw-menuanchor" ref={setMenuAnchor}>
         <Menu items={menu} label="Task actions" placement="bottom-end" trigger={<IconButton icon="more" label="Task actions" side="bottom" />} />
       </span>
-    </TaskBar>
+    </>
   )
 
   const notices = (
@@ -492,17 +486,23 @@ function TaskDetailBody({
   }
 
   return (
-    <div
+    <ThingDetail
+      actions={actions}
+      as={layout}
       className={`aw-task aw-task--${layout}${wide ? ' is-wide' : ''}${dropping ? ' is-dropping' : ''}`}
-      onDragLeave={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropping(false)
-      }}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
-      ref={root}
+      eyebrow={<TaskWhere item={item} layout={layout} projectId={item.projectId} />}
+      label={keys ? `${item.key}: ${item.title}` : item.title}
+      onClose={onClose}
     >
-      {bar}
-      <div className="aw-task__body">
+      <div
+        className="aw-task__body"
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropping(false)
+        }}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
+        ref={root}
+      >
         <div className="aw-task__column">
           <div className="aw-task__head">
             <h1 className="visually-hidden" id={layout === 'page' ? 'workspace-heading' : undefined}>
@@ -611,7 +611,7 @@ function TaskDetailBody({
           <LabelManager onClose={() => setManagingLabels(false)} projectId={item.projectId} />
         </Suspense>
       ) : null}
-    </div>
+    </ThingDetail>
   )
 }
 

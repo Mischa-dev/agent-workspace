@@ -856,10 +856,20 @@ async fn logout_on_one_instance_closes_the_socket_on_the_other() {
         .send(browser.request("POST", "/api/v1/auth/logout", None, Value::Null))
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
-    // Within a second, not at the 15 s revalidation.
-    match next_frame(&mut on_b, Duration::from_secs(1)).await {
-        Frame::Closed => {}
-        other => panic!("B's socket stayed open: {other:?}"),
+    // Within a second, not at the 15 s revalidation. Who is online, sent
+    // when the socket opens (C2.16), may come first.
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match next_frame(
+            &mut on_b,
+            deadline.saturating_duration_since(Instant::now()),
+        )
+        .await
+        {
+            Frame::Closed => break,
+            Frame::Json(frame) if frame["kind"] == "presence" => continue,
+            other => panic!("B's socket stayed open: {other:?}"),
+        }
     }
     cluster.finish().await;
 }
@@ -1760,9 +1770,15 @@ async fn presence_follows_connections_across_instances() {
     ready_of(&mut watcher).await;
     let mut on_a = cluster.instance(0).socket_v2(&owner, None).await;
     ready_of(&mut on_a).await;
-    let came = ephemeral_of(&mut watcher, "presence", Duration::from_secs(3))
-        .await
-        .expect("Mara heard the owner come online");
+    // Who was online already comes first, when the socket opens (C2.16).
+    let came = loop {
+        let frame = ephemeral_of(&mut watcher, "presence", Duration::from_secs(3))
+            .await
+            .expect("Mara heard the owner come online");
+        if frame["accountId"] == owner_id.to_string() {
+            break frame;
+        }
+    };
     assert_eq!(came["accountId"], owner_id.to_string(), "{came}");
     assert_eq!(came["online"], true, "{came}");
     assert!(online(1).await.contains(&owner_id), "counted on B too");
@@ -1816,14 +1832,14 @@ async fn document_update_reaches_watchers_only() {
             .instance(0)
             .send(owner.request(
                 "POST",
-                &format!("/api/v1/projects/{space}/pages"),
-                None,
-                json!({"title": title, "body": ""}),
+                "/api/v2/ops/page_create",
+                Some(&Uuid::now_v7().to_string()),
+                json!({"projectId": space, "title": title, "body": ""}),
             ))
             .await;
         assert!(status.is_success(), "{page}");
         pages.push(
-            page["id"]
+            page["value"]["id"]
                 .as_str()
                 .expect("page")
                 .parse::<Uuid>()

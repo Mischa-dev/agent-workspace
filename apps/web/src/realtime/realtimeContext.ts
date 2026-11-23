@@ -100,6 +100,11 @@ export function usePresence(accountId: string): boolean | undefined {
   return useLive((store) => store.get().presence[accountId])
 }
 
+/** `online` while an account is online, for avatars (C2.16); a hook. */
+export function useOnlineMark(accountId: string | undefined): 'online' | undefined {
+  return useLive((store) => (accountId && store.get().presence[accountId] ? 'online' : undefined))
+}
+
 /** What the page sends over the live connection; nothing outside a session. */
 export function useLiveControls(): LiveControls {
   return useContext(RealtimeContext)?.controls ?? NO_LIVE_CONTROLS

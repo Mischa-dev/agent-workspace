@@ -1729,3 +1729,87 @@ async fn a_host_job_stops_when_the_host_lease_is_lost() {
         "back for the successor"
     );
 }
+
+/// A repository preparation job that runs out of tries marks a repository
+/// still waiting for its first preparation failed, and leaves a ready one
+/// working from the mirror it has.
+#[tokio::test]
+async fn a_preparation_out_of_tries_fails_a_pending_repository_only() {
+    let Some(setup) = backbone("backbone_prepare_last_try").await else {
+        return;
+    };
+    let (status, project) = send(
+        &setup.app,
+        setup.browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/space_create", setup.organization_id),
+            Some("prepare-project"),
+            json!({"key": "PREP", "name": "Prepare"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let project: Uuid = project["value"]["id"]
+        .as_str()
+        .expect("project")
+        .parse()
+        .expect("project id");
+    let mut repositories = Vec::new();
+    for (index, state) in ["pending", "ready"].into_iter().enumerate() {
+        let id = Uuid::now_v7();
+        // Untrusted, so preparing it fails at once without a host.
+        sqlx::query(
+            r#"
+            INSERT INTO repositories (
+                id, project_id, github_repository_id, owner, name, clone_url,
+                default_branch, mirror_path, enabled, trusted, preparation_state,
+                prepared_at
+            )
+            VALUES ($1, $2, $3, 'Fixture', $4, 'https://example.test/fixture.git',
+                    'main', $5, true, false, $6,
+                    CASE WHEN $6 = 'ready' THEN now() END)
+            "#,
+        )
+        .bind(id)
+        .bind(project)
+        .bind(9_100_000_000_i64 + index as i64)
+        .bind(format!("fixture-{state}"))
+        .bind(format!("/nonexistent/{id}/mirror.git"))
+        .bind(state)
+        .execute(&setup.pool)
+        .await
+        .expect("repository");
+        jobs::enqueue(
+            &setup.pool,
+            NewJob::new(agent_workspace_server::repositories::PREPARE_KIND)
+                .payload(json!({"projectId": project, "repositoryId": id}))
+                .max_attempts(1),
+        )
+        .await
+        .expect("enqueue");
+        repositories.push((id, state));
+    }
+    let mut registry = JobRegistry::new();
+    agent_workspace_server::repositories::register_jobs(&mut registry);
+    assert_eq!(
+        jobs::run_due(&setup.state, &registry, &options())
+            .await
+            .expect("run"),
+        2
+    );
+    for (id, before) in repositories {
+        let after = sqlx::query_scalar::<_, String>(
+            "SELECT preparation_state FROM repositories WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&setup.pool)
+        .await
+        .expect("state");
+        let expected = if before == "pending" {
+            "failed"
+        } else {
+            "ready"
+        };
+        assert_eq!(after, expected, "a {before} repository");
+    }
+}

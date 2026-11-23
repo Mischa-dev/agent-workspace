@@ -3889,11 +3889,29 @@ async fn channel_writes_keep_to_private_channels() {
             "dm_request_respond",
             json!({"conversationId": secret, "accept": true}),
         ),
+        // C2.35: nor stop its agents.
+        ("reply_stop_all", json!({"conversationId": secret})),
     ] {
         let (status, body) = op(&omar.browser, name, input).await;
         assert!(!status.is_success(), "{name}: {body}");
         assert!(!body.to_string().contains("secret-plans"), "{name}: {body}");
     }
+    // C2.35: Stop all takes `replies.steer` where the conversation is; a
+    // member holds it, a read-only role doesn't.
+    let (status, body) = op(
+        &nate.browser,
+        "reply_stop_all",
+        json!({"conversationId": open}),
+    )
+    .await;
+    assert!(!status.is_success(), "{body}");
+    let (status, body) = op(
+        &lena.browser,
+        "reply_stop_all",
+        json!({"conversationId": open}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
     let (status, listed) = op(&omar.browser, "channel_list", json!({"spaceId": work})).await;
     assert_eq!(status, StatusCode::OK, "{listed}");
     assert!(!listed.to_string().contains(&secret), "{listed}");
@@ -5867,5 +5885,121 @@ async fn an_owner_manages_an_app_account_like_any_member() {
     .await
     .expect("membership after");
     assert_eq!((role.as_str(), enabled), ("admin", false));
+    world.finish().await;
+}
+
+/// C2.37: a guest reads only the channels they were added to. Another open
+/// channel in the same space isn't listed, opened, joined or found for them,
+/// and its mentions don't reach them; a member still reads it unasked.
+#[tokio::test]
+async fn a_guest_reads_only_the_channels_they_were_added_to() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("gus", "member")
+        .person("morgan", "member")
+        .build("privacy_guest_channels")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let workspace = world.organization;
+    let work = world.project("WORK").to_owned();
+    let op = |browser: &Browser, name: &'static str, input: Value| {
+        let request = browser.request(
+            "POST",
+            &format!("/api/v2/w/{workspace}/ops/{name}"),
+            Some(&Uuid::now_v7().to_string()),
+            input,
+        );
+        async move { send(app, request).await }
+    };
+    let lena = &world.people["lena"];
+    let gus = &world.people["gus"];
+    let mo = &world.people["morgan"];
+    sqlx::query(
+        "UPDATE organization_memberships SET role_id = \
+           (SELECT id FROM workspace_roles WHERE organization_id = $1 AND key = 'guest') \
+         WHERE organization_id = $1 AND actor_id = $2",
+    )
+    .bind(workspace)
+    .bind(gus.actor)
+    .execute(pool)
+    .await
+    .expect("gus is a guest");
+    let made = |name: &'static str| {
+        let request = lena.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{work}/channels"),
+            Some(&Uuid::now_v7().to_string()),
+            json!({"name": name}),
+        );
+        async move {
+            let (status, made) = send(app, request).await;
+            assert_eq!(status, StatusCode::CREATED, "{made}");
+            made["conversation"]["id"].as_str().expect("id").to_owned()
+        }
+    };
+    let room = made("guest-room").await;
+    let lobby = made("team-lobby").await;
+    sqlx::query(
+        "INSERT INTO conversation_members (project_id, conversation_id, actor_id, added_by_actor_id) \
+         VALUES ($1::uuid, $2::uuid, $3, $4)",
+    )
+    .bind(&work)
+    .bind(&room)
+    .bind(gus.actor)
+    .bind(lena.actor)
+    .execute(pool)
+    .await
+    .expect("gus joins the guest room");
+
+    let (status, listed) = op(&gus.browser, "channel_list", json!({"spaceId": work})).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert!(listed.to_string().contains(&room), "{listed}");
+    assert!(!listed.to_string().contains(&lobby), "{listed}");
+    for (name, input) in [
+        ("channel_get", json!({"channelId": lobby})),
+        ("channel_join", json!({"channelId": lobby})),
+        ("conversation_member_list", json!({"conversationId": lobby})),
+    ] {
+        let (status, body) = op(&gus.browser, name, input).await;
+        assert!(!status.is_success(), "{name}: {body}");
+    }
+    let (status, places) = op(&gus.browser, "place_search", json!({"q": "lobby"})).await;
+    assert_eq!(status, StatusCode::OK, "{places}");
+    assert!(!places.to_string().contains(&lobby), "{places}");
+    // A member reads the open channel without joining it.
+    let (status, listed) = op(&mo.browser, "channel_list", json!({"spaceId": work})).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert!(listed.to_string().contains(&lobby), "{listed}");
+
+    // @everyone in the lobby reaches the member, never the guest.
+    let request = lena.browser.request(
+        "POST",
+        &format!("/api/v1/conversations/{lobby}/messages"),
+        Some(&Uuid::now_v7().to_string()),
+        json!({"content": text("@everyone standup")}),
+    );
+    let (status, sent) = send(app, request).await;
+    assert!(status.is_success(), "{sent}");
+    agent_workspace_server::events::catch_up(pool)
+        .await
+        .expect("catch up with the log");
+    let lobby_id = &lobby;
+    let notified = |actor: Uuid| async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM notifications WHERE recipient_actor_id = $1 AND conversation_id = $2::uuid",
+        )
+        .bind(actor)
+        .bind(lobby_id)
+        .fetch_one(pool)
+        .await
+        .expect("notifications")
+    };
+    assert_eq!(notified(mo.actor).await, 1);
+    assert_eq!(notified(gus.actor).await, 0);
     world.finish().await;
 }

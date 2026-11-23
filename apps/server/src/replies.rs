@@ -1233,6 +1233,48 @@ pub(crate) async fn stop_request_in(
     })
 }
 
+/// C2.35: Stop all. Every agent's waiting or working request in a
+/// conversation (and its threads) stops, each as its own Stop does. Needs
+/// `replies.steer` there, whatever kind of account asks; someone who can't
+/// see the conversation is told it isn't there. Returns the requests
+/// stopped; none is not an error.
+pub(crate) async fn stop_all_in(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    conversation_id: Uuid,
+) -> Result<Vec<Uuid>, AppError> {
+    lock_seen_conversation_for(transaction, actor_id, conversation_id, Action::ReplySteer).await?;
+    let open = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT id FROM reply_requests
+        WHERE (conversation_id = $1 OR thread_id = $1)
+          AND status IN ('pending', 'claimed')
+        ORDER BY created_at, id
+        "#,
+    )
+    .bind(conversation_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let mut stopped = Vec::new();
+    for request_id in open {
+        // A request stopped already as a follow-up of an earlier one.
+        if stopped.contains(&request_id) {
+            continue;
+        }
+        let still_open = sqlx::query_scalar::<_, bool>(
+            "SELECT status IN ('pending', 'claimed') FROM reply_requests WHERE id = $1",
+        )
+        .bind(request_id)
+        .fetch_one(&mut **transaction)
+        .await?;
+        if still_open {
+            let outcome = stop_request_in(transaction, actor_id, request_id).await?;
+            stopped.extend(outcome.stopped);
+        }
+    }
+    Ok(stopped)
+}
+
 /// A1.4: someone stopped a launched run from the run itself (`run_cancel`).
 /// Its reply request stops the way the request's own Stop does, so a runner
 /// that only knows the reply tools hears `reply.cancelled` and its claim is

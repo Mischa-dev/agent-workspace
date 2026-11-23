@@ -647,16 +647,21 @@ async fn link_previews_show_once_ready_and_stay_hidden() {
     );
 
     // Only the author (or a moderator) hides it.
-    let hide =
-        format!("/api/v1/conversations/{channel}/messages/{message}/link-previews/{preview}");
-    let (status, _) = send(&setup.app, rook.request("DELETE", &hide, None, Value::Null)).await;
-    assert!(status.is_client_error(), "{status}");
-    let (status, _) = send(
+    let hide = "/api/v2/ops/message_preview_hide";
+    let input = json!({"messageId": message, "url": "https://example.com/post"});
+    let key = || Some(uuid::Uuid::now_v7().to_string());
+    let (status, body) = send(
         &setup.app,
-        owner.request("DELETE", &hide, None, Value::Null),
+        rook.request("POST", hide, key().as_deref(), input.clone()),
     )
     .await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(status.is_client_error(), "{status} {body}");
+    let (status, body) = send(
+        &setup.app,
+        owner.request("POST", hide, key().as_deref(), input),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
     let entry = timeline_entry(&setup, &rook, &channel, &message).await;
     assert!(entry["message"].get("linkPreviews").is_none(), "{entry}");
 }

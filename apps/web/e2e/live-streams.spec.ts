@@ -88,16 +88,16 @@ test('records the live frames of a chat burst, task moves, page edits and a reco
   recorder.save('task-board-moves', { project: projectId, taskA: tasks[0].id, taskB: tasks[1].id })
 
   // An agent writing a page in three steps.
-  const created = await request.post(`/api/v1/projects/${projectId}/pages`, { headers: headers(), data: { title: 'Release notes', body: 'Draft\n' } })
+  const created = await request.post('/api/v2/ops/page_create', { headers: headers(), data: { projectId, title: 'Release notes', body: 'Draft\n' } })
   expect(created.ok(), await created.text()).toBe(true)
-  const pageId = ((await created.json()) as { id: string }).id
+  const pageId = ((await created.json()) as { value: { id: string } }).value.id
   await page.waitForTimeout(500)
   recorder.clear()
   let body = 'Draft\n'
   for (const line of ['Faster sign-in.', 'Boards move cards live.', 'Fewer refetches.']) {
     const current = (await (await request.get(`/api/v1/pages/${pageId}`)).json()) as { version: number }
     body = `${body}${line}\n`
-    const saved = await request.patch(`/api/v1/pages/${pageId}`, { headers: headers(), data: { body, expectedVersion: current.version } })
+    const saved = await request.post('/api/v2/ops/page_update', { headers: headers(), data: { pageId, body, expectedVersion: current.version } })
     expect(saved.ok(), await saved.text()).toBe(true)
   }
   await received(recorder, 'page.updated', 3)

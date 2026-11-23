@@ -261,14 +261,17 @@ async fn mark_seen(
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/conversations/{conversation_id}/mark-seen"))
+                .uri("/api/v2/ops/conversation_mark_read")
                 .header("origin", ORIGIN)
                 .header("cookie", &actor.cookie)
                 .header("x-csrf-token", &actor.csrf)
                 .header(header::CONTENT_TYPE, "application/json")
+                .header("idempotency-key", Uuid::now_v7().to_string())
                 .body(Body::from(
-                    serde_json::to_vec(&json!({"highestSeenSequence": sequence}))
-                        .expect("serialize mark-seen request"),
+                    serde_json::to_vec(
+                        &json!({"conversationId": conversation_id, "upToSequence": sequence}),
+                    )
+                    .expect("serialize mark-read request"),
                 ))
                 .expect("build mark-seen request"),
         )

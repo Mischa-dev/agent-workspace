@@ -327,38 +327,36 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
     assert_eq!(entry_sequences(&second_page), vec![1]);
     assert!(second_page["nextCursor"].is_null());
 
-    let mark_seen_uri = format!("/api/v1/conversations/{channel_id}/mark-seen");
+    let mark_read_uri = "/api/v2/ops/conversation_mark_read";
     let seen = app
         .clone()
         .oneshot(request(
             "POST",
-            &mark_seen_uri,
-            &write_headers(&cookie, &csrf, None),
-            json!({"highestSeenSequence": 3, "expectedVersion": 1}),
+            mark_read_uri,
+            &write_headers(&cookie, &csrf, Some("seen-three")),
+            json!({"conversationId": channel_id, "upToSequence": 3}),
         ))
         .await
         .expect("mark seen");
     assert_eq!(seen.status(), StatusCode::OK);
     let seen = response_json(seen).await;
-    assert_eq!(seen["highestSeenSequence"], 3);
-    // C2.3 (R2): sending already read the author's own messages, so the
-    // mark is where it stands, not one version past the first.
-    assert!(
-        seen["version"].as_i64().is_some_and(|version| version > 1),
-        "{seen}"
-    );
+    assert_eq!(seen["value"]["lastReadSequence"], 3, "{seen}");
+    // A mark behind the current one leaves it where it stands.
     let stale_seen = app
         .clone()
         .oneshot(request(
             "POST",
-            &mark_seen_uri,
-            &write_headers(&cookie, &csrf, None),
-            json!({"highestSeenSequence": 1, "expectedVersion": 1}),
+            mark_read_uri,
+            &write_headers(&cookie, &csrf, Some("seen-one")),
+            json!({"conversationId": channel_id, "upToSequence": 1}),
         ))
         .await
         .expect("stale mark seen");
     assert_eq!(stale_seen.status(), StatusCode::OK);
-    assert_eq!(response_json(stale_seen).await["highestSeenSequence"], 3);
+    assert_eq!(
+        response_json(stale_seen).await["value"]["lastReadSequence"],
+        3
+    );
 
     let create_thread_uri = format!("/api/v1/channels/{channel_id}/threads");
     let thread = app
@@ -416,9 +414,9 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
         .clone()
         .oneshot(request(
             "POST",
-            &format!("/api/v1/conversations/{thread_id}/mark-seen"),
-            &write_headers(&cookie, &csrf, None),
-            json!({"highestSeenSequence": 1}),
+            "/api/v2/ops/conversation_mark_read",
+            &write_headers(&cookie, &csrf, Some("thread-seen")),
+            json!({"conversationId": thread_id, "upToSequence": 1}),
         ))
         .await
         .expect("mark durable Thread activity seen");
@@ -509,20 +507,16 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
         .clone()
         .oneshot(request(
             "POST",
-            &format!("/api/v1/threads/{thread_id}/archive"),
+            "/api/v2/ops/conversation_update",
             &write_headers(&cookie, &csrf, Some("archived-parent-run")),
-            json!({"expectedVersion": 1}),
+            json!({"conversationId": thread_id, "archived": true, "expectedVersion": 1}),
         ))
         .await
         .expect("archive Thread");
     assert_eq!(archived.status(), StatusCode::OK);
     let archived = response_json(archived).await;
-    assert_eq!(archived["conversation"]["version"], 2);
-    assert_eq!(archived["fallback"]["kind"], "channel");
-    assert_eq!(
-        archived["fallback"]["conversationId"],
-        channel_id.to_string()
-    );
+    assert_eq!(archived["value"]["version"], 2, "{archived}");
+    assert_eq!(archived["value"]["archived"], true, "{archived}");
 
     let hidden_archive = app
         .clone()
@@ -603,9 +597,9 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
         .clone()
         .oneshot(request(
             "POST",
-            &format!("/api/v1/channels/{channel_id}/archive"),
-            &write_headers(&cookie, &csrf, None),
-            json!({"expectedVersion": 1}),
+            "/api/v2/ops/conversation_update",
+            &write_headers(&cookie, &csrf, Some("archive-parent-channel")),
+            json!({"conversationId": channel_id, "archived": true, "expectedVersion": 1}),
         ))
         .await
         .expect("archive parent Channel");
@@ -777,37 +771,29 @@ async fn authenticated_conversation_http_flow_is_scoped_idempotent_and_paginated
 
     // Undo for archive: a thread can't come back while its channel is
     // archived, a stale version is refused, and the channel itself restores.
-    let restore = |path: String, version: i64| {
+    let restore = |conversation: Uuid, version: i64| {
         let app = app.clone();
-        let headers = write_headers(&cookie, &csrf, None);
+        let key = Uuid::now_v7().to_string();
+        let (cookie, csrf) = (cookie.clone(), csrf.clone());
         async move {
+            let headers = write_headers(&cookie, &csrf, Some(&key));
             app.oneshot(request(
                 "POST",
-                &path,
+                "/api/v2/ops/conversation_update",
                 &headers,
-                json!({"expectedVersion": version}),
+                json!({"conversationId": conversation, "archived": false, "expectedVersion": version}),
             ))
             .await
             .expect("restore Conversation")
         }
     };
-    assert_eq!(
-        restore(format!("/api/v1/threads/{thread_id}/restore"), 2)
-            .await
-            .status(),
-        StatusCode::CONFLICT
-    );
-    assert_eq!(
-        restore(format!("/api/v1/channels/{channel_id}/restore"), 1)
-            .await
-            .status(),
-        StatusCode::CONFLICT
-    );
-    let restored = restore(format!("/api/v1/channels/{channel_id}/restore"), 2).await;
+    assert_eq!(restore(thread_id, 2).await.status(), StatusCode::CONFLICT);
+    assert_eq!(restore(channel_id, 1).await.status(), StatusCode::CONFLICT);
+    let restored = restore(channel_id, 2).await;
     assert_eq!(restored.status(), StatusCode::OK);
     let restored = response_json(restored).await;
-    assert_eq!(restored["conversation"]["archivedAt"], Value::Null);
-    assert_eq!(restored["conversation"]["version"], 3);
+    assert_eq!(restored["value"]["archived"], false, "{restored}");
+    assert_eq!(restored["value"]["version"], 3, "{restored}");
     let channel_capabilities = capabilities(channel_id).await;
     assert_eq!(channel_capabilities["restore"], false);
     assert_eq!(channel_capabilities["archive"], true);

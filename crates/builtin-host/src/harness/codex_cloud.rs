@@ -119,6 +119,7 @@ pub fn codex_cloud_manifest() -> AdapterManifest {
             "additionalProperties": false
         }),
         default_models: Vec::new(),
+        open_locally: None,
     }
 }
 

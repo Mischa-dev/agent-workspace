@@ -1,6 +1,6 @@
 import { apiUrl, origins, readCsrfToken, requestJson } from '../api/client'
 import { ApiError } from '../api/errors'
-import { callOp, ranOrThrow } from '../api/ops'
+import { callOp, newRequestId, ranOrThrow } from '../api/ops'
 import { normalizeFile, normalizeFiles, type FileAttachment } from './model'
 
 export {
@@ -135,9 +135,7 @@ export async function listTaskFiles(projectId: string, workItemId: string): Prom
   return normalizeFiles(record(response)?.files)
 }
 
-export async function hideLinkPreview(input: { conversationId: string; messageId: string; previewId: string }) {
-  await requestJson<unknown>(
-    `/api/v1/conversations/${encodeURIComponent(input.conversationId)}/messages/${encodeURIComponent(input.messageId)}/link-previews/${encodeURIComponent(input.previewId)}`,
-    { method: 'DELETE' },
-  )
+/** Hide the preview of one link in a message, for everyone (`message_preview_hide`). */
+export async function hideLinkPreview(input: { messageId: string; url: string }) {
+  await callOp('message_preview_hide', { messageId: input.messageId, url: input.url }, { requestId: newRequestId() })
 }

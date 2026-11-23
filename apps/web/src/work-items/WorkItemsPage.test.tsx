@@ -24,9 +24,7 @@ import {
 } from './hooks'
 import { useCreateLaunches, useLaunchPlan } from '../launch/hooks'
 import { WorkItemDetailPage } from './WorkItemDetailPage'
-import { buildOpenInCodexLink } from './codexDeepLink'
 import { EMPTY_PLANNING } from './testFixtures'
-import type { WorkItem } from './types'
 import { ApiError } from '../api/errors'
 import { useProject } from '../projects/hooks'
 import { useRememberProjectLocation } from '../projects/useRememberProjectLocation'
@@ -133,6 +131,7 @@ const workItem = {
   linkedThreads: [],
   linkedRepositories: [],
   linkedPullRequests: [],
+  openIn: [],
   capabilities: { view: true, edit: true, archive: true },
   ...EMPTY_PLANNING,
 }
@@ -416,76 +415,21 @@ describe('Work Items list', () => {
 })
 
 describe('Work Item detail', () => {
-  it('builds an exactly encoded, bounded Codex deep link without mutable content or secrets', () => {
-    const ready = {
-      ...workItem,
-      title: hostileTitle,
-      description: 'AGENT_WORKSPACE_MCP_TOKEN=secret-canary /var/lib/private',
-      linkedRepositories: [{
-        id: 'repository-a',
-        owner: 'Mischa-dev',
-        name: 'agent-workspace',
-        cloneUrl: 'https://github.com/Mischa-dev/agent-workspace.git',
-        role: 'primary' as const,
-        preparationState: 'ready',
-        trusted: true,
-        available: true,
-        archivedAt: null,
-        href: `/projects/${projectId}/settings`,
-      }],
-    } as WorkItem
-    const result = buildOpenInCodexLink(ready, 'http://127.0.0.1:3100')
-    expect(result.reason).toBeNull()
-    const prompt = [
-      'Use the Agent Workspace MCP server.',
-      `Project ID: ${projectId}`,
-      `Project URL: http://127.0.0.1:3100/w/-/s/${projectId}`,
-      `Task ID: ${workItemId}`,
-      `Task URL: http://127.0.0.1:3100/w/-/s/${projectId}/tasks/${workItemId}`,
-      'Task key: AW-1',
-      'Load the task and its project instructions through MCP before changing anything.',
-      'Work in the repository matched by this Git origin. Set the task to In Progress only when meaningful work begins.',
-      'Post only useful progress or blocker updates. Respect the current version; refetch and make an informed retry after a version conflict.',
-      'When complete, link the canonical pull request through MCP and mark the task ready for review.',
-    ].join('\n')
-    expect(result.href).toBe(
-      `codex://new?originUrl=${encodeURIComponent(ready.linkedRepositories[0].cloneUrl)}&prompt=${encodeURIComponent(prompt)}`,
-    )
-    expect(result.href).not.toContain(hostileTitle)
-    expect(result.href).not.toContain('secret-canary')
-    expect(result.href).not.toContain('/var/lib')
-    expect(prompt.length).toBeLessThanOrEqual(2_000)
-  })
-
-  it('offers to open a task locally only when its one repository allows it', async () => {
+  it('offers the ways to open a task elsewhere that the server gives', async () => {
     renderDetail()
     fireEvent.click(screen.getByRole('button', { name: 'Task actions' }))
     expect(await screen.findByRole('menuitem', { name: 'Copy link' })).toBeVisible()
-    expect(screen.queryByRole('menuitem', { name: 'Open locally' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Open in Example' })).not.toBeInTheDocument()
     cleanup()
 
     vi.mocked(useWorkItem).mockReturnValue({
-      data: {
-        ...workItem,
-        linkedRepositories: [{
-          id: 'repository-a',
-          owner: 'Mischa-dev',
-          name: 'agent-workspace',
-          cloneUrl: 'https://github.com/Mischa-dev/agent-workspace.git',
-          role: 'primary',
-          preparationState: 'ready',
-          trusted: true,
-          available: true,
-          archivedAt: null,
-          href: `/projects/${projectId}/settings`,
-        }],
-      },
+      data: { ...workItem, openIn: [{ label: 'Open in Example', href: 'example://new?prompt=x' }] },
       isPending: false,
       isError: false,
     } as unknown as ReturnType<typeof useWorkItem>)
     renderDetail()
     fireEvent.click(screen.getByRole('button', { name: 'Task actions' }))
-    expect(await screen.findByRole('menuitem', { name: 'Open locally' })).toBeVisible()
+    expect(await screen.findByRole('menuitem', { name: 'Open in Example' })).toBeVisible()
   })
 
   it('launches an agent on the project defaults in one click, and with an edited prompt from the dialog', async () => {

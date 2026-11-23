@@ -522,36 +522,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     policy_route!(
         "conversations",
         Post,
-        "/api/v1/channels/{id}/archive",
-        ConversationArchive
-    ),
-    policy_route!(
-        "conversations",
-        Post,
-        "/api/v1/threads/{id}/archive",
-        ConversationArchive
-    ),
-    policy_route!(
-        "conversations",
-        Post,
-        "/api/v1/channels/{id}/restore",
-        ConversationArchive
-    ),
-    policy_route!(
-        "conversations",
-        Post,
-        "/api/v1/threads/{id}/restore",
-        ConversationArchive
-    ),
-    policy_route!(
-        "conversations",
-        Post,
-        "/api/v1/conversations/{id}/mark-seen",
-        ReadStateUpdate
-    ),
-    policy_route!(
-        "conversations",
-        Post,
         "/api/v1/conversations/{id}/messages",
         MessageSend
     ),
@@ -561,14 +531,12 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "/api/v1/conversations/{id}/threads",
         ThreadCreate
     ),
-    policy_route!("memory", Post, "/api/v1/projects/{id}/pages", PageEdit),
     policy_route!(
         "memory",
         Post,
         "/api/v1/projects/{id}/pages/import",
         PageEdit
     ),
-    policy_route!("memory", Patch, "/api/v1/pages/{id}", PageEdit),
     // Syncing a page's live document is a read: what the caller's copy lacks.
     policy_route!(
         "memory",
@@ -580,25 +548,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         "memory",
         Post,
         "/api/v1/pages/{id}/document/updates",
-        PageEdit
-    ),
-    policy_route!("memory", Post, "/api/v1/pages/{id}/comments", PageEdit),
-    policy_route!(
-        "memory",
-        Patch,
-        "/api/v1/pages/{id}/comments/{comment_id}",
-        PageEdit
-    ),
-    policy_route!(
-        "memory",
-        Delete,
-        "/api/v1/pages/{id}/comments/{comment_id}",
-        PageEdit
-    ),
-    policy_route!(
-        "memory",
-        Post,
-        "/api/v1/pages/{id}/suggestions/{suggestion_id}/decision",
         PageEdit
     ),
     policy_route!(
@@ -630,24 +579,6 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
         Post,
         "/api/v1/whiteboards/{id}/files",
         WhiteboardEdit
-    ),
-    policy_route!(
-        "whiteboards/http",
-        Post,
-        "/api/v1/whiteboards/{id}/revisions/{revision}/restore",
-        WhiteboardEdit
-    ),
-    policy_route!(
-        "memory",
-        Post,
-        "/api/v1/conversations/{id}/pins",
-        MessageSend
-    ),
-    policy_route!(
-        "memory",
-        Delete,
-        "/api/v1/conversations/{id}/pins/{kind}/{target_id}",
-        MessageSend
     ),
     boundary_route!(
         "connected_apps",
@@ -714,25 +645,7 @@ pub const MUTATING_ENTRY_POINTS: &[MutatingEntryPoint] = &[
     ),
     // Hiding a link preview follows the rule for removing the message: its
     // author, or a person who may moderate.
-    policy_route!(
-        "link_previews",
-        Delete,
-        "/api/v1/conversations/{id}/messages/{message_id}/link-previews/{preview_id}",
-        MessageSend
-    ),
     // Anyone who can post in a conversation can react there.
-    policy_route!(
-        "reactions",
-        Put,
-        "/api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
-        MessageSend
-    ),
-    policy_route!(
-        "reactions",
-        Delete,
-        "/api/v1/conversations/{id}/messages/{message_id}/reactions/{name}",
-        MessageSend
-    ),
     // Notification settings, devices and usage are the caller's own: their
     // devices, their provider accounts (owner only), their preferences.
     boundary_route!(

@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import { registeredEmbed } from '../../modules/embeds'
-import { collectionEmbed, embedTarget, fileEmbed, sheetChartEmbed, sheetEmbed } from './embedModel'
+import { collectionEmbed, embedPath, fileEmbed, sheetChartEmbed, sheetEmbed } from './embedModel'
 
 /** What the module that reads a path read from it (M1.5), or a link. */
 function read(href: string) {
   const found = registeredEmbed(href)
-  return found ? { embed: `${found.module}:${found.registration.id}`, ...found.params } : embedTarget(href)
+  return found ? { embed: `${found.module}:${found.registration.id}`, ...found.params } : { kind: 'link' }
 }
 
 describe('what an embed shows', () => {
@@ -46,7 +46,32 @@ describe('what an embed shows', () => {
   it('reads a file of the page from its path', () => {
     const id = '01a1eae3-c9cd-7980-a241-4f1e716a8b07'
     expect(fileEmbed({ id, name: 'plan.png' })).toEqual({ href: `/files/${id}`, label: 'plan.png' })
-    expect(embedTarget(`/files/${id.toUpperCase()}`)).toEqual({ kind: 'file', fileId: id })
-    expect(embedTarget('/files/not-an-id')).toEqual({ kind: 'link' })
+    expect(read(`/files/${id.toUpperCase()}`)).toEqual({ embed: 'pages:file', fileId: id })
+    expect(read('/files/not-an-id')).toEqual({ kind: 'link' })
+  })
+
+  it('reads one task, page, whiteboard or thread from its address', () => {
+    expect(read('/projects/p1/work-items/t1')).toEqual({ embed: 'tasks:task', kind: 'task', id: 't1' })
+    expect(read('/w/acme/s/p1/work-items/t1')).toEqual({ embed: 'tasks:task', kind: 'task', id: 't1' })
+    expect(read('/whiteboards/w1')).toEqual({ embed: 'whiteboards:whiteboard', kind: 'whiteboard', id: 'w1' })
+    expect(read('/projects/p1/pages/x')).toEqual({ embed: 'pages:page', kind: 'page', id: 'x' })
+    expect(read('/projects/p1/threads/c1')).toEqual({ embed: 'channels:thread', kind: 'thread', id: 'c1' })
+    expect(read('/projects/p1/work-items/t1/extra')).toEqual({ kind: 'link' })
+    expect(read('https://example.com/projects/p1/work-items/t1')).toEqual({ kind: 'link' })
+    expect(read('/runs/r1')).toEqual({ kind: 'link' })
+  })
+
+  it('reads a space’s task list with its filters and view', () => {
+    expect(read('/projects/p1/work-items?view=board&priority=high')).toEqual({ embed: 'tasks:task-list', projectId: 'p1', query: 'view=board&priority=high' })
+    expect(read('/projects/p1/work-items')).toEqual({ embed: 'tasks:task-list', projectId: 'p1', query: '' })
+  })
+})
+
+describe('pasted addresses', () => {
+  it('keeps the path of an address in this app and nothing else', () => {
+    expect(embedPath('https://app.example/projects/p1/work-items/t1', 'https://app.example')).toBe('/projects/p1/work-items/t1')
+    expect(embedPath(' /projects/p1/work-items?status=s ', 'https://app.example')).toBe('/projects/p1/work-items?status=s')
+    expect(embedPath('https://elsewhere.example/projects/p1', 'https://app.example')).toBeNull()
+    expect(embedPath('', 'https://app.example')).toBeNull()
   })
 })

@@ -7,7 +7,7 @@ import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
 import { toastError } from '../app/mutations'
 import { useAuthenticatedSession } from '../auth/session'
-import { continueConversation, getConversationTimeline, retryReplyRequest, stopReplyRequest } from '../conversations/api'
+import { continueConversation, getConversationTimeline, retryReplyRequest, stopAllReplies, stopReplyRequest } from '../conversations/api'
 import { ConversationHeader } from '../conversations/ConversationHeader'
 import { useConversationTimeline } from '../conversations/useConversationTimeline'
 import { useMessageActions } from '../conversations/MessageActions'
@@ -18,6 +18,7 @@ import { useHomeExperience } from '../experience/layout'
 import { ReplyStatusList } from '../conversations/ReplyStatus'
 import { groupReplyRequests } from '../conversations/replyStatusModel'
 import { StructuredComposer } from '../conversations/StructuredComposer'
+import { AgentsAtWork } from '../conversations/AgentsAtWork'
 import { ThreadBoard } from '../conversations/threadBoard'
 import { ThreadChip } from '../conversations/ThreadChip'
 import { threadChipFacts } from '../conversations/threadChipModel'
@@ -328,7 +329,7 @@ export function DirectConversationPage() {
   ) : (
     <ConversationHeader
       actions={threadsButton}
-      lead={other ? <Avatar kind={otherKind} name={other.displayName} seed={other.id} size={24} /> : undefined}
+      lead={other ? <Avatar kind={otherKind} name={other.displayName} seed={other.id} showPresence size={24} /> : undefined}
       menu={[...placement.menu, ...tools.levelMenu]}
       subtitle={
         other ? (
@@ -435,6 +436,7 @@ export function DirectConversationPage() {
         <PendingMessages entries={entries} items={sender.pending} viewer={viewer} />
         {/* Direct messages always say who is typing; layouts are for spaces. */}
         <TypingNow conversationId={conversationId} entries={entries} viewerId={viewerId} />
+        <AgentsAtWork onStopAll={page?.capabilities.sendMessage ? () => stopAllReplies(conversationId).then(() => timeline.refetch()) : undefined} requests={page?.replyRequests ?? []} />
       </ConversationTimeline>
       {waitingForContinue ? (
         <Banner
@@ -595,7 +597,7 @@ function GroupMembers({
           const you = member.id === viewerId
           return (
             <li className="aw-members__row" key={member.id}>
-              <Avatar kind={kind} name={member.displayName} seed={member.id} size={32} />
+              <Avatar kind={kind} name={member.displayName} seed={member.id} showPresence size={32} />
               <span className="aw-members__name">
                 {member.displayName}
                 {you ? <span className="aw-members__you"> (you)</span> : null}

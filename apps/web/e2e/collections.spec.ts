@@ -101,12 +101,12 @@ async function notesPage(context: BrowserContext, page: Page, projectId: string,
   const listed = (await (await request.get(`/api/v1/projects/${projectId}/pages`)).json()) as { pages: Array<{ id: string; title: string }> }
   const found = listed.pages.find((entry) => entry.title === NOTES)
   if (found) return found.id
-  const created = await request.post(`/api/v1/projects/${projectId}/pages`, {
+  const created = await request.post('/api/v2/ops/page_create', {
     headers: headers('page-playtest-notes'),
-    data: { title: NOTES, body: `What players said after 0.4.2:\n\n[${NAME}](/projects/${projectId}/collections/${collectionId} "embed")\n\nWe fix the high ones first.\n` },
+    data: { projectId, title: NOTES, body: `What players said after 0.4.2:\n\n[${NAME}](/projects/${projectId}/collections/${collectionId} "embed")\n\nWe fix the high ones first.\n` },
   })
   expect(created.ok(), await created.text()).toBe(true)
-  return ((await created.json()) as { id: string }).id
+  return ((await created.json()) as { value: { id: string } }).value.id
 }
 
 test('a collection edited in place, filtered into its view, and a record with its history', async ({ page, context }) => {
@@ -201,9 +201,10 @@ test('a page shows the collection live, and the editor adds another view of it',
 
   // Put the page back as the agent wrote it, for the screenshots after this.
   const current = (await (await request.get(`/api/v1/pages/${pageId}`)).json()) as { version: number }
-  const restored = await request.patch(`/api/v1/pages/${pageId}`, {
+  const restored = await request.post('/api/v2/ops/page_update', {
     headers: headers(`page-playtest-notes-restore-${Date.now()}`),
     data: {
+      pageId,
       expectedVersion: current.version,
       body: `What players said after 0.4.2:\n\n[${NAME}](/projects/${projectId}/collections/${collectionId} "embed")\n\nWe fix the high ones first.\n`,
     },
