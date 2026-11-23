@@ -21,7 +21,7 @@ EXPECTED_DEPENDENCY_SHA256 = (
 EXPECTED_ALLOWLIST = (
     "conversation_list",
     "conversation_read",
-    "external_event_poll",
+    "event_list",
     "message_send",
     "people_search",
     "project_get",
