@@ -952,16 +952,15 @@ async fn github_installations_need_a_claim_and_the_state_needs_its_browser() {
     .execute(&setup.pool)
     .await
     .expect("claim");
-    let (status, body) = send(
-        &setup.app,
-        setup.browser.request(
-            "POST",
-            &format!("/api/v1/projects/{project}/integrations/github/repositories"),
-            None,
-            json!({ "installationId": 42, "githubRepositoryId": 7 }),
-        ),
-    )
-    .await;
+    let (status, body) = setup
+        .browser
+        .op(
+            &setup.app,
+            "repository_create",
+            json!({ "projectId": project, "installationId": 42, "githubRepositoryId": 7,
+                    "trustAcknowledged": true }),
+        )
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     let repository = super::mcp_task_board::insert_repository(
         &setup,

@@ -448,8 +448,8 @@ async fn removed_message_text_vanishes_everywhere() {
             .fetch_one(&setup.pool)
             .await
             .expect("plain text");
-    // Mara's claim started a thread from the message, named after it; a
-    // person starts another and names it by hand.
+    // Mara's claim started a thread from the message, named after it (a
+    // message has one thread); a person starts another and names it by hand.
     let mut threads = vec![
         claim["value"]["request"]["replyConversationId"]
             .as_str()
@@ -464,7 +464,7 @@ async fn removed_message_text_vanishes_everywhere() {
                 "POST",
                 &format!("/api/v1/channels/{general}/threads"),
                 Some(key),
-                json!({ "name": name, "originMessageId": message }),
+                json!({ "name": name }),
             ),
         )
         .await;
@@ -496,9 +496,8 @@ async fn removed_message_text_vanishes_everywhere() {
         .expect("thread status audit");
         assert_eq!(audit, json!({ "status": "Done" }));
     }
-    // Rows written before that named the thread; the hand-named one was
-    // once named after the message too.
-    for thread in &threads {
+    // Rows written before that named the thread after the message.
+    for thread in &threads[..1] {
         sqlx::query(
             r#"
             INSERT INTO audit_events (
@@ -579,10 +578,7 @@ async fn removed_message_text_vanishes_everywhere() {
         .collect::<Vec<_>>();
     assert_eq!(
         listed,
-        [
-            (json!(threads[0]), json!("New thread")),
-            (json!(threads[1]), json!("Rotation plan")),
-        ],
+        [(json!(threads[0]), json!("New thread")),],
         "the remover sees the threads, after renaming"
     );
 
@@ -615,7 +611,7 @@ async fn removed_message_text_vanishes_everywhere() {
     assert_eq!(audit["renamed_threads"], 1, "{audit}");
 
     // The thread going by the message (C1.2: nobody named it) loses its
-    // words; the one named by hand keeps its name.
+    // words.
     let names = sqlx::query_scalar::<_, String>(
         "SELECT name FROM conversations WHERE origin_message_id = $1 ORDER BY created_at, id",
     )
@@ -623,7 +619,7 @@ async fn removed_message_text_vanishes_everywhere() {
     .fetch_all(&setup.pool)
     .await
     .expect("thread names");
-    assert_eq!(names, ["New thread", "Rotation plan"]);
+    assert_eq!(names, ["New thread"]);
     // Older audit rows naming those threads keep who changed what, not the
     // name.
     let mut thread_audits = sqlx::query_scalar::<_, Value>(
@@ -647,7 +643,6 @@ async fn removed_message_text_vanishes_everywhere() {
         [
             json!({ "status": "Done" }),
             json!({ "status": "Done" }),
-            json!({ "status": "Open" }),
             json!({ "status": "Open" }),
         ]
     );
@@ -1003,7 +998,10 @@ async fn removed_message_text_vanishes_everywhere() {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{retried_thread}");
+    // Starting from the message again finds the thread it already has,
+    // under its new name.
+    assert_eq!(status, StatusCode::OK, "{retried_thread}");
+    assert_eq!(retried_thread["conversation"]["id"], threads[0].as_str());
     assert!(!retried_thread.to_string().contains(&secret));
     let (status, new_thread) = send(
         app,
@@ -1015,9 +1013,10 @@ async fn removed_message_text_vanishes_everywhere() {
         ),
     )
     .await;
+    assert_eq!(status, StatusCode::OK, "{new_thread}");
     assert_eq!(
-        status,
-        StatusCode::CONFLICT,
+        new_thread["conversation"]["id"],
+        threads[0].as_str(),
         "no new threads from it: {new_thread}"
     );
     let audits_before = count(
@@ -1368,7 +1367,7 @@ async fn only_authors_edit_and_owners_or_admins_remove() {
         pat.to_string()
     );
     let audit = sqlx::query_scalar::<_, Value>(
-        "SELECT metadata FROM audit_events WHERE action = 'conversation.message_removed' AND target_id = $1",
+        "SELECT metadata FROM audit_events WHERE action = 'conversation.mcp_message_removed' AND target_id = $1",
     )
     .bind(owners.parse::<Uuid>().expect("message"))
     .fetch_one(&setup.pool)

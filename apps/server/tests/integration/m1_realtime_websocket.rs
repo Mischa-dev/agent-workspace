@@ -1,11 +1,11 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
+use crate::support::legacy::router;
 use agent_workspace_server::{
     AppState,
     config::AppConfig,
     rate_limit::RateLimiters,
     realtime::{RealtimeEvent, RealtimeHub},
-    router,
 };
 use futures_util::StreamExt;
 use http::{

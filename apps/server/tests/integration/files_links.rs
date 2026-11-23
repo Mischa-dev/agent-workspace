@@ -12,9 +12,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::support::legacy::router;
 use agent_workspace_server::{
     AppState, config::AppConfig, files, provider::SupervisorRegistry, rate_limit::RateLimiters,
-    realtime::RealtimeHub, router, secrets,
+    realtime::RealtimeHub, secrets,
 };
 use axum::{
     Router,

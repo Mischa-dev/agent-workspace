@@ -7,7 +7,8 @@
 
 use std::sync::Arc;
 
-use agent_workspace_server::{AppState, router};
+use crate::support::legacy::router;
+use agent_workspace_server::AppState;
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 use uuid::Uuid;

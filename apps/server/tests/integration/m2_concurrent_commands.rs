@@ -1,12 +1,12 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use crate::support::legacy::router;
 use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
-    router,
 };
 use axum::{
     body::{Body, to_bytes},
@@ -185,7 +185,7 @@ async fn concurrent_thread_create_is_linearizable_and_exactly_once() {
         .iter()
         .find(|(status, _)| *status == StatusCode::CONFLICT)
         .expect("conflict response");
-    assert_eq!(conflict_body["error"]["code"], "conflict");
+    assert_eq!(conflict_body["outcome"], "conflict", "{conflict_body}");
     let (_, created_body) = mismatch_responses
         .iter()
         .find(|(status, _)| *status == StatusCode::CREATED)
@@ -429,7 +429,7 @@ async fn assert_thread_result(
         1
     );
 
-    let scope = format!("channel.{}.thread_create", channel_id.simple());
+    let scope = format!("conversation.{}.thread_start", channel_id.simple());
     let idempotency_rows = sqlx::query_as::<_, (Option<i32>, Option<Value>)>(
         r#"
         SELECT response_status, response_body
@@ -450,12 +450,12 @@ async fn assert_thread_result(
         1,
         "one completed idempotency result must remain"
     );
-    assert_eq!(idempotency_rows[0].0, Some(201));
+    assert_eq!(idempotency_rows[0].0, Some(200));
     let response_body = idempotency_rows[0]
         .1
         .as_ref()
         .expect("completed idempotency response body");
-    assert_eq!(uuid_field(&response_body["conversation"], "id"), thread_id);
+    assert_eq!(uuid_field(response_body, "id"), thread_id);
 }
 
 async fn login(app: &axum::Router) -> (String, String) {

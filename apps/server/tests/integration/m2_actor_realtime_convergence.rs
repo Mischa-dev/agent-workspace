@@ -1,7 +1,8 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
+use crate::support::legacy::router;
 use agent_workspace_server::{
-    AppState, config::AppConfig, outbox, rate_limit::RateLimiters, realtime::RealtimeHub, router,
+    AppState, config::AppConfig, outbox, rate_limit::RateLimiters, realtime::RealtimeHub,
 };
 use futures_util::StreamExt;
 use http::{

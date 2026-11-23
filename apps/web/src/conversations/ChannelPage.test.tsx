@@ -244,32 +244,33 @@ describe('M2 Channel workspace', () => {
         if (path.endsWith('/ops/conversation_mark_read')) {
           return response({ outcome: 'ok', value: { conversationId: channelId, lastReadSequence: 4, unreadCount: 0 } })
         }
-        if (path.includes(`/channels/${channelId}/messages`)) {
+        if (path.endsWith('/ops/message_send')) {
           sentKeys.push(new Headers(init?.headers).get('idempotency-key') ?? '')
           sendAttempts += 1
-          return sendAttempts === 1
-            ? response(
-                {
-                  error: {
-                    code: 'temporarily_unavailable',
-                    message: 'Try the same Message again.',
-                  },
+          // callOp retries once by itself, so the first send fails twice.
+          return sendAttempts <= 2
+            ? response({ outcome: 'temporarily_unavailable', message: 'Try the same message again.' }, 503)
+            : response({
+                outcome: 'ok',
+                value: {
+                  conversationId: channelId,
+                  messageId: message(4, 'Retry me').message.id,
+                  sequence: 4,
+                  text: 'Retry me',
+                  sentAt: '2026-07-31T15:00:00Z',
+                  idempotentReplay: false,
                 },
-                503,
-              )
-            : response({ message: message(4, 'Retry me').message }, 201)
+              })
         }
-        if (path.endsWith(`/channels/${channelId}/threads`)) {
+        if (path.endsWith(`/conversations/${channelId}/messages/${message(4, 'Retry me').message.id}`)) {
+          return response({ entry: message(4, 'Retry me') })
+        }
+        if (path.endsWith('/ops/thread_start')) {
           threadCommands.push(JSON.parse(String(init?.body)))
-          return response(
-            {
-              conversation: {
-                id: createdThreadId,
-                name: 'Latest follow-up',
-              },
-            },
-            201,
-          )
+          return response({
+            outcome: 'ok',
+            value: { id: createdThreadId, name: 'Latest follow-up', parentId: channelId, status: 'Open', url: '' },
+          })
         }
         if (path.includes(`/conversations/${createdThreadId}/timeline`)) {
           return response({
@@ -337,13 +338,13 @@ describe('M2 Channel workspace', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Try the same Message again.',
+      'Try the same message again.',
     )
     expect(screen.getByLabelText('Message #General')).toHaveValue('Retry me')
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
-    await waitFor(() => expect(sendAttempts).toBe(2))
+    await waitFor(() => expect(sendAttempts).toBe(3))
     expect(sentKeys[0]).toBeTruthy()
-    expect(sentKeys[1]).toBe(sentKeys[0])
+    expect(new Set(sentKeys)).toEqual(new Set([sentKeys[0]]))
 
     const latestMessage = screen.getByText('Latest').closest('article')
     expect(latestMessage).not.toBeNull()
@@ -366,8 +367,9 @@ describe('M2 Channel workspace', () => {
     )
     await waitFor(() => expect(threadCommands).toHaveLength(1))
     expect(threadCommands[0]).toEqual({
+      conversationId: channelId,
       name: 'Latest follow-up',
-      originMessageId: messageId(3),
+      fromMessageId: messageId(3),
     })
     // The new thread opens beside the channel, which stays in place.
     await waitFor(() =>

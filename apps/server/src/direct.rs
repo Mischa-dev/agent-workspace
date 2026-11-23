@@ -30,7 +30,7 @@ use crate::{
         ActorView, ConversationCreateResponse, ConversationView, ReadStateView, enqueue_event,
         insert_audit_event, lock_seen_conversation_for, normalize_conversation_name,
     },
-    error::{ApiJson, ApiPath, ApiQuery, AppError},
+    error::{ApiJson, ApiQuery, AppError},
     idempotency::{self, IdempotencyKey, IdempotencyOutcome, RequestHash},
     outbox::{
         ConversationCreatedPayload, ConversationMemberAddedPayload,
@@ -52,11 +52,6 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/direct", get(direct_overview))
         .route("/api/v1/direct/dms", post(open_dm))
         .route("/api/v1/direct/groups", post(create_group))
-        .route("/api/v1/conversations/{id}/members", post(add_member))
-        .route(
-            "/api/v1/conversations/{id}/members/{actor_id}/remove",
-            post(remove_member),
-        )
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -76,12 +71,6 @@ struct CreateGroupRequest {
     /// The workspace it's started in; the caller's current one if left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     workspace_id: Option<Uuid>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AddMemberRequest {
-    actor_id: Uuid,
 }
 
 #[derive(Debug, Serialize)]
@@ -127,14 +116,6 @@ struct DirectConversationItem {
 struct DirectCapabilities {
     start_conversation: bool,
     manage_agents: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct MembersResponse {
-    conversation_id: Uuid,
-    version: i64,
-    members: Vec<ActorView>,
 }
 
 #[derive(Debug, FromRow)]
@@ -502,87 +483,6 @@ async fn create_group(
     idempotency::complete(&mut transaction, &reservation, StatusCode::CREATED, &body).await?;
     transaction.commit().await?;
     Ok((StatusCode::CREATED, Json(body)).into_response())
-}
-
-async fn add_member(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(conversation_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<AddMemberRequest>,
-) -> Result<Json<MembersResponse>, AppError> {
-    change_members_from_web(
-        &state,
-        &headers,
-        &principal,
-        conversation_id,
-        &[request.actor_id],
-        &[],
-    )
-    .await
-}
-
-async fn remove_member(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((conversation_id, actor_id)): ApiPath<(Uuid, Uuid)>,
-) -> Result<Json<MembersResponse>, AppError> {
-    change_members_from_web(
-        &state,
-        &headers,
-        &principal,
-        conversation_id,
-        &[],
-        &[actor_id],
-    )
-    .await
-}
-
-async fn change_members_from_web(
-    state: &AppState,
-    headers: &HeaderMap,
-    principal: &AuthenticatedActor,
-    conversation_id: Uuid,
-    add: &[Uuid],
-    remove: &[Uuid],
-) -> Result<Json<MembersResponse>, AppError> {
-    require_authenticated_write(state, headers, principal).await?;
-    let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    let change = change_group_members(
-        &mut transaction,
-        GroupEditor {
-            actor_id: principal.actor_id,
-        },
-        conversation_id,
-        add,
-        remove,
-        None,
-    )
-    .await?;
-    for (members, action) in [
-        (&change.added, "conversation.member_added"),
-        (&change.removed, "conversation.member_removed"),
-    ] {
-        for member in members {
-            insert_audit_event(
-                &mut transaction,
-                headers,
-                principal,
-                crate::spaces::place(change.project_id),
-                action,
-                conversation_id,
-                serde_json::json!({ "actor_id": member.id }),
-            )
-            .await?;
-        }
-    }
-    transaction.commit().await?;
-    Ok(Json(MembersResponse {
-        conversation_id,
-        version: change.version,
-        members: change.members,
-    }))
 }
 
 /// Who changes a group's members.

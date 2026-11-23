@@ -136,24 +136,28 @@ export type Batch = {
 
 export type BatchResult = {
   launched: number
-  projects: { projectId: string; projectName: string; environmentName: string; launches: { id: string }[] }[]
-  failed: { projectId: string; projectName: string | null; tasks: number; reason: string }[]
+  failed: { projectName: string | null; tasks: number; reason: string }[]
 }
 
 export const getBatch = (accountId: string, windowKey: string | null) =>
   requestJson<Batch>(`${account(accountId)}/batch${windowKey ? `?windowKey=${encodeURIComponent(windowKey)}` : ''}`)
 
 /** Leave `tasks` out to launch the suggested batch as it stands. The key makes a repeated tap launch once. */
-export const launchBatch = (
+export const launchBatch = async (
   accountId: string,
   request: { tasks?: { projectId: string; workItemId: string }[]; windowKey?: string | null },
   idempotencyKey: string,
-) =>
-  requestJson<BatchResult>(`${account(accountId)}/batch`, {
-    method: 'POST',
-    json: { tasks: request.tasks, windowKey: request.windowKey ?? undefined },
-    idempotencyKey,
-  })
+): Promise<BatchResult> => {
+  const result = await callOp(
+    'usage_batch_launch',
+    { accountId, taskIds: request.tasks?.map((task) => task.workItemId), windowKey: request.windowKey ?? undefined },
+    { requestId: idempotencyKey },
+  )
+  return {
+    launched: result.launched,
+    failed: result.failed.map((line) => ({ projectName: line.project, tasks: line.tasks, reason: line.reason })),
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Usage over time (U5)

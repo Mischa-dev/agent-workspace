@@ -28,9 +28,6 @@ use crate::{
 /// How a new thread is named.
 #[derive(Clone, Debug)]
 pub(crate) enum ThreadName {
-    /// Someone named it. A name already used by an open thread under the
-    /// same parent is refused (409), as the web dialog expects.
-    Given(String),
     /// Named from its origin message, else its first message, until someone
     /// names it (`auto_named`): editing or removing that message renames it
     /// (`refresh_auto_thread_names`), so its words never outlive the message.
@@ -295,7 +292,6 @@ pub(crate) async fn create(
     }
 
     let (name, auto_named) = match &spec.name {
-        ThreadName::Given(name) => (normalize_conversation_name(name)?, false),
         ThreadName::Derived => (
             origin_text
                 .as_deref()

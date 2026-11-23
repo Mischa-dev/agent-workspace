@@ -9,6 +9,7 @@ use std::{
     sync::Arc,
 };
 
+use super::legacy::router;
 use agent_workspace_server::{
     AppState,
     auth::password::hash_password,
@@ -17,7 +18,6 @@ use agent_workspace_server::{
     provider::SupervisorRegistry,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
-    router,
     secrets::FileKeyring,
     test_support::file_link,
 };
@@ -1842,7 +1842,8 @@ async fn build_workspace(
         browser.request(
             "POST",
             &format!("/api/v1/conversations/{channel}/messages"),
-            Some(&format!("files-{tag}")),
+            // The key becomes the message's client id, which events carry.
+            Some(&Uuid::now_v7().to_string()),
             json!({
                 "content": text(&format!("Report{m} https://example.com/{tag}-page")),
                 "attachments": [file],

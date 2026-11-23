@@ -673,13 +673,13 @@ async fn work_channel(
     let (status, channel) = a
         .send(browser.request(
             "POST",
-            &format!("/api/v1/projects/{project}/channels"),
+            "/api/v2/ops/channel_create",
             Some("k5-5-channel"),
-            json!({"name": "General"}),
+            json!({"projectId": project, "name": "General"}),
         ))
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{channel}");
-    let channel = channel["conversation"]["id"]
+    assert_eq!(status, StatusCode::OK, "{channel}");
+    let channel = channel["value"]["id"]
         .as_str()
         .expect("channel")
         .parse()
@@ -696,13 +696,16 @@ async fn say(
     let (status, sent) = instance
         .send(browser.request(
             "POST",
-            &format!("/api/v1/conversations/{conversation}/messages"),
+            "/api/v2/ops/message_send",
             Some(key),
-            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "Hello"}]}}),
+            json!({
+                "conversationId": conversation,
+                "content": {"version": 1, "nodes": [{"type": "text", "text": "Hello"}]},
+            }),
         ))
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{sent}");
-    sent["message"]["id"]
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    sent["value"]["messageId"]
         .as_str()
         .expect("message")
         .parse()
@@ -1019,15 +1022,18 @@ async fn write_budget_is_never_exceeded() {
             let instance = cluster.instance(attempt % 2);
             let request = browser.request(
                 "POST",
-                &format!("/api/v1/conversations/{channel}/messages"),
+                "/api/v2/ops/message_send",
                 Some(&format!("k5-6-write-{attempt}")),
-                json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "Hi"}]}}),
+                json!({
+                    "conversationId": channel,
+                    "content": {"version": 1, "nodes": [{"type": "text", "text": "Hi"}]},
+                }),
             );
             async move { instance.send(request).await.0 }
         });
         for status in join_all(sends).await {
             match status {
-                StatusCode::CREATED => accepted += 1,
+                StatusCode::OK => accepted += 1,
                 StatusCode::TOO_MANY_REQUESTS => refused += 1,
                 other => panic!("unexpected {other}"),
             }
@@ -1351,13 +1357,13 @@ async fn side_channel(
     let (status, channel) = a
         .send(browser.request(
             "POST",
-            &format!("/api/v1/projects/{project}/channels"),
+            "/api/v2/ops/channel_create",
             Some("k5-8-side-channel"),
-            json!({"name": "Side"}),
+            json!({"projectId": project, "name": "Side"}),
         ))
         .await;
-    assert_eq!(status, StatusCode::CREATED, "{channel}");
-    let channel = channel["conversation"]["id"]
+    assert_eq!(status, StatusCode::OK, "{channel}");
+    let channel = channel["value"]["id"]
         .as_str()
         .expect("channel")
         .parse()

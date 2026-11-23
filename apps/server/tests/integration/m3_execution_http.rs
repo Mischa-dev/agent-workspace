@@ -1,12 +1,12 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use crate::support::legacy::router;
 use agent_workspace_server::{
     AppState,
     bootstrap::{BootstrapCommand, bootstrap_admin},
     config::AppConfig,
     rate_limit::RateLimiters,
     realtime::RealtimeHub,
-    router,
     seed::dev_seed,
 };
 use axum::{

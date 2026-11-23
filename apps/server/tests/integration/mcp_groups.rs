@@ -476,7 +476,7 @@ async fn adding_others_follows_the_role_and_anyone_can_leave() {
     assert_eq!(opened["outcome"], "not_found", "{opened}");
 
     // The web's add and remove share the command: removing someone who isn't
-    // in the group changes nothing.
+    // in the group is refused and changes nothing.
     let before = version(&setup.pool, &group).await;
     let (status, body) = send(
         &setup.app,
@@ -488,8 +488,7 @@ async fn adding_others_follows_the_role_and_anyone_can_leave() {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["version"], before);
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(version(&setup.pool, &group).await, before);
     let (status, body) = send(
         &setup.app,

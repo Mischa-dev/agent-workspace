@@ -366,24 +366,6 @@ mod tests {
         ),
         (
             Post,
-            "/api/v1/projects/{id}/channels",
-            Tool("channel_create"),
-        ),
-        (Post, "/api/v1/channels/{id}/messages", Tool("message_send")),
-        (Post, "/api/v1/threads/{id}/messages", Tool("message_send")),
-        (Post, "/api/v1/channels/{id}/threads", Tool("thread_start")),
-        (
-            Post,
-            "/api/v1/conversations/{id}/messages",
-            Tool("message_send"),
-        ),
-        (
-            Post,
-            "/api/v1/conversations/{id}/threads",
-            Tool("thread_start"),
-        ),
-        (
-            Post,
             "/api/v1/projects/{id}/pages/import",
             Person("a file from the person's own computer; agents write the page with page_create"),
         ),
@@ -434,26 +416,6 @@ mod tests {
         ),
         (Post, "/api/v1/direct/dms", Tool("conversation_start")),
         (Post, "/api/v1/direct/groups", Tool("conversation_start")),
-        (
-            Post,
-            "/api/v1/conversations/{id}/members",
-            Tool("conversation_members_update"),
-        ),
-        (
-            Post,
-            "/api/v1/conversations/{id}/members/{actor_id}/remove",
-            Tool("conversation_members_update"),
-        ),
-        (
-            Patch,
-            "/api/v1/conversations/{id}/messages/{message_id}",
-            Tool("message_update"),
-        ),
-        (
-            Delete,
-            "/api/v1/conversations/{id}/messages/{message_id}",
-            Tool("message_delete"),
-        ),
         (
             Post,
             "/api/v1/conversations/{id}/files",
@@ -535,11 +497,6 @@ mod tests {
             Person("a person's own provider account"),
         ),
         (
-            Post,
-            "/api/v1/usage/accounts/{account_id}/batch",
-            Tool("usage_batch_launch"),
-        ),
-        (
             Put,
             "/api/v1/organizations/{organization_id}/onboarding",
             Person("a person's own account"),
@@ -548,11 +505,6 @@ mod tests {
             Post,
             "/api/v1/projects/{project_id}/integrations/github/connect",
             Person("installs the GitHub app as a person"),
-        ),
-        (
-            Post,
-            "/api/v1/projects/{project_id}/integrations/github/repositories",
-            Tool("repository_create"),
         ),
         (
             Post,
@@ -947,7 +899,7 @@ mod tests {
     /// Hand-written web writes whose tool is already an operation: each is a
     /// second edge for something the generated route does (K2.22). The
     /// number only goes down; when you delete one, lower it.
-    const HAND_WRITTEN_OPERATION_ROUTES: usize = 36;
+    const HAND_WRITTEN_OPERATION_ROUTES: usize = 24;
 
     #[test]
     fn hand_written_routes_for_operations_only_go_down() {

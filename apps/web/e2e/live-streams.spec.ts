@@ -49,7 +49,7 @@ test('records the live frames of a chat burst, task moves, page edits and a reco
   await expect(page.getByRole('main')).toBeVisible()
   const { request, headers } = await writer(context, page)
   const say = async (value: string) => {
-    const sent = await request.post(`/api/v1/channels/${channelId}/messages`, { headers: headers(), data: text(value) })
+    const sent = await request.post('/api/v2/ops/message_send', { headers: headers(), data: { conversationId: channelId, ...text(value) } })
     expect(sent.ok(), await sent.text()).toBe(true)
   }
   // The socket is open before anything is recorded.
