@@ -44,6 +44,10 @@ export function StickyFromMessageDialog({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [requestId] = useState(newRequestId)
+  // One place and one request per board chosen, so trying again after a
+  // failure adds the same sticky once, where it would have gone.
+  const [place] = useState(() => ({ x: 80 + Math.round(Math.random() * 400), y: 80 + Math.round(Math.random() * 300) }))
+  const [addIds] = useState(() => new Map<string, string>())
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -57,34 +61,41 @@ export function StickyFromMessageDialog({
         : Promise.resolve(target)
     void boardId
       .then(async (id) => {
-        const added = await callOp('whiteboard_update_elements', {
-          whiteboardId: id,
-          fromMessageId: message.id,
-          saySo,
-          operations: [
-            {
-              op: 'add',
-              type: 'rectangle',
-              x: 80 + Math.round(Math.random() * 400),
-              y: 80 + Math.round(Math.random() * 300),
-              width: 240,
-              height: 160,
-              text,
-              backgroundColor: STICKY,
-              fillStyle: 'solid',
-              rounded: true,
-            },
-          ],
-        })
-        ranOrThrow(added, 'Adding the sticky')
-        return id
+        const key = `${id}:${saySo}`
+        const addId = addIds.get(key) ?? newRequestId()
+        addIds.set(key, addId)
+        const added = await callOp(
+          'whiteboard_update_elements',
+          {
+            whiteboardId: id,
+            fromMessageId: message.id,
+            saySo,
+            operations: [
+              {
+                op: 'add',
+                type: 'rectangle',
+                ...place,
+                width: 240,
+                height: 160,
+                text,
+                backgroundColor: STICKY,
+                fillStyle: 'solid',
+                rounded: true,
+              },
+            ],
+          },
+          { requestId: addId },
+        )
+        return { id, suggested: Boolean(ranOrThrow(added, 'Adding the sticky').proposalId) }
       })
-      .then((id) => {
-        showToast({
-          tone: 'success',
-          title: 'Put on the whiteboard',
-          action: { label: 'Open', onSelect: () => navigate(whiteboardPath(id)) },
-        })
+      .then(({ id, suggested }) => {
+        const action = { label: 'Open', onSelect: () => navigate(whiteboardPath(id)) }
+        // Someone who only suggests here: the sticky waits for an editor.
+        showToast(
+          suggested
+            ? { tone: 'success', title: 'Suggested for the whiteboard', description: 'Someone who edits the board accepts or rejects it.', action }
+            : { tone: 'success', title: 'Put on the whiteboard', action },
+        )
         onClose()
       })
       .catch((reason: unknown) => setError(`The sticky wasn’t made. ${describeError(reason).message}`))

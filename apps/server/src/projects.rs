@@ -147,6 +147,8 @@ struct ProjectListQuery {
     limit: Option<u16>,
     /// Archived projects instead of active ones, most recently archived first.
     archived: Option<bool>,
+    /// Only this workspace's, so the limit counts its projects alone.
+    workspace_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -282,6 +284,7 @@ async fn list_projects(
         WHERE pm.actor_id = $1
           AND pm.enabled
           AND (p.archived_at IS NOT NULL) = $5
+          AND ($6::uuid IS NULL OR p.organization_id = $6)
           AND p.kind = 'standard'
           -- K4.2: the one readability rule (archived projects stay listed
           -- for their members, to be restored).
@@ -309,6 +312,7 @@ async fn list_projects(
     .bind(limit)
     .bind(search)
     .bind(query.archived.unwrap_or(false))
+    .bind(query.workspace_id)
     .fetch_all(crate::db::scoped(&state.pool))
     .await?;
     let attention = crate::notifications::attention_counts(&state.pool, principal.actor_id).await?;

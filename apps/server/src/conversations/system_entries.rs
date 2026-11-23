@@ -192,8 +192,9 @@ pub struct MadeIntoView {
 /// Puts on each message of `entries` (a page of `conversation`'s timeline,
 /// already read with the viewer's access) what it was made into: the tasks
 /// linked to it, which only a reader who sees tasks in the space is told
-/// of, the decisions and records made from it, and every other thing a system entry
-/// here says was made from it. The web names each with the reader's access
+/// of, the decisions and records made from it, the boards, sheets and pages
+/// that link back to it, and every other thing a system entry here says was
+/// made from it. The web names each with the reader's access
 /// and leaves out one they can't open.
 pub(crate) async fn attach_made_into<'e, E>(
     executor: E,
@@ -230,6 +231,17 @@ where
             SELECT record.source_message_id, 'record', record.id, record.created_at
             FROM collection_records record
             WHERE record.source_message_id = ANY($1) AND record.archived_at IS NULL
+            UNION ALL
+            -- A sticky, a sheet row or a page made quietly: its link back.
+            SELECT link.to_thing_id,
+                   CASE source.kind::text WHEN 'whiteboard' THEN 'sticky'
+                        WHEN 'sheet' THEN 'sheet_row' ELSE source.kind::text END,
+                   source.id, link.created_at
+            FROM links link
+            JOIN things source ON source.id = link.from_thing_id
+            WHERE link.kind = 'made_from' AND link.to_thing_id = ANY($1)
+              AND source.kind::text IN ('whiteboard', 'sheet', 'page')
+              AND source.deleted_at IS NULL
             UNION ALL
             SELECT (entry.system_event->>'messageId')::uuid,
                    entry.system_event->>'thingKind',

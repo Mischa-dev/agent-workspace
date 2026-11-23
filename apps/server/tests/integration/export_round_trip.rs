@@ -211,6 +211,29 @@ async fn a_workspace_arrives_on_a_fresh_server_with_every_exported_column() {
     };
     let a = &fixture.a;
 
+    // An initiative with a milestone under it: the import fills that link
+    // in after the records are in, and the registry has to follow.
+    for (name, input) in [
+        ("initiative_create", json!({"title": "Round trip"})),
+        (
+            "milestone_create",
+            json!({"projectId": "WORK", "name": "Round trip beta", "initiative": "Round trip"}),
+        ),
+    ] {
+        let (status, made) = send(
+            &fixture.app,
+            a.browser.request(
+                "POST",
+                &format!("/api/v2/w/{}/ops/{name}", a.organization),
+                Some(&format!("h1-11-{name}")),
+                input,
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "{name}: {made}");
+        assert_eq!(made["outcome"], "ok", "{name}: {made}");
+    }
+
     // Out, from the first server.
     let (status, started) = send(
         &fixture.app,
@@ -327,6 +350,17 @@ async fn a_workspace_arrives_on_a_fresh_server_with_every_exported_column() {
             .fetch_one(&fresh.pool)
             .await
             .expect("report");
+    // The registry, which the import's triggers fill: a milestone is under
+    // its initiative there, though that column went in last.
+    let under = sqlx::query_scalar::<_, bool>(
+        "SELECT thing.parent_id IS NOT DISTINCT FROM milestone.initiative_id \
+         FROM project_milestones milestone JOIN things thing ON thing.id = milestone.id \
+         WHERE milestone.initiative_id IS NOT NULL",
+    )
+    .fetch_all(&fresh.pool)
+    .await
+    .expect("milestones under initiatives");
+    assert_eq!(under, vec![true], "the milestone's place in the registry");
     let carried = before.keys().copied().collect::<BTreeSet<_>>();
     let mut lost = Vec::new();
     for (table, rows) in &before {

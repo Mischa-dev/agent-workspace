@@ -38,11 +38,16 @@ export function useProjects() {
 /**
  * The open projects of the workspace the person is in. The project list is
  * the person's across every workspace; Home, pickers and "first project"
- * choices keep to this one, as the rail does.
+ * choices keep to this one, as the rail does. The server lists this
+ * workspace's alone, so someone in many workspaces still gets all of them.
  */
 export function useWorkspaceProjects() {
-  const query = useProjects()
   const workspaceId = useWorkspaceId()
+  const query = useQuery({
+    queryKey: workspaceId ? queryKeys.projectsIn(workspaceId) : queryKeys.projects,
+    queryFn: () => listProjects(undefined, workspaceId ? { workspaceId } : {}),
+    staleTime: 30_000,
+  })
   const projects = useMemo(
     () =>
       (query.data?.projects ?? []).filter(

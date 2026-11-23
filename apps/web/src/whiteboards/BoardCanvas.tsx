@@ -61,6 +61,8 @@ export type BoardCanvasProps = {
   draftRef?: MutableRefObject<DraftHandle | null>
   /** Elements someone changed recently, by id (C1.10): outlined in their name. */
   edited?: ReadonlyMap<string, Outline>
+  /** Whether the others on the board show (C1.30): their pointers and selections, and following them. */
+  showPeers?: boolean
   /** The selection changed (C1.31): its elements and their box, or null. */
   onSelection?: (selection: BoardSelection | null) => void
   /** The board scrolled or zoomed, to place comment pins over it. */
@@ -85,6 +87,7 @@ export default function BoardCanvas({
   onDraft,
   draftRef,
   edited,
+  showPeers = true,
   onSelection,
   onViewport,
 }: BoardCanvasProps) {
@@ -493,7 +496,8 @@ export default function BoardCanvas({
     const collaborators = new Map<SocketId, Collaborator>(
       [...byActor].map(([actorId, entry]) => [`edited:${actorId}` as SocketId, { id: actorId, username: entry.username, selectedElementIds: entry.ids }]),
     )
-    for (const [connection, peer] of peers.current) {
+    // A layout that hides the others on a board shows none of them.
+    for (const [connection, peer] of showPeers ? peers.current : []) {
       const socketId = connection as SocketId
       collaborators.set(socketId, {
         id: peer.accountId,
@@ -505,7 +509,7 @@ export default function BoardCanvas({
       })
     }
     board.updateScene({ collaborators, captureUpdate: CaptureUpdateAction.NEVER })
-  }, [edited])
+  }, [edited, showPeers])
   useEffect(() => {
     drawRef.current = showEdited
     showEdited()

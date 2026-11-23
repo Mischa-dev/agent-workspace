@@ -57,7 +57,7 @@
   "web": { "folder": "whiteboards" },
   "slots": {
     "pages": ["/whiteboards", "/whiteboards/:whiteboardId"],
-    "parts": ["area.whiteboards", "whiteboard.convert"],
+    "parts": ["area.whiteboards", "whiteboard.convert", "whiteboard.presence"],
     "sidebar": [],
     "home": [],
     "settings": [],

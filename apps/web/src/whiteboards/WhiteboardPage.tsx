@@ -112,6 +112,8 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
   const lastDrawn = editors.reduce((latest, editor) => (editor.at > latest ? editor.at : latest), '')
   const showsRecent = Boolean(detail.data) && (detail.data?.whiteboard.projectId ? projectExperience : workspaceExperience).shows('page.recent_edits')
   const recent = useRecentEdits('whiteboard', whiteboardId, lastDrawn, { viewerId, all: allEdits, enabled: showsRecent })
+  // The others on the board (C1.30), where this layout shows them.
+  const showsPeers = (detail.data?.whiteboard.projectId ? projectExperience : workspaceExperience).shows('whiteboard.presence')
   // Comments on elements (C1.31): pins where threads were started, and
   // comment or ask about what's selected.
   const commentsShown = Boolean(detail.data) && (detail.data?.whiteboard.projectId ? projectExperience : workspaceExperience).shows('thing.comments')
@@ -348,6 +350,7 @@ function Board({ viewerId, whiteboardId }: { viewerId: string; whiteboardId: str
             onSelection={setSelection}
             onViewport={setViewport}
             paused={sending}
+            showPeers={showsPeers}
             suggesting={suggesting}
             whiteboardId={whiteboard.id}
           />

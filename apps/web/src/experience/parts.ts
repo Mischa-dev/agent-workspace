@@ -56,6 +56,7 @@ export const PART_IDS = [
   'page.move',
   'page.sharing',
   'whiteboard.convert',
+  'whiteboard.presence',
   'sheet.charts',
   'sheet.validation',
   'page.references',

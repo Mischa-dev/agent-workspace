@@ -186,6 +186,9 @@ impl Operation for WhiteboardUpdateElements {
         .await
         .map_err(whiteboard_commands::edit_error)?;
         if let Some((message_id, conversation_id, _)) = source {
+            // The link back, whether or not the conversation is told.
+            crate::links::put_checked(tx, id, message_id, "made_from", Some(caller.actor_id))
+                .await?;
             crate::conversations::system_entries::made_from_message(
                 tx,
                 conversation_id,

@@ -5,6 +5,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { requestJson } from '../api/client'
 import { isApiError } from '../api/errors'
 import { queryKeys } from '../api/queryKeys'
+import { useWorkspaceId } from '../app/workspace'
 import { useProjects } from '../projects/hooks'
 import { useShellPage } from '../shell/shellStore'
 import {
@@ -32,7 +33,7 @@ import { SearchAnswer } from './SearchAnswer'
 import { savedSearchName, useSavedSearches, useSetSavedSearch } from './savedSearches'
 import { describeFilter, parseSearchQuery, queryFilters, withToken, withoutToken } from './searchQuery'
 import '../styles/pages.css'
-import { useHomeExperience } from '../experience/layout'
+import { useHomeExperience, useProjectExperience } from '../experience/layout'
 
 type SearchHit = {
   kind: 'message' | 'thread' | 'task' | 'page' | 'decision' | 'record' | 'file' | 'whiteboard' | 'sheet'
@@ -106,12 +107,17 @@ function Snippet({ text }: { text: string }) {
 /** Search everything you can see: messages, threads, tasks, pages, decisions and files by name. */
 export function SearchPage() {
   const experience = useHomeExperience()
+  // An answer belongs to the workspace it was asked in: another workspace starts without one.
+  const workspaceId = useWorkspaceId()
   // The hints name only what this workspace has (W1.39).
   const channelsOn = experience.moduleOn('channels')
   const tasksOn = experience.moduleOn('tasks')
   const [params, setParams] = useSearchParams()
   const query = params.get('q') ?? ''
   const projectId = params.get('projectId') ?? ''
+  // Searching one project, answers follow that project's layout.
+  const projectExperience = useProjectExperience(projectId)
+  const answers = projectId ? projectExperience : experience
   const projects = useProjects()
   const scope = projectId ? (projects.data?.projects.find((project) => project.id === projectId) ?? null) : null
   // The box follows the address, so Back shows what was searched then.
@@ -288,7 +294,7 @@ export function SearchPage() {
             </EmptyState>
           ) : null}
           {/* An answer needs words to answer, not only filters. */}
-          {experience.shows('search.answers') && parseSearchQuery(query).text.trim() && results.data && results.data.hits.length > 0 ? <SearchAnswer projectId={projectId} query={query} /> : null}
+          {answers.shows('search.answers') && parseSearchQuery(query).text.trim() && results.data && results.data.hits.length > 0 ? <SearchAnswer key={workspaceId ?? ''} projectId={projectId} query={query} /> : null}
           {results.data && results.data.hits.length > 0 ? (
             <RowList label="Results">
               {results.data.hits.map((hit, _index, hits) => {

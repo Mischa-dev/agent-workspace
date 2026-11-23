@@ -209,7 +209,8 @@ pub(crate) async fn answer_tool(
 /// The sources in the order the answer first cites them (then any it lists
 /// but never cites), and the answer with each "[n]" renumbered to its place
 /// in that list. A number naming no result loses its brackets' link: it's
-/// dropped from the text.
+/// dropped from the text. Brackets right after a word (`retries[19]`, quoted
+/// from a result) are an index, not a citation, and stay as written.
 fn renumber(answer: &str, listed: &[i64], read: usize) -> (String, Vec<usize>) {
     let valid = |number: &str| {
         number
@@ -219,9 +220,17 @@ fn renumber(answer: &str, listed: &[i64], read: usize) -> (String, Vec<usize>) {
             .filter(|index| *index < read)
     };
     let citation = regex_lite::Regex::new(r"\[(\d{1,2})\]").expect("citation pattern");
+    let cites = |found: &regex_lite::Captures<'_>| {
+        let start = found.get(0).map_or(0, |whole| whole.start());
+        !answer[..start]
+            .chars()
+            .next_back()
+            .is_some_and(|before| before.is_alphanumeric() || before == '_')
+    };
     let mut order = Vec::new();
     for found in citation.captures_iter(answer) {
-        if let Some(index) = valid(&found[1])
+        if cites(&found)
+            && let Some(index) = valid(&found[1])
             && !order.contains(&index)
         {
             order.push(index);
@@ -236,6 +245,9 @@ fn renumber(answer: &str, listed: &[i64], read: usize) -> (String, Vec<usize>) {
     }
     let text = citation
         .replace_all(answer, |found: &regex_lite::Captures<'_>| {
+            if !cites(found) {
+                return found[0].to_owned();
+            }
             valid(&found[1])
                 .and_then(|index| order.iter().position(|cited| *cited == index))
                 .map(|position| format!("[{}]", position + 1))
@@ -270,5 +282,9 @@ mod tests {
         let (text, order) = renumber("Said [9], seen [1].", &[4, 1], 4);
         assert_eq!(order, vec![0, 3]);
         assert_eq!(text, "Said , seen [1].");
+        // An index quoted from a result is not a citation.
+        let (text, order) = renumber("Set retries[19] and rows[1] so [2].", &[2], 4);
+        assert_eq!(order, vec![1]);
+        assert_eq!(text, "Set retries[19] and rows[1] so [1].");
     }
 }

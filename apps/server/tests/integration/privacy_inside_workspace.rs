@@ -4589,6 +4589,51 @@ async fn channel_writes_keep_to_private_channels() {
     for kind in ["page", "sheet_row", "sticky"] {
         assert!(said.contains(&kind), "a line for the {kind}: {timeline}");
     }
+    // Made without saying so, a sticky still links back: the message shows
+    // what it was made into, though the channel has no line for it.
+    let (status, quiet_board) = op(
+        &lena.browser,
+        "whiteboard_create",
+        json!({"title": "Quiet plans", "projectId": work}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{quiet_board}");
+    let quiet_board = quiet_board["value"]["whiteboard"]["id"].clone();
+    let (status, made) = op(
+        &omar.browser,
+        "whiteboard_update_elements",
+        json!({"whiteboardId": quiet_board, "fromMessageId": shown, "operations": [
+            {"op": "add", "type": "rectangle", "text": "From the channel, quietly"},
+        ]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let request = lena.browser.request(
+        "GET",
+        &format!("/api/v1/conversations/{open}/timeline"),
+        None,
+        Value::Null,
+    );
+    let (_, timeline) = send(app, request).await;
+    let entries = timeline["entries"].as_array().expect("entries");
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry["system"]["thingId"] == quiet_board),
+        "nothing was said: {timeline}"
+    );
+    let chips = entries
+        .iter()
+        .find(|entry| entry["message"]["id"] == json!(shown))
+        .map(|entry| entry["message"]["madeInto"].clone())
+        .expect("the message");
+    assert!(
+        chips
+            .as_array()
+            .expect("chips")
+            .contains(&json!({"kind": "sticky", "id": quiet_board})),
+        "{chips}"
+    );
     // Someone who may make tasks but not post in the channel makes one from
     // a message quietly: saySo posts nothing for them.
     let tess = &world.people["tess"];

@@ -49,7 +49,13 @@ test('a channel message becomes a task, a decision, a page and a sticky on a whi
   await dialog.getByRole('button', { name: 'Put on whiteboard' }).click()
   await expect(dialog).toBeHidden()
 
-  // Still in the conversation, and the message says what it was made into.
+  // Still in the conversation, and the message says what it was made into:
+  // each thing is there to open, now and when the channel is opened again.
   expect(page.url()).toBe(here)
-  await expect(page.getByRole('article').filter({ hasText: text }).last()).toBeVisible()
+  await page.reload()
+  const message = page.getByRole('article').filter({ hasText: text }).last()
+  await expect(message).toBeVisible()
+  for (const thing of ['task', 'decision', 'page', 'sticky']) {
+    await expect(message.getByText(new RegExp(`Made into an? ${thing}:`)), `the ${thing} it was made into`).toBeVisible()
+  }
 })

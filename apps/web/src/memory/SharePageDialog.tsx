@@ -5,13 +5,14 @@ import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { publicPageUrl } from '../app/href'
+import { useWorkspaceId } from '../app/workspace'
 import { callOp, newRequestId, ranOrThrow } from '../api/ops'
 import { projectLocationHref } from '../projects/locations'
 import { Banner, Button, Checkbox, Dialog, SelectField, TextField, describeError, formatDateTime, showToast } from '../ui'
 import type { ShareLevel } from './api'
 
 const sharesKey = (pageId: string) => ['page-shares', pageId] as const
-const peopleKey = (search: string) => ['page-share-people', search] as const
+const peopleKey = (workspaceId: string | null, search: string) => ['page-share-people', workspaceId, search] as const
 
 const LEVELS: { value: ShareLevel; label: string }[] = [
   { value: 'see', label: 'Can read' },
@@ -43,9 +44,11 @@ export function SharePageDialog({ onClose, page }: { onClose: () => void; page: 
     const timer = window.setTimeout(() => setSearch(query.trim()), 200)
     return () => window.clearTimeout(timer)
   }, [query])
+  // Only people of the page's workspace can be shared with, so only they are offered.
+  const workspaceId = useWorkspaceId()
   const people = useQuery({
-    queryKey: peopleKey(search),
-    queryFn: ({ signal }) => callOp('people_search', { query: search, limit: 6 }, { signal }),
+    queryKey: peopleKey(workspaceId, search),
+    queryFn: ({ signal }) => callOp('people_search', { query: search, limit: 6 }, { signal, workspaceId: workspaceId ?? undefined }),
     enabled: search.length > 0,
   })
   const [level, setLevel] = useState<ShareLevel>('comment')

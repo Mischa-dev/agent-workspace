@@ -1,7 +1,7 @@
 import { Suspense, lazy, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
-import { callOp } from '../api/ops'
+import { callOp, ranOrThrow } from '../api/ops'
 import { useAuthenticatedSession } from '../auth/session'
 import { ThingCommentsPanel } from '../discussion/ThingCommentsPanel'
 import { useProjectExperience } from '../experience/layout'
@@ -108,7 +108,8 @@ export function RecordPanel({
 
   const suggest = async (change: { title?: string; fields?: Record<string, FieldValue | null> }) => {
     try {
-      const written = await callOp('record_update', { record: current.id, expectedVersion: current.version, ...change })
+      // A write a review guard holds made no suggestion: say so instead of looking done.
+      const written = ranOrThrow(await callOp('record_update', { record: current.id, expectedVersion: current.version, ...change }), 'The suggestion')
       void client.invalidateQueries({ queryKey: proposalsKey('record', current.id) })
       if (written.proposalId) showToast({ tone: 'success', title: 'Suggested', description: 'Someone who edits this record accepts or rejects it.' })
       else void record.refetch()
