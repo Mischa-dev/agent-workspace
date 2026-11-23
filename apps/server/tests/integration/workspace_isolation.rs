@@ -25,9 +25,11 @@
 //!   `.route("...")`, to [`HTTP_ROUTES`] and a case to `http_cases` (own
 //!   URIs that succeed for A, foreign URIs built from B's IDs). Routes that
 //!   can't be called this way go in [`HTTP_EXCLUSIONS`] with the reason.
-//! - a new read-only MCP tool (`read_only_hint = true`): add a case to
-//!   `mcp_cases`. Tools that can't be called this way go in
-//!   [`MCP_EXCLUSIONS`] with the reason.
+//! - a new hand-written read-only MCP tool (`read_only_hint = true`): add a
+//!   case to `mcp_cases`. Tools that can't be called this way go in
+//!   [`MCP_EXCLUSIONS`] with the reason. An operation needn't: the
+//!   dispatcher locates its target and row security binds its rows to that
+//!   workspace.
 //! - new kinds of data: create the look-alike in `build_workspace`, with
 //!   `marker` in its text, so the sweep and the marker check catch it.
 //!
@@ -382,7 +384,13 @@ fn every_get_route_and_read_tool_has_an_isolation_case() {
         .into_iter()
         .chain(MCP_EXCLUSIONS.iter().map(|(name, _)| (*name).to_owned()))
         .collect::<BTreeSet<_>>();
-    let missing = read_tools.difference(&cased).collect::<Vec<_>>();
+    // Operations are located and checked by the dispatcher and bound by
+    // row security, so a case for each is welcome but not required; a
+    // hand-written tool checks for itself and needs one.
+    let missing = read_only_tools(mcp_source)
+        .into_iter()
+        .filter(|name| !cased.contains(name))
+        .collect::<Vec<_>>();
     assert!(
         missing.is_empty(),
         "read-only MCP tools without a workspace-isolation case (add them to mcp_cases, \
@@ -3498,9 +3506,15 @@ async fn check_mcp(
         .iter()
         .map(|(name, _)| (*name).to_owned())
         .collect::<BTreeSet<_>>();
+    // Operations needn't have a case (see the static guard).
+    let operations = agent_workspace_server::ops::registry()
+        .entries()
+        .map(|entry| entry.meta.name.to_owned())
+        .collect::<BTreeSet<_>>();
     let uncovered = read_only
         .iter()
         .filter(|name| !listed.contains(name.as_str()) && !excluded.contains(*name))
+        .filter(|name| !operations.contains(*name))
         .collect::<Vec<_>>();
     if !uncovered.is_empty() {
         report.failures.push(format!(

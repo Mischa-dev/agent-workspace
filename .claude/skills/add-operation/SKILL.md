@@ -107,8 +107,10 @@ in the module's `ops.rs`.
 - The web calls it with `callOp('thing_create', input, { requestId })`.
 - An integration test where a bug would be silent: retries answered once,
   someone outside the space gets `not_found`, a private conversation stays
-  private. Add the operation to `MCP_WRITE_TOOLS` and a case in
-  `tests/integration/write_isolation.rs` (reads: `workspace_isolation.rs`).
+  private. An operation needs no case in `write_isolation.rs` or
+  `workspace_isolation.rs`: the dispatcher locates its target and row
+  security binds it to that workspace. Add one only when it reaches past its
+  target (another space's or workspace's ids in its input).
 - If it replaces a hand-written tool, delete the tool from the `mcp.rs`
   router, its `tool_permissions.rs` line and its function; an operation and a
   tool may not share a name (`an_operation_never_shadows_a_hand_written_tool`).

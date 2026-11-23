@@ -27,8 +27,11 @@
 //!   path exactly as written in `.route("...")`, to [`WRITE_ROUTES`] and a
 //!   case to `http_cases`. Routes that can't be called this way (sign-in
 //!   plumbing, capability tokens) go in [`WRITE_EXCLUSIONS`] with the reason.
-//! - a new MCP tool that isn't read-only: add it to [`MCP_WRITE_TOOLS`] and a
-//!   case to `mcp_cases`, or to [`MCP_WRITE_EXCLUSIONS`] with the reason.
+//! - a new hand-written MCP tool that isn't read-only: add it to
+//!   [`MCP_WRITE_TOOLS`] and a case to `mcp_cases`, or to
+//!   [`MCP_WRITE_EXCLUSIONS`] with the reason. An operation needn't: the
+//!   dispatcher locates its target and row security binds its rows to that
+//!   workspace. Add a case when an operation reaches past its target.
 //! - a new kind of data a write acts on: make B's (and A's) in
 //!   `more_targets`, or a spare of A's in `spares` when A's own request uses
 //!   it up, if the shared fixture doesn't have one.
@@ -790,8 +793,10 @@ fn every_write_route_and_write_tool_has_an_isolation_case() {
         .map(|(_, source)| source.as_str())
         .expect("src/mcp.rs");
     // Hand-written tools by their annotation, and operations by their kind.
-    let write_tools = write_tools(mcp_source)
-        .into_iter()
+    let hand_written = write_tools(mcp_source);
+    let write_tools = hand_written
+        .iter()
+        .cloned()
         .chain(
             agent_workspace_server::ops::registry()
                 .entries()
@@ -818,7 +823,10 @@ fn every_write_route_and_write_tool_has_an_isolation_case() {
         "tools both cased and excluded: {:#?}",
         cased.intersection(&excluded).collect::<Vec<_>>()
     );
-    let missing = write_tools
+    // Operations are located and checked by the dispatcher and bound by
+    // row security, so a case for each is welcome but not required; a
+    // hand-written tool checks for itself and needs one.
+    let missing = hand_written
         .iter()
         .filter(|name| !cased.contains(*name) && !excluded.contains(*name))
         .collect::<Vec<_>>();

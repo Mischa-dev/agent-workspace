@@ -9,6 +9,7 @@ import { callOp, newRequestId } from '../api/ops'
 import { Banner, Button, Checkbox, Dialog, TextField, describeError, formatDateTime, showToast } from '../ui'
 
 const sharesKey = (pageId: string) => ['page-shares', pageId] as const
+const peopleKey = (search: string) => ['page-share-people', search] as const
 
 export function SharePageDialog({ onClose, page }: { onClose: () => void; page: { id: string; title: string } }) {
   const queryClient = useQueryClient()
@@ -23,7 +24,7 @@ export function SharePageDialog({ onClose, page }: { onClose: () => void; page: 
     return () => window.clearTimeout(timer)
   }, [query])
   const people = useQuery({
-    queryKey: ['page-share-people', search],
+    queryKey: peopleKey(search),
     queryFn: ({ signal }) => callOp('people_search', { query: search, limit: 6 }, { signal }),
     enabled: search.length > 0,
   })

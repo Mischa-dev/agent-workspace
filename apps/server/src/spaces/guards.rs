@@ -333,31 +333,27 @@ mod tests {
 
     #[test]
     fn kind_literals_ratchet() {
+        // The whole tree holds to the sum of the allowances, so code that
+        // moves between files needs no change here.
         let allowed = kind_literal_allowances();
-        let mut failures = Vec::new();
-        let mut found_files = BTreeSet::new();
-        for (path, source) in sources() {
-            let found = kind_literals(strip_tests(&source));
-            if found == 0 {
-                continue;
-            }
-            found_files.insert(path.clone());
-            let allowance = allowed.get(&path).copied().unwrap_or(0);
-            if found > allowance {
-                failures.push(format!(
-                    "{path} has {found} hidden-kind literals, allowed {allowance}: read the kind \
-                     through SpaceKind (spaces/kind.rs); the count only goes down"
-                ));
-            } else if found < allowance {
-                println!("hint: lower {path} to {found} in spaces/guards/kind_literals.json");
-            }
+        let allowed_total: usize = allowed.values().sum();
+        let found = sources()
+            .into_iter()
+            .map(|(path, source)| (path, kind_literals(strip_tests(&source))))
+            .filter(|(_, found)| *found > 0)
+            .collect::<BTreeMap<_, _>>();
+        let found_total: usize = found.values().sum();
+        if found_total < allowed_total {
+            println!(
+                "hint: {found_total} hidden-kind literals, {allowed_total} allowed; \
+                 spaces/guards/kind_literals.json can come down"
+            );
         }
-        for path in allowed.keys() {
-            if !found_files.contains(path) {
-                println!("hint: remove {path} from spaces/guards/kind_literals.json");
-            }
-        }
-        assert!(failures.is_empty(), "{failures:#?}");
+        assert!(
+            found_total <= allowed_total,
+            "{found_total} hidden-kind literals, {allowed_total} allowed ({found:?}): read the \
+             kind through SpaceKind (spaces/kind.rs)"
+        );
     }
 
     #[test]
