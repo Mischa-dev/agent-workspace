@@ -30,6 +30,7 @@
     "skill_get": "describe",
     "decision_list": "query",
     "decision_record": "create",
+    "thing_share_list": "query",
     "thing_share_add": "change",
     "thing_share_remove": "change",
     "thing_link_create": "create",
@@ -42,6 +43,7 @@
   "routes": [
     "/api/v1/pages/*",
     "/api/v1/shared/{token}",
+    "/api/v1/public/pages/{token}",
     "/api/v1/projects/{id}/pages",
     "/api/v1/projects/{id}/pages/import",
     "/api/v1/projects/{id}/decisions",

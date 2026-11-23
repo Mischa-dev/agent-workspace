@@ -13830,6 +13830,10 @@
           "account": {
             "type": "string"
           },
+          "displayName": {
+            "description": "Their name.",
+            "type": "string"
+          },
           "expiresAt": {
             "type": [
               "string",
@@ -13838,7 +13842,8 @@
           }
         },
         "required": [
-          "account"
+          "account",
+          "displayName"
         ],
         "type": "object"
       },
@@ -13852,10 +13857,15 @@
           },
           "id": {
             "type": "string"
+          },
+          "public": {
+            "description": "Anyone with it may read the page without signing in.",
+            "type": "boolean"
           }
         },
         "required": [
-          "id"
+          "id",
+          "public"
         ],
         "type": "object"
       },
@@ -184633,7 +184643,7 @@
     },
     "/api/v2/w/{workspace}/ops/thing_link_create": {
       "post": {
-        "description": "Make a link that lets anyone signed in who has it read one page, and nothing else, until it expires (168 hours unless you say) or is revoked with thing_share_remove. The token is shown once. Needs the right to edit the page. Needs \"Edit pages and decisions\" where it acts.",
+        "description": "Make a link that lets anyone signed in who has it read one page, and nothing else, until it expires (168 hours unless you say) or is revoked with thing_share_remove; with public, anyone who has it may read the page without signing in. The token is shown once. Needs the right to edit the page. Needs \"Edit pages and decisions\" where it acts.",
         "operationId": "thing_link_create",
         "parameters": [
           {
@@ -184678,6 +184688,13 @@
                   "kind": {
                     "$ref": "#/components/schemas/ThingKind",
                     "description": "What kind of thing: `page`."
+                  },
+                  "public": {
+                    "description": "Let anyone with the link read the page without signing in. Left\nout, only someone signed in to this server can open it.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
@@ -185402,6 +185419,379 @@
           "pages"
         ],
         "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/thing_share_list": {
+      "post": {
+        "description": "The accounts a page is shared with on its own and the links that open it (never their secrets), with when each stops. Needs the right to edit the page, as sharing does. Needs \"Edit pages and decisions\" where it acts.",
+        "operationId": "thing_share_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "description": "The thing: its id or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "$ref": "#/components/schemas/ThingKind",
+                    "description": "What kind of thing: `page`."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "title": "ThingShareListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "Who and what a thing is shared with now.",
+                          "properties": {
+                            "accounts": {
+                              "items": {
+                                "$ref": "#/components/schemas/SharedAccount"
+                              },
+                              "type": "array"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "$ref": "#/components/schemas/ThingKind"
+                            },
+                            "links": {
+                              "items": {
+                                "$ref": "#/components/schemas/SharedLink"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id",
+                            "accounts",
+                            "links"
+                          ],
+                          "title": "ThingSharesView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "Who and what a thing is shared with now.",
+                          "properties": {
+                            "accounts": {
+                              "items": {
+                                "$ref": "#/components/schemas/SharedAccount"
+                              },
+                              "type": "array"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "$ref": "#/components/schemas/ThingKind"
+                            },
+                            "links": {
+                              "items": {
+                                "$ref": "#/components/schemas/SharedLink"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id",
+                            "accounts",
+                            "links"
+                          ],
+                          "title": "ThingSharesView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List one thing's shares",
+        "tags": [
+          "pages"
+        ],
+        "x-operation-kind": "query"
       }
     },
     "/api/v2/w/{workspace}/ops/thing_share_remove": {

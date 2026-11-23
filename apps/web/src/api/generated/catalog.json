@@ -6215,6 +6215,20 @@
     "title": "Share one thing"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "pages",
+    "name": "thing_share_list",
+    "permission": "pages.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "List one thing's shares"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [

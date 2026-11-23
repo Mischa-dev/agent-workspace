@@ -50,6 +50,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/projects/{id}/pages", get(list_pages_http))
         .route("/api/v1/pages/{id}", get(get_page_http))
         .route("/api/v1/shared/{token}", get(open_shared_http))
+        .route("/api/v1/public/pages/{token}", get(open_public_http))
         .route(
             "/api/v1/pages/{id}/revisions/{version}",
             get(get_revision_http),
@@ -1752,7 +1753,19 @@ async fn get_page_http(
     .is_err()
         && !shared_page(&state.pool, principal.actor_id, page_id).await?
     {
-        return Err(AppError::NotFound("page"));
+        if !shared_page(&state.pool, principal.actor_id, page_id).await? {
+            return Err(AppError::NotFound("page"));
+        }
+        // Shared on its own: the page and nothing else from its space, so
+        // not the pages around it or who changed it.
+        let mut page = get_page(&state.pool, page_id, principal.actor_id)
+            .await?
+            .ok_or(AppError::NotFound("page"))?;
+        page.revisions.clear();
+        page.ancestors.clear();
+        page.children.clear();
+        page.updated_by = None;
+        return Ok(Json(page));
     }
     get_page(&state.pool, page_id, principal.actor_id)
         .await?
@@ -1772,23 +1785,71 @@ pub(crate) async fn shared_page(
     .await
 }
 
+/// A page as a link opens it: its words, and nothing from around it.
+#[derive(Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedPageView {
+    pub id: Uuid,
+    pub title: String,
+    /// Markdown.
+    pub body: String,
+    pub updated_at: String,
+}
+
+async fn shared_page_view(pool: &PgPool, page_id: Uuid) -> Result<SharedPageView, AppError> {
+    // A conversation's memory page follows its conversation; no link opens it.
+    sqlx::query_as::<_, SharedPageView>(
+        "SELECT id, title, body, updated_at::text AS updated_at FROM project_pages \
+         WHERE id = $1 AND archived_at IS NULL \
+           AND memory_for_kind IS DISTINCT FROM 'conversation' \
+           AND module_part_on('page', id)",
+    )
+    .bind(page_id)
+    .fetch_optional(crate::db::scoped(pool))
+    .await?
+    .ok_or(AppError::NotFound("link"))
+}
+
+/// The page a link opens, while the link works and opens a page.
+async fn linked_page(pool: &PgPool, token: &str, public_only: bool) -> Result<Uuid, AppError> {
+    match crate::access::sharing::by_link(pool, token).await? {
+        Some(opened)
+            if opened.kind == crate::access::sharing::ThingKind::Page.key()
+                && (opened.public || !public_only) =>
+        {
+            Ok(opened.thing)
+        }
+        _ => Err(AppError::NotFound("link")),
+    }
+}
+
 /// A page opened by a link someone made for it (K1.32): any signed-in
 /// account with the link reads that page and nothing else.
 async fn open_shared_http(
     State(state): State<AppState>,
-    principal: AuthenticatedActor,
+    _principal: AuthenticatedActor,
     ApiPath(token): ApiPath<String>,
-) -> Result<Json<PageView>, AppError> {
-    let Some((kind, page_id)) = crate::access::sharing::by_link(&state.pool, &token).await? else {
-        return Err(AppError::NotFound("link"));
-    };
-    if kind != crate::access::sharing::ThingKind::Page.key() {
-        return Err(AppError::NotFound("link"));
-    }
-    get_page(&state.pool, page_id, principal.actor_id)
-        .await?
-        .map(Json)
-        .ok_or(AppError::NotFound("link"))
+) -> Result<Json<SharedPageView>, AppError> {
+    // A link's token names the one row it opens, before any scope is known.
+    crate::tenancy::system("auth.link", async {
+        let page_id = linked_page(&state.pool, &token, false).await?;
+        Ok(Json(shared_page_view(&state.pool, page_id).await?))
+    })
+    .await
+}
+
+/// A page opened by a public link (C1.27): anyone who has it, signed in or
+/// not, reads that page and nothing else.
+async fn open_public_http(
+    State(state): State<AppState>,
+    ApiPath(token): ApiPath<String>,
+) -> Result<Json<SharedPageView>, AppError> {
+    // A link's token names the one row it opens, before any scope is known.
+    crate::tenancy::system("auth.link", async {
+        let page_id = linked_page(&state.pool, &token, true).await?;
+        Ok(Json(shared_page_view(&state.pool, page_id).await?))
+    })
+    .await
 }
 
 async fn get_revision_http(

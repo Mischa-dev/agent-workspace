@@ -142,6 +142,11 @@ pub(crate) const ID_EXEMPT: &[(&str, &str)] = &[
          in, and it was made by someone who could edit the page",
     ),
     (
+        "/api/v1/public/pages/",
+        "a public link's secret token opens one page to anyone who has it, signed in or not; \
+         the page's own module switch is checked when it is read",
+    ),
+    (
         "/api/v1/bug-reports/",
         "a public report link by token, posted without a session; the gate answers only signed-in callers",
     ),

@@ -1,18 +1,23 @@
 import '@excalidraw/excalidraw/index.css'
 
-import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { CaptureUpdateAction, Excalidraw, reconcileElements, restoreElements } from '@excalidraw/excalidraw'
 import type { OrderedExcalidrawElement } from '@excalidraw/excalidraw/element/types'
-import type { AppState, BinaryFileData, BinaryFiles, Collaborator, ExcalidrawImperativeAPI, SocketId } from '@excalidraw/excalidraw/types'
+import type { AppState, BinaryFileData, BinaryFiles, Collaborator, ExcalidrawImperativeAPI, NormalizedZoomValue, SocketId } from '@excalidraw/excalidraw/types'
 import { useNavigate } from 'react-router-dom'
 
-import { useOptionalRealtime, useWatchDocument } from '../realtime/realtimeContext'
+import { opQuery } from '../api/ops'
+import { useWorkspaceId } from '../app/workspace'
+import type { DocumentRef } from '../realtime/live/protocol'
+import { useLiveControls, useOptionalRealtime, useWatchDocument, type DocumentFrame } from '../realtime/realtimeContext'
 import { onWhiteboardChange } from '../realtime/liveDocuments'
 import type { Outline } from '../changes/recentEdits'
 import { sameIds, selectionBounds, type BoardSelection, type BoardViewport } from './pins'
 import { describeError } from '../ui'
 import { getFile, getScene, uploadFile, writeScene, type Editor, type SceneView, type StoredElement } from './api'
 import { missingFiles, remember, unsaved, type Known, type SaveState } from './sync'
+import { HEARTBEAT_MS, MAX_SELECTED, SEND_EVERY_MS, followView, prunePeers, readPresence, type BoardPresence, type Peer } from './presence'
 
 /** How long the board waits after the last change before saving it. */
 const SAVE_DELAY_MS = 250
@@ -87,9 +92,111 @@ export default function BoardCanvas({
   const realtime = useOptionalRealtime()
   const live = realtime?.connection === 'live'
   const resync = realtime?.resyncGeneration ?? 0
-  // In the board's live room while it is open (W1.6).
-  useWatchDocument(whiteboardId ? { kind: 'whiteboard', id: whiteboardId } : null)
   const api = useRef<ExcalidrawImperativeAPI | null>(null)
+  const controls = useLiveControls()
+  const queryClient = useQueryClient()
+  const workspaceId = useWorkspaceId() ?? undefined
+  const room = useMemo<DocumentRef | null>(() => (whiteboardId ? { kind: 'whiteboard', id: whiteboardId } : null), [whiteboardId])
+  // Live presence (C1.30): the others on the board by connection, their
+  // names by account, whose view this one follows, and what this one shows.
+  const peers = useRef(new Map<string, Peer>())
+  const names = useRef(new Map<string, string>())
+  const following = useRef<string | null>(null)
+  const mine = useRef<BoardPresence | null>(null)
+  const lastSent = useRef(0)
+  const sendTimer = useRef<number | undefined>(undefined)
+  const drawRef = useRef<() => void>(() => undefined)
+  const unfollow = useRef<(() => void) | null>(null)
+  useEffect(() => () => unfollow.current?.(), [])
+  // Leaving says so before the room is left, so the cursor goes at once.
+  useEffect(() => {
+    if (!room) return
+    const leave = () => {
+      window.clearTimeout(sendTimer.current)
+      if (mine.current) controls.awareness(room, null)
+      mine.current = null
+    }
+    window.addEventListener('pagehide', leave)
+    return () => {
+      window.removeEventListener('pagehide', leave)
+      leave()
+    }
+  }, [controls, room])
+  const follow = useCallback((presence: BoardPresence) => {
+    const board = api.current
+    if (!board) return
+    const state = board.getAppState()
+    const view = followView(presence.viewport, { width: state.width, height: state.height })
+    board.updateScene({
+      appState: { scrollX: view.scrollX, scrollY: view.scrollY, zoom: { value: view.zoom as NormalizedZoomValue } },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    })
+  }, [])
+  const nameFor = useCallback(
+    (accountId: string) => {
+      if (names.current.has(accountId)) return
+      names.current.set(accountId, '')
+      queryClient
+        .fetchQuery({ ...opQuery('profile_get', { account: accountId }, { workspaceId }), staleTime: 60_000 })
+        .then((profile) => {
+          names.current.set(accountId, profile.name)
+          drawRef.current()
+        })
+        .catch(() => undefined)
+    },
+    [queryClient, workspaceId],
+  )
+  const onFrame = useCallback(
+    (frame: DocumentFrame) => {
+      // Your own other tabs show too: they're somewhere else on the board.
+      if (frame.type !== 'awareness') return
+      const presence = readPresence(frame.state)
+      if (presence) {
+        peers.current.set(frame.connection, { accountId: frame.accountId, presence, seen: Date.now() })
+        nameFor(frame.accountId)
+        if (following.current === frame.connection) follow(presence)
+      } else {
+        peers.current.delete(frame.connection)
+      }
+      drawRef.current()
+    },
+    [follow, nameFor],
+  )
+  // In the board's live room while it is open (W1.6).
+  useWatchDocument(room, onFrame)
+  // Pointer moves go out at most every SEND_EVERY_MS, the last one always.
+  const sendPresence = useCallback(
+    function sendNow() {
+      window.clearTimeout(sendTimer.current)
+      const wait = lastSent.current + SEND_EVERY_MS - Date.now()
+      if (wait > 0) {
+        sendTimer.current = window.setTimeout(sendNow, wait)
+        return
+      }
+      if (!room || !mine.current) return
+      lastSent.current = Date.now()
+      controls.awareness(room, mine.current)
+    },
+    [controls, room],
+  )
+  const present = useCallback(
+    (change: Partial<BoardPresence>) => {
+      const state = api.current?.getAppState()
+      if (!state) return
+      const selected = Object.keys(state.selectedElementIds)
+        .filter((id) => state.selectedElementIds[id])
+        .slice(0, MAX_SELECTED)
+      mine.current = {
+        pointer: mine.current?.pointer ?? null,
+        button: mine.current?.button ?? 'up',
+        selected,
+        viewport: { scrollX: state.scrollX, scrollY: state.scrollY, zoom: state.zoom.value, width: state.width, height: state.height },
+        ...change,
+      }
+      sendPresence()
+    },
+    [sendPresence],
+  )
   // What the server holds starts as the scene that came with the page.
   const [known] = useState<Known>(() => {
     const seeded: Known = new Map()
@@ -288,17 +395,22 @@ export default function BoardCanvas({
     const ids = Object.keys(appState.selectedElementIds)
       .filter((id) => appState.selectedElementIds[id])
       .sort()
+    let moved = false
     if (!sameIds(ids, lastSelection.current)) {
       lastSelection.current = ids
       callbacks.current.onSelection?.(ids.length ? selectionBounds(elements, ids) : null)
+      moved = true
     }
     const viewport = { scrollX: appState.scrollX, scrollY: appState.scrollY, zoom: appState.zoom.value }
     const last = lastViewport.current
     if (!last || last.scrollX !== viewport.scrollX || last.scrollY !== viewport.scrollY || last.zoom !== viewport.zoom) {
       lastViewport.current = viewport
       callbacks.current.onViewport?.(viewport)
+      moved = true
     }
-  }, [])
+    // The others see the new selection or view; a still board says nothing.
+    if (moved && mine.current) present({})
+  }, [present])
 
   const onChange = useCallback(
     (elements: readonly Element[], appState: AppState) => {
@@ -367,6 +479,8 @@ export default function BoardCanvas({
 
   // Recent edits (C1.10): the board outlines another person's selection in
   // their colour and name, so each author's changed elements show as theirs.
+  // Live cursors (C1.30) join them: each open board's pointer, name and
+  // selection.
   const showEdited = useCallback(() => {
     const board = api.current
     if (!board) return
@@ -379,14 +493,48 @@ export default function BoardCanvas({
     const collaborators = new Map<SocketId, Collaborator>(
       [...byActor].map(([actorId, entry]) => [`edited:${actorId}` as SocketId, { id: actorId, username: entry.username, selectedElementIds: entry.ids }]),
     )
+    for (const [connection, peer] of peers.current) {
+      const socketId = connection as SocketId
+      collaborators.set(socketId, {
+        id: peer.accountId,
+        socketId,
+        username: names.current.get(peer.accountId) || 'Someone',
+        pointer: peer.presence.pointer ? { ...peer.presence.pointer, tool: 'pointer' } : undefined,
+        button: peer.presence.button,
+        selectedElementIds: Object.fromEntries(peer.presence.selected.map((id) => [id, true as const])),
+      })
+    }
     board.updateScene({ collaborators, captureUpdate: CaptureUpdateAction.NEVER })
   }, [edited])
-  useEffect(() => showEdited(), [showEdited])
+  useEffect(() => {
+    drawRef.current = showEdited
+    showEdited()
+  }, [showEdited])
+  // Still here: said again now and then, so a board opened later sees this
+  // one, and a board that went quiet without saying goodbye drops away.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (room && mine.current) controls.awareness(room, mine.current)
+      if (prunePeers(peers.current, Date.now())) drawRef.current()
+    }, HEARTBEAT_MS)
+    return () => window.clearInterval(timer)
+  }, [controls, room])
+  // After a reconnect the room is joined again: say where this board is.
+  useEffect(() => {
+    if (resync > 0 && mine.current) present({})
+  }, [present, resync])
 
   return (
     <Excalidraw
       excalidrawAPI={(instance) => {
         api.current = instance
+        // Follow (C1.30): clicking someone's avatar follows their view.
+        unfollow.current?.()
+        unfollow.current = instance.onUserFollow(({ action, userToFollow }) => {
+          following.current = action === 'FOLLOW' ? userToFollow.socketId : null
+          const leader = following.current ? peers.current.get(following.current) : undefined
+          if (leader) follow(leader.presence)
+        })
         void loadFiles(initial.elements)
         showEdited()
       }}
@@ -396,6 +544,7 @@ export default function BoardCanvas({
       }}
       isCollaborating
       onChange={onChange}
+      onPointerUpdate={({ pointer, button }) => present({ pointer: { x: pointer.x, y: pointer.y }, button })}
       onLinkOpen={(element, event) => {
         const link = element.link
         if (link && link.startsWith('/') && !link.startsWith('//')) {

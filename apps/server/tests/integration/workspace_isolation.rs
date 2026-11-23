@@ -272,6 +272,11 @@ const HTTP_EXCLUSIONS: &[(&str, &str)] = &[
          privacy_inside_workspace (a_shared_page_opens_only_itself)",
     ),
     (
+        "/api/v1/public/pages/{token}",
+        "a page opened by a public link's secret token, made for that one page; covered in \
+         privacy_inside_workspace (a_shared_page_opens_only_itself)",
+    ),
+    (
         "/api/v1/forms/{token}",
         "a form's public page reads it by the link's secret token, not a session; it holds \
          only the form (the collection's name and the asked fields), never records or \
@@ -2186,6 +2191,7 @@ const MCP_CASE_TOOLS: &[&str] = &[
     "task_ready_list",
     "template_list",
     "thing_open",
+    "thing_share_list",
     "thread_followed_list",
     "usage_batch_preview",
     "usage_window_list",
@@ -3162,6 +3168,12 @@ pub(super) fn mcp_cases(a: &World, b: &World) -> Vec<McpCase> {
             "page_comment_list",
             vec![json!({"pageId": a.page, "includeResolved": true})],
             vec![json!({"pageId": b.page, "includeResolved": true})],
+            vec![],
+        ),
+        case(
+            "thing_share_list",
+            vec![json!({"kind": "page", "id": a.page})],
+            vec![json!({"kind": "page", "id": b.page})],
             vec![],
         ),
         case(

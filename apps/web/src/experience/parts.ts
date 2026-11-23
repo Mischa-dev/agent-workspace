@@ -53,6 +53,7 @@ export const PART_IDS = [
   'page.nesting',
   'page.recent_edits',
   'page.move',
+  'page.sharing',
   'whiteboard.convert',
   'sheet.charts',
   'sheet.validation',

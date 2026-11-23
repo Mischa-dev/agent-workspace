@@ -182,8 +182,8 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
     // (`widen_to_system`).
     ("files.quota", &["files.rs"]),
     // A link someone was given (an invitation, an account claim, a setup
-    // link, a public form or report link, a password reset or email
-    // check): its token names the one row it opens, and the handler acts
+    // link, a public form or report link, a page's share link, a password
+    // reset or email check): its token names the one row it opens, and the handler acts
     // only on what that row says.
     (
         "auth.link",
@@ -193,6 +193,7 @@ pub const SYSTEM_REASONS: &[(&str, &[&str])] = &[
             "accounts/claims.rs",
             "password_reset.rs",
             "bug_reports.rs",
+            "memory.rs",
             "agent_setup_links.rs",
             "spaces/invite_links.rs",
             "github/connect.rs",

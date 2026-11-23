@@ -154,6 +154,11 @@ export function workspaceHref(ws: string, path = '/home'): string {
   return `/w/${encodeURIComponent(ws)}${workspaceRoutePath(pathname)}${rest}`
 }
 
+/** The full address of a page opened by a link (C1.27), to copy and send: `/p/<token>` on this server. */
+export function publicPageUrl(token: string): string {
+  return `${window.location.origin}/p/${encodeURIComponent(token)}`
+}
+
 /** A page of the workspace links are built in now: `here('/inbox')`. Leaves account settings and other root pages as they are. */
 export function here(path = '/home'): string {
   const [pathname] = split(path.startsWith('/') ? path : `/${path}`)

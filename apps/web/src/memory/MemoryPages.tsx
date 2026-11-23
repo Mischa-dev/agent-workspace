@@ -78,6 +78,7 @@ import '../styles/pages.css'
 import { here, spaceHref } from '../app/href'
 
 const MovePageDialog = lazy(() => import('./MovePageDialog').then((module) => ({ default: module.MovePageDialog })))
+const SharePageDialog = lazy(() => import('./SharePageDialog').then((module) => ({ default: module.SharePageDialog })))
 
 /** A collection's view, or whatever else a page embeds, live where the page is read. */
 const renderEmbed = (embed: Embed) => <PageEmbed href={embed.href} label={embed.label} />
@@ -398,6 +399,7 @@ function PageDetail({ inChannel = false, pageId, project }: { inChannel?: boolea
   const [loadingVersion, setLoadingVersion] = useState<number | null>(null)
   const [restoring, setRestoring] = useState(false)
   const [moving, setMoving] = useState(false)
+  const [sharing, setSharing] = useState(false)
   const [makingChild, setMakingChild] = useState(false)
   const viewer = useRef<HTMLDivElement>(null)
   const canEdit = Boolean(pages.data?.canEdit)
@@ -416,6 +418,7 @@ function PageDetail({ inChannel = false, pageId, project }: { inChannel?: boolea
   const [allEdits, setAllEdits] = useState(false)
   const showsRecent = experience.shows('page.recent_edits')
   const showsMove = experience.shows('page.move')
+  const showsSharing = experience.shows('page.sharing')
   const recent = useRecentEdits('page', pageId, page.data?.version, { viewerId, all: allEdits, enabled: showsRecent })
   const editedBlocks = useMemo(() => [...recent.shown].map(([blockId, outline]) => ({ blockId, title: outlineTitle(outline) })), [recent.shown])
   const [draft, setDraft] = useState<CommentAnchor | null>(null)
@@ -501,6 +504,11 @@ function PageDetail({ inChannel = false, pageId, project }: { inChannel?: boolea
           <MovePageDialog onClose={() => setMoving(false)} page={current} projectId={projectId} />
         </Suspense>
       ) : null}
+      {sharing && showsSharing ? (
+        <Suspense fallback={null}>
+          <SharePageDialog onClose={() => setSharing(false)} page={current} />
+        </Suspense>
+      ) : null}
       <PageHeader
         actions={
           editing ? null : (
@@ -510,6 +518,11 @@ function PageDetail({ inChannel = false, pageId, project }: { inChannel?: boolea
               {showsMove && canEdit && !current.archived && !current.isGuide ? (
                 <Button icon={FolderInput} onClick={() => setMoving(true)}>
                   Move
+                </Button>
+              ) : null}
+              {showsSharing && canEdit && !current.archived ? (
+                <Button icon="users" onClick={() => setSharing(true)}>
+                  Share
                 </Button>
               ) : null}
               {canEdit ? (

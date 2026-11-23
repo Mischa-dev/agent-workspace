@@ -4,7 +4,8 @@
 //! other things, lists and search still follow the space's members.
 //!
 //! A link is a secret shown once to whoever made it; only its digest is
-//! kept. It opens the thing for any signed-in account that has it, until it
+//! kept. It opens the thing for any signed-in account that has it, or, when
+//! it is public (C1.27), for anyone who has it, signed in or not, until it
 //! expires or is revoked. Sharing needs the edit permission on the thing's
 //! kind in its space, so nobody shares more than they could change.
 
@@ -34,6 +35,7 @@ const MAX_LINK_HOURS: i64 = 90 * 24;
 
 pub fn register_ops(registry: &mut Registry) {
     registry
+        .add::<ThingShareList>()
         .add::<ThingShare>()
         .add::<ThingUnshare>()
         .add::<ThingLinkCreate>();
@@ -85,8 +87,17 @@ pub async fn shared_with(
     .await?)
 }
 
-/// The thing a link opens, while it works: its kind and id.
-pub async fn by_link(pool: &PgPool, token: &str) -> Result<Option<(String, Uuid)>, AppError> {
+/// What a working link opens.
+#[derive(Clone, Debug)]
+pub struct Opened {
+    pub kind: String,
+    pub thing: Uuid,
+    /// Anyone with the link may read it, signed in or not.
+    pub public: bool,
+}
+
+/// The thing a link opens, while it works.
+pub async fn by_link(pool: &PgPool, token: &str) -> Result<Option<Opened>, AppError> {
     if !token.starts_with(LINK_PREFIX) || token.len() > 128 {
         return Ok(None);
     }
@@ -95,8 +106,8 @@ pub async fn by_link(pool: &PgPool, token: &str) -> Result<Option<(String, Uuid)
     };
     let candidate: [u8; 32] = Sha256::digest(token.as_bytes()).into();
     let rows = crate::db::scoped_one(pool, async |connection| {
-        sqlx::query_as::<_, (String, Uuid, Vec<u8>)>(
-            "SELECT thing_kind, thing_id, link_digest FROM thing_grants \
+        sqlx::query_as::<_, (String, Uuid, Vec<u8>, bool)>(
+            "SELECT thing_kind, thing_id, link_digest, public FROM thing_grants \
              WHERE link_prefix = $1 AND revoked_at IS NULL \
                AND (expires_at IS NULL OR expires_at > now())",
         )
@@ -105,9 +116,13 @@ pub async fn by_link(pool: &PgPool, token: &str) -> Result<Option<(String, Uuid)
         .await
     })
     .await?;
-    Ok(rows.into_iter().find_map(|(kind, thing, digest)| {
+    Ok(rows.into_iter().find_map(|(kind, thing, digest, public)| {
         (digest.len() == candidate.len() && bool::from(digest.as_slice().ct_eq(&candidate)))
-            .then_some((kind, thing))
+            .then_some(Opened {
+                kind,
+                thing,
+                public,
+            })
     }))
 }
 
@@ -127,6 +142,8 @@ pub struct ThingSharesView {
 pub struct SharedAccount {
     #[schemars(with = "String")]
     pub account: Uuid,
+    /// Their name.
+    pub display_name: String,
     #[schemars(with = "Option<String>")]
     pub expires_at: Option<DateTime<Utc>>,
 }
@@ -136,6 +153,8 @@ pub struct SharedAccount {
 pub struct SharedLink {
     #[schemars(with = "String")]
     pub id: Uuid,
+    /// Anyone with it may read the page without signing in.
+    pub public: bool,
     #[schemars(with = "Option<String>")]
     pub expires_at: Option<DateTime<Utc>>,
 }
@@ -145,11 +164,27 @@ async fn shares(
     kind: ThingKind,
     id: Uuid,
 ) -> Result<ThingSharesView, AppError> {
-    let rows = sqlx::query_as::<_, (Uuid, Option<Uuid>, Option<DateTime<Utc>>)>(
-        "SELECT id, grantee_account_id, expires_at FROM thing_grants \
-         WHERE thing_kind = $1 AND thing_id = $2 AND revoked_at IS NULL \
-           AND (expires_at IS NULL OR expires_at > now()) \
-         ORDER BY created_at, id",
+    let rows = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            Option<Uuid>,
+            Option<String>,
+            bool,
+            Option<DateTime<Utc>>,
+        ),
+    >(
+        "SELECT grant_row.id, grant_row.grantee_account_id, \
+                CASE WHEN grant_row.grantee_account_id IS NOT NULL THEN \
+                    (SELECT profile.display_name \
+                     FROM account_profile(grant_row.grantee_account_id, grant_row.workspace_id) profile) \
+                END, \
+                grant_row.public, grant_row.expires_at \
+         FROM thing_grants grant_row \
+         WHERE grant_row.thing_kind = $1 AND grant_row.thing_id = $2 \
+           AND grant_row.revoked_at IS NULL \
+           AND (grant_row.expires_at IS NULL OR grant_row.expires_at > now()) \
+         ORDER BY grant_row.created_at, grant_row.id",
     )
     .bind(kind.key())
     .bind(id)
@@ -161,14 +196,16 @@ async fn shares(
         accounts: Vec::new(),
         links: Vec::new(),
     };
-    for (grant, account, expires_at) in rows {
+    for (grant, account, name, public, expires_at) in rows {
         match account {
             Some(account) => view.accounts.push(SharedAccount {
                 account,
+                display_name: name.unwrap_or_default(),
                 expires_at,
             }),
             None => view.links.push(SharedLink {
                 id: grant,
+                public,
                 expires_at,
             }),
         }
@@ -203,6 +240,48 @@ fn located(call: &OpCall<'_>) -> Result<(Uuid, Uuid), OpError> {
 
 // ---------------------------------------------------------------------------
 // Operations
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ThingShareListInput {
+    /// What kind of thing: `page`.
+    pub kind: ThingKind,
+    /// The thing: its id or a link to it.
+    pub id: IdRef,
+}
+
+impl Targeted for ThingShareListInput {
+    fn target(&self) -> Target {
+        Target::thing(self.kind.key(), self.id.id())
+    }
+}
+
+/// Who and what one thing is shared with.
+pub struct ThingShareList;
+
+impl Operation for ThingShareList {
+    const NAME: &'static str = "thing_share_list";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "pages";
+    const PERMISSION: Option<Perm> = Some(Perm::PagesEdit);
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "List one thing's shares";
+    const DESCRIPTION: &'static str = "The accounts a page is shared with on its own and the \
+        links that open it (never their secrets), with when each stops. Needs the right to edit \
+        the page, as sharing does.";
+
+    type Input = ThingShareListInput;
+    type Output = ThingSharesView;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ThingShareListInput,
+    ) -> Result<ThingSharesView, OpError> {
+        let (kind, id) = (input.kind, input.id.id());
+        let tx = call.tx().await?;
+        Ok(shares(tx, kind, id).await?)
+    }
+}
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -391,6 +470,10 @@ pub struct ThingLinkCreateInput {
     /// out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_in_hours: Option<i64>,
+    /// Let anyone with the link read the page without signing in. Left
+    /// out, only someone signed in to this server can open it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public: Option<bool>,
 }
 
 impl Targeted for ThingLinkCreateInput {
@@ -429,7 +512,8 @@ impl Operation for ThingLinkCreate {
     const TITLE: &'static str = "Make a link to one thing";
     const DESCRIPTION: &'static str = "Make a link that lets anyone signed in who has it read \
         one page, and nothing else, until it expires (168 hours unless you say) or is revoked \
-        with thing_share_remove. The token is shown once. Needs the right to edit the page.";
+        with thing_share_remove; with public, anyone who has it may read the page without \
+        signing in. The token is shown once. Needs the right to edit the page.";
 
     type Input = ThingLinkCreateInput;
     type Output = ThingLinkView;
@@ -475,8 +559,9 @@ impl Operation for ThingLinkCreate {
         let tx = call.tx().await?;
         sqlx::query(
             "INSERT INTO thing_grants (id, workspace_id, space_id, thing_kind, thing_id, \
-                 link_prefix, link_digest, level, expires_at, granted_by_account_id, request_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 'see', $8, $9, $10)",
+                 link_prefix, link_digest, level, expires_at, granted_by_account_id, request_id, \
+                 public) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'see', $8, $9, $10, $11)",
         )
         .bind(link_id)
         .bind(workspace_id)
@@ -488,6 +573,7 @@ impl Operation for ThingLinkCreate {
         .bind(expires_at)
         .bind(by)
         .bind(request_id.as_deref())
+        .bind(input.public.unwrap_or(false))
         .execute(&mut **tx)
         .await
         .map_err(AppError::from)?;

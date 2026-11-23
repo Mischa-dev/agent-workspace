@@ -2958,6 +2958,120 @@ async fn a_shared_page_opens_only_itself() {
         "a revoked link stops at once"
     );
 
+    // C1.27: a link opens without signing in only when it is public, and
+    // the share list names links, never their secrets.
+    let anonymous = |path: String| {
+        axum::http::Request::builder()
+            .method("GET")
+            .uri(path)
+            .header(axum::http::header::HOST, "127.0.0.1")
+            .body(axum::body::Body::empty())
+            .expect("request")
+    };
+    let (_, private_link) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "thing_link_create",
+            "owner-private-link",
+            json!({"kind": "page", "id": plan}),
+        ),
+    )
+    .await;
+    let private_token = private_link["value"]["token"]
+        .as_str()
+        .expect("token")
+        .to_owned();
+    let (status, _) = send(
+        &world.app,
+        anonymous(format!("/api/v1/public/pages/{private_token}")),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "a signed-in link isn't public"
+    );
+    let (_, public_link) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "thing_link_create",
+            "owner-public-link",
+            json!({"kind": "page", "id": plan, "public": true}),
+        ),
+    )
+    .await;
+    assert_eq!(public_link["outcome"], "ok", "{public_link}");
+    let public_token = public_link["value"]["token"]
+        .as_str()
+        .expect("token")
+        .to_owned();
+    let (status, page) = send(
+        &world.app,
+        anonymous(format!("/api/v1/public/pages/{public_token}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["id"], plan.as_str());
+    assert!(page.get("projectId").is_none(), "{page}");
+    assert!(!page.to_string().contains("Salaries"), "{page}");
+    let (_, listed) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "thing_share_list",
+            "owner-list",
+            json!({"kind": "page", "id": plan}),
+        ),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(
+        listed["value"]["links"]
+            .as_array()
+            .expect("links")
+            .iter()
+            .any(|link| link["id"] == public_link["value"]["id"] && link["public"] == true),
+        "{listed}"
+    );
+    assert!(!listed.to_string().contains(&public_token), "{listed}");
+    let (_, denied) = send(
+        &world.app,
+        op(
+            &mara.browser,
+            "thing_share_list",
+            "mara-list",
+            json!({"kind": "page", "id": plan}),
+        ),
+    )
+    .await;
+    assert_ne!(
+        denied["outcome"], "ok",
+        "only editors see the shares: {denied}"
+    );
+    let (_, revoked) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "thing_share_remove",
+            "owner-revoke-public",
+            json!({"kind": "page", "id": plan, "link": public_link["value"]["id"]}),
+        ),
+    )
+    .await;
+    assert_eq!(revoked["outcome"], "ok", "{revoked}");
+    let (status, _) = send(
+        &world.app,
+        anonymous(format!("/api/v1/public/pages/{public_token}")),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "a revoked public link stops at once"
+    );
+
     let (_, unshared) = send(
         &world.app,
         op(

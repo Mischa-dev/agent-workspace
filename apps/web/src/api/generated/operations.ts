@@ -676,9 +676,9 @@ export type ShapeChannel = { name: string; private?: boolean }
 
 export type ShapePage = { guide?: boolean; markdown?: string; title: string }
 
-export type SharedAccount = { account: string; expiresAt?: string | null }
+export type SharedAccount = { account: string; displayName: string; expiresAt?: string | null }
 
-export type SharedLink = { expiresAt?: string | null; id: string }
+export type SharedLink = { expiresAt?: string | null; id: string; public: boolean }
 
 export type SharedSpace = { id: string; name: string }
 
@@ -2468,13 +2468,17 @@ export type ThingLinkInput = { from: string; kind: HandLinkKind; to: string }
 
 export type ThingLinkOutput = { changed: boolean }
 
-export type ThingLinkCreateInput = { expiresInHours?: number | null; id: string; kind: ThingKind }
+export type ThingLinkCreateInput = { expiresInHours?: number | null; id: string; kind: ThingKind; public?: boolean | null }
 
 export type ThingLinkCreateOutput = { expiresAt: string; id: string; token?: string | null }
 
 export type ThingShareAddInput = { account: string; expiresAt?: string | null; id: string; kind: ThingKind }
 
 export type ThingShareAddOutput = { accounts: SharedAccount[]; id: string; kind: ThingKind; links: SharedLink[] }
+
+export type ThingShareListInput = { id: string; kind: ThingKind }
+
+export type ThingShareListOutput = { accounts: SharedAccount[]; id: string; kind: ThingKind; links: SharedLink[] }
 
 export type ThingShareRemoveInput = { account?: string | null; id: string; kind: ThingKind; link?: string | null }
 
@@ -3069,6 +3073,7 @@ export type Operations = {
   thing_link: { input: ThingLinkInput; output: ThingLinkOutput }
   thing_link_create: { input: ThingLinkCreateInput; output: ThingLinkCreateOutput }
   thing_share_add: { input: ThingShareAddInput; output: ThingShareAddOutput }
+  thing_share_list: { input: ThingShareListInput; output: ThingShareListOutput }
   thing_share_remove: { input: ThingShareRemoveInput; output: ThingShareRemoveOutput }
   thing_unlink: { input: ThingUnlinkInput; output: ThingUnlinkOutput }
   thing_upsert: { input: ThingUpsertInput; output: ThingUpsertOutput }

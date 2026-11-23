@@ -51,3 +51,59 @@
   box-shadow: inset 3px 0 0 var(--accent);
   transition: background-color var(--duration-fade) var(--ease-out);
 }
+
+/* Share a page (C1.27): people, then links, each a short list. */
+.aw-share {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.aw-share + .aw-share {
+  margin-top: var(--space-4);
+}
+
+.aw-share__heading {
+  margin: 0;
+  font: var(--t-label);
+  color: var(--content-fg);
+}
+
+.aw-share__list {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-share__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 36px;
+  font: var(--t-body);
+  color: var(--content-fg);
+}
+
+.aw-share__muted {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-share__made {
+  display: grid;
+  gap: var(--space-2);
+  margin-block: var(--space-1);
+}
+
+.aw-share__url {
+  display: block;
+  padding: var(--space-2);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+  user-select: all;
+  font: var(--t-code);
+}
