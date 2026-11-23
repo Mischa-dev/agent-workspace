@@ -13,7 +13,7 @@ import { Badge, Banner, ButtonLink, EmptyState, ErrorState, Icon, ListSkeleton, 
 import { firstName, homeGreeting } from './greeting'
 import { Capacity, NeedsYou, QuietLine, SetupCard, WorkingNow, YourTasks } from './HomeSections'
 import { useQuietSections } from './homeQuiet'
-import { useProjects, useSwitchProject } from './hooks'
+import { useSwitchProject, useWorkspaceProjects } from './hooks'
 import './home.css'
 import { MoreLink } from './MoreLink'
 import { ProjectInitials } from './ProjectInitials'
@@ -41,7 +41,7 @@ export function HomePage() {
   // The workspace in the address; the person's default only outside one.
   const workspace = useWorkspace() ?? defaultWorkspace(session)
   const experience = useHomeExperience()
-  const projects = useProjects()
+  const { query: projects, projects: activeProjects } = useWorkspaceProjects()
   const switchProject = useSwitchProject()
   const quiet = useQuietSections()
   const navigate = useNavigate()
@@ -53,7 +53,6 @@ export function HomePage() {
     typeof location.state.notice === 'string'
       ? location.state.notice
       : null
-  const activeProjects = (projects.data?.projects ?? []).filter((project) => !project.archivedAt)
   const recentProjects = [...activeProjects].sort((left, right) => openedAt(right) - openedAt(left)).slice(0, RECENT_PROJECTS)
   const firstVisit = projects.isSuccess && activeProjects.every((project) => !project.navigation.lastOpenedAt)
   const canCreate = session.user.capabilities.createProject

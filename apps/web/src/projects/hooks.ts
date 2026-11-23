@@ -5,7 +5,10 @@ import {
   type QueryClient,
 } from '@tanstack/react-query'
 
+import { useMemo } from 'react'
+
 import { queryKeys } from '../api/queryKeys'
+import { useWorkspaceId } from '../app/workspace'
 import {
   archiveProject,
   createProject,
@@ -30,6 +33,24 @@ export function useProjects() {
     queryFn: () => listProjects(),
     staleTime: 30_000,
   })
+}
+
+/**
+ * The open projects of the workspace the person is in. The project list is
+ * the person's across every workspace; Home, pickers and "first project"
+ * choices keep to this one, as the rail does.
+ */
+export function useWorkspaceProjects() {
+  const query = useProjects()
+  const workspaceId = useWorkspaceId()
+  const projects = useMemo(
+    () =>
+      (query.data?.projects ?? []).filter(
+        (project) => !project.archivedAt && (!workspaceId || project.organizationId === workspaceId),
+      ),
+    [query.data, workspaceId],
+  )
+  return { query, projects }
 }
 
 export function useProjectSearch(query: string) {

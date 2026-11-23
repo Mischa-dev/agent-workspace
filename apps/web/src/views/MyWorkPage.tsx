@@ -5,7 +5,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { useAuthenticatedSession } from '../auth/session'
 import { useHomeExperience, useProjectExperience } from '../experience/layout'
 import { useShellPage } from '../shell/shellStore'
-import { useProjects } from '../projects/hooks'
+import { useWorkspaceProjects } from '../projects/hooks'
 import { ButtonLink, EmptyState, ErrorState, ListSkeleton, PageHeader, Section, StatusChip, actorKind, countLabel } from '../ui'
 import { useListKeys } from '../ui/listKeys'
 import { LIST_PIECE_TITLE, ListPiece, ListPieceTitle } from '../pieces/ListPiece'
@@ -32,8 +32,8 @@ type OpenTask = (task: TaskPlace, event: MouseEvent<HTMLAnchorElement>) => void
 export function MyWorkPage() {
   const session = useAuthenticatedSession()
   const work = useQuery({ queryKey: viewKeys.myWork, queryFn: getMyWork, refetchInterval: 60_000 })
-  const projects = useProjects()
-  const firstProject = (projects.data?.projects ?? []).find((project) => !project.archivedAt)
+  const { query: projects, projects: here } = useWorkspaceProjects()
+  const firstProject = here[0]
   const empty = work.data && !work.data.assigned.total && !work.data.claimed.total && !work.data.review.total
   const actorId = session.user.actorId
 

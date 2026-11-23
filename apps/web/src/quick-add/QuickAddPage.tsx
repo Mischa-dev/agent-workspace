@@ -6,7 +6,7 @@ import { useWorkspaceHref } from '../app/workspace'
 import { useHomeExperience } from '../experience/layout'
 import { captureEntries } from '../modules/registry'
 import { useAuthenticatedSession } from '../auth/session'
-import { useProjects } from '../projects/hooks'
+import { useWorkspaceProjects } from '../projects/hooks'
 import { useShellPage } from '../shell/shellStore'
 import { ButtonLink, EmptyState, ErrorState, Icon, PageHeader, SegmentedControl, SettingsSkeleton } from '../ui'
 import { formatBytes } from '../files/api'
@@ -41,8 +41,7 @@ export function QuickAddPage() {
     }
   }, [fileCount])
   const [mode, setMode] = useState<'task' | 'message' | 'note' | 'later'>('task')
-  const projects = useProjects()
-  const active = useMemo(() => (projects.data?.projects ?? []).filter((project) => !project.archivedAt), [projects.data])
+  const { query: projects, projects: active } = useWorkspaceProjects()
 
   let body
   if (projects.isPending || files === null) {

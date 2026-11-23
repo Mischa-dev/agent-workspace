@@ -7,7 +7,7 @@ import { useHomeExperience, useProjectExperience } from '../experience/layout'
 import { LaunchQueue } from '../launch/LaunchQueue'
 import { launchesHref } from '../launch/launchModel'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
-import { useProject, useProjects } from '../projects/hooks'
+import { useProject, useWorkspaceProjects } from '../projects/hooks'
 import { RememberPlace } from '../projects/RememberPlace'
 import type { Project } from '../projects/types'
 import { useShellPage } from '../shell/shellStore'
@@ -128,8 +128,7 @@ export function RunsPage({ project }: { project?: Project } = {}) {
   const hosts = choicesFrom(list, (run) => [run.hostId, run.hostName])
   if (agentId && !agents.some(([id]) => id === agentId)) agents.push([agentId, 'The chosen agent'])
   if (hostId && !hosts.some(([id]) => id === hostId)) hosts.push([hostId, 'The chosen host'])
-  const projects = useProjects()
-  const choices = (projects.data?.projects ?? []).filter((project) => !project.archivedAt)
+  const { projects: choices } = useWorkspaceProjects()
   // Where a new run starts: the chosen project, or the first one you're in.
   const launchProject = projectId ?? choices[0]?.id
 

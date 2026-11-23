@@ -133,6 +133,8 @@ export default async function globalSetup() {
     process.env.E2E_CHANNEL_ID = seededIds.channelId
     // For specs that set up what the API can't yet, such as a second workspace.
     process.env.E2E_DATABASE_URL = `${databaseBase}/${databaseName}`
+    // For specs that run the server's own commands (workspace-import) against this server.
+    process.env.E2E_SERVER_ENVIRONMENT = JSON.stringify({ ...serverEnvironment, cwd: runtimeRoot })
   } catch (error) {
     await teardown()
     throw error

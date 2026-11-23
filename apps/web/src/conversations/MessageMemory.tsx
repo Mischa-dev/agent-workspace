@@ -12,6 +12,7 @@ import { showToast, type MenuEntry } from '../ui'
 import { LazyDecisionDialog } from './LazyDecisionDialog'
 import { LazyMakePageDialog } from '../memory/LazyMakePageDialog'
 import { LazyRecordFromMessageDialog } from './LazyRecordFromMessageDialog'
+import { LazyStickyFromMessageDialog } from './LazyStickyFromMessageDialog'
 import type { ConversationMessage } from './types'
 
 /**
@@ -37,7 +38,10 @@ export function useMessageMemory({
   const [deciding, setDeciding] = useState<ConversationMessage | null>(null)
   const [making, setMaking] = useState<ConversationMessage | null>(null)
   const [recording, setRecording] = useState<ConversationMessage | null>(null)
-  const records = useProjectExperience(projectId).shows('area.collections')
+  const [sticking, setSticking] = useState<ConversationMessage | null>(null)
+  const experience = useProjectExperience(projectId)
+  const records = experience.shows('area.collections')
+  const boards = experience.shows('area.whiteboards')
   // A DM's decision goes in a project the person can write in; with none, there's nowhere to save it.
   const projects = useProjects()
   const decisionProjects = direct ? (projects.data?.projects ?? []).filter((project) => !project.archivedAt && can(project, 'pages.edit')) : []
@@ -77,6 +81,8 @@ export function useMessageMemory({
           ]),
       // C2.21: a record in one of this space's collections, linked back here.
       ...(direct || !records ? [] : [{ label: 'Make a record…', icon: 'table' as const, onSelect: () => setRecording(message) }]),
+      // C2.22: a sticky on one of this space's whiteboards, linked back here.
+      ...(direct || !boards ? [] : [{ label: 'Put on a whiteboard…', icon: 'whiteboard' as const, onSelect: () => setSticking(message) }]),
     ]
   }
 
@@ -102,6 +108,7 @@ export function useMessageMemory({
       {recording ? (
         <LazyRecordFromMessageDialog message={recording} onClose={() => setRecording(null)} projectId={projectId} />
       ) : null}
+      {sticking ? <LazyStickyFromMessageDialog message={sticking} onClose={() => setSticking(null)} projectId={projectId} /> : null}
     </>
   )
 
