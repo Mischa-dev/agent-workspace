@@ -146,6 +146,12 @@ async fn the_alert_launches_its_batch_on_the_account_in_each_projects_environmen
         .expect("alert");
     assert_eq!(alert["batch"]["accountId"], account.to_string(), "{alert}");
     assert_eq!(alert["batch"]["size"], 2, "{alert}");
+    // The launch goes to the alert's own workspace, whichever one is open.
+    assert_eq!(
+        alert["batch"]["workspaceId"],
+        setup.organization_id.to_string(),
+        "{alert}"
+    );
     assert!(
         alert["preview"]
             .as_str()

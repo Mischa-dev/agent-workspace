@@ -16,8 +16,9 @@ import type { InboxNotification } from './api'
  */
 export function BatchLaunch({ batch, reviewHref }: { batch: NonNullable<InboxNotification['batch']>; reviewHref: string | null }) {
   const queryClient = useQueryClient()
-  // A capacity alert is shown in its account's workspace.
-  const workspaceId = useWorkspaceId()
+  // The alert's own workspace (the inbox lists every workspace's), else the open one.
+  const openWorkspace = useWorkspaceId()
+  const workspaceId = batch.workspaceId ?? openWorkspace
   // One key per alert while it's shown, so a double tap launches once.
   const [attempt] = useState(() => newAttemptKey('alert-batch'))
   const launch = useMutation({
