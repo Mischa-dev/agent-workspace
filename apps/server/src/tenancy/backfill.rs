@@ -41,9 +41,15 @@ pub fn register_jobs(registry: &mut JobRegistry) {
         |context: JobContext| async move {
             let payload: BackfillPayload = context.job.payload_as()?;
             let Some(table) = backfilled_table(&payload.table) else {
-                return Err(JobError::permanent(
-                    "The table has no workspace column to fill.",
-                ));
+                // A table a later migration dropped or renamed: the rows it
+                // would have filled are gone, so the job is done. (An upgrade
+                // that runs every migration at once queues these and then
+                // drops the tables; a dead job would alert for nothing.)
+                tracing::info!(
+                    table = payload.table,
+                    "nothing to fill: the table has no workspace column any more"
+                );
+                return Ok(());
             };
             backfill_batch(&context.state.pool, table, payload.after_page)
                 .await
@@ -54,7 +60,10 @@ pub fn register_jobs(registry: &mut JobRegistry) {
 }
 
 /// The listed table a payload names: only a tenant table whose column is
-/// `workspace_id` (the ones H1.4 to H1.7 add) is backfilled.
+/// `workspace_id` (the ones H1.4 to H1.7 add) is backfilled. None means
+/// there is nothing to fill, either because the table went away or because
+/// a payload names something that was never backfilled here; either way no
+/// name from a payload reaches SQL.
 fn backfilled_table(name: &str) -> Option<&'static str> {
     TENANT_TABLES
         .iter()
@@ -116,5 +125,8 @@ mod tests {
         assert_eq!(backfilled_table("messages"), Some("messages"));
         assert_eq!(backfilled_table("projects"), None, "organization_id");
         assert_eq!(backfilled_table("messages; DROP TABLE x"), None);
+        // Dropped on the way through the migrations: nothing to fill, and
+        // the job finishes rather than dying and raising an alert.
+        assert_eq!(backfilled_table("outbox_events"), None);
     }
 }
