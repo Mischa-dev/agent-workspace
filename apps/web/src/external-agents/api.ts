@@ -47,8 +47,9 @@ export type SetupApp = string
 export type SetupRecipe = { id: string; title: string }
 
 /** The apps the server has setup steps for, in its order. */
-export async function listSetupRecipes(): Promise<SetupRecipe[]> {
-  const value = await callOp('agent_recipe_list', {})
+export async function listSetupRecipes(workspaceId?: string): Promise<SetupRecipe[]> {
+  // The list belongs to one workspace: without it, someone in two is asked which.
+  const value = await callOp('agent_recipe_list', {}, { workspaceId })
   return value.recipes
 }
 

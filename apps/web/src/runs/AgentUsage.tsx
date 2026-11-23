@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 
 import { callOp, type OpOutput } from '../api/ops'
+import { useWorkspaceId } from '../app/workspace'
 import { useHomeExperience } from '../experience/layout'
 import { ErrorState, ListSkeleton, Section } from '../ui'
 import { costText, formatTokens } from './runModel'
@@ -8,7 +9,7 @@ import './runs.css'
 
 type AgentUsage = OpOutput<'agent_usage_list'>
 
-const agentUsageKey = ['runs', 'agent-usage'] as const
+const agentUsageKey = (workspaceId?: string) => ['runs', 'agent-usage', workspaceId ?? null] as const
 
 /**
  * A1.15: tokens and cost per agent in this workspace over the last 30 days,
@@ -17,10 +18,12 @@ const agentUsageKey = ['runs', 'agent-usage'] as const
  */
 export function AgentUsageSection() {
   const shown = useHomeExperience().shows('tech.run_usage')
+  // The usage of the workspace you are in: without it, someone in two is asked which.
+  const workspaceId = useWorkspaceId() ?? undefined
   const usage = useQuery({
     enabled: shown,
-    queryKey: agentUsageKey,
-    queryFn: ({ signal }) => callOp('agent_usage_list', {}, { signal }) as Promise<AgentUsage>,
+    queryKey: agentUsageKey(workspaceId),
+    queryFn: ({ signal }) => callOp('agent_usage_list', {}, { signal, workspaceId }) as Promise<AgentUsage>,
     refetchInterval: 5 * 60_000,
   })
   if (!shown) return null

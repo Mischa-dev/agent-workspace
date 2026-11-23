@@ -85,9 +85,8 @@ export function OutsideDataPage() {
   return (
     <div className="aw-page aw-outside">
       <PageHeader actions={actions} icon="table" title="Outside data">
-        <p>
-          Saved queries over databases kept elsewhere. Their answers are stored, so <Link to={dashboardsHref(projectId)}>dashboards</Link> show them without reaching the database.
-        </p>
+        {/* The header writes its own paragraph around this. */}
+        Saved queries over databases kept elsewhere. Their answers are stored, so <Link to={dashboardsHref(projectId)}>dashboards</Link> show them without reaching the database.
       </PageHeader>
       {list.isPending ? <ListSkeleton label="Loading queries" rows={3} /> : null}
       {list.isError ? <ErrorState error={list.error} onRetry={() => void list.refetch()} title="Queries didn’t load" /> : null}
