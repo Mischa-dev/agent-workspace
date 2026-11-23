@@ -5,6 +5,7 @@
 import { Suspense, lazy, useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
+import { useHomeExperience } from '../experience/layout'
 import { thingLink } from '../modules/references/thingLinks'
 import { usePageTitle } from '../shell/documentTitleModel'
 import { useShellPage } from '../shell/shellStore'
@@ -28,7 +29,10 @@ const ALLOWS: Record<ShareLevel, string> = {
 export default function SharedPageDetail({ level, page }: { level: ShareLevel; page: Page }) {
   useShellPage({ mainClassName: 'aw-main--page' })
   usePageTitle(page.title)
-  const comments = level !== 'see'
+  // The reader isn't in the page's space, so the workspace's layout decides
+  // which parts show, as it does on Home.
+  const experience = useHomeExperience()
+  const comments = level !== 'see' && experience.shows('page.comments')
   const discussion = useQuery({
     queryKey: discussionKey(page.projectId, page.id),
     queryFn: () => getDiscussion(page.id),
@@ -53,7 +57,7 @@ export default function SharedPageDetail({ level, page }: { level: ShareLevel; p
     }
   }, [discussion.data, activeThread, startComment])
   const read = <Markdown className="aw-doc" empty="Nothing here yet." renderLink={thingLink} source={page.body} />
-  const live = level === 'edit' && !page.archived
+  const live = level === 'edit' && !page.archived && experience.shows('page.live_editing')
   return (
     <div className="aw-page aw-page--reading">
       <PageHeader icon="list" title={page.title}>
