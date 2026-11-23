@@ -288,7 +288,7 @@ export function SearchPage() {
             </EmptyState>
           ) : null}
           {/* An answer needs words to answer, not only filters. */}
-          {parseSearchQuery(query).text.trim() && results.data && results.data.hits.length > 0 ? <SearchAnswer projectId={projectId} query={query} /> : null}
+          {experience.shows('search.answers') && parseSearchQuery(query).text.trim() && results.data && results.data.hits.length > 0 ? <SearchAnswer projectId={projectId} query={query} /> : null}
           {results.data && results.data.hits.length > 0 ? (
             <RowList label="Results">
               {results.data.hits.map((hit, _index, hits) => {

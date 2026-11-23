@@ -227,7 +227,7 @@
       "/design-system/pieces",
       "*"
     ],
-    "parts": ["tech.ids", "thing.activity", "thing.proposals", "page.references", "workspace.spend_limits"],
+    "parts": ["tech.ids", "thing.activity", "thing.proposals", "page.references", "search.answers", "workspace.spend_limits"],
     "sidebar": ["rail.home", "rail.search", "rail.settings", "home.home"],
     "home": ["setup"],
     "settings": [

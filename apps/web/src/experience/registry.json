@@ -418,6 +418,13 @@
       "default": true
     },
     {
+      "id": "search.answers",
+      "group": "workspace",
+      "label": "Answers from search",
+      "description": "An answer to a search, written from the results you can see, citing each one.",
+      "default": true
+    },
+    {
       "id": "tech.task_keys",
       "group": "technical",
       "label": "Task keys",
@@ -607,6 +614,7 @@
         "sheet.charts",
         "sheet.validation",
         "page.references",
+        "search.answers",
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
@@ -658,6 +666,7 @@
         "sheet.charts",
         "sheet.validation",
         "page.references",
+        "search.answers",
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
@@ -761,6 +770,7 @@
         "sheet.charts",
         "sheet.validation",
         "page.references",
+        "search.answers",
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
@@ -817,6 +827,7 @@
         "sheet.charts",
         "sheet.validation",
         "page.references",
+        "search.answers",
         "home.working_now",
         "workspace.my_work",
         "workspace.threads",
@@ -868,6 +879,7 @@
         "sheet.charts",
         "sheet.validation",
         "page.references",
+        "search.answers",
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
@@ -925,6 +937,7 @@
         "sheet.charts",
         "sheet.validation",
         "page.references",
+        "search.answers",
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
@@ -974,6 +987,7 @@
         "sheet.charts",
         "sheet.validation",
         "page.references",
+        "search.answers",
         "workspace.my_work",
         "workspace.threads",
         "workspace.later",
@@ -1031,6 +1045,7 @@
         "sheet.charts",
         "sheet.validation",
         "page.references",
+        "search.answers",
         "tech.task_keys",
         "workspace.my_work",
         "workspace.threads",
@@ -1095,6 +1110,7 @@
         "sheet.charts",
         "sheet.validation",
         "page.references",
+        "search.answers",
         "tech.task_keys",
         "workspace.my_work"
       ]
@@ -1136,6 +1152,7 @@
         "sheet.charts",
         "sheet.validation",
         "page.references",
+        "search.answers",
         "workspace.my_work"
       ]
     },

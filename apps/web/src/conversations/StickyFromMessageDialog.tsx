@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
-import { callOp, newRequestId } from '../api/ops'
+import { callOp, newRequestId, ranOrThrow } from '../api/ops'
 import { listWhiteboards, whiteboardPath } from '../whiteboards/api'
 import { whiteboardKeys } from '../whiteboards/keys'
 import { Banner, Button, Checkbox, Dialog, SelectField, describeError, showToast } from '../ui'
@@ -53,11 +53,11 @@ export function StickyFromMessageDialog({
     const text = message.plainText.trim().slice(0, 500)
     const boardId =
       target === NEW_BOARD
-        ? callOp('whiteboard_create', { title: firstLine(message.plainText), projectId }, { requestId }).then((made) => made.whiteboard.id)
+        ? callOp('whiteboard_create', { title: firstLine(message.plainText), projectId }, { requestId }).then((made) => ranOrThrow(made, 'Making the whiteboard').whiteboard.id)
         : Promise.resolve(target)
     void boardId
       .then(async (id) => {
-        await callOp('whiteboard_update_elements', {
+        const added = await callOp('whiteboard_update_elements', {
           whiteboardId: id,
           fromMessageId: message.id,
           saySo,
@@ -76,6 +76,7 @@ export function StickyFromMessageDialog({
             },
           ],
         })
+        ranOrThrow(added, 'Adding the sticky')
         return id
       })
       .then((id) => {

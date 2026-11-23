@@ -59,6 +59,7 @@ export const PART_IDS = [
   'sheet.charts',
   'sheet.validation',
   'page.references',
+  'search.answers',
   'tech.task_keys',
   'tech.run_usage',
   'tech.run_files',
