@@ -565,7 +565,7 @@ async fn tool(
         token,
         Some(session),
         json!({
-            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "jsonrpc": "2.0", "id": crate::support::app::next_request_id(), "method": "tools/call",
             "params": { "name": name, "arguments": arguments }
         }),
     )
