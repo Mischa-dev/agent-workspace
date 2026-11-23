@@ -1,6 +1,7 @@
 import { Children, Fragment, lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore, type DragEvent, type ReactNode } from 'react'
 import { Maximize2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 
 import {
   Button,
@@ -17,8 +18,10 @@ import {
   showToast,
   type MenuEntry,
 } from '../ui'
+import { queryKeys } from '../api/queryKeys'
 import { useAuthenticatedSession } from '../auth/session'
 import { useProjectExperience } from '../experience/layout'
+import { ProposedChanges } from '../pieces/ProposedChanges'
 import { ThingDetail } from '../pieces/ThingDetail'
 import { useTaskFiles, useWorkItem, useWorkItemWorkflow } from './hooks'
 import { workItemHref, workItemsHref } from './links'
@@ -211,6 +214,7 @@ function TaskDetailBody({
   const [parentAnchor, setParentAnchor] = useState<HTMLElement | null>(null)
   const [moving, setMoving] = useState(false)
   const actorId = useAuthenticatedSession().user.actorId
+  const queryClient = useQueryClient()
   const moveKey = `${actorId}:${item.projectId}:${item.id}`
   const moveSent = useSyncExternalStore(
     (listener) => {
@@ -371,6 +375,14 @@ function TaskDetailBody({
           Someone who edits this task accepts or rejects each one.
         </TaskNotice>
       ) : null}
+      <ProposedChanges
+        canDecide={changeable && item.capabilities.edit}
+        enabled={changeable && (item.capabilities.edit || suggesting)}
+        kind="task"
+        onDecided={() => void queryClient.invalidateQueries({ queryKey: queryKeys.workItem(item.projectId, item.id) })}
+        thingId={item.id}
+        viewerId={actorId}
+      />
       {saveStopped ? (
         <Suspense fallback={null}>
           <TaskSaveNotices item={item} save={save} />

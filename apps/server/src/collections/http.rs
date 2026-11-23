@@ -138,6 +138,9 @@ struct Reader {
     /// Reads tasks: a collection whose records are tasks opens only with
     /// this.
     can_view_tasks: bool,
+    /// Without edit, the reader's role suggests on records: their changes
+    /// become proposals (T1.41).
+    can_suggest: bool,
     project_archived: bool,
 }
 
@@ -157,8 +160,21 @@ async fn reader(
     if project_key(connection, project_id).await?.is_none() {
         return Err(AppError::NotFound("project"));
     }
+    let can_edit = allows(&actor, &membership, Action::CollectionRecordEdit)?;
+    let can_suggest = !can_edit
+        && crate::access::write_mode(
+            connection,
+            &principal.caller()?,
+            "record",
+            project_id,
+            false,
+            Some("collections"),
+        )
+        .await?
+        .is_ok_and(|grant| grant.mode == crate::access::WriteMode::Propose);
     Ok(Reader {
-        can_edit: allows(&actor, &membership, Action::CollectionRecordEdit)?,
+        can_edit,
+        can_suggest,
         can_build: allows(&actor, &membership, Action::CollectionBuild)?,
         can_manage_task_fields: allows(&actor, &membership, Action::WorkflowManage)?,
         can_view_tasks: allows(&actor, &membership, Action::WorkItemView)?,
@@ -365,6 +381,8 @@ struct CollectionBody {
     views: Vec<ViewSummary>,
     archived_records: i64,
     can_edit_records: bool,
+    /// Changes to records become proposals for someone who edits them.
+    can_suggest_records: bool,
     can_build: bool,
     /// Adds, changes and archives its fields: building, and for Tasks the
     /// task field settings' rule too (T1.11).
@@ -376,6 +394,7 @@ async fn collection_body(
     project_id: Uuid,
     collection: &Collection,
     can_edit: bool,
+    can_suggest: bool,
     can_build: bool,
     can_manage_task_fields: bool,
     reader: Uuid,
@@ -404,6 +423,9 @@ async fn collection_body(
         archived_records,
         // Records of a collection that acts like a task change as tasks.
         can_edit_records: can_edit && !collection.archived,
+        // A collection whose records are tasks takes suggestions through
+        // task_update, on the task.
+        can_suggest_records: can_suggest && !collection.archived && !collection.acts_like_task,
         can_build,
         can_change_fields: can_build && (!collection.is_tasks() || can_manage_task_fields),
     })
@@ -427,6 +449,7 @@ async fn get_collection(
             project_id,
             &collection,
             reader.can_edit && writable,
+            reader.can_suggest && writable,
             reader.can_build && writable,
             reader.can_manage_task_fields,
             principal.actor_id,

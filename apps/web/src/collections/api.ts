@@ -87,6 +87,8 @@ export type CollectionBody = {
   views: CollectionView[]
   archivedRecords: number
   canEditRecords: boolean
+  /** Without edit, changes to records become proposals (T1.41). */
+  canSuggestRecords: boolean
   canBuild: boolean
   /** Adds, changes and archives its fields; for Tasks, the task field settings' permission too. */
   canChangeFields: boolean
@@ -267,6 +269,7 @@ function normalizeBody(value: unknown): CollectionBody {
     views: asArray(raw.views).map(normalizeView),
     archivedRecords: asNumber(raw.archivedRecords),
     canEditRecords: raw.canEditRecords === true,
+    canSuggestRecords: raw.canSuggestRecords === true,
     canBuild: raw.canBuild === true,
     canChangeFields: raw.canChangeFields === true,
   }

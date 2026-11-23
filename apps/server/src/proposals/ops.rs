@@ -31,7 +31,7 @@ pub struct ProposalList;
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProposalListInput {
-    /// page, sheet or whiteboard, with thingId.
+    /// page, sheet, whiteboard, record or task, with thingId.
     /// Leave both out to list the proposals you made.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thing_kind: Option<String>,
@@ -82,7 +82,7 @@ impl Operation for ProposalList {
     const IDEMPOTENCY: Idempotency = Idempotency::None;
     const TITLE: &'static str = "List proposals";
     const DESCRIPTION: &'static str = "List proposed changes waiting for someone who edits the \
-        thing: pass thingKind (page, sheet or whiteboard) and thingId for one thing's, or nothing for the ones you \
+        thing: pass thingKind (page, sheet, whiteboard, record or task) and thingId for one thing's, or nothing for the ones you \
         made. Each says what it changes and what it read. Decide one with proposal_decide.";
 
     type Input = ProposalListInput;
@@ -98,7 +98,7 @@ impl Operation for ProposalList {
                 known_kind(kind).ok_or_else(|| {
                     OpError::invalid(
                         "thingKind",
-                        "Pages, sheets and whiteboards take proposals (page, sheet, whiteboard).",
+                        "Pages, sheets, whiteboards, records and tasks take proposals (page, sheet, whiteboard, record, task).",
                     )
                 })?,
                 id.id(),

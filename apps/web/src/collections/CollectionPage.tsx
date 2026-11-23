@@ -365,7 +365,7 @@ function CollectionWorkspace({ collectionId, project }: { collectionId: string; 
     ] satisfies PageCommand[]
   ).map((command) => ({ ...command, id: `collection-view:${command.id}` }))
   const panel = recordId && !opensElsewhere ? (
-    <RecordPanel body={body} canEdit={body.canEditRecords && !readOnly} edits={edits} onClose={closeRecord} projectId={projectId} recordId={recordId} />
+    <RecordPanel body={body} canEdit={body.canEditRecords && !readOnly} canSuggest={body.canSuggestRecords && !readOnly} edits={edits} onClose={closeRecord} projectId={projectId} recordId={recordId} />
   ) : undefined
 
   return (

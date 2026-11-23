@@ -144,6 +144,21 @@ async fn a_suggested_record_change_is_accepted_from_its_card_and_can_be_put_back
     .fetch_one(pool)
     .await
     .expect("the proposal's request card");
+    // The card opens the record, where the change shows beside it.
+    let hrefs = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT detail->>'href' FROM notifications WHERE subject_kind = 'request' AND subject_id = $1",
+    )
+    .bind(request)
+    .fetch_all(pool)
+    .await
+    .expect("the card's notifications");
+    assert!(
+        !hrefs.is_empty()
+            && hrefs.iter().all(|href| href
+                .as_deref()
+                .is_some_and(|href| href.contains(&format!("record={record}")))),
+        "{hrefs:?}"
+    );
 
     // The owner accepts it from the card: written as Sol's change, and the
     // history says who accepted it.

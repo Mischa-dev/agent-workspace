@@ -1,5 +1,7 @@
 import { Suspense, lazy, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 
+import { callOp } from '../api/ops'
 import { useAuthenticatedSession } from '../auth/session'
 import { ThingCommentsPanel } from '../discussion/ThingCommentsPanel'
 import { useProjectExperience } from '../experience/layout'
@@ -7,7 +9,9 @@ import { useProjectExperience } from '../experience/layout'
 import { FieldEditor } from '../fields/FieldEditor'
 import { FieldValueView } from '../fields/FieldValueView'
 import { displayText, isEmpty, isReadOnlyType, type FieldDefinition, type FieldReference, type FieldType, type FieldValue } from '../fields/fieldModel'
-import { Banner, DocumentSkeleton, ErrorState, Icon, IconButton, Menu, TextArea, formatFullDate, formatRelative, showToast, type MenuEntry } from '../ui'
+import { Banner, DocumentSkeleton, ErrorState, Icon, IconButton, Menu, TextArea, describeError, formatFullDate, formatRelative, showToast, type MenuEntry } from '../ui'
+import { ProposedChanges } from '../pieces/ProposedChanges'
+import { proposalsKey } from '../pieces/proposedChanges'
 import { ThingDetail } from '../pieces/ThingDetail'
 import { useRecord, type CollectionBody, type HistoryEntry } from './api'
 import { historyValue, recordName, referenceKind } from './collectionModel'
@@ -27,6 +31,7 @@ const ACTIONS: Record<string, string> = { created: 'added this', updated: 'chang
 export function RecordPanel({
   body,
   canEdit,
+  canSuggest = false,
   edits,
   onClose,
   projectId,
@@ -35,6 +40,8 @@ export function RecordPanel({
   body: CollectionBody
   /** The person may change records here: neither the project nor the collection is archived. */
   canEdit: boolean
+  /** Without edit, the person's role suggests: their changes wait as proposals (T1.41). */
+  canSuggest?: boolean
   edits: RecordEdits
   onClose: () => void
   projectId: string
@@ -45,6 +52,7 @@ export function RecordPanel({
   const linkedFrom = experience.shows('page.references')
   const showComments = experience.shows('thing.comments')
   const viewerId = useAuthenticatedSession().user.actorId
+  const client = useQueryClient()
   const [editing, setEditing] = useState<{ field: FieldDefinition; anchor: HTMLElement } | null>(null)
   const picked = useRef<string | null>(null)
   if (record.isPending) {
@@ -63,6 +71,9 @@ export function RecordPanel({
   }
   const { record: current, references, history } = record.data
   const editable = canEdit && !current.archived
+  // A role that only suggests changes the title and fields as proposals.
+  const suggesting = !editable && canSuggest && !current.archived
+  const changeable = editable || suggesting
   const fields = body.fields.filter((field) => !field.archived).sort((left, right) => left.position - right.position)
   const menu: MenuEntry[] = [
     {
@@ -95,9 +106,24 @@ export function RecordPanel({
       : []),
   ]
 
+  const suggest = async (change: { title?: string; fields?: Record<string, FieldValue | null> }) => {
+    try {
+      const written = await callOp('record_update', { record: current.id, expectedVersion: current.version, ...change })
+      void client.invalidateQueries({ queryKey: proposalsKey('record', current.id) })
+      if (written.proposalId) showToast({ tone: 'success', title: 'Suggested', description: 'Someone who edits this record accepts or rejects it.' })
+      else void record.refetch()
+    } catch (error) {
+      showToast({ tone: 'danger', title: 'The suggestion wasn’t sent', description: describeError(error).message })
+    }
+  }
+
   const set = (field: FieldDefinition, value: FieldValue | null) => {
     const label = picked.current
     picked.current = null
+    if (suggesting) {
+      void suggest({ fields: { [field.id]: value } })
+      return
+    }
     const reference: FieldReference | undefined = label && typeof value === 'string' ? { id: value, kind: referenceKind(field), label, key: null } : undefined
     void edits.save(current, { values: { [field.id]: value } }, reference)
   }
@@ -114,7 +140,25 @@ export function RecordPanel({
           This record is archived, so it’s hidden from the table.
         </Banner>
       ) : null}
-      <TitleEditor editable={editable} label={body.collection.titleName} onSave={(title) => void edits.save(current, { title })} title={current.title} />
+      {suggesting ? (
+        <Banner icon="pencil" tone="info">
+          Your changes here are suggestions. Someone who edits this record accepts or rejects each one.
+        </Banner>
+      ) : null}
+      <TitleEditor
+        editable={changeable}
+        label={body.collection.titleName}
+        onSave={(title) => void (suggesting ? suggest({ title }) : edits.save(current, { title }))}
+        title={current.title}
+      />
+      <ProposedChanges
+        canDecide={editable}
+        enabled={editable || suggesting}
+        kind="record"
+        onDecided={() => void record.refetch()}
+        thingId={current.id}
+        viewerId={viewerId}
+      />
       <dl className="aw-recordpanel__fields">
         {fields.map((field) => {
           const value = current.values[field.id]
@@ -126,7 +170,7 @@ export function RecordPanel({
             ) : (
               <RecordButton collectionId={body.collection.id} field={field} projectId={projectId} record={current} />
             )
-          } else if (!editable || isReadOnlyType(field.type)) {
+          } else if (!changeable || isReadOnlyType(field.type)) {
             control = <FieldValueView empty="Empty" field={field} references={references} value={value} />
           } else if (field.type === 'checkbox') {
             control = (
