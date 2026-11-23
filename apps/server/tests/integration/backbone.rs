@@ -1762,10 +1762,12 @@ async fn a_preparation_out_of_tries_fails_a_pending_repository_only() {
             r#"
             INSERT INTO repositories (
                 id, project_id, github_repository_id, owner, name, clone_url,
-                default_branch, mirror_path, enabled, trusted, preparation_state
+                default_branch, mirror_path, enabled, trusted, preparation_state,
+                prepared_at
             )
             VALUES ($1, $2, $3, 'Fixture', $4, 'https://example.test/fixture.git',
-                    'main', $5, true, false, $6)
+                    'main', $5, true, false, $6,
+                    CASE WHEN $6 = 'ready' THEN now() END)
             "#,
         )
         .bind(id)
