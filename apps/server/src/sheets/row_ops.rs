@@ -158,6 +158,8 @@ impl Operation for SheetRowAdd {
             crate::outbox::enqueue_sheet_updated(tx, space, sheet.id, applied.revision).await?;
         }
         if let Some((message_id, conversation_id, _)) = source {
+            // The link back, whether or not the conversation is told.
+            crate::links::put_checked(tx, sheet.id, message_id, "made_from", Some(actor)).await?;
             crate::conversations::system_entries::made_from_message(
                 tx,
                 conversation_id,

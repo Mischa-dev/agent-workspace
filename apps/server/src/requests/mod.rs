@@ -1403,6 +1403,14 @@ pub async fn announce_raised(
     .bind(run_requester(transaction, &row).await?)
     .fetch_all(&mut **transaction)
     .await?;
+    // A proposal's card opens the thing it would change, where its changes
+    // show beside it.
+    let proposal_target = match (row.subject_kind.as_deref(), row.subject_id) {
+        (Some(crate::proposals::REQUEST_SUBJECT), Some(proposal)) => {
+            crate::proposals::thing_target(transaction, proposal).await?
+        }
+        _ => None,
+    };
     let mut told = 0;
     for (account_id, kind) in candidates {
         let named = row.addressed_account_ids.contains(&account_id);
@@ -1420,7 +1428,9 @@ pub async fn announce_raised(
             (None, Some(task_id)) => {
                 crate::addresses::Target::task(space_id, task_id).legacy_path()
             }
-            _ => crate::addresses::Target::Inbox.legacy_path(),
+            _ => proposal_target
+                .unwrap_or(crate::addresses::Target::Inbox)
+                .legacy_path(),
         };
         let notification = crate::notifications::NewNotification {
             project_id: space_id,

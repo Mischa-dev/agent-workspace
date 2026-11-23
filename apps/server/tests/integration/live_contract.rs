@@ -801,6 +801,118 @@ async fn document_rooms(name: &str, target: Target) {
     world.cluster.finish().await;
 }
 
+/// C1.27: a page shared with someone on its own is a room they may watch,
+/// until the share is taken back: then the ticket goes stale, the page's
+/// changes stop, and a new ticket has no room.
+async fn shared_page_rooms(name: &str, target: Target) {
+    use agent_workspace_server::realtime::{
+        documents::{DocumentKind, DocumentRef},
+        ephemeral::{EphemeralFrame, publish},
+    };
+    let Some(world) = world(name, target).await else {
+        return;
+    };
+    let api = world.api();
+    let owner = api.login("owner").await;
+    let workspace = world.cluster.organization_id;
+    let (project, _) = channel(&world, &owner, workspace, "shared").await;
+    let (elsewhere, _) = channel(&world, &owner, workspace, "elsewhere").await;
+    let page = call(
+        api,
+        &owner,
+        "POST",
+        "/api/v2/ops/page_create",
+        Some("shared-page"),
+        json!({"projectId": project, "title": "Plan", "body": "Hello"}),
+    )
+    .await;
+    let page: Uuid = page["value"]["id"]
+        .as_str()
+        .expect("page")
+        .parse()
+        .expect("id");
+    // Noor is in the workspace, but not in the page's space.
+    let (noor, noor_browser) = person(&world, workspace, elsewhere, "noor").await;
+    let watch = async || {
+        call(
+            api,
+            &noor_browser,
+            "GET",
+            &format!("/api/v2/live/ticket?documents=page.{page}"),
+            None,
+            Value::Null,
+        )
+        .await
+    };
+    assert_eq!(watch().await["documents"], json!([]), "not shared yet");
+    let shared = call(
+        api,
+        &owner,
+        "POST",
+        "/api/v2/ops/thing_share_add",
+        Some("share-noor"),
+        json!({"kind": "page", "id": page, "account": noor}),
+    )
+    .await;
+    assert_eq!(shared["outcome"], "ok", "{shared}");
+    // The share's own signal is in the log before the ticket is cut, so the
+    // stale ticket below can only be the share taken back.
+    world.cluster.sequenced().await;
+    let issued = watch().await;
+    assert_eq!(issued["documents"], json!([format!("page.{page}")]));
+    let mut socket = open(&world, issued["ticket"].as_str().expect("ticket")).await;
+    until(&mut socket, WAIT, |frame| frame["type"] == "ready")
+        .await
+        .expect("ready");
+    let change = |version: i64| EphemeralFrame::DocumentUpdate {
+        document: DocumentRef {
+            kind: DocumentKind::Page,
+            id: page,
+        },
+        generation: Uuid::now_v7(),
+        version,
+        update: "AQLy".to_owned(),
+    };
+    let is_update = |frame: &Value| frame["kind"] == "document.update";
+    publish(api.state(), change(1)).await;
+    until(&mut socket, WAIT, is_update)
+        .await
+        .expect("a shared page is heard");
+
+    let unshared = call(
+        api,
+        &owner,
+        "POST",
+        "/api/v2/ops/thing_share_remove",
+        Some("unshare-noor"),
+        json!({"kind": "page", "id": page, "account": noor}),
+    )
+    .await;
+    assert_eq!(unshared["outcome"], "ok", "{unshared}");
+    until(&mut socket, WAIT, |frame| frame["type"] == "ticket.stale")
+        .await
+        .expect("Noor's ticket went stale");
+    publish(api.state(), change(2)).await;
+    assert!(
+        until(&mut socket, Duration::from_secs(1), is_update)
+            .await
+            .is_none(),
+        "a page no longer shared is not heard"
+    );
+    assert_eq!(watch().await["documents"], json!([]), "the room is dropped");
+    world.cluster.finish().await;
+}
+
+#[tokio::test]
+async fn the_in_process_live_role_drops_a_page_no_longer_shared() {
+    shared_page_rooms("c1_27_in_process", Target::InProcess).await;
+}
+
+#[tokio::test]
+async fn a_separate_live_instance_drops_a_page_no_longer_shared() {
+    shared_page_rooms("c1_27_separate", Target::Separate).await;
+}
+
 #[tokio::test]
 async fn the_in_process_live_role_keeps_document_rooms() {
     document_rooms("k5_21_in_process", Target::InProcess).await;

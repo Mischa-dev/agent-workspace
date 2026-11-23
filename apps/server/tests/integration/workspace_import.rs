@@ -514,3 +514,18 @@ async fn an_import_resumes_copies_and_refuses_what_it_must() {
 
     fixture.finish().await;
 }
+
+/// An archive goes in in some order whatever kinds it holds. It carries
+/// only the kinds the workspace has rows of, and tables can need each other
+/// only when one that would have broken the loop is missing.
+#[tokio::test]
+async fn an_archive_has_an_order_whatever_kinds_it_holds() {
+    // Only the tables' shapes are read: a migrated database is enough.
+    let Some(database) = crate::support::db::db("h1_import_order").await else {
+        return;
+    };
+    let planned = import::plan_any_kinds(&database.pool)
+        .await
+        .expect("an order for every set of kinds");
+    assert!(planned > 1000);
+}

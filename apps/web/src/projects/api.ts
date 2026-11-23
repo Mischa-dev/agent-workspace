@@ -103,11 +103,12 @@ export function normalizeProject(value: unknown): Project {
   }
 }
 
-export async function listProjects(query?: string, options: { archived?: boolean } = {}): Promise<ProjectListResponse> {
+export async function listProjects(query?: string, options: { archived?: boolean; workspaceId?: string } = {}): Promise<ProjectListResponse> {
   const parameters = new URLSearchParams()
   if (query?.trim()) parameters.set('q', query.trim())
   parameters.set('limit', '100')
   if (options.archived) parameters.set('archived', 'true')
+  if (options.workspaceId) parameters.set('workspaceId', options.workspaceId)
   const suffix = parameters.toString()
   const payload = await requestJson<{ projects?: unknown[] } | unknown[]>(
     `/api/v1/projects?${suffix}`,

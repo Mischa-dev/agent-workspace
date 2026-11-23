@@ -27,7 +27,7 @@ const MAX_ASSETS = 120
 // the first segments of the routes in app/routes.tsx (serviceWorker.test.ts
 // checks).
 const APP_ROUTE =
-  /^\/(?:|w|dm|home|welcome|inbox|later|threads|my-work|initiatives|runs|whiteboards|pages|messages|projects|settings|search|share|new-task|forms|sign-in|setup|forgot-password|reset-password|verify-email|join|design-system)(?:\/|$)|^\/[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\/?$/
+  /^\/(?:|w|dm|home|welcome|inbox|later|threads|my-work|initiatives|runs|whiteboards|pages|messages|projects|settings|search|share|new-task|forms|p|sign-in|setup|forgot-password|reset-password|verify-email|join|design-system)(?:\/|$)|^\/[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\/?$/
 
 self.addEventListener('install', (event) => {
   event.waitUntil(cacheShell().catch(() => undefined).then(() => self.skipWaiting()))

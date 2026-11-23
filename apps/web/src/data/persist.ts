@@ -227,7 +227,10 @@ export async function saveOffline(queryClient: QueryClient, owner: string): Prom
 
 /**
  * Show the kept copy before the network answers, if this device keeps one.
- * Fresher answers already in the cache win. Says whether there was one.
+ * Fresher answers already in the cache win. What's shown from the copy is
+ * always asked for again, however recently it was kept: a page opened again
+ * within moments would otherwise trust it (a session without the workspace
+ * the person just joined). Says whether there was one.
  */
 export async function restoreOffline(queryClient: QueryClient): Promise<boolean> {
   const owner = offlineOwner()
@@ -240,6 +243,7 @@ export async function restoreOffline(queryClient: QueryClient): Promise<boolean>
     // A fresher answer already here wins.
     if ((queryClient.getQueryState(kept.queryKey)?.dataUpdatedAt ?? 0) >= kept.updatedAt) continue
     queryClient.setQueryData(kept.queryKey, kept.data, { updatedAt: kept.updatedAt })
+    void queryClient.invalidateQueries({ queryKey: kept.queryKey, exact: true })
   }
   for (const thing of copy.things) thingStore.put(thing)
   return true

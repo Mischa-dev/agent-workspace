@@ -5137,6 +5137,20 @@
     "kind": "query",
     "long": false,
     "module": "workspace",
+    "name": "search_answer",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Answer from search"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
     "name": "setting_list",
     "permission": null,
     "preview": false,
@@ -6213,6 +6227,20 @@
     "preview": false,
     "proposable": false,
     "title": "Share one thing"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "pages",
+    "name": "thing_share_list",
+    "permission": "pages.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "List one thing's shares"
   },
   {
     "automation": true,

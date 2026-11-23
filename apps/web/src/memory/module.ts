@@ -3,6 +3,7 @@ import type { WebModule } from '../modules/define'
 export default {
   id: 'pages',
   shell: 'project',
+  publicRoutes: [{ path: '/p/:token', space: 'none', layout: 'public', page: () => import('./PublicPage') }],
   routes: [
     { path: '/pages', space: 'workspace', page: () => import('./MemoryPages').then((module) => ({ default: module.PagesPage })) },
     { path: '/projects/:projectId/pages', space: 'project', page: () => import('./MemoryPages').then((module) => ({ default: module.PagesPage })) },

@@ -1,6 +1,8 @@
 import { lazy, Suspense, useEffect } from 'react'
+import { useIsFetching } from '@tanstack/react-query'
 import { Navigate, Outlet, useLocation, useParams } from 'react-router-dom'
 
+import { queryKeys } from '../api/queryKeys'
 import { useAuthenticatedSession, type OrganizationSummary } from '../auth/session'
 import { AvatarSourcesProvider } from '../profiles/AvatarSourcesProvider'
 import { useOnlineMark } from '../realtime/realtimeContext'
@@ -73,6 +75,7 @@ export function WorkspaceBoundary() {
   const { ws = '' } = useParams()
   const session = useAuthenticatedSession()
   const location = useLocation()
+  const checking = useIsFetching({ queryKey: queryKeys.session, exact: true }) > 0
   if (ws === CURRENT_WORKSPACE) {
     const workspace = resolveWorkspace(session)
     if (!workspace) return <NotInWorkspacePage workspaces={[]} />
@@ -85,6 +88,8 @@ export function WorkspaceBoundary() {
     if (byId) {
       return <Navigate replace state={location.state} to={`${workspaceHref(byId.slug, withinWorkspace(location.pathname) || '/home')}${location.search}${location.hash}`} />
     }
+    // The session shown may be a kept copy still being checked: wait for the answer before saying so.
+    if (checking) return null
     return <NotInWorkspacePage workspaces={session.organizations} />
   }
   return <SpaceInWorkspace ws={ws} />

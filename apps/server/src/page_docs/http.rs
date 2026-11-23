@@ -22,6 +22,7 @@ use uuid::Uuid;
 use super::{store, ydoc};
 use crate::{
     AppState,
+    access::sharing::{self, ShareLevel},
     auth::{AuthenticatedActor, require_authenticated_write, require_csrf},
     error::{ApiJson, ApiPath, AppError},
     memory,
@@ -93,18 +94,24 @@ fn decode(value: &str, max_bytes: usize, field: &'static str) -> Result<Vec<u8>,
         .map_err(|_| AppError::Validation(field))
 }
 
-/// The page's project, when the caller may take `action` there; a page they
-/// can't see is not found.
+/// The page's project, when the caller may take `action` there, or the page
+/// was shared with them on its own for `shared` (K1.32); a page they can't
+/// see is not found.
 async fn page_access(
     state: &AppState,
     principal: &AuthenticatedActor,
     page_id: Uuid,
     action: Action,
+    shared: ShareLevel,
 ) -> Result<Uuid, AppError> {
     let project_id = memory::page_project(&state.pool, page_id, principal.actor_id).await?;
-    memory::project_access(&state.pool, principal.actor_id, project_id, action)
+    if memory::project_access(&state.pool, principal.actor_id, project_id, action)
         .await
-        .map_err(|_| AppError::NotFound("page"))?;
+        .is_err()
+        && !sharing::page_allows(&state.pool, principal.actor_id, page_id, shared).await?
+    {
+        return Err(AppError::NotFound("page"));
+    }
     Ok(project_id)
 }
 
@@ -113,7 +120,14 @@ pub async fn get_document(
     principal: AuthenticatedActor,
     ApiPath(page_id): ApiPath<Uuid>,
 ) -> Result<Json<DocumentView>, AppError> {
-    let project_id = page_access(&state, &principal, page_id, Action::ProjectView).await?;
+    let project_id = page_access(
+        &state,
+        &principal,
+        page_id,
+        Action::ProjectView,
+        ShareLevel::See,
+    )
+    .await?;
     let can_edit = memory::project_access(
         &state.pool,
         principal.actor_id,
@@ -121,7 +135,8 @@ pub async fn get_document(
         Action::PageEdit,
     )
     .await
-    .is_ok();
+    .is_ok()
+        || sharing::page_allows(&state.pool, principal.actor_id, page_id, ShareLevel::Edit).await?;
     let archived = sqlx::query_scalar::<_, bool>(
         "SELECT archived_at IS NOT NULL FROM project_pages WHERE id = $1",
     )
@@ -149,7 +164,14 @@ pub async fn sync_document(
     // only because a state vector can outgrow a URL.
     require_csrf(&state.config, &headers, &principal)?;
     let since = decode(&request.state_vector, MAX_STATE_VECTOR_BYTES, "stateVector")?;
-    page_access(&state, &principal, page_id, Action::ProjectView).await?;
+    page_access(
+        &state,
+        &principal,
+        page_id,
+        Action::ProjectView,
+        ShareLevel::See,
+    )
+    .await?;
     let snapshot = store::open(&state.pool, page_id).await?;
     if snapshot.generation != request.generation {
         return Ok(Json(replaced(&snapshot.generation, snapshot.version)));
@@ -187,14 +209,19 @@ pub async fn update_document(
     let since = decode(&request.state_vector, MAX_STATE_VECTOR_BYTES, "stateVector")?;
     let project_id = memory::page_project(&state.pool, page_id, principal.actor_id).await?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
-    memory::project_access(
+    if memory::project_access(
         &mut *transaction,
         writer.actor_id,
         project_id,
         Action::PageEdit,
     )
     .await
-    .map_err(|_| AppError::NotFound("page"))?;
+    .is_err()
+        && sharing::level_for(&mut transaction, writer.actor_id, "page", page_id).await?
+            != Some(ShareLevel::Edit)
+    {
+        return Err(AppError::NotFound("page"));
+    }
     let page = store::lock_page(&mut transaction, page_id)
         .await?
         .ok_or(AppError::NotFound("page"))?;

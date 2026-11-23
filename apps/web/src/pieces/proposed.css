@@ -1,0 +1,72 @@
+/* Suggested changes on a record or a task (T1.41). */
+.aw-proposed {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--content-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.aw-proposed__heading {
+  margin: 0;
+  font: var(--t-label);
+  color: var(--content-fg);
+}
+
+.aw-proposed__item {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.aw-proposed__item + .aw-proposed__item {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--content-border);
+}
+
+.aw-proposed__by,
+.aw-proposed__note {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-proposed__by strong {
+  color: var(--content-fg);
+  font-weight: var(--weight-semibold);
+}
+
+.aw-proposed__note {
+  color: var(--content-fg);
+}
+
+.aw-proposed__fields {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font: var(--t-small);
+  overflow-wrap: anywhere;
+}
+
+.aw-proposed__name {
+  color: var(--content-fg-muted);
+}
+
+.aw-proposed__fields del {
+  color: var(--content-fg-muted);
+}
+
+.aw-proposed__fields ins {
+  text-decoration: none;
+  font-weight: var(--weight-semibold);
+  color: var(--content-fg);
+}
+
+.aw-proposed__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}

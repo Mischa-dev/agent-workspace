@@ -7,7 +7,7 @@ import { useProjectConversationSidebar } from '../conversations/hooks'
 import type { ConversationMessage } from '../conversations/types'
 import { conversationTitle, useDirectOverview } from '../direct/api'
 import { useProjectExperience } from '../experience/layout'
-import { useProjects } from '../projects/hooks'
+import { useWorkspaceProjects } from '../projects/hooks'
 import { Banner, Button, Checkbox, Dialog, SelectField, TextArea, TextField, describeError, plainPreview, showToast } from '../ui'
 import { createWorkItem } from '../work-items/api'
 import { forwardMessage } from './api'
@@ -30,12 +30,8 @@ export function ForwardDialog({
 }) {
   const session = useAuthenticatedSession()
   const navigate = useNavigate()
-  const projects = useProjects()
+  const { projects: choices } = useWorkspaceProjects()
   const direct = useDirectOverview()
-  const choices = useMemo(
-    () => (projects.data?.projects ?? []).filter((project) => !project.archivedAt),
-    [projects.data?.projects],
-  )
   const [projectId, setProjectId] = useState(() =>
     choices.some((project) => project.id === currentProjectId) ? currentProjectId : '',
   )

@@ -1,15 +1,11 @@
 # Repository guidance
 
-The plan is one page, "Build plan", in the app's AWD project; that page and
-your lane's task there are the required reading, together with the code. The
-plan says what must exist and in what order; the session doing the work decides
-how. Five lanes each own an area (accounts, access and spaces; backbone and
-hosting; operations, modules and the web app; chat, documents and records;
-agents), and a lane's task holds its feature list and what is in flight. Build a
-whole chunk in one branch and one pull request, never split work to keep busy,
-never wait on another lane (build against a small stub instead), and merge your
-own pull request when CI is green and the review has no open P1. Comment on the
-lane task when a pull request opens and when it merges.
+The plan is one page, "Build plan", in the app's AWD project; that page is the
+required reading, together with the code. The plan says what must exist; the
+session doing the work decides how. Build a whole chunk in one branch and one
+pull request, never split work to keep busy, and merge your own pull request
+when CI is green and the review has no open P1 (one review round: fix what
+matters, answer the rest, merge).
 
 `docs/plans/master/` (the end state, the rulings, the fourteen detailed plans,
 the slice list) is a reference library: look things up there for background,
@@ -72,9 +68,11 @@ running the build another way, and don't use plain `systemd-run --user
 ## How much to check
 
 - While building: `cargo check`, plus the tests for the code you changed.
-- Before pushing or deploying: `tools/ci/run.sh` (format, clippy, all tests,
-  web lint/typecheck/test/build; the same checks GitHub runs). Then, for a
-  deploy, try the change once on the live server.
+- Before pushing: format, clippy and the tests for what you changed. CI runs
+  everything else; `tools/ci/run.sh` runs the same checks on a free machine
+  when you want them before pushing.
+- Before a deploy: `tools/ci/run.sh`, then try the change once on the live
+  server.
 - Write tests where a bug would be silent and costly: permissions and private
   conversations, claims and leases, reply rules, credentials. Don't write test
   matrices for UI details, and don't produce acceptance-evidence documents.
@@ -103,13 +101,17 @@ Several agents build at once, so changes must merge in either order.
 
 ## Rules while the foundations are rebuilt
 
-Fourteen workstreams are replacing five patterns that grew by copying. Don't
-add to them. Each rule has a guard test (`apps/server/src/structure_guards.rs`,
-`apps/web/src/structure.test.ts`) with an allowance per file for today's code.
-The allowances only go down: when you remove an offender, lower its number;
-never raise one. If you move code between files, move its allowance in the
-same pull request. If a rule blocks real work, ask in the task instead of
-raising a number.
+Some patterns grew by copying; don't add to them. Rules 1, 2, 7, 10, 11, 14,
+15 and 16 protect people's data and the hosting model: keep to them. The rest
+keep the code tidy; follow them in new code, but there is no need to go back
+and convert old code that works.
+
+Most rules have a guard test (`apps/server/src/structure_guards.rs`,
+`apps/web/src/structure.test.ts`) that counts today's offenders. A guard fails
+only when the tree as a whole grows one, so moving code between files needs no
+bookkeeping; when you remove offenders, lowering the allowance is welcome but
+not required. If a tidiness rule (3, 4, 5, 6, 8, 12, 13, 17) blocks real work,
+raise its number and say why in the pull request.
 
 1. **Access is decided in one place.** Don't write a new role check by name:
    no SQL `role IN ('owner','admin')`, `role = 'admin'` or `role <> 'viewer'`,
@@ -117,11 +119,9 @@ raising a number.
    in the web no `role === 'owner'`. Ask the policy: `policy::authorize`
    through `work_item_commands::lock_membership` and `authorize_mutation`,
    `roles::standing` or `roles::project_holding`, and on the web the
-   permissions the server returns. (K1 replaces these with one `access`
-   module; use it once it lands.) No role name compared in Rust
-   (`== "owner"`), no hand-built `Subject` or direct `authorize(` call, no
-   agent limit applied by hand. Every allowance for these rules names the K1
-   slice that removes it in `structure_guards/removals.json`.
+   permissions the server returns (the `access` module). No role name
+   compared in Rust (`== "owner"`), no hand-built `Subject` or direct
+   `authorize(` call, no agent limit applied by hand.
 2. **No permission depends on the kind of account.** People, agents and apps
    differ only in how they sign in and how they're told about things. Don't
    refuse or allow anything because `actor_kind` is or isn't `Human`. If
@@ -176,12 +176,14 @@ raising a number.
    outside `provider/`, `ai/providers/`, the built-in host's adapters
    (`crates/builtin-host/src/harness/`) and adapter manifests. Read display
    names from manifests.
-9. **Every new write is an operation with an agent tool, a `clientRequestId`
-   if it creates something, and an isolation case** in both
-   `write_isolation.rs` (another workspace) and `privacy_inside_workspace.rs`
-   (a non-member of a private conversation, a narrowed role). Once K2's
-   registry lands, follow the `add-operation` skill: the web route, tool,
+9. **Every new write is an operation** with a `clientRequestId` if it
+   creates something (the `add-operation` skill): the web route, tool,
    public endpoint and automation action are generated, never hand-written.
+   The dispatcher and row security keep an operation inside its workspace, so
+   it needs no isolation case of its own; write a privacy test when it reads
+   or changes something private (a conversation, a page shared to one
+   person, a credential). The old hand-written routes don't have to be moved
+   onto operations.
 10. **Content stays in its record.** Events, notifications, job payloads,
     delivery bodies and logs carry ids, kinds and field names, never message,
     comment, page or cell text. Readers fetch the text live, with the

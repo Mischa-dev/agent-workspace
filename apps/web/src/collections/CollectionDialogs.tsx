@@ -51,8 +51,7 @@ export function CollectionDetailsDialog({
       if (collection) {
         body = await updateCollection(projectId, collection.id, { expectedVersion: collection.version, ...details, ...switched, ...ownStatuses })
       } else {
-        body = await createCollection(projectId, { ...details, idempotencyKey: crypto.randomUUID() })
-        if (taskLike) body = await updateCollection(projectId, body.collection.id, { expectedVersion: body.collection.version, actsLikeTask: true })
+        body = await createCollection(projectId, { ...details, actsLikeTask: taskLike, idempotencyKey: crypto.randomUUID() })
       }
       client.setQueryData(collectionKeys.one(projectId, body.collection.id), body)
       void client.invalidateQueries({ queryKey: collectionKeys.all(projectId) })

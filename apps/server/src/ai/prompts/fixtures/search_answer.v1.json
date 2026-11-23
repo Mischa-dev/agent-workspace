@@ -1,0 +1,7 @@
+{
+  "input": {"question": "When do we ship the beta?", "results": [
+    {"n": 1, "kind": "decision", "title": "Beta date", "snippet": "Ship the beta on 2 December, after the migration rehearsal.", "author": "Ana", "at": "2026-11-20T10:00:00Z"},
+    {"n": 2, "kind": "message", "title": "#launch", "snippet": "Rehearsal is booked for 1 December.", "author": "Sam", "at": "2026-11-21T09:00:00Z"}
+  ]},
+  "output": {"answer": "The beta ships on 2 December, after the migration rehearsal [1], which is booked for 1 December [2].", "sources": [1, 2]}
+}

@@ -26,10 +26,18 @@ vi.mock('./homeQuiet', () => ({
   useQuietSections: () => ({ needsYou: false, working: false, capacity: false, tasks: false }),
 }))
 
-vi.mock('./hooks', () => ({
-  useProjects: vi.fn(),
-  useSwitchProject: vi.fn(),
-}))
+vi.mock('./hooks', () => {
+  const useProjects = vi.fn()
+  return {
+    useProjects,
+    useSwitchProject: vi.fn(),
+    // This workspace's open projects, from the mocked list.
+    useWorkspaceProjects: () => {
+      const query = useProjects() as { data?: { projects: Array<{ archivedAt?: string | null }> } }
+      return { query, projects: (query.data?.projects ?? []).filter((project) => !project.archivedAt) }
+    },
+  }
+})
 
 const session: AuthenticatedSession = {
   authenticated: true,

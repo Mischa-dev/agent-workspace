@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { useQueryClient } from '@tanstack/react-query'
 
 import { queryKeys } from '../api/queryKeys'
+import { proposalsKey } from '../pieces/proposedChanges'
 import { isApiError } from '../api/errors'
 import { callOp, newRequestId } from '../api/ops'
 import { discardOutbound, useOutbound } from '../data/outbound'
@@ -362,6 +363,7 @@ export function useTaskSave(item: WorkItem, { suggest = false }: { suggest?: boo
     }
     change(id, null)
     if (written.proposalId) {
+      void queryClient.invalidateQueries({ queryKey: proposalsKey('task', task.id) })
       showToast({ tone: 'success', title: `Suggested a new ${name}`, description: 'Someone who edits this task accepts or rejects it.' })
     } else {
       // Their own task, which they may change: it landed. As on the direct

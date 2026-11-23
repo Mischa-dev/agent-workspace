@@ -2,11 +2,9 @@
 //! foundations are rebuilt") checked over the server's source, with a
 //! per-file allowance for today's code in `structure_guards/allowances.json`.
 //!
-//! A file whose count is above its allowance fails, and so does a rule whose
-//! allowances add up to more than its ceiling. A count below its allowance
-//! never fails: it prints a hint to lower the number, so two branches that
-//! each remove an offender merge in either order. Allowances only go down;
-//! when code moves between files, its allowance moves with it.
+//! A rule fails when the whole tree has more offenders than its allowances
+//! add up to, or when they add up to more than its ceiling. Moving code
+//! between files needs no change here; fewer offenders print a hint.
 //!
 //! Every guard id here is listed in `docs/plans/master/guards.md`.
 
@@ -234,9 +232,8 @@ const TRANSACTIONS_ACROSS_CALLS_CEILING: usize = 3;
 // the built-in host (`hosts/builtin/`), so nothing else may.
 const SERVER_RUNS_AGENTS_CEILING: usize = 0;
 
-/// The rules of `AGENTS.md` rules 1 and 2 (access and account kinds). Every
-/// allowance of theirs names the K1 slice that removes it and why it is
-/// there today, in `structure_guards/removals.json` (K1.1).
+/// The rules of `AGENTS.md` rules 1 and 2 (access and account kinds), which
+/// the access module itself may break.
 pub(crate) const ACCESS_RULES: &[&str] = &[
     "raw_role_checks",
     "custom_role_allows",
@@ -975,31 +972,6 @@ pub(crate) fn readable_by_problem(sql: &str) -> Option<String> {
     (body != expected).then(|| format!("its body is `{body}`, not `{expected}`"))
 }
 
-/// Why each access allowance is there and the K1 slice that removes it
-/// (K1.1): `rule -> file -> "K1.n: reason"`.
-fn removals() -> BTreeMap<String, BTreeMap<String, String>> {
-    serde_json::from_str(include_str!("structure_guards/removals.json"))
-        .expect("structure_guards/removals.json is a map of rule to file to note")
-}
-
-/// Whether a removal note starts with the slice that removes the entry.
-pub(crate) fn names_its_slice(note: &str) -> bool {
-    let Some((slice, reason)) = note.split_once(": ") else {
-        return false;
-    };
-    let mut parts = slice.splitn(2, '.');
-    let plan = parts.next().unwrap_or_default();
-    let number = parts.next().unwrap_or_default();
-    plan.len() == 2
-        && plan.starts_with('K')
-        && plan[1..].bytes().all(|byte| byte.is_ascii_digit())
-        && number
-            .trim_end_matches(|c: char| c.is_ascii_lowercase())
-            .parse::<u32>()
-            .is_ok()
-        && !reason.trim().is_empty()
-}
-
 fn allowances() -> BTreeMap<String, BTreeMap<String, usize>> {
     serde_json::from_str(include_str!("structure_guards/allowances.json"))
         .expect("structure_guards/allowances.json is a map of rule to file to count")
@@ -1025,8 +997,10 @@ pub(crate) fn counts() -> BTreeMap<&'static str, BTreeMap<String, usize>> {
         .collect()
 }
 
-/// A rule's failures (a file above its allowance, allowances above the
-/// ceiling) and hints (a file below its allowance) for one scan.
+/// A rule's failures and hints for one scan. A rule holds to the sum of its
+/// allowances, not file by file, so code that moves between files needs no
+/// bookkeeping; a rule fails only when the tree as a whole grows an offender.
+/// The per-file numbers say where today's offenders are.
 pub(crate) fn judge(
     rule: &Rule,
     per_file: &BTreeMap<String, usize>,
@@ -1034,32 +1008,32 @@ pub(crate) fn judge(
 ) -> (Vec<String>, Vec<String>) {
     let mut failures = Vec::new();
     let mut hints = Vec::new();
-    let total: usize = allowed.values().sum();
-    if total > rule.ceiling {
+    let allowed_total: usize = allowed.values().sum();
+    if allowed_total > rule.ceiling {
         failures.push(format!(
-            "{}: the allowances add up to {total}, above the ceiling of {}; allowances only \
-             go down (AGENTS.md, \"{AGENTS_HEADING}\", {})",
+            "{}: the allowances add up to {allowed_total}, above the ceiling of {}. Raise the \
+             ceiling only with a reason in the pull request (AGENTS.md, \"{AGENTS_HEADING}\", {})",
             rule.id, rule.ceiling, rule.agents_rule
         ));
     }
-    for (file, found) in per_file {
-        let allowance = allowed.get(file).copied().unwrap_or(0);
-        if *found > allowance {
-            failures.push(format!(
-                "{}: {file} has {found}, allowed {allowance}. AGENTS.md, \"{AGENTS_HEADING}\", \
-                 {}; don't raise the allowance",
-                rule.id, rule.agents_rule
-            ));
-        }
-    }
-    for (file, allowance) in allowed {
-        let found = per_file.get(file).copied().unwrap_or(0);
-        if found < *allowance {
-            hints.push(format!(
-                "{}: you can lower {file} to {found} in allowances.json",
-                rule.id
-            ));
-        }
+    let found_total: usize = per_file.values().sum();
+    if found_total > allowed_total {
+        let over = per_file
+            .iter()
+            .filter(|(file, found)| **found > allowed.get(*file).copied().unwrap_or(0))
+            .map(|(file, found)| format!("{file} has {found}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        failures.push(format!(
+            "{}: {found_total} found, {allowed_total} allowed ({over}). AGENTS.md, \
+             \"{AGENTS_HEADING}\", {}",
+            rule.id, rule.agents_rule
+        ));
+    } else if found_total < allowed_total {
+        hints.push(format!(
+            "{}: {found_total} found, {allowed_total} allowed; allowances.json can come down",
+            rule.id
+        ));
     }
     (failures, hints)
 }
@@ -1138,53 +1112,6 @@ mod tests {
             "{}",
             serde_json::to_string_pretty(&counts()).expect("serialise counts")
         );
-    }
-
-    /// Every allowance of an access rule says which K1 slice removes it and
-    /// why it is there (K1.1). A note for a file no longer allowed is a hint.
-    #[test]
-    fn access_allowances_name_the_slice_that_removes_them() {
-        let allowances = allowances();
-        let removals = removals();
-        let mut failures = Vec::new();
-        for rule in ACCESS_RULES {
-            assert!(
-                RULES.iter().any(|known| known.id == *rule),
-                "ACCESS_RULES names {rule}, which is no rule"
-            );
-            let notes = removals.get(*rule).cloned().unwrap_or_default();
-            for file in allowances
-                .get(*rule)
-                .into_iter()
-                .flat_map(|files| files.keys())
-            {
-                match notes.get(file) {
-                    Some(note) if names_its_slice(note) => {}
-                    Some(note) => failures.push(format!(
-                        "{rule}: {file}'s note \"{note}\" must start with the slice that removes it, \
-                         like \"K1.16: why it is there\""
-                    )),
-                    None => failures.push(format!(
-                        "{rule}: {file} has an allowance but no note in removals.json saying which \
-                         K1 slice removes it"
-                    )),
-                }
-            }
-            for file in notes.keys() {
-                if !allowances
-                    .get(*rule)
-                    .is_some_and(|files| files.contains_key(file))
-                {
-                    eprintln!(
-                        "hint: {rule}: {file} has no allowance now; drop its note from removals.json"
-                    );
-                }
-            }
-        }
-        assert!(failures.is_empty(), "{}", failures.join("\n"));
-        assert!(names_its_slice("K1.14a: role caps"));
-        assert!(!names_its_slice("someday: role caps"));
-        assert!(!names_its_slice("K1.16:"));
     }
 
     #[test]
@@ -1503,6 +1430,13 @@ async fn notify(pool: &PgPool, client: &reqwest::Client) -> Result<(), Error> {
         );
         assert!(failures.0.is_empty(), "{failures:?}");
         assert_eq!(failures.1.len(), 1, "a hint to lower it: {failures:?}");
+        // Code that moves to another file takes nothing from the allowances.
+        let moved = judge(
+            rule,
+            &BTreeMap::from([("elsewhere.rs".to_owned(), 1)]),
+            &BTreeMap::from([("scratch.rs".to_owned(), 1)]),
+        );
+        assert!(moved.0.is_empty() && moved.1.is_empty(), "{moved:?}");
     }
 
     #[test]

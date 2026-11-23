@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["answer", "sources"],
+  "properties": {
+    "answer": {"type": "string", "minLength": 1, "maxLength": 1500},
+    "sources": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {"type": "integer", "minimum": 1, "maximum": 20}
+    }
+  }
+}

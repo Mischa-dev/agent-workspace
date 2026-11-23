@@ -1,5 +1,5 @@
 import { requestJson } from '../../api/client'
-import { callOp } from '../../api/ops'
+import { callOp, ranOrThrow } from '../../api/ops'
 
 // Usage windows, capacity alerts and banked resets (U1, U3, U6), and where
 // notifications reach you (N3, N4). Accounts belong to one person: everything
@@ -149,10 +149,13 @@ export const launchBatch = async (
   idempotencyKey: string,
 ): Promise<BatchResult> => {
   // The account's own workspace, so someone in several launches in the right one.
-  const result = await callOp(
-    'usage_batch_launch',
-    { accountId: account.accountId, taskIds: request.tasks?.map((task) => task.workItemId), windowKey: request.windowKey ?? undefined },
-    { requestId: idempotencyKey, workspaceId: account.workspaceId ?? undefined },
+  const result = ranOrThrow(
+    await callOp(
+      'usage_batch_launch',
+      { accountId: account.accountId, taskIds: request.tasks?.map((task) => task.workItemId), windowKey: request.windowKey ?? undefined },
+      { requestId: idempotencyKey, workspaceId: account.workspaceId ?? undefined },
+    ),
+    'The batch',
   )
   return {
     launched: result.launched,

@@ -59,7 +59,15 @@ export type Page = {
   ancestors: PageCrumb[]
   /** The pages inside it, in order. */
   children: PageCrumb[]
+  /**
+   * Set when the reader isn't in its space and it was shared with them on
+   * its own: what they may do with it.
+   */
+  sharedLevel?: ShareLevel
 }
+
+/** What a page shared with one person lets them do, each including the ones before it. */
+export type ShareLevel = 'see' | 'comment' | 'edit'
 
 export type PageInput = {
   title?: string

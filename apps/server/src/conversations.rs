@@ -106,8 +106,10 @@ const ACCESS_COLUMNS: &str = r#"
             conversation.thread_status,
             conversation.thread_outcome,
             conversation.next_entry_sequence,
+            -- Someone a page was shared with to comment has no membership:
+            -- a placeholder role, never enabled, so it allows nothing.
             CASE WHEN conversation.project_id IS NULL THEN 'admin'
-                 ELSE membership.role END AS membership_role,
+                 ELSE COALESCE(membership.role, 'viewer') END AS membership_role,
             CASE WHEN conversation.project_id IS NULL
                  THEN direct_permissions(conversation.id, $2)
                  ELSE workspace_role_permissions(membership.role_id)
@@ -135,7 +137,10 @@ const ACCESS_FROM: &str = r#"
           AND conversation_visible_to(conversation.id, $2)
           AND (conversation.project_id IS NULL
                OR (organization_membership.actor_id IS NOT NULL
-                   AND membership.actor_id IS NOT NULL))
+                   AND (membership.actor_id IS NOT NULL
+                        -- A page's comments, for someone the page was
+                        -- shared with to comment (C1.27).
+                        OR page_discussion_shared(conversation.id, $2))))
 "#;
 
 #[derive(Clone, Debug, FromRow)]
@@ -2267,7 +2272,13 @@ pub(crate) async fn lock_message_conversation(
     let allowed = if actor.run_id.is_some() && row.project_id.is_some() {
         row.allows_for_run(actor.actor_id, action)?
     } else if let Some(kind) = discussed {
-        row.allows_permission(actor.actor_id, kind.comment_permission())?
+        (kind == crate::discussion::SubjectKind::Page
+            && sqlx::query_scalar::<_, bool>("SELECT page_discussion_shared($1, $2)")
+                .bind(row.id)
+                .bind(actor.actor_id)
+                .fetch_one(&mut **transaction)
+                .await?)
+            || row.allows_permission(actor.actor_id, kind.comment_permission())?
     } else {
         row.allows(actor.actor_id, action)?
     };
@@ -3481,7 +3492,19 @@ pub(crate) async fn lock_conversation_for(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(AppError::NotFound("conversation"))?;
-    authorize_conversation_row_for(actor_id, &row, action, include_archived)?;
+    // Commenting on a page shared with them to comment (C1.27): starting a
+    // thread in its comments, or posting there.
+    let shared_discussion = matches!(action, Action::ThreadCreate | Action::MessageSend)
+        && !row.project_archived
+        && !row.is_archived()
+        && sqlx::query_scalar::<_, bool>("SELECT page_discussion_shared($1, $2)")
+            .bind(row.id)
+            .bind(actor_id)
+            .fetch_one(&mut **transaction)
+            .await?;
+    if !shared_discussion {
+        authorize_conversation_row_for(actor_id, &row, action, include_archived)?;
+    }
     if let Some(parent_channel_id) = row.parent_channel_id {
         let parent_active = sqlx::query_scalar::<_, bool>(
             r#"

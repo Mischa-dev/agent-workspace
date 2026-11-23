@@ -24,8 +24,7 @@ use sqlx::{PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
 use super::{
-    ChangeOutcome, Collection, CollectionChange, CollectionSummary, CreateOutcome, NewCollection,
-    definition::{self, FieldWrite, ViewWrite},
+    Collection, CollectionSummary,
     query::{self, Archived, GroupCount, GroupRef, Spec},
     records::{self, ProblemKind, RecordInput, RecordRef, RecordView, Written},
     views::{self, SortRule, ViewConfig, ViewSummary},
@@ -58,11 +57,11 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/api/v1/projects/{project_id}/collections",
-            get(list_collections).post(create_collection),
+            get(list_collections),
         )
         .route(
             "/api/v1/projects/{project_id}/collections/{collection_id}",
-            get(get_collection).patch(update_collection),
+            get(get_collection),
         )
         .route(
             "/api/v1/projects/{project_id}/collections/{collection_id}/fields",
@@ -139,6 +138,9 @@ struct Reader {
     /// Reads tasks: a collection whose records are tasks opens only with
     /// this.
     can_view_tasks: bool,
+    /// Without edit, the reader's role suggests on records: their changes
+    /// become proposals (T1.41).
+    can_suggest: bool,
     project_archived: bool,
 }
 
@@ -158,8 +160,21 @@ async fn reader(
     if project_key(connection, project_id).await?.is_none() {
         return Err(AppError::NotFound("project"));
     }
+    let can_edit = allows(&actor, &membership, Action::CollectionRecordEdit)?;
+    let can_suggest = !can_edit
+        && crate::access::write_mode(
+            connection,
+            &principal.caller()?,
+            "record",
+            project_id,
+            false,
+            Some("collections"),
+        )
+        .await?
+        .is_ok_and(|grant| grant.mode == crate::access::WriteMode::Propose);
     Ok(Reader {
-        can_edit: allows(&actor, &membership, Action::CollectionRecordEdit)?,
+        can_edit,
+        can_suggest,
         can_build: allows(&actor, &membership, Action::CollectionBuild)?,
         can_manage_task_fields: allows(&actor, &membership, Action::WorkflowManage)?,
         can_view_tasks: allows(&actor, &membership, Action::WorkItemView)?,
@@ -366,17 +381,21 @@ struct CollectionBody {
     views: Vec<ViewSummary>,
     archived_records: i64,
     can_edit_records: bool,
+    /// Changes to records become proposals for someone who edits them.
+    can_suggest_records: bool,
     can_build: bool,
     /// Adds, changes and archives its fields: building, and for Tasks the
     /// task field settings' rule too (T1.11).
     can_change_fields: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn collection_body(
     connection: &mut PgConnection,
     project_id: Uuid,
     collection: &Collection,
     can_edit: bool,
+    can_suggest: bool,
     can_build: bool,
     can_manage_task_fields: bool,
     reader: Uuid,
@@ -405,6 +424,9 @@ async fn collection_body(
         archived_records,
         // Records of a collection that acts like a task change as tasks.
         can_edit_records: can_edit && !collection.archived,
+        // A collection whose records are tasks takes suggestions through
+        // task_update, on the task.
+        can_suggest_records: can_suggest && !collection.archived && !collection.acts_like_task,
         can_build,
         can_change_fields: can_build && (!collection.is_tasks() || can_manage_task_fields),
     })
@@ -428,382 +450,13 @@ async fn get_collection(
             project_id,
             &collection,
             reader.can_edit && writable,
+            reader.can_suggest && writable,
             reader.can_build && writable,
             reader.can_manage_task_fields,
             principal.actor_id,
         )
         .await?,
     ))
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CreateCollectionRequest {
-    name: String,
-    #[serde(default)]
-    description: String,
-    title_name: Option<String>,
-    /// Fields and views to start with, by name, as a definition holds them.
-    #[serde(default)]
-    fields: Vec<FieldWrite>,
-    #[serde(default)]
-    views: Vec<ViewWrite>,
-}
-
-fn name_message() -> String {
-    format!(
-        "Give it a name of 1 to {} characters, on one line.",
-        super::MAX_NAME_CHARACTERS
-    )
-}
-
-fn definition_problem(problem: definition::ApplyProblem) -> Response {
-    match problem.kind {
-        definition::ProblemKind::Invalid => invalid(&problem.field, problem.message),
-        definition::ProblemKind::NotFound => refusal(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            problem.message,
-            json!({ "field": problem.field }),
-        ),
-        definition::ProblemKind::Full => refusal(
-            StatusCode::CONFLICT,
-            "collection_limit",
-            problem.message,
-            json!({ "field": problem.field }),
-        ),
-    }
-}
-
-async fn create_collection(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath(project_id): ApiPath<Uuid>,
-    ApiJson(request): ApiJson<CreateCollectionRequest>,
-) -> Result<Response, AppError> {
-    let Some(name) = super::normalize_name(&request.name) else {
-        return Ok(invalid("name", name_message()));
-    };
-    let Some(description) = super::normalize_description(&request.description) else {
-        return Ok(invalid(
-            "description",
-            format!(
-                "The description is one line of at most {} characters.",
-                super::MAX_DESCRIPTION_CHARACTERS
-            ),
-        ));
-    };
-    let title_name = match request.title_name.as_deref() {
-        Some(value) => match super::normalize_title_name(value) {
-            Some(title_name) => title_name,
-            None => {
-                return Ok(invalid(
-                    "titleName",
-                    format!(
-                        "Call the title column 1 to {} characters, on one line.",
-                        super::MAX_TITLE_NAME_CHARACTERS
-                    ),
-                ));
-            }
-        },
-        None => super::DEFAULT_TITLE_NAME.to_owned(),
-    };
-    if let Some(message) = definition::duplicate_name(&request.fields, &request.views) {
-        return Ok(invalid("fields", message));
-    }
-    let mut write = begin!(
-        start_write(
-            &state,
-            &headers,
-            &principal,
-            project_id,
-            Action::CollectionBuild,
-            resource_bound_scope("projects", project_id, "collections_create")?,
-            &request,
-        )
-        .await
-    );
-    let collection = match super::create(
-        &mut write.transaction,
-        project_id,
-        principal.actor_id,
-        NewCollection {
-            name,
-            description,
-            title_name,
-            first_view: request.views.is_empty(),
-        },
-    )
-    .await?
-    {
-        CreateOutcome::Created(collection) => collection,
-        CreateOutcome::NameTaken(collection) => {
-            return Ok(refusal(
-                StatusCode::CONFLICT,
-                "collection_name_taken",
-                format!("A collection is already called \"{}\".", collection.name),
-                json!({ "field": "name" }),
-            ));
-        }
-        CreateOutcome::ProjectFull => {
-            return Ok(refusal(
-                StatusCode::CONFLICT,
-                "collection_limit",
-                format!(
-                    "This project has {} collections already, or keeps {} with archived ones. Archive one first.",
-                    super::MAX_ACTIVE_COLLECTIONS,
-                    super::MAX_COLLECTION_ROWS
-                ),
-                Value::Null,
-            ));
-        }
-    };
-    let actor_id = write.actor.actor_id;
-    let project_key = write.project_key.clone();
-    if !request.fields.is_empty() || !request.views.is_empty() {
-        let writer = Writer {
-            actor_id,
-            project_key: &project_key,
-        };
-        if let Err(problem) = definition::apply(
-            &mut write.transaction,
-            project_id,
-            &collection,
-            writer,
-            &request.fields,
-            &request.views,
-        )
-        .await?
-        {
-            return Ok(definition_problem(problem));
-        }
-    }
-    record_audit_for(
-        &mut write.transaction,
-        &write.actor,
-        "collection",
-        "collection.created",
-        collection.id,
-        json!({
-            "name": collection.name,
-            "fields": request.fields.len(),
-            "views": request.views.len(),
-        }),
-    )
-    .await?;
-    outbox::enqueue_collection_updated(&mut write.transaction, project_id, collection.id, &[])
-        .await?;
-    let collection = write.collection(collection.id).await?;
-    let body = collection_body(
-        &mut write.transaction,
-        project_id,
-        &collection,
-        true,
-        true,
-        true,
-        principal.actor_id,
-    )
-    .await?;
-    write.finish(StatusCode::CREATED, &body).await
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct UpdateCollectionRequest {
-    expected_version: i64,
-    name: Option<String>,
-    description: Option<String>,
-    title_name: Option<String>,
-    position: Option<i32>,
-    archived: Option<bool>,
-    acts_like_task: Option<bool>,
-    /// The statuses its tasks use and the one they start in; both are
-    /// replaced together.
-    workflow: Option<WorkflowRequest>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct WorkflowRequest {
-    /// [] uses all of the space's statuses.
-    statuses: Vec<Uuid>,
-    start_status_id: Option<Uuid>,
-}
-
-async fn update_collection(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    principal: AuthenticatedActor,
-    ApiPath((project_id, collection_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(request): ApiJson<UpdateCollectionRequest>,
-) -> Result<Response, AppError> {
-    let name = match request.name.as_deref() {
-        Some(value) => match super::normalize_name(value) {
-            Some(name) => Some(name),
-            None => return Ok(invalid("name", name_message())),
-        },
-        None => None,
-    };
-    let description = match request.description.as_deref() {
-        Some(value) => match super::normalize_description(value) {
-            Some(description) => Some(description),
-            None => {
-                return Ok(invalid(
-                    "description",
-                    format!(
-                        "The description is one line of at most {} characters.",
-                        super::MAX_DESCRIPTION_CHARACTERS
-                    ),
-                ));
-            }
-        },
-        None => None,
-    };
-    let title_name = match request.title_name.as_deref() {
-        Some(value) => match super::normalize_title_name(value) {
-            Some(title_name) => Some(title_name),
-            None => {
-                return Ok(invalid(
-                    "titleName",
-                    format!(
-                        "Call the title column 1 to {} characters, on one line.",
-                        super::MAX_TITLE_NAME_CHARACTERS
-                    ),
-                ));
-            }
-        },
-        None => None,
-    };
-    let mut write = begin!(
-        start_write(
-            &state,
-            &headers,
-            &principal,
-            project_id,
-            Action::CollectionBuild,
-            resource_bound_scope("collections", collection_id, "update")?,
-            &request,
-        )
-        .await
-    );
-    if let Some(message) = write.collection(collection_id).await?.read_only_message() {
-        return Ok(builtin_refusal(message));
-    }
-    // Switching on makes a task for each record.
-    if request.acts_like_task == Some(true)
-        && !super::task_writes::may_create_tasks(&mut write.transaction, &write.actor).await?
-    {
-        return Ok(refusal(
-            StatusCode::FORBIDDEN,
-            "forbidden",
-            "Records that act like tasks are tasks: only people who can make tasks here can switch it on.",
-            Value::Null,
-        ));
-    }
-    let outcome = super::change(
-        &mut write.transaction,
-        project_id,
-        collection_id,
-        principal.actor_id,
-        CollectionChange {
-            name,
-            description,
-            title_name,
-            position: request.position,
-            archived: request.archived,
-            acts_like_task: request.acts_like_task,
-            workflow: request
-                .workflow
-                .as_ref()
-                .map(|workflow| super::task_like::Workflow {
-                    statuses: (!workflow.statuses.is_empty()).then(|| workflow.statuses.clone()),
-                    start: workflow.start_status_id,
-                }),
-            expected_version: Some(request.expected_version),
-        },
-    )
-    .await?;
-    let collection = match outcome {
-        ChangeOutcome::Changed {
-            collection,
-            previous,
-            changed,
-        } => {
-            let action = match (previous.archived, collection.archived) {
-                (false, true) => "collection.archived",
-                (true, false) => "collection.restored",
-                _ => "collection.updated",
-            };
-            record_audit_for(
-                &mut write.transaction,
-                &write.actor,
-                "collection",
-                action,
-                collection.id,
-                json!({
-                    "changedFields": changed,
-                    "previous": { "name": previous.name },
-                    "previousVersion": previous.version,
-                }),
-            )
-            .await?;
-            outbox::enqueue_collection_updated(
-                &mut write.transaction,
-                project_id,
-                collection.id,
-                &[],
-            )
-            .await?;
-            *collection
-        }
-        ChangeOutcome::Unchanged(collection) => collection,
-        ChangeOutcome::NotFound => return Err(AppError::NotFound("collection")),
-        ChangeOutcome::VersionConflict(collection) => {
-            return Err(AppError::VersionConflict {
-                resource: "collection",
-                current_version: collection.version,
-            });
-        }
-        ChangeOutcome::NameTaken(other) => {
-            return Ok(refusal(
-                StatusCode::CONFLICT,
-                "collection_name_taken",
-                format!("Another collection is already called \"{other}\"."),
-                json!({ "field": "name" }),
-            ));
-        }
-        ChangeOutcome::ProjectFull => {
-            return Ok(refusal(
-                StatusCode::CONFLICT,
-                "collection_limit",
-                format!(
-                    "This project has {} active collections already. Archive one first.",
-                    super::MAX_ACTIVE_COLLECTIONS
-                ),
-                Value::Null,
-            ));
-        }
-        ChangeOutcome::TaskLike(message) => {
-            return Ok(refusal(
-                StatusCode::CONFLICT,
-                "acts_like_task",
-                message,
-                Value::Null,
-            ));
-        }
-    };
-    let body = collection_body(
-        &mut write.transaction,
-        project_id,
-        &collection,
-        true,
-        true,
-        true,
-        principal.actor_id,
-    )
-    .await?;
-    write.finish(StatusCode::OK, &body).await
 }
 
 // ---------------------------------------------------------------------------

@@ -68,6 +68,8 @@ export type PageDiscussion = {
   threads: PageThread[]
   suggestions: PageSuggestion[]
   canComment: boolean
+  /** Accepts and rejects suggestions: edits the page in its space (a share to comment doesn’t). */
+  canDecide?: boolean
   viewerId: string
 }
 

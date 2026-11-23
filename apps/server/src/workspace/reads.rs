@@ -6,7 +6,7 @@
 use uuid::Uuid;
 
 use crate::{
-    mcp::{briefing, memory_tools, task_commands::tool_answer},
+    mcp::{briefing, memory_tools, search_answer, task_commands::tool_answer},
     ops::{
         Idempotency, OpCall, OpError, OpKind, Operation, Perm, Registry, Target, Targeted,
         refs::parse_id,
@@ -16,7 +16,10 @@ use crate::{
 
 /// The workspace module's reads.
 pub fn register_ops(registry: &mut Registry) {
-    registry.add::<BriefingGet>().add::<WorkspaceSearch>();
+    registry
+        .add::<BriefingGet>()
+        .add::<WorkspaceSearch>()
+        .add::<SearchAnswer>();
 }
 
 /// The Projects module's reads.
@@ -109,6 +112,44 @@ read_op!(WorkspaceSearch {
     output: memory_tools::SearchValue,
     run: memory_tools::search_tool
 });
+
+impl Targeted for search_answer::AnswerArguments {
+    fn target(&self) -> Target {
+        space_or_workspace(self.project_id.as_deref())
+    }
+}
+
+/// Answers with sources (C2.27). Kept to the call's workspace, whose model
+/// answers: what it reads goes to that workspace's provider.
+pub(crate) struct SearchAnswer;
+
+impl Operation for SearchAnswer {
+    const NAME: &'static str = "search_answer";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "workspace";
+    const PERMISSION: Option<Perm> = None;
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const HELD_SPACE_BY_DEFAULT: bool = true;
+    const TITLE: &'static str = "Answer from search";
+    const DESCRIPTION: &'static str = "Answer a question from what search finds for you in \
+        this workspace, citing each statement's sources by number ([1] is the first source). \
+        It reads only what you can see, and uses the workspace's model, so it fails when the \
+        workspace has none set up. Narrow it with search filters in the question or a space \
+        (projectId).";
+
+    type Input = search_answer::AnswerArguments;
+    type Output = search_answer::AnswerValue;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: search_answer::AnswerArguments,
+    ) -> Result<search_answer::AnswerValue, OpError> {
+        let principal = reader(call.state, call.ctx).await?;
+        tool_answer(
+            search_answer::answer_tool(call.state, &principal, call.ctx.workspace_id, input).await,
+        )
+    }
+}
 
 impl Targeted for briefing::ProjectsListArguments {
     fn target(&self) -> Target {

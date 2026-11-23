@@ -62,9 +62,12 @@ async function seed(page: Page) {
   const listed = (await (await page.request.get(base)).json()) as { collections: Array<{ id: string; name: string }> }
   let collectionId = listed.collections.find((collection) => collection.name === 'Speed rows')?.id
   if (!collectionId) {
-    const made = await page.request.post(base, { headers: headers('perf-collection'), data: { name: 'Speed rows', titleName: 'Row' } })
+    const made = await page.request.post(`${webOrigin}/api/v2/ops/collection_create`, {
+      headers: headers('perf-collection'),
+      data: { projectId, name: 'Speed rows', titleName: 'Row' },
+    })
     expect(made.ok(), await made.text()).toBe(true)
-    collectionId = ((await made.json()) as { collection: { id: string } }).collection.id
+    collectionId = ((await made.json()) as { value: { collection: { id: string } } }).value.collection.id
     const first = await page.request.post(`${base}/${collectionId}/records`, { headers: headers('perf-row-0'), data: { title: 'Row 0' } })
     expect(first.ok(), await first.text()).toBe(true)
     // The rest straight into the table, copied from the first: through the API

@@ -676,9 +676,11 @@ export type ShapeChannel = { name: string; private?: boolean }
 
 export type ShapePage = { guide?: boolean; markdown?: string; title: string }
 
-export type SharedAccount = { account: string; expiresAt?: string | null }
+export type ShareLevel = "see" | "comment" | "edit"
 
-export type SharedLink = { expiresAt?: string | null; id: string }
+export type SharedAccount = { account: string; displayName: string; expiresAt?: string | null; level: ShareLevel }
+
+export type SharedLink = { expiresAt?: string | null; id: string; public: boolean }
 
 export type SharedSpace = { id: string; name: string }
 
@@ -2196,6 +2198,10 @@ export type ScheduledMessageUpdateInput = { cancel?: boolean | null; content?: M
 
 export type ScheduledMessageUpdateOutput = { canceled: boolean; scheduled?: ScheduledLine | null }
 
+export type SearchAnswerInput = { projectId?: string | null; question: string }
+
+export type SearchAnswerOutput = { answer: string; model: string; provider: string; read: number; sources: SearchResult[] }
+
 export type SettingListInput = { keys?: string[] | null; spaceId?: string | null }
 
 export type SettingListOutput = { capabilities: SettingCapabilities; organizationId: string; projectId?: string | null; settings: Resolved[] }
@@ -2468,13 +2474,17 @@ export type ThingLinkInput = { from: string; kind: HandLinkKind; to: string }
 
 export type ThingLinkOutput = { changed: boolean }
 
-export type ThingLinkCreateInput = { expiresInHours?: number | null; id: string; kind: ThingKind }
+export type ThingLinkCreateInput = { expiresInHours?: number | null; id: string; kind: ThingKind; public?: boolean | null }
 
 export type ThingLinkCreateOutput = { expiresAt: string; id: string; token?: string | null }
 
-export type ThingShareAddInput = { account: string; expiresAt?: string | null; id: string; kind: ThingKind }
+export type ThingShareAddInput = { account: string; expiresAt?: string | null; id: string; kind: ThingKind; level?: ShareLevel | null }
 
 export type ThingShareAddOutput = { accounts: SharedAccount[]; id: string; kind: ThingKind; links: SharedLink[] }
+
+export type ThingShareListInput = { id: string; kind: ThingKind }
+
+export type ThingShareListOutput = { accounts: SharedAccount[]; id: string; kind: ThingKind; links: SharedLink[] }
 
 export type ThingShareRemoveInput = { account?: string | null; id: string; kind: ThingKind; link?: string | null }
 
@@ -2999,6 +3009,7 @@ export type Operations = {
   schedule_list: { input: ScheduleListInput; output: ScheduleListOutput }
   schedule_update: { input: ScheduleUpdateInput; output: ScheduleUpdateOutput }
   scheduled_message_update: { input: ScheduledMessageUpdateInput; output: ScheduledMessageUpdateOutput }
+  search_answer: { input: SearchAnswerInput; output: SearchAnswerOutput }
   setting_list: { input: SettingListInput; output: SettingListOutput }
   setting_update: { input: SettingUpdateInput; output: SettingUpdateOutput }
   sheet_chart_get: { input: SheetChartGetInput; output: SheetChartGetOutput }
@@ -3069,6 +3080,7 @@ export type Operations = {
   thing_link: { input: ThingLinkInput; output: ThingLinkOutput }
   thing_link_create: { input: ThingLinkCreateInput; output: ThingLinkCreateOutput }
   thing_share_add: { input: ThingShareAddInput; output: ThingShareAddOutput }
+  thing_share_list: { input: ThingShareListInput; output: ThingShareListOutput }
   thing_share_remove: { input: ThingShareRemoveInput; output: ThingShareRemoveOutput }
   thing_unlink: { input: ThingUnlinkInput; output: ThingUnlinkOutput }
   thing_upsert: { input: ThingUpsertInput; output: ThingUpsertOutput }

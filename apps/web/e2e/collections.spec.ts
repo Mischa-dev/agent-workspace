@@ -31,12 +31,12 @@ async function seed(context: BrowserContext, page: Page) {
   const listed = (await (await request.get(`/api/v1/projects/${projectId}/collections`)).json()) as { collections: Array<{ id: string; name: string }> }
   const found = listed.collections.find((collection) => collection.name === NAME)
   if (found) return { projectId, collectionId: found.id }
-  const created = await request.post(`/api/v1/projects/${projectId}/collections`, {
+  const created = await request.post('/api/v2/ops/collection_create', {
     headers: headers('collection-playtest'),
-    data: { name: NAME, description: 'What players said after each build.', titleName: 'Note' },
+    data: { projectId, name: NAME, description: 'What players said after each build.', titleName: 'Note' },
   })
   expect(created.ok(), await created.text()).toBe(true)
-  const collectionId = ((await created.json()) as { collection: { id: string } }).collection.id
+  const collectionId = ((await created.json()) as { value: { collection: { id: string } } }).value.collection.id
   const base = `/api/v1/projects/${projectId}/collections/${collectionId}`
   const fields = [
     { name: 'Severity', type: 'single_choice', options: [{ name: 'Low', color: 'green' }, { name: 'Medium', color: 'yellow' }, { name: 'High', color: 'red' }] },

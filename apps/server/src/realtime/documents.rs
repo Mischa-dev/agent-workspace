@@ -46,6 +46,14 @@ pub async fn can_view(
     if document.kind == DocumentKind::Whiteboard {
         return crate::whiteboards::visible_to(pool, document.id, account).await;
     }
+    // A page shared with them on its own (K1.32) is watched like any other.
+    if document.kind == DocumentKind::Page
+        && crate::access::sharing::page_level(pool, account, document.id)
+            .await?
+            .is_some()
+    {
+        return Ok(true);
+    }
     let mut connection = crate::db::scoped_tx(pool).await?;
     let Some(located) = crate::things::locate(&mut connection, document.id).await? else {
         return Ok(false);

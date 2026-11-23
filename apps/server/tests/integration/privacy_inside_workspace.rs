@@ -2958,6 +2958,120 @@ async fn a_shared_page_opens_only_itself() {
         "a revoked link stops at once"
     );
 
+    // C1.27: a link opens without signing in only when it is public, and
+    // the share list names links, never their secrets.
+    let anonymous = |path: String| {
+        axum::http::Request::builder()
+            .method("GET")
+            .uri(path)
+            .header(axum::http::header::HOST, "127.0.0.1")
+            .body(axum::body::Body::empty())
+            .expect("request")
+    };
+    let (_, private_link) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "thing_link_create",
+            "owner-private-link",
+            json!({"kind": "page", "id": plan}),
+        ),
+    )
+    .await;
+    let private_token = private_link["value"]["token"]
+        .as_str()
+        .expect("token")
+        .to_owned();
+    let (status, _) = send(
+        &world.app,
+        anonymous(format!("/api/v1/public/pages/{private_token}")),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "a signed-in link isn't public"
+    );
+    let (_, public_link) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "thing_link_create",
+            "owner-public-link",
+            json!({"kind": "page", "id": plan, "public": true}),
+        ),
+    )
+    .await;
+    assert_eq!(public_link["outcome"], "ok", "{public_link}");
+    let public_token = public_link["value"]["token"]
+        .as_str()
+        .expect("token")
+        .to_owned();
+    let (status, page) = send(
+        &world.app,
+        anonymous(format!("/api/v1/public/pages/{public_token}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["id"], plan.as_str());
+    assert!(page.get("projectId").is_none(), "{page}");
+    assert!(!page.to_string().contains("Salaries"), "{page}");
+    let (_, listed) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "thing_share_list",
+            "owner-list",
+            json!({"kind": "page", "id": plan}),
+        ),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(
+        listed["value"]["links"]
+            .as_array()
+            .expect("links")
+            .iter()
+            .any(|link| link["id"] == public_link["value"]["id"] && link["public"] == true),
+        "{listed}"
+    );
+    assert!(!listed.to_string().contains(&public_token), "{listed}");
+    let (_, denied) = send(
+        &world.app,
+        op(
+            &mara.browser,
+            "thing_share_list",
+            "mara-list",
+            json!({"kind": "page", "id": plan}),
+        ),
+    )
+    .await;
+    assert_ne!(
+        denied["outcome"], "ok",
+        "only editors see the shares: {denied}"
+    );
+    let (_, revoked) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "thing_share_remove",
+            "owner-revoke-public",
+            json!({"kind": "page", "id": plan, "link": public_link["value"]["id"]}),
+        ),
+    )
+    .await;
+    assert_eq!(revoked["outcome"], "ok", "{revoked}");
+    let (status, _) = send(
+        &world.app,
+        anonymous(format!("/api/v1/public/pages/{public_token}")),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "a revoked public link stops at once"
+    );
+
     let (_, unshared) = send(
         &world.app,
         op(
@@ -2975,6 +3089,326 @@ async fn a_shared_page_opens_only_itself() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    world.finish().await;
+}
+
+/// C1.27: a page shared on its own does what its level says and no more:
+/// `see` reads it, `comment` reads and writes its comments, `edit` changes
+/// its words too. None of them lists, renames, shares or reaches another
+/// page of the space.
+#[tokio::test]
+async fn a_shared_page_allows_only_its_level() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("SECRET")
+        .person("lena", "member")
+        .build("privacy_share_levels")
+        .await
+    else {
+        return;
+    };
+    let secret = world.project("SECRET").to_owned();
+    let lena = &world.people["lena"];
+    sqlx::query("DELETE FROM project_memberships WHERE project_id = $1 AND actor_id = $2")
+        .bind(secret.parse::<Uuid>().expect("space"))
+        .bind(lena.actor)
+        .execute(world.pool())
+        .await
+        .expect("lena isn't in SECRET");
+    let mut pages = Vec::new();
+    for title in ["Plan", "Other"] {
+        let (status, page) = send(
+            &world.app,
+            world.owner.browser.request(
+                "POST",
+                &format!("/api/v1/projects/{secret}/pages"),
+                None,
+                json!({"title": title, "body": "first words"}),
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "{status} {page}");
+        pages.push(page["id"].as_str().expect("page").to_owned());
+    }
+    let (plan, other) = (pages[0].clone(), pages[1].clone());
+    let read = |uri: String| lena.browser.request("GET", &uri, None, Value::Null);
+    let op = |browser: &Browser, name: &str, key: &str, body: Value| {
+        browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/{name}", world.organization),
+            Some(key),
+            body,
+        )
+    };
+    let share = |level: &'static str| {
+        op(
+            &world.owner.browser,
+            "thing_share_add",
+            level,
+            json!({"kind": "page", "id": plan, "account": lena.actor, "level": level}),
+        )
+    };
+    let comment = |key: &str, page: &str| {
+        op(
+            &lena.browser,
+            "page_comment_create",
+            key,
+            json!({"pageId": page, "text": "a thought"}),
+        )
+    };
+    let append = |key: &str, page: &str| {
+        op(
+            &lena.browser,
+            "page_update_blocks",
+            key,
+            json!({"pageId": page, "edits": [{"op": "append", "markdown": "more words"}]}),
+        )
+    };
+
+    // see: the page, its document, nothing else.
+    let (_, shared) = send(&world.app, share("see")).await;
+    assert_eq!(shared["outcome"], "ok", "{shared}");
+    assert_eq!(shared["value"]["accounts"][0]["level"], "see", "{shared}");
+    let (status, page) = send(&world.app, read(format!("/api/v1/pages/{plan}"))).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["sharedLevel"], "see", "{page}");
+    let (status, document) = send(&world.app, read(format!("/api/v1/pages/{plan}/document"))).await;
+    assert_eq!(status, StatusCode::OK, "{document}");
+    assert_eq!(document["canEdit"], false, "{document}");
+    let (status, _) = send(&world.app, read(format!("/api/v1/pages/{plan}/discussion"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "see doesn't read comments");
+    let (_, refused) = send(&world.app, comment("see-comment", &plan)).await;
+    assert_ne!(refused["outcome"], "ok", "see doesn't comment: {refused}");
+    let (_, refused) = send(&world.app, append("see-edit", &plan)).await;
+    assert_ne!(refused["outcome"], "ok", "see doesn't edit: {refused}");
+
+    // comment: its discussion too, and still nothing of the space's.
+    let (_, shared) = send(&world.app, share("comment")).await;
+    assert_eq!(shared["outcome"], "ok", "{shared}");
+    let (_, commented) = send(&world.app, comment("comment-comment", &plan)).await;
+    assert_eq!(commented["outcome"], "ok", "{commented}");
+    let (status, discussion) =
+        send(&world.app, read(format!("/api/v1/pages/{plan}/discussion"))).await;
+    assert_eq!(status, StatusCode::OK, "{discussion}");
+    assert_eq!(discussion["canComment"], true, "{discussion}");
+    let (_, listed) = send(
+        &world.app,
+        op(
+            &lena.browser,
+            "page_comment_list",
+            "comment-list",
+            json!({"pageId": plan}),
+        ),
+    )
+    .await;
+    assert_eq!(listed["outcome"], "ok", "{listed}");
+    assert!(listed.to_string().contains("a thought"), "{listed}");
+    let (_, refused) = send(&world.app, comment("comment-other", &other)).await;
+    assert_ne!(refused["outcome"], "ok", "only the shared page: {refused}");
+    let (_, refused) = send(&world.app, append("comment-edit", &plan)).await;
+    assert_ne!(refused["outcome"], "ok", "comment doesn't edit: {refused}");
+
+    // edit: its words too, but not its title, its shares or another page.
+    let (_, shared) = send(&world.app, share("edit")).await;
+    assert_eq!(shared["outcome"], "ok", "{shared}");
+    let (status, document) = send(&world.app, read(format!("/api/v1/pages/{plan}/document"))).await;
+    assert_eq!(status, StatusCode::OK, "{document}");
+    assert_eq!(document["canEdit"], true, "{document}");
+    let (_, edited) = send(&world.app, append("edit-edit", &plan)).await;
+    assert_eq!(edited["outcome"], "ok", "{edited}");
+    let body: String = sqlx::query_scalar("SELECT body FROM project_pages WHERE id = $1::uuid")
+        .bind(&plan)
+        .fetch_one(world.pool())
+        .await
+        .expect("body");
+    assert!(body.contains("more words"), "{body}");
+    let (_, refused) = send(&world.app, append("edit-other", &other)).await;
+    assert_ne!(refused["outcome"], "ok", "only the shared page: {refused}");
+    for (name, body) in [
+        ("page_update", json!({"pageId": plan, "title": "Mine now"})),
+        (
+            "thing_share_add",
+            json!({"kind": "page", "id": plan, "account": world.owner.actor}),
+        ),
+        ("thing_share_list", json!({"kind": "page", "id": plan})),
+        ("page_list", json!({"projectId": secret})),
+    ] {
+        let (_, refused) = send(&world.app, op(&lena.browser, name, name, body)).await;
+        assert_ne!(refused["outcome"], "ok", "{name}: {refused}");
+    }
+    let title: String = sqlx::query_scalar("SELECT title FROM project_pages WHERE id = $1::uuid")
+        .bind(&plan)
+        .fetch_one(world.pool())
+        .await
+        .expect("title");
+    assert_eq!(title, "Plan");
+    // Its history stays with its space: no earlier version by number.
+    let (_, refused) = send(
+        &world.app,
+        op(
+            &lena.browser,
+            "page_get",
+            "edit-old-version",
+            json!({"pageId": plan, "version": 1}),
+        ),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "no earlier version: {refused}");
+    // An archived space takes no changes, shared or not.
+    sqlx::query(
+        "UPDATE projects SET archived_at = now(), archived_by_actor_id = $2 WHERE id = $1::uuid",
+    )
+    .bind(&secret)
+    .bind(world.owner.actor)
+    .execute(world.pool())
+    .await
+    .expect("archive SECRET");
+    let (_, refused) = send(&world.app, append("archived-edit", &plan)).await;
+    assert_ne!(refused["outcome"], "ok", "archived: {refused}");
+    let (_, document) = send(&world.app, read(format!("/api/v1/pages/{plan}/document"))).await;
+    assert_ne!(document["canEdit"], true, "archived: {document}");
+    sqlx::query(
+        "UPDATE projects SET archived_at = NULL, archived_by_actor_id = NULL WHERE id = $1::uuid",
+    )
+    .bind(&secret)
+    .execute(world.pool())
+    .await
+    .expect("restore SECRET");
+
+    // A link only reads.
+    let violated = sqlx::query(
+        "UPDATE thing_grants SET level = 'edit' WHERE thing_id = $1::uuid AND link_digest IS NULL",
+    )
+    .bind(&plan)
+    .execute(world.pool())
+    .await;
+    assert!(violated.is_ok(), "a person's share may edit");
+    let (_, link) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "thing_link_create",
+            "owner-link",
+            json!({"kind": "page", "id": plan}),
+        ),
+    )
+    .await;
+    assert_eq!(link["outcome"], "ok", "{link}");
+    let refused = sqlx::query("UPDATE thing_grants SET level = 'edit' WHERE id = $1::uuid")
+        .bind(link["value"]["id"].as_str().expect("link id"))
+        .execute(world.pool())
+        .await;
+    assert!(refused.is_err(), "a link stays read-only");
+
+    // Unshared, all of it stops.
+    let (_, unshared) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "thing_share_remove",
+            "owner-unshare",
+            json!({"kind": "page", "id": plan, "account": lena.actor}),
+        ),
+    )
+    .await;
+    assert_eq!(unshared["outcome"], "ok", "{unshared}");
+    let (_, refused) = send(&world.app, comment("after-comment", &plan)).await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    let (status, _) = send(&world.app, read(format!("/api/v1/pages/{plan}/document"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    world.finish().await;
+}
+
+/// C2.27: an answer from search reads only what the asker can see. A page
+/// in a space they aren't in never reaches the model, so never the answer.
+#[tokio::test]
+async fn search_answers_read_only_what_the_asker_sees() {
+    let Some(world) = super::support::world::WorldBuilder::default()
+        .project("WORK")
+        .project("SECRET")
+        .person("lena", "member")
+        .build("privacy_search_answers")
+        .await
+    else {
+        return;
+    };
+    let (work, secret) = (
+        world.project("WORK").to_owned(),
+        world.project("SECRET").to_owned(),
+    );
+    let lena = &world.people["lena"];
+    sqlx::query("DELETE FROM project_memberships WHERE project_id = $1 AND actor_id = $2")
+        .bind(secret.parse::<Uuid>().expect("space"))
+        .bind(lena.actor)
+        .execute(world.pool())
+        .await
+        .expect("lena isn't in SECRET");
+    for (space, title, body) in [
+        (&work, "Zebra plan", "The zebra launch is on Friday."),
+        (&secret, "Zebra vault", "The zebra launch code is 4242."),
+    ] {
+        let (status, page) = send(
+            &world.app,
+            world.owner.browser.request(
+                "POST",
+                &format!("/api/v1/projects/{space}/pages"),
+                None,
+                json!({"title": title, "body": body}),
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "{status} {page}");
+    }
+    let op = |browser: &Browser, name: &str, body: Value| {
+        browser.request(
+            "POST",
+            &format!("/api/v2/w/{}/ops/{name}", world.organization),
+            Some(&Uuid::now_v7().to_string()),
+            body,
+        )
+    };
+    let (_, set) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "setting_update",
+            json!({"key": "ai.provider", "scope": "workspace", "value": "fake"}),
+        ),
+    )
+    .await;
+    assert_eq!(set["outcome"], "ok", "{set}");
+
+    let (_, answered) = send(
+        &world.app,
+        op(
+            &lena.browser,
+            "search_answer",
+            json!({"question": "zebra launch"}),
+        ),
+    )
+    .await;
+    assert_eq!(answered["outcome"], "ok", "{answered}");
+    let text = answered.to_string();
+    assert!(text.contains("Friday"), "{answered}");
+    assert!(
+        !text.contains("4242") && !text.contains("Zebra vault"),
+        "{answered}"
+    );
+    let sources = answered["value"]["sources"].as_array().expect("sources");
+    assert_eq!(sources.len(), 1, "{answered}");
+    assert_eq!(sources[0]["title"], "Zebra plan", "{answered}");
+
+    // The owner sees both, so both are read.
+    let (_, answered) = send(
+        &world.app,
+        op(
+            &world.owner.browser,
+            "search_answer",
+            json!({"question": "zebra launch"}),
+        ),
+    )
+    .await;
+    assert_eq!(answered["outcome"], "ok", "{answered}");
+    assert_eq!(answered["value"]["read"], 2, "{answered}");
     world.finish().await;
 }
 
@@ -3803,6 +4237,7 @@ async fn an_export_is_for_its_requester_alone() {
 async fn channel_writes_keep_to_private_channels() {
     let Some(world) = super::support::world::WorldBuilder::default()
         .project("WORK")
+        .project("SIDE")
         .person("lena", "member")
         .person("omar", "member")
         .person("nate", "member")
@@ -4155,6 +4590,84 @@ async fn channel_writes_keep_to_private_channels() {
     for kind in ["page", "sheet_row", "sticky"] {
         assert!(said.contains(&kind), "a line for the {kind}: {timeline}");
     }
+    // Made without saying so, a sticky still links back: the message shows
+    // what it was made into, though the channel has no line for it.
+    let (status, quiet_board) = op(
+        &lena.browser,
+        "whiteboard_create",
+        json!({"title": "Quiet plans", "projectId": work}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{quiet_board}");
+    let quiet_board = quiet_board["value"]["whiteboard"]["id"].clone();
+    let (status, made) = op(
+        &omar.browser,
+        "whiteboard_update_elements",
+        json!({"whiteboardId": quiet_board, "fromMessageId": shown, "operations": [
+            {"op": "add", "type": "rectangle", "text": "From the channel, quietly"},
+        ]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let request = lena.browser.request(
+        "GET",
+        &format!("/api/v1/conversations/{open}/timeline"),
+        None,
+        Value::Null,
+    );
+    let (_, timeline) = send(app, request).await;
+    let entries = timeline["entries"].as_array().expect("entries");
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry["system"]["thingId"] == quiet_board),
+        "nothing was said: {timeline}"
+    );
+    let chips = entries
+        .iter()
+        .find(|entry| entry["message"]["id"] == json!(shown))
+        .map(|entry| entry["message"]["madeInto"].clone())
+        .expect("the message");
+    assert!(
+        chips
+            .as_array()
+            .expect("chips")
+            .contains(&json!({"kind": "sticky", "id": quiet_board})),
+        "{chips}"
+    );
+    // A thing in another space that links back to the message names nothing
+    // here: this channel's readers needn't be in that space.
+    let (status, elsewhere) = op(
+        &lena.browser,
+        "whiteboard_create",
+        json!({"title": "Side plans", "projectId": world.project("SIDE")}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{elsewhere}");
+    let elsewhere = elsewhere["value"]["whiteboard"]["id"].clone();
+    sqlx::query(
+        "INSERT INTO links (workspace_id, from_thing_id, to_thing_id, kind, origin) \
+         VALUES ($1, $2::uuid, $3::uuid, 'made_from', 'explicit')",
+    )
+    .bind(workspace)
+    .bind(elsewhere.as_str().expect("board id"))
+    .bind(&shown)
+    .execute(pool)
+    .await
+    .expect("a link from another space");
+    let request = lena.browser.request(
+        "GET",
+        &format!("/api/v1/conversations/{open}/timeline"),
+        None,
+        Value::Null,
+    );
+    let (_, timeline) = send(app, request).await;
+    assert!(
+        !timeline
+            .to_string()
+            .contains(elsewhere.as_str().expect("board id")),
+        "{timeline}"
+    );
     // Someone who may make tasks but not post in the channel makes one from
     // a message quietly: saySo posts nothing for them.
     let tess = &world.people["tess"];

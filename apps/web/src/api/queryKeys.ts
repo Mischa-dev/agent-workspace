@@ -1,6 +1,8 @@
 export const queryKeys = {
   session: ['session'] as const,
   projects: ['projects', 'rail'] as const,
+  /** One workspace's open projects: under `projects`, so whatever refreshes the rail refreshes it. */
+  projectsIn: (workspaceId: string) => ['projects', 'rail', workspaceId] as const,
   /** Every project list: the rail, search and the archived list. */
   projectLists: ['projects'] as const,
   projectSearch: (query: string) => ['projects', 'search', query] as const,

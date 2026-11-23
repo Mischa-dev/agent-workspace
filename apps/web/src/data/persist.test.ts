@@ -111,6 +111,8 @@ describe('reading offline', () => {
     const restarted = client()
     expect(await restoreOffline(restarted)).toBe(true)
     expect(restarted.getQueryData(queryKeys.timeline('p', 'c'))).toEqual({ messages: [{ id: 'm1' }] })
+    // Shown, and asked for again however recently it was kept.
+    expect(restarted.getQueryState(queryKeys.timeline('p', 'c'))?.isInvalidated).toBe(true)
     expect(things.get('task', 't1')?.title).toBe('Kept')
 
     // Bob signs in on the same device: Alice's copy goes, and nothing of hers is shown to him.

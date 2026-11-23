@@ -986,6 +986,22 @@ pub(super) fn space_arg(
     }
 }
 
+/// Whether an MCP credential reaches a page shared with its account on its
+/// own (C1.27), as it would the page's space: its limits, its space, its
+/// connection's workspace.
+pub(crate) async fn share_reaches(
+    state: &AppState,
+    principal: &McpPrincipal,
+    page: Uuid,
+) -> Result<bool, AppError> {
+    let (_, limits) = super::caller_reach(state, principal).await?;
+    let caller = crate::access::Caller::of_principal(principal, limits);
+    crate::db::scoped_one(&state.pool, async |connection| {
+        crate::access::sharing::credential_reaches(connection, &caller, page).await
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

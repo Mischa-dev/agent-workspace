@@ -8,7 +8,7 @@
   "auth/SignInPage.tsx": 1,
   "auth/workos.ts": 2,
   "automations/api.ts": 2,
-  "collections/api.ts": 8,
+  "collections/api.ts": 6,
   "conversations/api.ts": 4,
   "conversations/sidebarApi.ts": 2,
   "direct/api.ts": 3,

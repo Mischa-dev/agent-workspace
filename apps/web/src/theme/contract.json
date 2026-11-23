@@ -593,6 +593,10 @@
       "label": "The table piece"
     },
     {
+      "class": "aw-proposed",
+      "label": "Suggested changes to a task or record, waiting for a decision"
+    },
+    {
       "class": "aw-membed",
       "label": "Tasks or a thing embedded in a page"
     },

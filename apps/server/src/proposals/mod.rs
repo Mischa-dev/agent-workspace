@@ -58,7 +58,9 @@ pub struct ProposalView {
     /// lasting block id, each with the Markdown it replaces (`before`); for
     /// a sheet, `{"cells": [...]}`, each with its tab, row, column, the
     /// input it read (`before`) and the one proposed (`after`); for a
-    /// whiteboard, `{"elements": [...]}`, likewise.
+    /// whiteboard, `{"elements": [...]}`, likewise; for a record or a task,
+    /// `{"changes": [...]}`, each with its field, name, and how it reads
+    /// `before` and `after`.
     #[schemars(with = "serde_json::Value")]
     pub change: sqlx::types::Json<serde_json::Value>,
     #[schemars(with = "serde_json::Value")]
@@ -386,6 +388,44 @@ pub async fn announce_fact(
 
 /// What a proposal's request card is about.
 pub const REQUEST_SUBJECT: &str = "proposal";
+
+/// Where the thing a proposal would change opens, for its request card.
+pub async fn thing_target(
+    transaction: &mut Transaction<'_, Postgres>,
+    proposal_id: Uuid,
+) -> Result<Option<crate::addresses::Target>, AppError> {
+    use crate::addresses::{Place, Target};
+    let Some((kind, thing, space, collection)) = sqlx::query_as::<
+        _,
+        (String, Uuid, Uuid, Option<Uuid>),
+    >(
+        "SELECT proposal.thing_kind, proposal.thing_id, proposal.space_id, record.collection_id \
+             FROM proposals proposal \
+             LEFT JOIN collection_records record \
+               ON proposal.thing_kind = 'record' AND record.id = proposal.thing_id \
+             WHERE proposal.id = $1",
+    )
+    .bind(proposal_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    else {
+        return Ok(None);
+    };
+    Ok(match (kind.as_str(), collection) {
+        ("page", _) => Some(Target::page(space, thing)),
+        ("task", _) => Some(Target::task(space, thing)),
+        ("sheet", _) => Some(Target::space(space, Place::Sheet(thing))),
+        ("whiteboard", _) => Some(Target::Whiteboard(thing)),
+        ("record", Some(collection)) => Some(Target::space(
+            space,
+            Place::Record {
+                collection,
+                record: thing,
+            },
+        )),
+        _ => None,
+    })
+}
 
 /// Raises the request card that asks the people who edit a thing to decide
 /// a proposal on it: its creator (when that isn't the author) and the

@@ -4,7 +4,8 @@
 //! other things, lists and search still follow the space's members.
 //!
 //! A link is a secret shown once to whoever made it; only its digest is
-//! kept. It opens the thing for any signed-in account that has it, until it
+//! kept. It opens the thing for any signed-in account that has it, or, when
+//! it is public (C1.27), for anyone who has it, signed in or not, until it
 //! expires or is revoked. Sharing needs the edit permission on the thing's
 //! kind in its space, so nobody shares more than they could change.
 
@@ -34,6 +35,7 @@ const MAX_LINK_HOURS: i64 = 90 * 24;
 
 pub fn register_ops(registry: &mut Registry) {
     registry
+        .add::<ThingShareList>()
         .add::<ThingShare>()
         .add::<ThingUnshare>()
         .add::<ThingLinkCreate>();
@@ -54,39 +56,185 @@ impl ThingKind {
     }
 }
 
-/// Whether `thing` of `kind` is shared with `account`, who is still an
-/// active member of its workspace.
-pub async fn shared_with(
+/// What a share with one person lets them do, each including the ones
+/// before it. A link is always `See`.
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema, Eq, PartialEq, PartialOrd, Ord,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ShareLevel {
+    /// Read it.
+    #[default]
+    See,
+    /// Read it and its comments, and comment.
+    Comment,
+    /// Comment, and change its words.
+    Edit,
+}
+
+impl ShareLevel {
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::See => "see",
+            Self::Comment => "comment",
+            Self::Edit => "edit",
+        }
+    }
+
+    fn from_key(key: &str) -> Self {
+        match key {
+            "edit" => Self::Edit,
+            "comment" => Self::Comment,
+            _ => Self::See,
+        }
+    }
+
+    /// Whether this level lets someone outside the space run `operation`
+    /// on the shared thing. Only these: nothing that lists, moves, shares or
+    /// deletes it.
+    pub fn admits(self, operation: &str) -> bool {
+        let needs = match operation {
+            "page_get" | "page_blocks_get" => Self::See,
+            "page_comment_list"
+            | "page_comment_create"
+            | "page_comment_update"
+            | "page_suggestion_list" => Self::Comment,
+            "page_update_blocks" => Self::Edit,
+            _ => return false,
+        };
+        self >= needs
+    }
+}
+
+/// What `thing` of `kind` is shared with `account` for, while they are
+/// still an active member of its workspace.
+pub async fn level_for(
     connection: &mut PgConnection,
     account: Uuid,
     kind: &str,
     thing: Uuid,
-) -> Result<bool, AppError> {
-    Ok(sqlx::query_scalar::<_, bool>(
+) -> Result<Option<ShareLevel>, AppError> {
+    let level = sqlx::query_as::<_, (String, bool)>(
         r#"
-        SELECT EXISTS (
-            SELECT 1 FROM thing_grants grant_row
-            JOIN organization_memberships membership
-              ON membership.organization_id = grant_row.workspace_id
-             AND membership.actor_id = grant_row.grantee_account_id
-             AND membership.enabled
-            JOIN actors account ON account.id = membership.actor_id AND account.status = 'active'
-            WHERE grant_row.thing_kind = $1 AND grant_row.thing_id = $2
-              AND grant_row.grantee_account_id = $3
-              AND grant_row.revoked_at IS NULL
-              AND (grant_row.expires_at IS NULL OR grant_row.expires_at > now())
-        )
+        SELECT grant_row.level, COALESCE(project.archived_at IS NOT NULL, false)
+        FROM thing_grants grant_row
+        JOIN organization_memberships membership
+          ON membership.organization_id = grant_row.workspace_id
+         AND membership.actor_id = grant_row.grantee_account_id
+         AND membership.enabled
+        JOIN actors account ON account.id = membership.actor_id AND account.status = 'active'
+        LEFT JOIN project_pages page
+          ON grant_row.thing_kind = 'page' AND page.id = grant_row.thing_id
+        LEFT JOIN projects project ON project.id = page.project_id
+        WHERE grant_row.thing_kind = $1 AND grant_row.thing_id = $2
+          AND grant_row.grantee_account_id = $3
+          AND grant_row.revoked_at IS NULL
+          AND (grant_row.expires_at IS NULL OR grant_row.expires_at > now())
+          -- A conversation's memory page follows its conversation; no
+          -- share opens it.
+          AND page.memory_for_kind IS DISTINCT FROM 'conversation'
         "#,
     )
     .bind(kind)
     .bind(thing)
     .bind(account)
-    .fetch_one(&mut *connection)
-    .await?)
+    .fetch_optional(&mut *connection)
+    .await?;
+    // An archived space takes no changes from anyone, so a share there
+    // only reads.
+    Ok(level.map(|(level, closed)| {
+        let level = ShareLevel::from_key(&level);
+        if closed {
+            level.min(ShareLevel::See)
+        } else {
+            level
+        }
+    }))
 }
 
-/// The thing a link opens, while it works: its kind and id.
-pub async fn by_link(pool: &PgPool, token: &str) -> Result<Option<(String, Uuid)>, AppError> {
+/// Whether the credential a call came through reaches a page shared with
+/// its account, as it would reach the page's space: a run's credential
+/// stays in its run's space, an older space credential in its own space, an
+/// app acting for the account in the workspaces its limits name, and an
+/// agent's connection in its connection's workspace. The browser reaches
+/// every share.
+pub async fn credential_reaches(
+    connection: &mut PgConnection,
+    caller: &crate::access::Caller,
+    page: Uuid,
+) -> Result<bool, AppError> {
+    let Some((workspace, space)) = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT project.organization_id, project.id FROM project_pages page \
+         JOIN projects project ON project.id = page.project_id WHERE page.id = $1",
+    )
+    .bind(page)
+    .fetch_optional(&mut *connection)
+    .await?
+    else {
+        return Ok(false);
+    };
+    if caller.for_run
+        || caller
+            .confined_space
+            .is_some_and(|confined| confined != space)
+    {
+        return Ok(false);
+    }
+    if caller
+        .limits
+        .as_ref()
+        .is_some_and(|limits| !limits.organizations.contains_key(&workspace))
+    {
+        return Ok(false);
+    }
+    if let Some(connection_id) = caller.connection_id {
+        return Ok(sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM external_agent_connections \
+             WHERE id = $1 AND status = 'active' AND workspace_id = $2)",
+        )
+        .bind(connection_id)
+        .bind(workspace)
+        .fetch_one(&mut *connection)
+        .await?);
+    }
+    Ok(true)
+}
+
+/// Whether a page is shared with `account` for at least `needs`.
+pub async fn page_allows(
+    pool: &PgPool,
+    account: Uuid,
+    page: Uuid,
+    needs: ShareLevel,
+) -> Result<bool, AppError> {
+    Ok(page_level(pool, account, page)
+        .await?
+        .is_some_and(|level| level >= needs))
+}
+
+/// What a page is shared with `account` for, read on its own connection.
+pub async fn page_level(
+    pool: &PgPool,
+    account: Uuid,
+    page: Uuid,
+) -> Result<Option<ShareLevel>, AppError> {
+    crate::db::scoped_one(pool, async |connection| {
+        level_for(connection, account, ThingKind::Page.key(), page).await
+    })
+    .await
+}
+
+/// What a working link opens.
+#[derive(Clone, Debug)]
+pub struct Opened {
+    pub kind: String,
+    pub thing: Uuid,
+    /// Anyone with the link may read it, signed in or not.
+    pub public: bool,
+}
+
+/// The thing a link opens, while it works.
+pub async fn by_link(pool: &PgPool, token: &str) -> Result<Option<Opened>, AppError> {
     if !token.starts_with(LINK_PREFIX) || token.len() > 128 {
         return Ok(None);
     }
@@ -95,8 +243,8 @@ pub async fn by_link(pool: &PgPool, token: &str) -> Result<Option<(String, Uuid)
     };
     let candidate: [u8; 32] = Sha256::digest(token.as_bytes()).into();
     let rows = crate::db::scoped_one(pool, async |connection| {
-        sqlx::query_as::<_, (String, Uuid, Vec<u8>)>(
-            "SELECT thing_kind, thing_id, link_digest FROM thing_grants \
+        sqlx::query_as::<_, (String, Uuid, Vec<u8>, bool)>(
+            "SELECT thing_kind, thing_id, link_digest, public FROM thing_grants \
              WHERE link_prefix = $1 AND revoked_at IS NULL \
                AND (expires_at IS NULL OR expires_at > now())",
         )
@@ -105,9 +253,13 @@ pub async fn by_link(pool: &PgPool, token: &str) -> Result<Option<(String, Uuid)
         .await
     })
     .await?;
-    Ok(rows.into_iter().find_map(|(kind, thing, digest)| {
+    Ok(rows.into_iter().find_map(|(kind, thing, digest, public)| {
         (digest.len() == candidate.len() && bool::from(digest.as_slice().ct_eq(&candidate)))
-            .then_some((kind, thing))
+            .then_some(Opened {
+                kind,
+                thing,
+                public,
+            })
     }))
 }
 
@@ -127,6 +279,10 @@ pub struct ThingSharesView {
 pub struct SharedAccount {
     #[schemars(with = "String")]
     pub account: Uuid,
+    /// Their name.
+    pub display_name: String,
+    /// What they may do with it.
+    pub level: ShareLevel,
     #[schemars(with = "Option<String>")]
     pub expires_at: Option<DateTime<Utc>>,
 }
@@ -136,6 +292,8 @@ pub struct SharedAccount {
 pub struct SharedLink {
     #[schemars(with = "String")]
     pub id: Uuid,
+    /// Anyone with it may read the page without signing in.
+    pub public: bool,
     #[schemars(with = "Option<String>")]
     pub expires_at: Option<DateTime<Utc>>,
 }
@@ -145,11 +303,28 @@ async fn shares(
     kind: ThingKind,
     id: Uuid,
 ) -> Result<ThingSharesView, AppError> {
-    let rows = sqlx::query_as::<_, (Uuid, Option<Uuid>, Option<DateTime<Utc>>)>(
-        "SELECT id, grantee_account_id, expires_at FROM thing_grants \
-         WHERE thing_kind = $1 AND thing_id = $2 AND revoked_at IS NULL \
-           AND (expires_at IS NULL OR expires_at > now()) \
-         ORDER BY created_at, id",
+    let rows = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            Option<Uuid>,
+            Option<String>,
+            bool,
+            String,
+            Option<DateTime<Utc>>,
+        ),
+    >(
+        "SELECT grant_row.id, grant_row.grantee_account_id, \
+                CASE WHEN grant_row.grantee_account_id IS NOT NULL THEN \
+                    (SELECT profile.display_name \
+                     FROM account_profile(grant_row.grantee_account_id, grant_row.workspace_id) profile) \
+                END, \
+                grant_row.public, grant_row.level, grant_row.expires_at \
+         FROM thing_grants grant_row \
+         WHERE grant_row.thing_kind = $1 AND grant_row.thing_id = $2 \
+           AND grant_row.revoked_at IS NULL \
+           AND (grant_row.expires_at IS NULL OR grant_row.expires_at > now()) \
+         ORDER BY grant_row.created_at, grant_row.id",
     )
     .bind(kind.key())
     .bind(id)
@@ -161,14 +336,17 @@ async fn shares(
         accounts: Vec::new(),
         links: Vec::new(),
     };
-    for (grant, account, expires_at) in rows {
+    for (grant, account, name, public, level, expires_at) in rows {
         match account {
             Some(account) => view.accounts.push(SharedAccount {
                 account,
+                display_name: name.unwrap_or_default(),
+                level: ShareLevel::from_key(&level),
                 expires_at,
             }),
             None => view.links.push(SharedLink {
                 id: grant,
+                public,
                 expires_at,
             }),
         }
@@ -206,6 +384,48 @@ fn located(call: &OpCall<'_>) -> Result<(Uuid, Uuid), OpError> {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ThingShareListInput {
+    /// What kind of thing: `page`.
+    pub kind: ThingKind,
+    /// The thing: its id or a link to it.
+    pub id: IdRef,
+}
+
+impl Targeted for ThingShareListInput {
+    fn target(&self) -> Target {
+        Target::thing(self.kind.key(), self.id.id())
+    }
+}
+
+/// Who and what one thing is shared with.
+pub struct ThingShareList;
+
+impl Operation for ThingShareList {
+    const NAME: &'static str = "thing_share_list";
+    const KIND: OpKind = OpKind::Query;
+    const MODULE: &'static str = "pages";
+    const PERMISSION: Option<Perm> = Some(Perm::PagesEdit);
+    const IDEMPOTENCY: Idempotency = Idempotency::None;
+    const TITLE: &'static str = "List one thing's shares";
+    const DESCRIPTION: &'static str = "The accounts a page is shared with on its own and the \
+        links that open it (never their secrets), with when each stops. Needs the right to edit \
+        the page, as sharing does.";
+
+    type Input = ThingShareListInput;
+    type Output = ThingSharesView;
+
+    async fn run(
+        call: &mut OpCall<'_>,
+        input: ThingShareListInput,
+    ) -> Result<ThingSharesView, OpError> {
+        let (kind, id) = (input.kind, input.id.id());
+        let tx = call.tx().await?;
+        Ok(shares(tx, kind, id).await?)
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ThingShareInput {
     /// What kind of thing: `page`.
     pub kind: ThingKind,
@@ -213,6 +433,11 @@ pub struct ThingShareInput {
     pub id: IdRef,
     /// The account to share it with: a member of this workspace.
     pub account: IdRef,
+    /// What they may do: `see` (read it, the default), `comment` (read it
+    /// and its comments, and comment) or `edit` (comment and change its
+    /// words). Never more than reading for anything else in its space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<ShareLevel>,
     /// When the share stops (RFC 3339). Leave out to keep it until it is
     /// unshared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -238,9 +463,10 @@ impl Operation for ThingShare {
     const PERMISSION: Option<Perm> = Some(Perm::PagesEdit);
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
     const TITLE: &'static str = "Share one thing";
-    const DESCRIPTION: &'static str = "Let one member of this workspace read one page that is \
-        in a space they aren't in, without giving them anything else there. Sharing again \
-        changes when it stops. Needs the right to edit the page. Undo it with thing_share_remove.";
+    const DESCRIPTION: &'static str = "Let one member of this workspace read, comment on or edit \
+        one page that is in a space they aren't in (level), without giving them anything else \
+        there. Sharing again changes the level and when it stops. Needs the right to edit the \
+        page. Undo it with thing_share_remove.";
 
     type Input = ThingShareInput;
     type Output = ThingSharesView;
@@ -251,6 +477,7 @@ impl Operation for ThingShare {
     ) -> Result<ThingSharesView, OpError> {
         let (workspace_id, space_id) = located(call)?;
         let (kind, id, account) = (input.kind, input.id.id(), input.account.id());
+        let level = input.level.unwrap_or_default();
         if input.expires_at.is_some_and(|at| at <= Utc::now()) {
             return Err(OpError::invalid("expiresAt", "Pick a time in the future."));
         }
@@ -284,7 +511,7 @@ impl Operation for ThingShare {
         sqlx::query(
             "INSERT INTO thing_grants (id, workspace_id, space_id, thing_kind, thing_id, \
                  grantee_account_id, level, expires_at, granted_by_account_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'see', $7, $8)",
+             VALUES ($1, $2, $3, $4, $5, $6, $9, $7, $8)",
         )
         .bind(Uuid::now_v7())
         .bind(workspace_id)
@@ -294,10 +521,15 @@ impl Operation for ThingShare {
         .bind(account)
         .bind(input.expires_at)
         .bind(by)
+        .bind(level.key())
         .execute(&mut **tx)
         .await
         .map_err(AppError::from)?;
-        call.audit_target(kind.key(), id, json!({ "sharedWith": account }));
+        call.audit_target(
+            kind.key(),
+            id,
+            json!({ "sharedWith": account, "level": level.key() }),
+        );
         share_changed(call, kind, id).await?;
         let tx = call.tx().await?;
         Ok(shares(tx, kind, id).await?)
@@ -391,6 +623,10 @@ pub struct ThingLinkCreateInput {
     /// out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_in_hours: Option<i64>,
+    /// Let anyone with the link read the page without signing in. Left
+    /// out, only someone signed in to this server can open it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public: Option<bool>,
 }
 
 impl Targeted for ThingLinkCreateInput {
@@ -429,7 +665,8 @@ impl Operation for ThingLinkCreate {
     const TITLE: &'static str = "Make a link to one thing";
     const DESCRIPTION: &'static str = "Make a link that lets anyone signed in who has it read \
         one page, and nothing else, until it expires (168 hours unless you say) or is revoked \
-        with thing_share_remove. The token is shown once. Needs the right to edit the page.";
+        with thing_share_remove; with public, anyone who has it may read the page without \
+        signing in. The token is shown once. Needs the right to edit the page.";
 
     type Input = ThingLinkCreateInput;
     type Output = ThingLinkView;
@@ -475,8 +712,9 @@ impl Operation for ThingLinkCreate {
         let tx = call.tx().await?;
         sqlx::query(
             "INSERT INTO thing_grants (id, workspace_id, space_id, thing_kind, thing_id, \
-                 link_prefix, link_digest, level, expires_at, granted_by_account_id, request_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 'see', $8, $9, $10)",
+                 link_prefix, link_digest, level, expires_at, granted_by_account_id, request_id, \
+                 public) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'see', $8, $9, $10, $11)",
         )
         .bind(link_id)
         .bind(workspace_id)
@@ -488,6 +726,7 @@ impl Operation for ThingLinkCreate {
         .bind(expires_at)
         .bind(by)
         .bind(request_id.as_deref())
+        .bind(input.public.unwrap_or(false))
         .execute(&mut **tx)
         .await
         .map_err(AppError::from)?;
