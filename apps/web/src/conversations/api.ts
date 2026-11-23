@@ -1,6 +1,6 @@
 import { isSpaceAddress } from '../app/href'
 import { requestJson } from '../api/client'
-import { callOp, newRequestId } from '../api/ops'
+import { callOp, newRequestId, ranOrThrow } from '../api/ops'
 import { asRecord, capability, integer, normalizeConversationActor, nullableString, REMOVED_MESSAGE_CONTENT, string } from './sidebarApi'
 import type { FileAttachment } from '../files/model'
 import {
@@ -392,16 +392,19 @@ export async function sendConversationMessage(input: {
   replyTo?: { messageId: string }
 }) {
   return timed('message_send', (async () => {
-    const sent = await callOp(
-      'message_send',
-      {
-        conversationId: input.conversationId,
-        content: input.content,
-        // Left out when there are none.
-        ...(input.attachments?.length ? { attachmentIds: input.attachments.map((file) => file.id) } : {}),
-        ...(input.replyTo ? { replyToMessageId: input.replyTo.messageId } : {}),
-      },
-      { requestId: input.idempotencyKey },
+    const sent = ranOrThrow(
+      await callOp(
+        'message_send',
+        {
+          conversationId: input.conversationId,
+          content: input.content,
+          // Left out when there are none.
+          ...(input.attachments?.length ? { attachmentIds: input.attachments.map((file) => file.id) } : {}),
+          ...(input.replyTo ? { replyToMessageId: input.replyTo.messageId } : {}),
+        },
+        { requestId: input.idempotencyKey },
+      ),
+      'Sending it',
     )
     // The timeline's own reading of it, shown at once before any refetch.
     const entry = await getConversationMessage(input.conversationId, sent.messageId)
@@ -443,10 +446,13 @@ export async function editConversationMessage(input: {
   expectedRevision: number
   idempotencyKey: string
 }) {
-  const saved = await callOp(
-    'message_update',
-    { messageId: input.messageId, content: input.content, expectedRevision: input.expectedRevision },
-    { requestId: input.idempotencyKey },
+  const saved = ranOrThrow(
+    await callOp(
+      'message_update',
+      { messageId: input.messageId, content: input.content, expectedRevision: input.expectedRevision },
+      { requestId: input.idempotencyKey },
+    ),
+    'The edit',
   )
   return {
     entry: await getConversationMessage(input.conversationId, input.messageId),
@@ -456,7 +462,7 @@ export async function editConversationMessage(input: {
 
 /** Remove a message for everyone. Its text and earlier versions are deleted. */
 export async function removeConversationMessage(input: { conversationId: string; messageId: string }) {
-  const removed = await callOp('message_delete', { messageId: input.messageId }, { requestId: newRequestId() })
+  const removed = ranOrThrow(await callOp('message_delete', { messageId: input.messageId }, { requestId: newRequestId() }), 'Removing it')
   return {
     entry: await getConversationMessage(input.conversationId, input.messageId),
     alreadyRemoved: removed.alreadyRemoved,
@@ -550,14 +556,17 @@ export async function createThread(input: {
   originMessageId?: string
   idempotencyKey: string
 }) {
-  const thread = await callOp(
-    'thread_start',
-    {
-      conversationId: input.channelId,
-      ...(input.name ? { name: input.name } : {}),
-      ...(input.originMessageId ? { fromMessageId: input.originMessageId } : {}),
-    },
-    { requestId: input.idempotencyKey },
+  const thread = ranOrThrow(
+    await callOp(
+      'thread_start',
+      {
+        conversationId: input.channelId,
+        ...(input.name ? { name: input.name } : {}),
+        ...(input.originMessageId ? { fromMessageId: input.originMessageId } : {}),
+      },
+      { requestId: input.idempotencyKey },
+    ),
+    'Starting the thread',
   )
   return { id: thread.id, name: thread.name || (input.name ?? '') }
 }

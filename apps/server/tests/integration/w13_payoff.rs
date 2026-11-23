@@ -260,10 +260,10 @@ async fn the_alert_launches_its_batch_on_the_account_in_each_projects_environmen
         1,
         "{picked}"
     );
-    let (launched_account, launched_environment, launched_state) =
-        sqlx::query_as::<_, (Option<Uuid>, Option<Uuid>, String)>(
-            "SELECT provider_account_id, environment_id, state FROM launches \
-             WHERE provider_account_id = $1",
+    let (launched_account, launched_environment, launched_state, launched_source, through_app) =
+        sqlx::query_as::<_, (Option<Uuid>, Option<Uuid>, String, String, bool)>(
+            "SELECT provider_account_id, environment_id, state, source, made_through_app \
+             FROM launches WHERE provider_account_id = $1",
         )
         .bind(account)
         .fetch_one(&setup.pool)
@@ -276,6 +276,10 @@ async fn the_alert_launches_its_batch_on_the_account_in_each_projects_environmen
         "in the project's own environment"
     );
     assert_eq!(launched_state, "queued");
+    // From the browser it's the person's own launch, so a limit they set on
+    // their apps doesn't cancel it when the queue drains.
+    assert_ne!(launched_source, "mcp", "a browser batch is no app's launch");
+    assert!(!through_app, "a browser batch is no app's launch");
 
     // A queued task isn't suggested again; one tap launches what's left.
     let (_, batch) = get(setup, &setup.browser, &batch_uri).await;

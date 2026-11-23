@@ -191,7 +191,7 @@ function AccountUsageSection({
         ) : null}
         <Windows windows={account.windows} />
         <BankedResets account={account} />
-        <UsageBatch accountId={account.accountId} initiallyOpen={openBatch} windowKey={windowKey} />
+        <UsageBatch accountId={account.accountId} workspaceId={account.organizationId} initiallyOpen={openBatch} windowKey={windowKey} />
         <UsageHistory accountId={account.accountId} />
         <Schedules account={account} />
         <Rules account={account} />

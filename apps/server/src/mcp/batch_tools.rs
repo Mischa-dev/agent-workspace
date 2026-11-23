@@ -87,6 +87,11 @@ pub(crate) struct UsageBatchLaunchArguments {
     /// A stable ID so a retry never launches twice.
     #[serde(default)]
     pub client_request_id: Option<String>,
+    /// Set by the operation for a person's browser session, so the launch
+    /// is recorded as theirs and not an app's (never read from the call).
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub browser_session: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -216,8 +221,13 @@ pub(crate) async fn usage_batch_launch(
         let picks = match &arguments.task_ids {
             None => None,
             Some(ids) => {
-                if ids.is_empty() || ids.len() > batch::MAX_BATCH {
-                    return Ok(ToolResult::invalid("taskIds", "Pass 1 to 20 tasks."));
+                // Picks may go past the suggested batch's size, up to what
+                // one launch takes.
+                if ids.is_empty() || ids.len() > crate::launch::MAX_TASKS_PER_LAUNCH {
+                    return Ok(ToolResult::invalid(
+                        "taskIds",
+                        format!("Pass 1 to {} tasks.", crate::launch::MAX_TASKS_PER_LAUNCH),
+                    ));
                 }
                 let mut picks = Vec::new();
                 for id in ids {
@@ -253,8 +263,8 @@ pub(crate) async fn usage_batch_launch(
             actor_id: principal.actor_id,
             actor_kind: principal.actor_kind,
             via_grant_id: principal.via_grant_id(),
-            mcp: true,
-            session_id: None,
+            mcp: arguments.browser_session.is_none(),
+            session_id: arguments.browser_session,
             request_id: Some(request_id.clone()),
             mcp_credential: None,
         };

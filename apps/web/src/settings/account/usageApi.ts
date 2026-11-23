@@ -144,14 +144,15 @@ export const getBatch = (accountId: string, windowKey: string | null) =>
 
 /** Leave `tasks` out to launch the suggested batch as it stands. The key makes a repeated tap launch once. */
 export const launchBatch = async (
-  accountId: string,
+  account: { accountId: string; workspaceId: string | null | undefined },
   request: { tasks?: { projectId: string; workItemId: string }[]; windowKey?: string | null },
   idempotencyKey: string,
 ): Promise<BatchResult> => {
+  // The account's own workspace, so someone in several launches in the right one.
   const result = await callOp(
     'usage_batch_launch',
-    { accountId, taskIds: request.tasks?.map((task) => task.workItemId), windowKey: request.windowKey ?? undefined },
-    { requestId: idempotencyKey },
+    { accountId: account.accountId, taskIds: request.tasks?.map((task) => task.workItemId), windowKey: request.windowKey ?? undefined },
+    { requestId: idempotencyKey, workspaceId: account.workspaceId ?? undefined },
   )
   return {
     launched: result.launched,
