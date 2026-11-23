@@ -855,6 +855,9 @@ async fn shared_page_rooms(name: &str, target: Target) {
     )
     .await;
     assert_eq!(shared["outcome"], "ok", "{shared}");
+    // The share's own signal is in the log before the ticket is cut, so the
+    // stale ticket below can only be the share taken back.
+    world.cluster.sequenced().await;
     let issued = watch().await;
     assert_eq!(issued["documents"], json!([format!("page.{page}")]));
     let mut socket = open(&world, issued["ticket"].as_str().expect("ticket")).await;
