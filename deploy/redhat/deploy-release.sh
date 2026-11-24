@@ -9,15 +9,33 @@ readonly node_bin="${install_root}/toolchains/node-v24.22.1-linux-arm64/bin"
 readonly cargo_bin="${HOME}/.local/share/agent-workspace/cargo/bin"
 readonly rustup_home="${HOME}/.local/share/agent-workspace/rustup"
 readonly cargo_target_root="${checkout_root}/target"
+# A build made elsewhere (the Host release workflow), unpacked: bin/, web/ and
+# COMMIT. Set AGENT_WORKSPACE_PREBUILT to its folder to install it instead of
+# building here, for when the host can't spare the memory the build needs.
+readonly prebuilt="${AGENT_WORKSPACE_PREBUILT:-}"
 
 if [[ -n "$(git -C "${checkout_root}" status --porcelain)" ]]; then
   echo "Refusing to deploy a dirty checkout." >&2
   exit 1
 fi
 
+if [[ -n "${prebuilt}" ]]; then
+  if [[ "$(cat "${prebuilt}/COMMIT" 2>/dev/null)" != "${commit_sha}" ]]; then
+    echo "${prebuilt} was not built from ${commit_sha} (see its COMMIT)." >&2
+    exit 1
+  fi
+  readonly server_binary="${prebuilt}/bin/agent-workspace-server"
+  readonly maintenance_binary="${prebuilt}/bin/agent-workspace-host-maintenance"
+  readonly web_dist="${prebuilt}/web"
+else
+  readonly server_binary="${cargo_target_root}/release/agent-workspace-server"
+  readonly maintenance_binary="${cargo_target_root}/release/agent-workspace-host-maintenance"
+  readonly web_dist="${checkout_root}/apps/web/dist"
+fi
+
 # Never fall back to a system Node when the staged toolchain is missing.
-if [[ ! -x "${node_bin}/node" || ! -x "${node_bin}/corepack" ]] ||
-  [[ "$("${node_bin}/node" --version)" != "v24.22.1" ]]; then
+if [[ -z "${prebuilt}" ]] && { [[ ! -x "${node_bin}/node" || ! -x "${node_bin}/corepack" ]] ||
+  [[ "$("${node_bin}/node" --version)" != "v24.22.1" ]]; }; then
   echo "Stage Node 24.22.1 first: sudo ./deploy/redhat/install-toolchains.sh --node-only" >&2
   exit 1
 fi
@@ -50,7 +68,9 @@ build() {
 
 cd "${checkout_root}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-if systemd-run --user --scope --quiet -p MemoryMax=1G true 2>/dev/null; then
+if [[ -n "${prebuilt}" ]]; then
+  echo "Installing the build in ${prebuilt}." >&2
+elif systemd-run --user --scope --quiet -p MemoryMax=1G true 2>/dev/null; then
   systemd-run --user --scope --quiet \
     -p MemoryMax="${build_memory_max}" -p MemorySwapMax=0 \
     nice -n 10 bash -euo pipefail -c "$(declare -f build); build"
@@ -61,10 +81,10 @@ fi
 
 sudo install -d -m 0755 "${release_root}/bin" "${release_root}/web"
 sudo install -m 0755 \
-  "${cargo_target_root}/release/agent-workspace-server" \
+  "${server_binary}" \
   "${release_root}/bin/agent-workspace-server"
 sudo install -m 0755 \
-  "${cargo_target_root}/release/agent-workspace-host-maintenance" \
+  "${maintenance_binary}" \
   "${release_root}/bin/agent-workspace-host-maintenance"
 sudo install -m 0755 \
   deploy/redhat/agent-workspace-service-command \
@@ -81,7 +101,7 @@ sudo install -m 0755 \
   deploy/redhat/install-file-secret.sh \
   deploy/redhat/measure-service-lifecycle.sh \
   "${release_root}/bin/"
-sudo cp -R apps/web/dist/. "${release_root}/web/"
+sudo cp -R "${web_dist}/." "${release_root}/web/"
 sudo chown -R root:root "${release_root}"
 
 # The new build checks the live configuration and database before it takes
