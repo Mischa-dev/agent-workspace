@@ -51,7 +51,10 @@ is on mains power with its GPU quiet, otherwise the Red Hat host. On the laptop
 each step also waits its turn behind agents' builds, then checks CPU and memory
 before it starts. It checks the working tree as it is, so run it before
 pushing; add `--areas rust` or `--areas web` to run one side. Release builds for
-a deploy always happen on the Red Hat host, which serves the app. Cap build
+a deploy happen on the Red Hat host, which serves the app, unless it can't
+spare the memory: then the on-demand Host release workflow builds the same
+commit on an arm64 runner and `deploy-release.sh` installs it
+(`AGENT_WORKSPACE_PREBUILT`, see `docs/operations/alpha-deploy.md`). Cap build
 memory: a cap limits the job it's on, not the whole machine.
 
 On the NixOS laptop, run finite heavy commands (cargo build, check, clippy

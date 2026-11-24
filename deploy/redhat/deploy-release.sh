@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly checkout_root="${1:-/home/bot/deployments/agent-workspace}"
+# Absolute, so the paths below still hold after the cd into the checkout.
+readonly checkout_root="$(realpath -e -- "${1:-/home/bot/deployments/agent-workspace}")"
 readonly commit_sha="$(git -C "${checkout_root}" rev-parse HEAD)"
 readonly install_root="/opt/agent-workspace"
 readonly release_root="${install_root}/releases/${commit_sha}"
@@ -12,7 +13,11 @@ readonly cargo_target_root="${checkout_root}/target"
 # A build made elsewhere (the Host release workflow), unpacked: bin/, web/ and
 # COMMIT. Set AGENT_WORKSPACE_PREBUILT to its folder to install it instead of
 # building here, for when the host can't spare the memory the build needs.
-readonly prebuilt="${AGENT_WORKSPACE_PREBUILT:-}"
+prebuilt="${AGENT_WORKSPACE_PREBUILT:-}"
+if [[ -n "${prebuilt}" ]]; then
+  prebuilt="$(realpath -e -- "${prebuilt}")"
+fi
+readonly prebuilt
 
 if [[ -n "$(git -C "${checkout_root}" status --porcelain)" ]]; then
   echo "Refusing to deploy a dirty checkout." >&2
@@ -27,6 +32,14 @@ if [[ -n "${prebuilt}" ]]; then
   readonly server_binary="${prebuilt}/bin/agent-workspace-server"
   readonly maintenance_binary="${prebuilt}/bin/agent-workspace-host-maintenance"
   readonly web_dist="${prebuilt}/web"
+  # The maintenance tool starts on this host (same C library, nothing
+  # missing): with no command it answers with its own usage error. preflight
+  # below does the same for the server before anything switches.
+  maintenance_says="$("${maintenance_binary}" 2>&1 || true)"
+  if [[ "${maintenance_says}" != *"maintenance command is required"* ]]; then
+    echo "${maintenance_binary} doesn't run on this host: ${maintenance_says}" >&2
+    exit 1
+  fi
 else
   readonly server_binary="${cargo_target_root}/release/agent-workspace-server"
   readonly maintenance_binary="${cargo_target_root}/release/agent-workspace-host-maintenance"
