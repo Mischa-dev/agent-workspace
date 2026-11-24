@@ -1,0 +1,17 @@
+Draft patch — PR #104 briefing includeArchived (CONFIRMED, verdicts.md item 9). The archived-projects query in projects_list joined only project_memberships, so a person whose organization membership was disabled kept listing that workspace's archived projects. Adds the enabled organization_memberships join — the missing half of actor_can_access_project's person branch (the predicate itself excludes archived projects, so it cannot be applied verbatim here). Uncompiled in the authoring sandbox; run cargo check + the briefing integration tests before landing.
+
+diff --git a/apps/server/src/mcp/briefing.rs b/apps/server/src/mcp/briefing.rs
+index 623fc72..813c153 100644
+--- a/apps/server/src/mcp/briefing.rs
++++ b/apps/server/src/mcp/briefing.rs
+@@ -371,6 +371,10 @@ pub(super) async fn projects_list(
+                     JOIN project_memberships membership
+                       ON membership.project_id = project.id AND membership.actor_id = $1
+                      AND membership.enabled
++                    JOIN organization_memberships organization_membership
++                      ON organization_membership.organization_id = project.organization_id
++                     AND organization_membership.actor_id = $1
++                     AND organization_membership.enabled
+                     WHERE project.archived_at IS NOT NULL
+                     LIMIT 200
+                     "#,

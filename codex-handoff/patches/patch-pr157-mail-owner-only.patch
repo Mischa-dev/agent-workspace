@@ -1,0 +1,15 @@
+Draft patch — PR #157 reset-mail transport (CONFIRMED narrowed residual, verdicts.md item 46). transport_for_actor exempted the person's default workspace from the owner requirement, and default_workspace() is chosen-or-earliest-JOINED — so reset/confirmation tokens could transit SMTP controlled by another workspace's owner, contradicting the function's own doc comment. Requires role='owner' for every candidate (the default-first ORDER BY is unchanged and now only ranks owned workspaces;  remains bound for it). Uncompiled in the authoring sandbox; land WITH a Postgres integration test (owner/member x default/non-default x mail on/off).
+
+diff --git a/apps/server/src/mail/mod.rs b/apps/server/src/mail/mod.rs
+index 50c11f5..69b53ce 100644
+--- a/apps/server/src/mail/mod.rs
++++ b/apps/server/src/mail/mod.rs
+@@ -313,7 +313,7 @@ pub async fn transport_for_actor(
+         JOIN workspace_mail_settings mail
+           ON mail.organization_id = membership.organization_id AND mail.enabled
+         WHERE membership.actor_id = $1 AND membership.enabled
+-          AND (membership.organization_id = $2 OR membership.role = 'owner')
++          AND membership.role = 'owner'
+         ORDER BY (membership.organization_id = $2) DESC, membership.created_at, membership.organization_id
+         LIMIT 1
+         "#,
