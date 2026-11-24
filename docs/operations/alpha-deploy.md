@@ -41,6 +41,17 @@ cd /home/bot/deployments/agent-workspace
 ./deploy/redhat/deploy-release.sh
 ```
 
+If the host can't spare the memory for the server's release compile (it
+needs more than 8 GB, and the host has about 9 GB free beside its other
+services), build on GitHub instead: run the **Host release** workflow on the
+exact commit, check the tarball against its `.sha256`, unpack it on the host,
+and give the script its folder (the checkout must be at the same commit):
+
+```bash
+AGENT_WORKSPACE_PREBUILT=/var/tmp/agent-workspace-<commit>-linux-arm64 \
+  ./deploy/redhat/deploy-release.sh
+```
+
 The script builds, installs the release and runs the new build's `preflight`
 against the live configuration and database before switching. `preflight` only
 reads. It reports:

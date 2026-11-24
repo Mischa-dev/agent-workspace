@@ -1,0 +1,71 @@
+name: Host release
+
+# Builds what deploy/redhat/deploy-release.sh installs (the server, the host
+# maintenance tool and the web app) for the arm64 Red Hat host, on a runner
+# with the memory the server's release compile needs. The host shares its
+# memory with other services and can't give the build more than about 8 GB,
+# which the server crate now outgrows. Runs on demand only; the artifact is
+# kept for a week. Install it with deploy-release.sh and
+# AGENT_WORKSPACE_PREBUILT (docs/operations/alpha-deploy.md).
+#
+# Ubuntu 24.04 has glibc 2.39, the same as RHEL 10; the server links only
+# libc, libm and libgcc_s.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: tools/ci/rust-toolchain.sh
+      - name: Node 24.22.1, as install-toolchains.sh stages it on the host
+        run: |
+          set -euo pipefail
+          version=24.22.1
+          archive="node-v${version}-linux-arm64.tar.xz"
+          cd "${RUNNER_TEMP}"
+          curl --fail --location --proto '=https' --tlsv1.2 -O "https://nodejs.org/dist/v${version}/${archive}"
+          curl --fail --location --proto '=https' --tlsv1.2 -O "https://nodejs.org/dist/v${version}/SHASUMS256.txt"
+          grep " ${archive}\$" SHASUMS256.txt | sha256sum --check -
+          tar -xJf "${archive}"
+          echo "${RUNNER_TEMP}/node-v${version}-linux-arm64/bin" >> "${GITHUB_PATH}"
+      - name: Build
+        env:
+          AGENT_WORKSPACE_BUILD_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          node --version
+          corepack enable
+          corepack prepare pnpm@11.18.0 --activate
+          pnpm install --frozen-lockfile
+          pnpm build
+          cargo build --release --locked \
+            -p agent-workspace-server \
+            -p agent-workspace-host-maintenance
+      - name: Package
+        run: |
+          set -euo pipefail
+          out="agent-workspace-${GITHUB_SHA}-linux-arm64"
+          mkdir -p "${out}/bin" "${out}/web"
+          cp target/release/agent-workspace-server target/release/agent-workspace-host-maintenance "${out}/bin/"
+          cp -R apps/web/dist/. "${out}/web/"
+          printf '%s\n' "${GITHUB_SHA}" > "${out}/COMMIT"
+          tar -czf "${out}.tar.gz" "${out}"
+          sha256sum "${out}.tar.gz" | tee "${out}.tar.gz.sha256"
+      # actions/upload-artifact v7.0.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: host-release-linux-arm64
+          path: |
+            agent-workspace-*-linux-arm64.tar.gz
+            agent-workspace-*-linux-arm64.tar.gz.sha256
+          compression-level: 0
+          retention-days: 7
