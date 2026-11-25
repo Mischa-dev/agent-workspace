@@ -577,3 +577,97 @@ async fn the_badge_counts_what_needs_you() {
 
     world.finish().await;
 }
+
+/// A read doesn't wait for a notification someone else is writing (the next
+/// message's fan-out would be), and doesn't leave it unread either: a job
+/// reads it once the writer is done.
+#[tokio::test]
+async fn a_notification_locked_during_a_read_is_read_afterwards() {
+    let Some(fixture) = fixture("skipped_read").await else {
+        return;
+    };
+    let setup = &fixture.setup;
+    let state = &fixture.state;
+    let project = super::mcp_admin::create_project(setup, "SK", "Skipped").await;
+    let general = create_channel(setup, &project, "general").await;
+    let (mara_id, mara) = add_person(setup, &[&project], "mara").await;
+    say(
+        setup,
+        &setup.browser,
+        &general,
+        "skipped-mention",
+        mention(mara_id, "Look at this "),
+    )
+    .await;
+    drain(setup).await;
+    assert_eq!(inbox(setup, &mara, "").await["unreadCount"], 1);
+    let sequence = sqlx::query_scalar::<_, i64>(
+        "SELECT next_entry_sequence - 1 FROM conversations WHERE id = $1::uuid",
+    )
+    .bind(&general)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("sequence");
+
+    // Someone holds her notification, as a fan-out writing to it would.
+    let mut writer = setup.pool.begin().await.expect("writer");
+    let held = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM notifications WHERE recipient_actor_id = $1 AND read_at IS NULL FOR UPDATE",
+    )
+    .bind(mara_id)
+    .fetch_all(&mut *writer)
+    .await
+    .expect("hold the notification");
+    assert_eq!(held.len(), 1);
+
+    // Mara reads the channel. The read goes through at once.
+    let (status, seen) = send(
+        &setup.app,
+        mara.request(
+            "POST",
+            "/api/v2/ops/conversation_mark_read",
+            Some(&Uuid::now_v7().to_string()),
+            json!({"conversationId": general, "upToSequence": sequence}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{seen}");
+    writer.commit().await.expect("writer done");
+    assert_eq!(inbox(setup, &mara, "").await["unreadCount"], 1);
+
+    // The job it left reads the notification.
+    let mut registry = jobs::JobRegistry::new();
+    agent_workspace_server::notifications::register_jobs(&mut registry);
+    let ran = jobs::run_due(state, &registry, &options())
+        .await
+        .expect("run the job");
+    assert_eq!(ran, 1);
+    assert_eq!(inbox(setup, &mara, "").await["unreadCount"], 0);
+
+    // A read that skips nothing leaves no job.
+    say(
+        setup,
+        &setup.browser,
+        &general,
+        "plain-mention",
+        mention(mara_id, "And this "),
+    )
+    .await;
+    drain(setup).await;
+    let (status, seen) = send(
+        &setup.app,
+        mara.request(
+            "POST",
+            "/api/v2/ops/conversation_mark_read",
+            Some(&Uuid::now_v7().to_string()),
+            json!({"conversationId": general, "upToSequence": sequence + 1}),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{seen}");
+    assert_eq!(inbox(setup, &mara, "").await["unreadCount"], 0);
+    let ran = jobs::run_due(state, &registry, &options())
+        .await
+        .expect("no job");
+    assert_eq!(ran, 0);
+}

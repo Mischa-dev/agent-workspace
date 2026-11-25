@@ -22,7 +22,7 @@
 //! to your runs or tasks. Later workstreams add kinds of their own through
 //! `NewNotification` (the kind column is open-ended).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use axum::{Json, Router, extract::State, routing::get};
 use rmcp::schemars::{self, JsonSchema};
@@ -36,6 +36,7 @@ use crate::{
     auth::AuthenticatedActor,
     domain::RunState,
     error::{ApiQuery, AppError},
+    jobs::{self, JobRegistry, NewJob},
     outbox::{self, NotificationsUpdatedPayload, OutboxEventPayload},
 };
 
@@ -380,57 +381,26 @@ pub async fn deliver(
     }
     // A message the recipient has already seen (they had the conversation
     // open when it arrived) comes in read.
-    //
-    // The read mark is locked (shared) before the notification row is
-    // written, the same order `read_state::mark_seen` takes them in: a read
-    // that is moving the mark right now finishes first and this sees where
-    // it got to, and a read that comes after waits for this row to commit.
-    // Without it, a read could skip this row while it was being written
-    // (`read_for_conversation` skips locked rows) and leave it unread.
-    //
-    // A send holds its conversation before it moves the sender's mark, and
-    // the row written below references the conversation, so the conversation
-    // comes first here too: conversation, read mark, notification, the one
-    // order everywhere.
-    if let Some(message_id) = notification.message_id {
-        sqlx::query(
-            r#"
-            SELECT conversation.id
-            FROM conversations conversation
-            WHERE conversation.id = $2
-               OR conversation.id IN (
-                   SELECT entry.conversation_id
-                   FROM conversation_entries entry
-                   WHERE entry.message_id = $1
-               )
-            ORDER BY conversation.id
-            -- visibility: locks the row by id; nothing of it is read
-            FOR KEY SHARE OF conversation
-            "#,
-        )
-        .bind(message_id)
-        .bind(notification.conversation_id)
-        .execute(&mut **transaction)
-        .await?;
-    }
     let already_seen = match notification.message_id {
-        Some(message_id) => sqlx::query_scalar::<_, bool>(
-            r#"
-            SELECT entry.sequence <= state.highest_seen_sequence
-            FROM conversation_entries entry
-            JOIN conversation_read_states state
-              ON state.conversation_id = entry.conversation_id
-             AND state.actor_id = $2
-            WHERE entry.message_id = $1
-            FOR SHARE OF state
-            "#,
-        )
-        .bind(message_id)
-        .bind(notification.recipient_actor_id)
-        .fetch_all(&mut **transaction)
-        .await?
-        .into_iter()
-        .any(|seen| seen),
+        Some(message_id) => {
+            sqlx::query_scalar::<_, bool>(
+                r#"
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM conversation_entries entry
+                    JOIN conversation_read_states state
+                      ON state.conversation_id = entry.conversation_id
+                     AND state.actor_id = $2
+                    WHERE entry.message_id = $1
+                      AND entry.sequence <= state.highest_seen_sequence
+                )
+                "#,
+            )
+            .bind(message_id)
+            .bind(notification.recipient_actor_id)
+            .fetch_one(&mut **transaction)
+            .await?
+        }
         None => false,
     };
     let notification_id = sqlx::query_scalar::<_, Uuid>(
@@ -666,16 +636,31 @@ pub(crate) async fn announce(
     Ok(())
 }
 
+/// The viewer's notifications about a conversation that viewing it up to a
+/// sequence reads: `$1` the viewer, `$2` the conversation, `$3` the
+/// sequence. Snoozed notifications wait for their time.
+const READ_BY_VIEWING: &str = r#"
+    n.recipient_actor_id = $1
+    AND n.conversation_id = $2
+    AND n.read_at IS NULL
+    AND n.archived_at IS NULL
+    AND (n.snoozed_until IS NULL OR n.snoozed_until <= now())
+    AND (n.message_id IS NULL OR EXISTS (
+        SELECT 1 FROM conversation_entries entry
+        WHERE entry.conversation_id = $2
+          AND entry.message_id = n.message_id
+          AND entry.sequence <= $3
+    ))
+"#;
+
 /// Viewing a conversation up to `sequence` reads what the viewer was told
 /// about it there. Snoozed notifications wait for their time.
 ///
 /// A notification another transaction is writing right now is left alone
-/// (`SKIP LOCKED`): it is being told about something newer, and waiting for
-/// it deadlocked a send against the fan-out of the message before it, which
-/// holds one of the viewer's rows while it waits for another. A skipped row
-/// isn't left unread: `deliver` holds the viewer's read mark (shared) while
-/// it writes, so the caller, having just moved that mark, has made `deliver`
-/// wait and see the new mark.
+/// (`SKIP LOCKED`): waiting for it deadlocked a send against the fan-out of
+/// the message before it, which holds one of the viewer's rows while it
+/// waits for another. The ones left are read by a job once this commits
+/// ([`READ_SKIPPED_KIND`]), so nothing the viewer has seen stays unread.
 pub(crate) async fn read_for_conversation(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -683,29 +668,19 @@ pub(crate) async fn read_for_conversation(
     conversation_id: Uuid,
     sequence: i64,
 ) -> Result<(), AppError> {
-    let read = sqlx::query(
+    let read = sqlx::query(&format!(
         r#"
         UPDATE notifications
         SET read_at = now(), updated_at = now()
         WHERE id IN (
             SELECT n.id
             FROM notifications n
-            WHERE n.recipient_actor_id = $1
-              AND n.conversation_id = $2
-              AND n.read_at IS NULL
-              AND n.archived_at IS NULL
-              AND (n.snoozed_until IS NULL OR n.snoozed_until <= now())
-              AND (n.message_id IS NULL OR EXISTS (
-                  SELECT 1 FROM conversation_entries entry
-                  WHERE entry.conversation_id = $2
-                    AND entry.message_id = n.message_id
-                    AND entry.sequence <= $3
-              ))
+            WHERE {READ_BY_VIEWING}
             ORDER BY n.id
             FOR UPDATE OF n SKIP LOCKED
         )
-        "#,
-    )
+        "#
+    ))
     .bind(viewer)
     .bind(conversation_id)
     .bind(sequence)
@@ -713,6 +688,86 @@ pub(crate) async fn read_for_conversation(
     .await?;
     if read.rows_affected() > 0 {
         announce(transaction, project_id, viewer).await?;
+    }
+    // What still matches was locked and skipped.
+    let skipped = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(&format!(
+        "SELECT n.id, n.workspace_id FROM notifications n WHERE {READ_BY_VIEWING} ORDER BY n.id"
+    ))
+    .bind(viewer)
+    .bind(conversation_id)
+    .bind(sequence)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let mut by_workspace = BTreeMap::<Option<Uuid>, Vec<Uuid>>::new();
+    for (id, workspace) in skipped {
+        by_workspace.entry(workspace).or_default().push(id);
+    }
+    for (workspace, notification_ids) in by_workspace {
+        let job = NewJob::new(READ_SKIPPED_KIND).payload(ReadSkippedJob {
+            viewer,
+            place: project_id,
+            conversation_id,
+            sequence,
+            notification_ids,
+        });
+        jobs::enqueue(
+            &mut **transaction,
+            match workspace {
+                Some(workspace) => job.workspace(workspace),
+                None => job,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Reads the notifications a view of their conversation had to skip.
+pub const READ_SKIPPED_KIND: &str = "notifications.read_skipped";
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadSkippedJob {
+    viewer: Uuid,
+    /// The conversation's place: its space, or the direct scope.
+    place: Uuid,
+    conversation_id: Uuid,
+    sequence: i64,
+    notification_ids: Vec<Uuid>,
+}
+
+pub fn register_jobs(registry: &mut JobRegistry) {
+    registry.register(READ_SKIPPED_KIND, |context| async move {
+        let job: ReadSkippedJob = context.job.payload_as()?;
+        read_skipped(&context.state, &job).await?;
+        Ok(())
+    });
+}
+
+/// One notification at a time, each in its own transaction: this waits for
+/// whoever is writing the row while holding nothing they could want. A row
+/// that has since been told about something newer than the view stays
+/// unread.
+async fn read_skipped(state: &AppState, job: &ReadSkippedJob) -> Result<(), AppError> {
+    for notification_id in &job.notification_ids {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        let read = sqlx::query(&format!(
+            r#"
+            UPDATE notifications n
+            SET read_at = now(), updated_at = now()
+            WHERE n.id = $4 AND {READ_BY_VIEWING}
+            "#
+        ))
+        .bind(job.viewer)
+        .bind(job.conversation_id)
+        .bind(job.sequence)
+        .bind(notification_id)
+        .execute(&mut *transaction)
+        .await?;
+        if read.rows_affected() > 0 {
+            announce(&mut transaction, job.place, job.viewer).await?;
+        }
+        transaction.commit().await?;
     }
     Ok(())
 }
