@@ -2,14 +2,22 @@
 --
 -- `search_tsquery` is `websearch_to_tsquery` with the last word matched as a
 -- prefix, so "batt" finds "battery" in every kind, as the command palette's
--- task search already did. A query that ends a phrase (a closing quote), or
--- holds only stop words, is left as it is.
+-- task search already did. Only a plain last word is a prefix: a query that
+-- ends in a phrase (quoted, closed or not), an excluded word (-word), "or",
+-- or a stop word is left as it is.
 CREATE FUNCTION search_tsquery(config regconfig, query text) RETURNS tsquery
 LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
 DECLARE
     parsed tsquery := websearch_to_tsquery(config, query);
+    last_word text := substring(query from '(\S+)\s*$');
 BEGIN
-    IF numnode(parsed) = 0 OR query ~ '"\s*$' THEN
+    IF numnode(parsed) = 0
+        OR last_word IS NULL
+        OR last_word ~ '^-|"'
+        OR lower(last_word) = 'or'
+        OR (length(query) - length(replace(query, '"', ''))) % 2 = 1
+        OR numnode(websearch_to_tsquery(config, last_word)) = 0
+    THEN
         RETURN parsed;
     END IF;
     RETURN (parsed::text || ':*')::tsquery;

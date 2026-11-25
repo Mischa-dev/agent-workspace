@@ -180,6 +180,42 @@ export function MessagesPage() {
   // On a phone the list of conversations is a menu away, so the Messages tab leads with it.
   const phone = usePhoneWidth()
   const recent = phone && chosen.length === 0 ? (overview.data?.conversations ?? []) : []
+  // On a phone this page is also the Messages tab: your conversations stay
+  // listed even when there is no one new you can start one with.
+  const recentList =
+    recent.length > 0 ? (
+      <div className="aw-newchat__recent">
+        <RowList label="Your conversations">
+          {recent.map((conversation) => {
+            const other = conversation.members.find((member) => member.id !== session.user.actorId)
+            return (
+              <Row
+                actions={
+                  !conversation.muted && conversation.unreadMessages > 0 ? (
+                    <Badge count={conversation.unreadMessages} label={`${conversation.unreadMessages} unread`} />
+                  ) : undefined
+                }
+                className="aw-row--link"
+                key={conversation.id}
+                leading={
+                  conversation.kind === 'dm' && other ? (
+                    <Avatar kind={actorKind(other.kind)} name={other.displayName} seed={other.id} size={28} />
+                  ) : (
+                    <Icon name={conversation.kind === 'group' ? 'users' : 'message'} size={18} />
+                  )
+                }
+                meta={formatRelative(conversation.lastActivityAt)}
+                title={
+                  <Link className="aw-row__link" to={here(`/messages/${encodeURIComponent(conversation.id)}`)}>
+                    {conversationTitle(conversation, session.user.actorId)}
+                  </Link>
+                }
+              />
+            )
+          })}
+        </RowList>
+      </div>
+    ) : null
   return (
     <>
       <ConversationHeader icon={recent.length > 0 ? 'message' : 'compose'} title={recent.length > 0 ? 'Messages' : 'New message'} />
@@ -261,7 +297,7 @@ export function MessagesPage() {
       ) : null}
       <div className="aw-newchat__body">
         {overview.isPending ? <ListSkeleton label="Loading people" rows={2} avatars /> : null}
-        {overview.data && people.length === 0 ? (
+        {overview.data && people.length === 0 && recent.length === 0 ? (
           <EmptyState
             action={
               manageAgents ? (
@@ -280,6 +316,7 @@ export function MessagesPage() {
                 : 'Ask your workspace owner to add an agent. Each one gets its own identity and shows up here.'}
           </EmptyState>
         ) : null}
+        {overview.data && people.length === 0 ? recentList : null}
         {overview.data && people.length > 0 ? (
           only ? (
             <ConversationIntro
@@ -309,37 +346,7 @@ export function MessagesPage() {
               Your first message starts the group.{agentsOn ? ' Agents answer when they’re asked or mentioned.' : ''}
             </ConversationIntro>
           ) : recent.length > 0 ? (
-            <div className="aw-newchat__recent">
-              <RowList label="Your conversations">
-                {recent.map((conversation) => {
-                  const other = conversation.members.find((member) => member.id !== session.user.actorId)
-                  return (
-                    <Row
-                      actions={
-                        !conversation.muted && conversation.unreadMessages > 0 ? (
-                          <Badge count={conversation.unreadMessages} label={`${conversation.unreadMessages} unread`} />
-                        ) : undefined
-                      }
-                      className="aw-row--link"
-                      key={conversation.id}
-                      leading={
-                        conversation.kind === 'dm' && other ? (
-                          <Avatar kind={actorKind(other.kind)} name={other.displayName} seed={other.id} size={28} />
-                        ) : (
-                          <Icon name={conversation.kind === 'group' ? 'users' : 'message'} size={18} />
-                        )
-                      }
-                      meta={formatRelative(conversation.lastActivityAt)}
-                      title={
-                        <Link className="aw-row__link" to={here(`/messages/${encodeURIComponent(conversation.id)}`)}>
-                          {conversationTitle(conversation, session.user.actorId)}
-                        </Link>
-                      }
-                    />
-                  )
-                })}
-              </RowList>
-            </div>
+            recentList
           ) : (
             <ConversationIntro icon="compose" title="New message">
               Choose who it’s to above: {agentsOn ? 'one person or agent' : 'one person'} for a direct message, or several for a group.

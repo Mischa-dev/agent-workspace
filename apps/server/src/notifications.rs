@@ -380,26 +380,31 @@ pub async fn deliver(
     }
     // A message the recipient has already seen (they had the conversation
     // open when it arrived) comes in read.
+    //
+    // The read mark is locked (shared) before the notification row is
+    // written, the same order `read_state::mark_seen` takes them in: a read
+    // that is moving the mark right now finishes first and this sees where
+    // it got to, and a read that comes after waits for this row to commit.
+    // Without it, a read could skip this row while it was being written
+    // (`read_for_conversation` skips locked rows) and leave it unread.
     let already_seen = match notification.message_id {
-        Some(message_id) => {
-            sqlx::query_scalar::<_, bool>(
-                r#"
-                SELECT EXISTS (
-                    SELECT 1
-                    FROM conversation_entries entry
-                    JOIN conversation_read_states state
-                      ON state.conversation_id = entry.conversation_id
-                     AND state.actor_id = $2
-                    WHERE entry.message_id = $1
-                      AND entry.sequence <= state.highest_seen_sequence
-                )
-                "#,
-            )
-            .bind(message_id)
-            .bind(notification.recipient_actor_id)
-            .fetch_one(&mut **transaction)
-            .await?
-        }
+        Some(message_id) => sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT entry.sequence <= state.highest_seen_sequence
+            FROM conversation_entries entry
+            JOIN conversation_read_states state
+              ON state.conversation_id = entry.conversation_id
+             AND state.actor_id = $2
+            WHERE entry.message_id = $1
+            FOR SHARE OF state
+            "#,
+        )
+        .bind(message_id)
+        .bind(notification.recipient_actor_id)
+        .fetch_all(&mut **transaction)
+        .await?
+        .into_iter()
+        .any(|seen| seen),
         None => false,
     };
     let notification_id = sqlx::query_scalar::<_, Uuid>(
@@ -641,7 +646,10 @@ pub(crate) async fn announce(
 /// A notification another transaction is writing right now is left alone
 /// (`SKIP LOCKED`): it is being told about something newer, and waiting for
 /// it deadlocked a send against the fan-out of the message before it, which
-/// holds one of the viewer's rows while it waits for another.
+/// holds one of the viewer's rows while it waits for another. A skipped row
+/// isn't left unread: `deliver` holds the viewer's read mark (shared) while
+/// it writes, so the caller, having just moved that mark, has made `deliver`
+/// wait and see the new mark.
 pub(crate) async fn read_for_conversation(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,

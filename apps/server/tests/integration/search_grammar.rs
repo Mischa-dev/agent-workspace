@@ -392,6 +392,9 @@ async fn a_half_typed_word_and_a_task_key_find_only_what_the_searcher_can_open()
         "wiring zebrafi".to_owned(),
         key.clone(),
         key.to_lowercase(),
+        // Only a plain last word is unfinished: an excluded one is whole, so
+        // "-zebraf" doesn't shut out "Zebrafinch".
+        "wiring -zebraf".to_owned(),
     ] {
         assert_eq!(
             task_hits(app, lena, &query).await,
@@ -401,6 +404,7 @@ async fn a_half_typed_word_and_a_task_key_find_only_what_the_searcher_can_open()
     }
     // A whole phrase stays a phrase, and a key is the whole query or nothing.
     assert!(task_hits(app, lena, "\"zebraf\"").await.is_empty());
+    assert!(task_hits(app, lena, "\"zebraf\" the").await.is_empty());
     assert!(task_hits(app, lena, &format!("{key}9")).await.is_empty());
 
     // Nina leaves the project: neither the words nor the key find it.
