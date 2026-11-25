@@ -312,3 +312,46 @@ async fn requests_blocks_and_a_shared_workspace_decide_who_reaches_whom() {
 
     world.finish().await;
 }
+
+/// The web app calls every operation under its current workspace's address.
+/// A DM is in no workspace, so it answers there for the two people in it,
+/// and for nobody else, whichever workspace is named.
+#[tokio::test]
+async fn a_dm_operation_under_a_workspace_address_answers_only_its_two_people() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("mara", "member")
+        .person("nina", "member")
+        .dm("lena", "mara")
+        .build("dm_under_workspace_address")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let input = json!({"conversationId": world.conversations["lena+mara"]});
+
+    for name in ["lena", "mara"] {
+        let (status, standing) = world.people[name]
+            .browser
+            .op_in(app, world.organization, "dm_standing_get", input.clone())
+            .await;
+        assert_eq!(status, StatusCode::OK, "{name}: {standing}");
+        assert_eq!(standing["canSend"], true, "{name}: {standing}");
+    }
+    // Nina shares the workspace but isn't in the DM: it doesn't exist for
+    // her, under the workspace's address or without one. Nor for the owner,
+    // who manages the workspace and still reads no DM that isn't theirs.
+    for outsider in [&world.people["nina"], &world.owner] {
+        let (status, body) = outsider
+            .browser
+            .op_in(app, world.organization, "dm_standing_get", input.clone())
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        let (status, body) = op(app, outsider, "dm_standing_get", input.clone()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    }
+
+    world.finish().await;
+}

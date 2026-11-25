@@ -903,11 +903,8 @@ pub(super) async fn create(
             audit_metadata["parentWorkItemId"] = serde_json::json!(parent);
         }
         let (summary, audit_action) = match parent {
-            Some(_) => (
-                "Subtask created through MCP",
-                "work_item.mcp_subtask_created",
-            ),
-            None => ("Work Item created through MCP", "work_item.mcp_created"),
+            Some(_) => ("Subtask created", "work_item.mcp_subtask_created"),
+            None => ("Task created", "work_item.mcp_created"),
         };
         let outcome = create_work_item(
             transaction,

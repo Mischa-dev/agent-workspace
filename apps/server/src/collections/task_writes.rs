@@ -438,7 +438,7 @@ async fn create(
                 due_date: change.due_date.flatten(),
                 ..Default::default()
             },
-            activity_summary: "Work Item created",
+            activity_summary: "Task created",
             activity_metadata: serde_json::json!({ "via": "collection" }),
             activity_number_metadata: AllocatedNumberMetadata::Omit,
             audit_action: "work_item.created",
@@ -602,7 +602,7 @@ async fn update(
                     ..Default::default()
                 },
                 field_values: field_values.as_ref(),
-                summary: "Work Item updated",
+                summary: "Task updated",
                 audit_action: "work_item.updated",
                 audit_version_metadata: AuditVersionMetadata::Omit,
             },
@@ -638,9 +638,9 @@ async fn archive(
             expected_version: version,
             archived,
             summary: if archived {
-                "Work Item archived"
+                "Task archived"
             } else {
-                "Work Item restored"
+                "Task restored"
             },
             audit_action: if archived {
                 "work_item.archived"

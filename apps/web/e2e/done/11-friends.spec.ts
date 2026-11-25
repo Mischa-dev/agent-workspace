@@ -35,8 +35,13 @@ test('a workspace set up as Friends shows chat and nothing about tasks, projects
     }
   }
   await page.goto(`/w/${friends.slug}/messages`)
-  // Starting a conversation is right there: a button at a desk, the new-message screen itself on a phone.
+  // Starting a conversation is right there: a button at a desk; on a phone the new-message screen itself,
+  // or its "To" field above your conversations once you have some.
   await expect(
-    page.getByRole('button', { name: /new message/i }).or(page.getByRole('heading', { name: 'New message' })).first(),
+    page
+      .getByRole('button', { name: /new message/i })
+      .or(page.getByRole('heading', { name: 'New message' }))
+      .or(page.getByRole('combobox', { name: 'To' }))
+      .first(),
   ).toBeVisible()
 })

@@ -4711,7 +4711,9 @@ mod tests {
         let branches = schema["oneOf"]
             .as_array()
             .unwrap_or_else(|| panic!("no oneOf: {schema}"));
-        assert_eq!(branches.len(), 7, "{schema}");
+        // Seven from the first release, and `limit_reached`, which a limit
+        // used to answer as `temporarily_unavailable`.
+        assert_eq!(branches.len(), 8, "{schema}");
         let added = [
             "key",
             "url",

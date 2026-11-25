@@ -2951,7 +2951,7 @@ async fn task_reorder_inner(
             *id,
             principal.actor_id,
             "work_item_updated",
-            "Task reordered on the board through MCP",
+            "Task reordered on the board",
             &payload.activity(),
         )
         .await?;
@@ -3540,9 +3540,9 @@ async fn task_link_inner(
                 principal.actor_id,
                 linked,
                 if linked {
-                    "Pull request linked through MCP"
+                    "Pull request linked"
                 } else {
-                    "Pull request unlinked through MCP"
+                    "Pull request unlinked"
                 },
             )
             .await?
@@ -3751,9 +3751,9 @@ async fn change_record_link(
         _ => "Decision",
     };
     let summary = if link {
-        format!("{noun} linked through MCP")
+        format!("{noun} linked")
     } else {
-        format!("{noun} unlinked through MCP")
+        format!("{noun} unlinked")
     };
     finalize_change(
         transaction,

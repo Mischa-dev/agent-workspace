@@ -15,7 +15,7 @@ import { isArchiving } from './archiving'
 import { accountSettingsHref, projectSettingsHref, workspaceSettingsHref } from './paths'
 import { GitHubReturnBanner } from './GitHubReturnBanner'
 import { parseSettingsPath, workspaceSettingsSplat } from './route'
-import { GROUP_LABELS, SETTINGS_PAGES, findPage, pageModule, pagesIn, type PageModuleState, type SettingsPage } from './registry'
+import { GROUP_LABELS, SETTINGS_PAGES, clustersIn, findPage, pageModule, pagesIn, type PageModuleState, type SettingsPage } from './registry'
 import type { SettingsGroup, SettingsPageProps, SettingsVisibility } from './types'
 import { defaultWorkspace, useViewedWorkspace } from './workspaceChoice'
 import './settings.css'
@@ -178,9 +178,18 @@ export default function SettingsArea() {
     if (entry && projectList.isPending && !(entry.visible?.(context) ?? true)) {
       // Some pages depend on the person's projects; wait for them before deciding.
       content = <SettingsSkeleton label="Loading settings" />
-    } else if (!entry || !(entry.visible?.(context) ?? true)) {
+    } else if (!entry) {
       const first = pagesIn(group, context)[0]
       return <Navigate replace to={first ? (hrefFor(first, null, viewedWorkspace?.slug) ?? accountSettingsHref('profile')) : accountSettingsHref('profile')} />
+    } else if (!(entry.visible?.(context) ?? true)) {
+      // A real page this person can't use: say so, rather than land them somewhere else without a word.
+      content = (
+        <EmptyState icon="lock" title={`${entry.label} isn’t open to your role`}>
+          {group === 'workspace'
+            ? 'People who manage the workspace change these settings. Ask an owner or admin if something here needs changing.'
+            : 'Your role doesn’t use these settings yet.'}
+        </EmptyState>
+      )
     } else {
       // A new page for each workspace, so nothing typed for one is saved to the next.
       content = (
@@ -315,12 +324,12 @@ function SettingsNav({
   const spaceWord = contexts.workspace.modules?.moduleOn('projects') === false ? 'space' : 'project'
   const searching = query.trim().length > 0
 
-  const link = (entry: SettingsPage) => {
+  const link = (entry: SettingsPage, gap: boolean) => {
     const href = hrefFor(entry, pickerProject?.id ?? null, workspace?.slug)
     if (!href) return null
     const current = entry.group === currentGroup && entry.id === currentSection
     return (
-      <li key={`${entry.group}:${entry.id}`}>
+      <li className={gap ? 'aw-settings__gap' : undefined} key={`${entry.group}:${entry.id}`}>
         <Link aria-current={current ? 'page' : undefined} className="aw-settings__link" to={href}>
           <Icon name={entry.icon} />
           <span>{entry.label}</span>
@@ -328,6 +337,10 @@ function SettingsNav({
       </li>
     )
   }
+
+  // Related pages sit together, with a little air before each next cluster.
+  const links = (group: SettingsGroup) =>
+    clustersIn(group, contexts[group]).flatMap((cluster, at) => cluster.map((entry, index) => link(entry, at > 0 && index === 0)))
 
   return (
     <nav aria-label="Settings" className="aw-settings__nav" id="settings-nav">
@@ -337,7 +350,7 @@ function SettingsNav({
           <div className="aw-settings__group">
             <h2 className="aw-settings__grouplabel">{GROUP_LABELS.account}</h2>
             <ul aria-label="Account settings" className="aw-settings__links">
-              {pagesIn('account', contexts.account).map(link)}
+              {links('account')}
             </ul>
           </div>
           {workspace && (
@@ -359,7 +372,7 @@ function SettingsNav({
                 </div>
               )}
               <ul aria-label="Workspace settings" className="aw-settings__links">
-                {pagesIn('workspace', contexts.workspace).map(link)}
+                {links('workspace')}
               </ul>
             </div>
           )}
@@ -385,7 +398,7 @@ function SettingsNav({
               </div>
               {pickerProject && (
                 <ul aria-label={spaceWord === 'project' ? 'Project settings' : 'Space settings'} className="aw-settings__links">
-                  {pagesIn('project', contexts.project).map(link)}
+                  {links('project')}
                 </ul>
               )}
             </div>

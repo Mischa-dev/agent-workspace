@@ -100,3 +100,39 @@
 .aw-templates__more[open] > summary {
   margin-bottom: var(--space-1);
 }
+
+/* Setup asks one question; the templates wait under it. */
+.aw-templates__other {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--content-border);
+}
+
+.aw-templates__other > summary {
+  width: fit-content;
+  border-radius: var(--radius-sm);
+  font: var(--t-ui);
+  color: var(--content-fg-muted);
+  cursor: pointer;
+}
+
+.aw-templates__other > summary:hover {
+  color: var(--content-fg);
+}
+
+.aw-templates__other > summary:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.aw-templates__other[open] > summary {
+  margin-bottom: var(--space-3);
+}
+
+.aw-templates__other > .aw-templates__description {
+  margin-bottom: var(--space-4);
+  color: var(--content-fg-muted);
+}

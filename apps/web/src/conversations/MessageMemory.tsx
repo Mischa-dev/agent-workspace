@@ -39,7 +39,7 @@ export function useMessageMemory({
   const [making, setMaking] = useState<ConversationMessage | null>(null)
   const [recording, setRecording] = useState<ConversationMessage | null>(null)
   const [sticking, setSticking] = useState<ConversationMessage | null>(null)
-  const experience = useProjectExperience(projectId)
+  const experience = useProjectExperience(direct ? null : projectId)
   const records = experience.shows('area.collections')
   const boards = experience.shows('area.whiteboards')
   // A DM's decision goes in a project the person can write in; with none, there's nowhere to save it.

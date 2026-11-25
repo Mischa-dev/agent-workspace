@@ -283,7 +283,7 @@ impl OpError {
 /// `mcp/common.rs`); operations use `?` on domain calls.
 impl From<AppError> for OpError {
     fn from(error: AppError) -> Self {
-        match error {
+        match error.input_problem() {
             AppError::AuthenticationRequired | AppError::InvalidCredentials => {
                 Self::Unauthenticated
             }

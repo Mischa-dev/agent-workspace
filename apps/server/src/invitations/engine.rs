@@ -334,6 +334,26 @@ pub async fn admit(
     .bind(admission.account_id)
     .fetch_optional(&mut *connection)
     .await?;
+    // The starting Viewer and Worker roles are held in projects only (the
+    // database refuses the row), so say so instead of failing on it. Someone
+    // already here, or an owner coming back, isn't given the role at all.
+    let takes_role = match &existing {
+        Some((_, true)) => false,
+        Some((role, false)) => !is_ownership(role),
+        None => true,
+    };
+    if takes_role
+        && admission.role_id.is_none()
+        && matches!(
+            MembershipRole::parse(admission.role),
+            Some(MembershipRole::Viewer | MembershipRole::Worker)
+        )
+    {
+        return Err(AppError::Refused {
+            field: "roleId",
+            message: "That role is for projects. For the whole workspace, use a role based on Viewer, such as Read only.",
+        });
+    }
     let admin = MembershipRole::parse(admission.role) == Some(MembershipRole::Admin);
     let explicit = admin || admission.role_id.is_some();
     if !matches!(existing, Some((_, true))) {

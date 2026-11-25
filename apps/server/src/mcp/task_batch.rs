@@ -1880,7 +1880,7 @@ async fn update_many(
                             due_date: change.due_date,
                             ..TaskFieldChanges::default()
                         },
-                        summary: "Work Item updated through MCP",
+                        summary: "Task updated",
                         audit_action: "work_item.mcp_bulk_updated",
                         audit_version_metadata: AuditVersionMetadata::Include,
                     },
@@ -2055,15 +2055,9 @@ async fn apply_archive(
     key: &str,
 ) -> Result<Result<Outcome, BatchProblem>, AppError> {
     let (summary, audit_action) = if archived {
-        (
-            "Work Item archived through MCP",
-            "work_item.mcp_bulk_archived",
-        )
+        ("Task archived", "work_item.mcp_bulk_archived")
     } else {
-        (
-            "Work Item restored through MCP",
-            "work_item.mcp_bulk_restored",
-        )
+        ("Task restored", "work_item.mcp_bulk_restored")
     };
     let status_id = current.status_id;
     let outcome = set_archived(

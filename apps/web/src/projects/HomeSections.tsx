@@ -65,7 +65,7 @@ export function SetupCard({ organizationId }: { organizationId: string }) {
           {data.canManageWorkspace ? `Set up ${data.organizationName}` : `Get started in ${data.organizationName}`}
         </h2>
         <p className="aw-home__setup-text">
-          {progressText(data)}. Next: {STEP_TITLES[data.nextStep]}.
+          {progressText({ steps: data.steps, projectName: null })}. Next: {STEP_TITLES[data.nextStep]}.
         </p>
       </div>
       <div className="aw-home__setup-actions">

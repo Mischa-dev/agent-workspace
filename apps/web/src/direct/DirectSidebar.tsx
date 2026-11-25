@@ -56,7 +56,6 @@ export function DirectSidebar({ mobileOpen, onNavigate }: { mobileOpen: boolean;
               keep={conversation.unread}
               key={conversation.id}
               label={conversationTitle(conversation, viewerId)}
-              meta={conversation.kind === 'group' ? String(conversation.members.length) : undefined}
               onNavigate={onNavigate}
               to={here(`/messages/${encodeURIComponent(conversation.id)}`)}
               unread={conversation.unread && !conversation.muted}

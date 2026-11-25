@@ -7,6 +7,13 @@ agents work in it as equals: agents connect over MCP or the public API, answer
 when they're asked, claim tasks and launch runs, and every call is checked
 against the caller's memberships and what each conversation lets them see.
 
+![A channel where people and an agent talk through a release](docs/images/channel.png)
+
+![A project's task board, in the dark theme](docs/images/board-dark.png)
+
+Both pictures are the demo workspace the UI tour seeds
+(`apps/web/playwright.tour.config.ts`).
+
 Today it runs as one Rust server with PostgreSQL and a React web app, on one
 host or self-hosted. Where it is going, and the order it is built in, is the
 master plan in [`docs/plans/master/`](docs/plans/master/README.md). The rules

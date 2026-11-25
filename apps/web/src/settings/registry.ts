@@ -122,6 +122,41 @@ export function pagesIn(group: SettingsGroup, context: SettingsVisibility) {
   )
 }
 
+/**
+ * How the nav lays a group out: pages that go together sit together, with a
+ * gap between the clusters (you and the app, then what runs agents, then
+ * what connects from outside). A page not named here follows in a cluster
+ * of its own, so a new page still shows.
+ */
+const NAV_CLUSTERS: Record<SettingsGroup, string[][]> = {
+  account: [
+    ['profile', 'security', 'appearance', 'notifications'],
+    ['provider-accounts', 'usage', 'hosts'],
+    ['connected-apps', 'api-tokens', 'webhooks', 'api-reference'],
+  ],
+  workspace: [
+    ['general', 'members', 'roles'],
+    ['modules', 'layout', 'templates', 'project-templates'],
+    ['runs', 'harnesses', 'hosts', 'keys', 'github'],
+    ['email', 'usage', 'export', 'audit-log', 'server'],
+  ],
+  project: [
+    ['general', 'members', 'layout'],
+    ['workflow', 'fields', 'templates', 'automations', 'bug-reports', 'import-export'],
+    ['repositories', 'runs', 'agents', 'run-requests'],
+  ],
+}
+
+/** A group's pages for the nav, in clusters; empty clusters are left out. */
+export function clustersIn(group: SettingsGroup, context: SettingsVisibility): SettingsPage[][] {
+  const pages = pagesIn(group, context)
+  const named = new Set(NAV_CLUSTERS[group].flat())
+  return [
+    ...NAV_CLUSTERS[group].map((ids) => ids.flatMap((id) => pages.filter((entry) => entry.id === id))),
+    pages.filter((entry) => !named.has(entry.id)),
+  ].filter((cluster) => cluster.length > 0)
+}
+
 export function findPage(group: SettingsGroup, id: string) {
   return SETTINGS_PAGES.find((entry) => entry.group === group && entry.id === id) ?? null
 }

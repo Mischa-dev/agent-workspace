@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 
-import { Button, ButtonLink, ErrorState, ListSkeleton, Row, RowList, Section, StatusChip, describeError, formatDateTime, formatRelative, showToast } from '../ui'
+import { Button, ButtonLink, ErrorState, Row, RowList, Section, StatusChip, describeError, formatDateTime, formatRelative, showToast } from '../ui'
 import { workItemHref } from '../work-items/links'
 import type { Launch } from './api'
 import { useCancelLaunch, useLaunchList } from './hooks'
@@ -78,24 +78,24 @@ export function LaunchQueue({ projectId }: { projectId: string }) {
     )
   }
 
-  if (launches.isPending) return <ListSkeleton label="Loading launches" rows={2} />
+  // Most projects have nothing waiting, so nothing holds its place while it loads.
+  if (launches.isPending) return null
   if (launches.isError) return <ErrorState error={launches.error} onRetry={() => void launches.refetch()} title="Launches didn’t load" />
   const queued = launches.data.queued
   // Started launches are the runs below; the rest never ran here.
   const other = launches.data.recent.filter((launch) => !launch.runId && launch.state !== 'started')
   return (
     <>
-      <Section
-        description={queued.length > 1 ? 'In the order they start: unblocked tasks first, as each account has room.' : undefined}
-        id="launch-queue-heading"
-        title={`Waiting to start (${queued.length})`}
-      >
-        {queued.length ? (
+      {/* An empty queue says nothing: the runs below are the page. */}
+      {queued.length ? (
+        <Section
+          description={queued.length > 1 ? 'In the order they start: unblocked tasks first, as each account has room.' : undefined}
+          id="launch-queue-heading"
+          title={`Waiting to start (${queued.length})`}
+        >
           <RowList label="Waiting to start">{queued.map(row)}</RowList>
-        ) : (
-          <p className="aw-quiet">Nothing is waiting. Tasks that can’t start yet wait here, in order.</p>
-        )}
-      </Section>
+        </Section>
+      ) : null}
       {other.length ? (
         <Section
           description="Launched lately but never ran here: cancelled, couldn’t start, or went to a connected runner."

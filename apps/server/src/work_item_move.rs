@@ -2097,7 +2097,7 @@ async fn carry_over(
                 })
                 .collect(),
         };
-        let summary = format!("Work Item moved from {}", task.key);
+        let summary = format!("Task moved from {}", task.key);
         let outcome = create_work_item_with_id(
             transaction,
             &mover.target,
@@ -2561,7 +2561,7 @@ async fn archive(
     .bind(task.id)
     .fetch_one(&mut **transaction)
     .await?;
-    let summary = format!("Work Item moved to {new_key}");
+    let summary = format!("Task moved to {new_key}");
     finalize_change(
         transaction,
         actor,

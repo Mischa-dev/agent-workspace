@@ -135,6 +135,13 @@ export function SheetGrid({
   const body = useMemo(() => Array.from({ length: Math.max(0, last - first + 1) }, (_, index) => rowAt(first + index)), [first, last, rowAt])
   const frozenRows = useMemo(() => Array.from({ length: frozen }, (_, index) => index + 1), [frozen])
 
+  // A sheet opens ready to type in: the grid takes the keys unless something
+  // else already has them, so typing fills the cell that looks selected
+  // instead of running the app's one-key shortcuts.
+  useEffect(() => {
+    if (document.activeElement === document.body) scroller.current?.focus({ preventScroll: true })
+  }, [])
+
   // The focused cell stays in view.
   const focus = selection.focus
   useEffect(() => {

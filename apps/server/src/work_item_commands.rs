@@ -1690,32 +1690,25 @@ pub async fn place_in_column(
 // Links to threads and repositories
 
 /// How a link change is written down. The web app and MCP name the same
-/// change differently in the audit log and the activity summary.
+/// change differently in the audit log. The activity summary reads the same
+/// from both: the entry already says which app it was done through (`via`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LinkWording {
     /// Prefix of every audit action, such as "work_item.mcp_" for
     /// "work_item.mcp_thread_linked".
     pub audit_prefix: &'static str,
-    /// Appended to every activity summary, such as " through MCP".
-    pub summary_suffix: &'static str,
 }
 
 impl LinkWording {
     pub const WEB: Self = Self {
         audit_prefix: "work_item.",
-        summary_suffix: "",
     };
     pub const MCP: Self = Self {
         audit_prefix: "work_item.mcp_",
-        summary_suffix: " through MCP",
     };
 
     fn audit_action(self, kind: &str) -> String {
         format!("{}{kind}", self.audit_prefix)
-    }
-
-    fn summary(self, summary: &str) -> String {
-        format!("{summary}{}", self.summary_suffix)
     }
 }
 
@@ -1802,7 +1795,7 @@ pub async fn change_thread_link(
         current.id,
         ChangeFinalization {
             activity_kind: kind,
-            summary: &wording.summary(summary),
+            summary,
             audit_action: &wording.audit_action(kind),
             activity_payload: payload.clone(),
             audit_metadata: payload,
@@ -1960,7 +1953,7 @@ pub async fn change_repository_link(
         current.id,
         ChangeFinalization {
             activity_kind: kind,
-            summary: &wording.summary(summary),
+            summary,
             audit_action: &wording.audit_action(kind),
             activity_payload: payload.clone(),
             audit_metadata: payload,

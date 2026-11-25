@@ -131,7 +131,7 @@ impl<T> ToolResult<T> {
     }
 
     pub(super) fn from_error(error: AppError, operation: &'static str) -> Self {
-        match error {
+        match error.input_problem() {
             AppError::NotFound(what) => Self::not_found(what),
             AppError::LimitReached(limit) => Self::LimitReached {
                 message: limit.message.clone(),
@@ -171,9 +171,12 @@ impl<T> ToolResult<T> {
                 ),
             },
             error => {
+                let (database_code, database_constraint) = error.database_log_fields();
                 tracing::error!(
                     operation,
                     category = error.log_category(),
+                    database_code = database_code.as_deref().unwrap_or("none"),
+                    database_constraint = database_constraint.as_deref().unwrap_or("none"),
                     "MCP tool failed"
                 );
                 Self::unavailable()

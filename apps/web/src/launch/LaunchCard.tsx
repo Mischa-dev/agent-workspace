@@ -31,7 +31,8 @@ export function LaunchCard({ embedded = false, item }: { embedded?: boolean; ite
   // Each reason links to the settings page that fixes it.
   const unavailable = !data ? null : !harness ? (
     <>
-      No agent is set up for this project yet. <Link to={`${projectSettingsHref(item.projectId, 'runs')}#environments`}>Set one up</Link>
+      This project can’t start runs yet: it needs somewhere to run an agent.{' '}
+      <Link to={`${projectSettingsHref(item.projectId, 'runs')}#environments`}>Set up runs</Link>
     </>
   ) : accounts.length === 0 ? (
     <>

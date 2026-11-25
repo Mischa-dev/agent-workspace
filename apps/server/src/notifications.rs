@@ -22,7 +22,7 @@
 //! to your runs or tasks. Later workstreams add kinds of their own through
 //! `NewNotification` (the kind column is open-ended).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use axum::{Json, Router, extract::State, routing::get};
 use rmcp::schemars::{self, JsonSchema};
@@ -36,6 +36,7 @@ use crate::{
     auth::AuthenticatedActor,
     domain::RunState,
     error::{ApiQuery, AppError},
+    jobs::{self, JobRegistry, NewJob},
     outbox::{self, NotificationsUpdatedPayload, OutboxEventPayload},
 };
 
@@ -635,8 +636,31 @@ pub(crate) async fn announce(
     Ok(())
 }
 
+/// The viewer's notifications about a conversation that viewing it up to a
+/// sequence reads: `$1` the viewer, `$2` the conversation, `$3` the
+/// sequence. Snoozed notifications wait for their time.
+const READ_BY_VIEWING: &str = r#"
+    n.recipient_actor_id = $1
+    AND n.conversation_id = $2
+    AND n.read_at IS NULL
+    AND n.archived_at IS NULL
+    AND (n.snoozed_until IS NULL OR n.snoozed_until <= now())
+    AND (n.message_id IS NULL OR EXISTS (
+        SELECT 1 FROM conversation_entries entry
+        WHERE entry.conversation_id = $2
+          AND entry.message_id = n.message_id
+          AND entry.sequence <= $3
+    ))
+"#;
+
 /// Viewing a conversation up to `sequence` reads what the viewer was told
 /// about it there. Snoozed notifications wait for their time.
+///
+/// A notification another transaction is writing right now is left alone
+/// (`SKIP LOCKED`): waiting for it deadlocked a send against the fan-out of
+/// the message before it, which holds one of the viewer's rows while it
+/// waits for another. The ones left are read by a job once this commits
+/// ([`READ_SKIPPED_KIND`]), so nothing the viewer has seen stays unread.
 pub(crate) async fn read_for_conversation(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -644,23 +668,19 @@ pub(crate) async fn read_for_conversation(
     conversation_id: Uuid,
     sequence: i64,
 ) -> Result<(), AppError> {
-    let read = sqlx::query(
+    let read = sqlx::query(&format!(
         r#"
-        UPDATE notifications n
+        UPDATE notifications
         SET read_at = now(), updated_at = now()
-        WHERE n.recipient_actor_id = $1
-          AND n.conversation_id = $2
-          AND n.read_at IS NULL
-          AND n.archived_at IS NULL
-          AND (n.snoozed_until IS NULL OR n.snoozed_until <= now())
-          AND (n.message_id IS NULL OR EXISTS (
-              SELECT 1 FROM conversation_entries entry
-              WHERE entry.conversation_id = $2
-                AND entry.message_id = n.message_id
-                AND entry.sequence <= $3
-          ))
-        "#,
-    )
+        WHERE id IN (
+            SELECT n.id
+            FROM notifications n
+            WHERE {READ_BY_VIEWING}
+            ORDER BY n.id
+            FOR UPDATE OF n SKIP LOCKED
+        )
+        "#
+    ))
     .bind(viewer)
     .bind(conversation_id)
     .bind(sequence)
@@ -668,6 +688,86 @@ pub(crate) async fn read_for_conversation(
     .await?;
     if read.rows_affected() > 0 {
         announce(transaction, project_id, viewer).await?;
+    }
+    // What still matches was locked and skipped.
+    let skipped = sqlx::query_as::<_, (Uuid, Option<Uuid>)>(&format!(
+        "SELECT n.id, n.workspace_id FROM notifications n WHERE {READ_BY_VIEWING} ORDER BY n.id"
+    ))
+    .bind(viewer)
+    .bind(conversation_id)
+    .bind(sequence)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let mut by_workspace = BTreeMap::<Option<Uuid>, Vec<Uuid>>::new();
+    for (id, workspace) in skipped {
+        by_workspace.entry(workspace).or_default().push(id);
+    }
+    for (workspace, notification_ids) in by_workspace {
+        let job = NewJob::new(READ_SKIPPED_KIND).payload(ReadSkippedJob {
+            viewer,
+            place: project_id,
+            conversation_id,
+            sequence,
+            notification_ids,
+        });
+        jobs::enqueue(
+            &mut **transaction,
+            match workspace {
+                Some(workspace) => job.workspace(workspace),
+                None => job,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Reads the notifications a view of their conversation had to skip.
+pub const READ_SKIPPED_KIND: &str = "notifications.read_skipped";
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadSkippedJob {
+    viewer: Uuid,
+    /// The conversation's place: its space, or the direct scope.
+    place: Uuid,
+    conversation_id: Uuid,
+    sequence: i64,
+    notification_ids: Vec<Uuid>,
+}
+
+pub fn register_jobs(registry: &mut JobRegistry) {
+    registry.register(READ_SKIPPED_KIND, |context| async move {
+        let job: ReadSkippedJob = context.job.payload_as()?;
+        read_skipped(&context.state, &job).await?;
+        Ok(())
+    });
+}
+
+/// One notification at a time, each in its own transaction: this waits for
+/// whoever is writing the row while holding nothing they could want. A row
+/// that has since been told about something newer than the view stays
+/// unread.
+async fn read_skipped(state: &AppState, job: &ReadSkippedJob) -> Result<(), AppError> {
+    for notification_id in &job.notification_ids {
+        let mut transaction = crate::db::scoped_tx(&state.pool).await?;
+        let read = sqlx::query(&format!(
+            r#"
+            UPDATE notifications n
+            SET read_at = now(), updated_at = now()
+            WHERE n.id = $4 AND {READ_BY_VIEWING}
+            "#
+        ))
+        .bind(job.viewer)
+        .bind(job.conversation_id)
+        .bind(job.sequence)
+        .bind(notification_id)
+        .execute(&mut *transaction)
+        .await?;
+        if read.rows_affected() > 0 {
+            announce(&mut transaction, job.place, job.viewer).await?;
+        }
+        transaction.commit().await?;
     }
     Ok(())
 }
@@ -2356,6 +2456,15 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
         ),
     };
     let subject_title = match row.subject_kind.as_str() {
+        // A DM has no name of its own: it goes by the person it's with, who
+        // is whoever wrote to you there.
+        "conversation"
+            if row.conversation_kind.as_deref() == Some("dm")
+                && row.subject_label.is_none()
+                && row.actor_name.is_some() =>
+        {
+            who.clone()
+        }
         "conversation" | "agent_run" => place.clone(),
         "work_item" => task,
         "pull_request" => match &row.pull_request_title {

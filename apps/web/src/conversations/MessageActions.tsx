@@ -112,8 +112,9 @@ export function useMessageActions({
   // never replaces a newer one.
   const reactionRequests = useRef(new Map<string, number>())
   const later = useMessageLater({ conversationId, projectId, taskProject })
-  // Reactions offer the emoji of the message's own workspace.
-  const workspaceId = useProject(projectId).data?.organizationId || null
+  // Reactions offer the emoji of the message's own workspace. A DM or group
+  // belongs to no project, so there is none to ask.
+  const workspaceId = useProject(direct ? '' : projectId).data?.organizationId || null
   const canPost = Boolean(capabilities?.sendMessage)
   const memory = useMessageMemory({ conversationId, direct, enabled: canPost, projectId })
 

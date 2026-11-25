@@ -220,6 +220,7 @@ fn written(result: writes::WriteResult) -> Result<TaskWritten, OpError> {
             })),
         }),
         Result::TemporarilyUnavailable { .. } => Err(OpError::Unavailable),
+        Result::LimitReached { limit, .. } => Err(OpError::LimitReached { refusal: limit }),
     }
 }
 

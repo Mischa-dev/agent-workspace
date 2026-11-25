@@ -29,10 +29,13 @@ export function TemplateStep({ onboarding }: { onboarding: Onboarding }) {
   // other way to start.
   return (
     <div className="aw-templates__start">
-      <h3 className="aw-templates__section">What is this workspace for?</h3>
       <ShapePicker canChange organizationId={onboarding.organizationId} />
-      <h3 className="aw-templates__section">Or start from a template</h3>
-      <TemplatePicker confirm={false} leads={false} organizationId={onboarding.organizationId} />
+      {/* One question first. Templates also set roles, so they wait a click away. */}
+      <details className="aw-templates__other">
+        <summary>Or start from a template</summary>
+        <p className="aw-templates__description">A template also sets up roles and a first project. You can use one later in settings too.</p>
+        <TemplatePicker confirm={false} leads={false} organizationId={onboarding.organizationId} />
+      </details>
     </div>
   )
 }

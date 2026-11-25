@@ -335,3 +335,88 @@ async fn each_filter_narrows_and_none_widens() {
 
     world.finish().await;
 }
+
+/// The ids of the tasks `person` finds for `query`.
+async fn task_hits(app: &axum::Router, person: &Person, query: &str) -> Vec<String> {
+    let path = format!("/api/v1/search?q={}", encoded(query));
+    let (status, body) = send(app, person.browser.request("GET", &path, None, Value::Null)).await;
+    assert_eq!(status, StatusCode::OK, "{query}: {body}");
+    body["hits"]
+        .as_array()
+        .expect("hits")
+        .iter()
+        .filter(|hit| hit["kind"] == "task")
+        .map(|hit| hit["id"].as_str().expect("id").to_owned())
+        .collect()
+}
+
+/// Search as you type: a half-typed last word finds what it starts, and a
+/// task's key finds the task in any case. Neither reaches a project the
+/// searcher isn't in.
+#[tokio::test]
+async fn a_half_typed_word_and_a_task_key_find_only_what_the_searcher_can_open() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("lena", "member")
+        .person("nina", "member")
+        .build("search_as_you_type")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let work = world.project("WORK");
+    let lena = &world.people["lena"];
+    let nina = &world.people["nina"];
+    let (status, made) = op(
+        app,
+        lena,
+        "task_create",
+        json!({"projectId": work, "title": "Zebrafinch wiring", "description": "Route the loom."}),
+    )
+    .await;
+    assert!(status.is_success(), "{made}");
+    let task = made["value"]["workItemId"]
+        .as_str()
+        .expect("task")
+        .to_owned();
+    let key: String =
+        sqlx::query_scalar("SELECT 'WORK-' || number::text FROM work_items WHERE id = $1::uuid")
+            .bind(&task)
+            .fetch_one(world.pool())
+            .await
+            .expect("key");
+
+    for query in [
+        "zebraf".to_owned(),
+        "wiring zebrafi".to_owned(),
+        key.clone(),
+        key.to_lowercase(),
+        // Only a plain last word is unfinished: an excluded one is whole, so
+        // "-zebraf" doesn't shut out "Zebrafinch".
+        "wiring -zebraf".to_owned(),
+    ] {
+        assert_eq!(
+            task_hits(app, lena, &query).await,
+            vec![task.clone()],
+            "{query}"
+        );
+    }
+    // A whole phrase stays a phrase, and a key is the whole query or nothing.
+    assert!(task_hits(app, lena, "\"zebraf\"").await.is_empty());
+    assert!(task_hits(app, lena, "\"zebraf\" the").await.is_empty());
+    assert!(task_hits(app, lena, &format!("{key}9")).await.is_empty());
+
+    // Nina leaves the project: neither the words nor the key find it.
+    sqlx::query("DELETE FROM project_memberships WHERE actor_id = $1 AND project_id = $2::uuid")
+        .bind(nina.actor)
+        .bind(work)
+        .execute(world.pool())
+        .await
+        .expect("nina leaves");
+    for query in ["zebraf".to_owned(), key.clone()] {
+        assert!(task_hits(app, nina, &query).await.is_empty(), "{query}");
+    }
+
+    world.finish().await;
+}
