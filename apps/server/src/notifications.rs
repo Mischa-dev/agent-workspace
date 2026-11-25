@@ -726,6 +726,38 @@ pub(crate) async fn read_for_conversation(
     Ok(())
 }
 
+/// Whether the recipient has already viewed their conversation past the
+/// message a notification is about. True while a skipped read still waits
+/// for its job, so an alert for the message doesn't depend on which of the
+/// two jobs runs first.
+pub(crate) async fn seen_by_viewing(
+    pool: &PgPool,
+    recipient: Uuid,
+    notification_id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM notifications n
+            JOIN conversation_entries entry
+              ON entry.conversation_id = n.conversation_id
+             AND entry.message_id = n.message_id
+            JOIN conversation_read_states state
+              ON state.conversation_id = n.conversation_id
+             AND state.actor_id = n.recipient_actor_id
+            WHERE n.id = $1
+              AND n.recipient_actor_id = $2
+              AND entry.sequence <= state.highest_seen_sequence
+        )
+        "#,
+    )
+    .bind(notification_id)
+    .bind(recipient)
+    .fetch_one(crate::db::scoped(pool))
+    .await?)
+}
+
 /// Reads the notifications a view of their conversation had to skip.
 pub const READ_SKIPPED_KIND: &str = "notifications.read_skipped";
 const READ_SKIPPED_PRIORITY: i16 = 20;

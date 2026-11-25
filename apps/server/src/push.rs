@@ -613,7 +613,9 @@ async fn deliver_job(state: &AppState, job: &DeliverJob) -> Result<(), JobError>
     .next() else {
         return Ok(());
     };
-    if notification.read {
+    if notification.read
+        || notifications::seen_by_viewing(&state.pool, job.recipient, job.notification_id).await?
+    {
         return Ok(());
     }
     let organization_id =
