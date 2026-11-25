@@ -709,3 +709,111 @@ async fn push_devices_stay_encrypted_follow_settings_and_lose_access_with_the_pr
         0
     );
 }
+
+/// A read that had to skip a notification (its row was being written)
+/// leaves it unread until a job reads it. A push for that message must not
+/// go out in between, whichever job runs first.
+#[tokio::test]
+async fn a_push_for_a_message_already_seen_sends_nothing() {
+    let Some(fixture) = fixture("w9_push_seen").await else {
+        return;
+    };
+    let setup = &fixture.setup;
+    let state = &fixture.state;
+    let project = create_project(setup, "PSN", "Push seen").await;
+    let general = create_channel(setup, &project, "general").await;
+    let (mara_id, mara) = add_person(setup, &[&project], "mara").await;
+    let (status, device) = call(
+        setup,
+        &mara,
+        "POST",
+        "/api/v1/push/subscriptions",
+        Some("mara-phone"),
+        json!({
+            "endpoint": "https://fcm.googleapis.com/fcm/send/w9-seen-endpoint",
+            "keys": device_keys(),
+            "organizationId": setup.organization_id,
+            "label": "Phone"
+        }),
+    )
+    .await;
+    assert!(status.is_success(), "{device}");
+    say(
+        setup,
+        &setup.browser,
+        &general,
+        "seen-mention",
+        json!({
+            "version": 1,
+            "nodes": [
+                {"type": "text", "text": "Can you look "},
+                {"type": "mention", "actorId": mara_id}
+            ]
+        }),
+    )
+    .await;
+    drain(setup).await;
+    let sequence = sqlx::query_scalar::<_, i64>(
+        "SELECT next_entry_sequence - 1 FROM conversations WHERE id = $1::uuid",
+    )
+    .bind(&general)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("sequence");
+
+    // Mara reads the channel while her notification is held, as a fan-out
+    // writing to it would hold it: the read leaves the row for a job.
+    let mut writer = setup.pool.begin().await.expect("writer");
+    let held = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM notifications WHERE recipient_actor_id = $1 AND read_at IS NULL FOR UPDATE",
+    )
+    .bind(mara_id)
+    .fetch_all(&mut *writer)
+    .await
+    .expect("hold the notification");
+    assert_eq!(held.len(), 1);
+    let (status, seen) = call(
+        setup,
+        &mara,
+        "POST",
+        "/api/v2/ops/conversation_mark_read",
+        Some("seen-read"),
+        json!({"conversationId": general, "upToSequence": sequence}),
+    )
+    .await;
+    assert!(status.is_success(), "{seen}");
+    writer.commit().await.expect("writer done");
+    assert_eq!(inbox(setup, &mara, "").await["unreadCount"], 1);
+
+    // The push runs before the job that reads the row, and sends nothing.
+    let ran = jobs::run_due(state, &push_jobs(), &options())
+        .await
+        .expect("run pushes");
+    assert_eq!(ran, 1);
+    let finished =
+        sqlx::query_scalar::<_, String>("SELECT state::text FROM background_jobs WHERE kind = $1")
+            .bind(push::DELIVER_KIND)
+            .fetch_all(&setup.pool)
+            .await
+            .expect("push job");
+    assert_eq!(finished, ["succeeded"], "the job decided, it didn't fail");
+    let (failures, last_sent) = sqlx::query_as::<_, (i32, Option<chrono::DateTime<Utc>>)>(
+        "SELECT failure_count, last_sent_at FROM push_subscriptions WHERE actor_id = $1",
+    )
+    .bind(mara_id)
+    .fetch_one(&setup.pool)
+    .await
+    .expect("device");
+    assert_eq!((failures, last_sent), (0, None), "no send was attempted");
+    // A send mints its receipt first, so none means it never got that far.
+    for table in ["push_receipts", "push_deliveries"] {
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
+                .fetch_one(&setup.pool)
+                .await
+                .expect("count"),
+            0,
+            "{table}"
+        );
+    }
+}
