@@ -703,13 +703,17 @@ pub(crate) async fn read_for_conversation(
         by_workspace.entry(workspace).or_default().push(id);
     }
     for (workspace, notification_ids) in by_workspace {
-        let job = NewJob::new(READ_SKIPPED_KIND).payload(ReadSkippedJob {
-            viewer,
-            place: project_id,
-            conversation_id,
-            sequence,
-            notification_ids,
-        });
+        // Ahead of the push for the same notification, which checks whether
+        // it has been read.
+        let job = NewJob::new(READ_SKIPPED_KIND)
+            .priority(READ_SKIPPED_PRIORITY)
+            .payload(ReadSkippedJob {
+                viewer,
+                place: project_id,
+                conversation_id,
+                sequence,
+                notification_ids,
+            });
         jobs::enqueue(
             &mut **transaction,
             match workspace {
@@ -724,6 +728,7 @@ pub(crate) async fn read_for_conversation(
 
 /// Reads the notifications a view of their conversation had to skip.
 pub const READ_SKIPPED_KIND: &str = "notifications.read_skipped";
+const READ_SKIPPED_PRIORITY: i16 = 20;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
