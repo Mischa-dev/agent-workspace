@@ -387,6 +387,32 @@ pub async fn deliver(
     // it got to, and a read that comes after waits for this row to commit.
     // Without it, a read could skip this row while it was being written
     // (`read_for_conversation` skips locked rows) and leave it unread.
+    //
+    // A send holds its conversation before it moves the sender's mark, and
+    // the row written below references the conversation, so the conversation
+    // comes first here too: conversation, read mark, notification, the one
+    // order everywhere.
+    if let Some(message_id) = notification.message_id {
+        sqlx::query(
+            r#"
+            SELECT conversation.id
+            FROM conversations conversation
+            WHERE conversation.id = $2
+               OR conversation.id IN (
+                   SELECT entry.conversation_id
+                   FROM conversation_entries entry
+                   WHERE entry.message_id = $1
+               )
+            ORDER BY conversation.id
+            -- visibility: locks the row by id; nothing of it is read
+            FOR KEY SHARE OF conversation
+            "#,
+        )
+        .bind(message_id)
+        .bind(notification.conversation_id)
+        .execute(&mut **transaction)
+        .await?;
+    }
     let already_seen = match notification.message_id {
         Some(message_id) => sqlx::query_scalar::<_, bool>(
             r#"

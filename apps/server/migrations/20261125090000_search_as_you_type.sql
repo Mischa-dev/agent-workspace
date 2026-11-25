@@ -9,11 +9,12 @@ CREATE FUNCTION search_tsquery(config regconfig, query text) RETURNS tsquery
 LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
 DECLARE
     parsed tsquery := websearch_to_tsquery(config, query);
-    last_word text := substring(query from '(\S+)\s*$');
+    -- What follows the last space or quote: nothing when the query ends in one.
+    last_word text := substring(query from '([^\s"]+)\s*$');
 BEGIN
     IF numnode(parsed) = 0
         OR last_word IS NULL
-        OR last_word ~ '^-|"'
+        OR last_word ~ '^-'
         OR lower(last_word) = 'or'
         OR (length(query) - length(replace(query, '"', ''))) % 2 = 1
         OR numnode(websearch_to_tsquery(config, last_word)) = 0
