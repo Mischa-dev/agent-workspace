@@ -790,6 +790,13 @@ async fn a_push_for_a_message_already_seen_sends_nothing() {
         .await
         .expect("run pushes");
     assert_eq!(ran, 1);
+    let finished =
+        sqlx::query_scalar::<_, String>("SELECT state::text FROM background_jobs WHERE kind = $1")
+            .bind(push::DELIVER_KIND)
+            .fetch_all(&setup.pool)
+            .await
+            .expect("push job");
+    assert_eq!(finished, ["succeeded"], "the job decided, it didn't fail");
     let (failures, last_sent) = sqlx::query_as::<_, (i32, Option<chrono::DateTime<Utc>>)>(
         "SELECT failure_count, last_sent_at FROM push_subscriptions WHERE actor_id = $1",
     )
