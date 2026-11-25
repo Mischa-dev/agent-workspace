@@ -47,6 +47,11 @@
   list-style: none;
 }
 
+/* The first page of each later cluster in a group. */
+.aw-settings__gap {
+  margin-top: var(--space-2);
+}
+
 .aw-settings__link {
   display: flex;
   align-items: center;

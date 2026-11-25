@@ -128,7 +128,8 @@ export async function seedTour(context: SeedContext): Promise<TourState> {
   await me.get('/api/v1/direct')
   await me.write('PATCH', '/api/v1/account/profile', { displayName: 'Robin Achterberg' })
   const workspace = (await me.get(`/api/v1/organizations/${context.organizationId}`)) as { version?: number; workspace?: { version?: number } }
-  await me.write('PATCH', `/api/v1/organizations/${context.organizationId}`, {
+  await me.write('POST', `/api/v2/w/${context.organizationId}/ops/workspace_update`, {
+    projectId: 'workspace',
     name: 'Atlas Robotics',
     expectedVersion: Number(workspace.version ?? workspace.workspace?.version ?? 1),
   })

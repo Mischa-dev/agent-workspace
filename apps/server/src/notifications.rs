@@ -637,6 +637,11 @@ pub(crate) async fn announce(
 
 /// Viewing a conversation up to `sequence` reads what the viewer was told
 /// about it there. Snoozed notifications wait for their time.
+///
+/// A notification another transaction is writing right now is left alone
+/// (`SKIP LOCKED`): it is being told about something newer, and waiting for
+/// it deadlocked a send against the fan-out of the message before it, which
+/// holds one of the viewer's rows while it waits for another.
 pub(crate) async fn read_for_conversation(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
@@ -646,19 +651,25 @@ pub(crate) async fn read_for_conversation(
 ) -> Result<(), AppError> {
     let read = sqlx::query(
         r#"
-        UPDATE notifications n
+        UPDATE notifications
         SET read_at = now(), updated_at = now()
-        WHERE n.recipient_actor_id = $1
-          AND n.conversation_id = $2
-          AND n.read_at IS NULL
-          AND n.archived_at IS NULL
-          AND (n.snoozed_until IS NULL OR n.snoozed_until <= now())
-          AND (n.message_id IS NULL OR EXISTS (
-              SELECT 1 FROM conversation_entries entry
-              WHERE entry.conversation_id = $2
-                AND entry.message_id = n.message_id
-                AND entry.sequence <= $3
-          ))
+        WHERE id IN (
+            SELECT n.id
+            FROM notifications n
+            WHERE n.recipient_actor_id = $1
+              AND n.conversation_id = $2
+              AND n.read_at IS NULL
+              AND n.archived_at IS NULL
+              AND (n.snoozed_until IS NULL OR n.snoozed_until <= now())
+              AND (n.message_id IS NULL OR EXISTS (
+                  SELECT 1 FROM conversation_entries entry
+                  WHERE entry.conversation_id = $2
+                    AND entry.message_id = n.message_id
+                    AND entry.sequence <= $3
+              ))
+            ORDER BY n.id
+            FOR UPDATE OF n SKIP LOCKED
+        )
         "#,
     )
     .bind(viewer)
@@ -2356,6 +2367,15 @@ fn view(addresses: Addresses, row: NotificationRow) -> NotificationView {
         ),
     };
     let subject_title = match row.subject_kind.as_str() {
+        // A DM has no name of its own: it goes by the person it's with, who
+        // is whoever wrote to you there.
+        "conversation"
+            if row.conversation_kind.as_deref() == Some("dm")
+                && row.subject_label.is_none()
+                && row.actor_name.is_some() =>
+        {
+            who.clone()
+        }
         "conversation" | "agent_run" => place.clone(),
         "work_item" => task,
         "pull_request" => match &row.pull_request_title {

@@ -253,7 +253,7 @@ export function TimelinePage() {
   const slipCount = slipped?.tasks.size ?? 0
   return (
     <>
-      <div className="aw-page aw-page--full aw-timeline">
+      <div className="aw-page aw-page--full">
         <PageHeader icon="clock" title="Timeline" />
         <WorkTabs current="timeline" projectId={project.data.id} />
         <RememberPlace location={{ kind: 'timeline' }} project={project.data} />

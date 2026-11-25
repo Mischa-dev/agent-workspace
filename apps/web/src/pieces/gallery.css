@@ -59,6 +59,8 @@
 
 .aw-gallery__body {
   display: grid;
+  /* One column no wider than the card, so a long name wraps or cuts short inside it. */
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: var(--space-1-5);
   min-width: 0;

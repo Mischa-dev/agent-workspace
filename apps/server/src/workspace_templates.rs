@@ -639,10 +639,15 @@ pub async fn last_use(
     .await?)
 }
 
-/// Whether a workspace has used a template yet: the setup path's first step.
+/// Whether a workspace has picked how it starts yet, the setup path's first
+/// step: a template used, or a shape set (which installs as a package).
 pub async fn used_any(pool: &sqlx::PgPool, organization_id: Uuid) -> Result<bool, AppError> {
     Ok(sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM workspace_template_uses WHERE organization_id = $1)",
+        "SELECT EXISTS (SELECT 1 FROM workspace_template_uses WHERE organization_id = $1) \
+             OR EXISTS (SELECT 1 FROM package_installs install \
+                        JOIN packages package ON package.id = install.package_id \
+                        WHERE install.workspace_id = $1 AND install.state = 'installed' \
+                          AND package.source = 'builtin' AND package.package_key LIKE 'shapes.%')",
     )
     .bind(organization_id)
     .fetch_one(crate::db::scoped(pool))

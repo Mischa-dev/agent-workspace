@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { describeError } from '../../app/mutations'
+import { can } from '../../auth/can'
 import type { OrganizationSummary } from '../../auth/session'
 import {
   Banner,
@@ -105,6 +106,8 @@ export function HostsView({ mode, workspace }: { mode: 'workspace' | 'account'; 
     onSettled: refresh,
   })
   const owner = mode === 'workspace' ? (workspace?.name ?? 'the workspace') : 'you'
+  // Anyone links a host of their own; one for the workspace takes managing its hosts.
+  const canLink = mode === 'account' || can(workspace, 'hosts.manage')
 
   return (
     <>
@@ -126,67 +129,71 @@ export function HostsView({ mode, workspace }: { mode: 'workspace' | 'account'; 
           {formatFullDate(code.expiresAt)}, and links a host owned by {code.owner.name}.
         </OneTimeValue>
       )}
-      <Section id="link-host-heading" title="Link a host">
-        <form
-          className="aw-card aw-formcard aw-form"
-          onSubmit={(event: FormEvent<HTMLFormElement>) => {
-            event.preventDefault()
-            enrol.mutate()
-          }}
-        >
-          <TextField
-            hint={`A note for you, such as the machine’s name. The host will belong to ${owner}.`}
-            id="host-label"
-            label="Label"
-            maxLength={80}
-            onChange={(event) => setLabel(event.target.value)}
-            value={label}
-          />
-          {enrol.isError && <Banner tone="danger">{`No code was made. ${describeError(enrol.error).message}`}</Banner>}
-          <div className="aw-form__actions">
-            <Button busy={enrol.isPending} icon="plus" type="submit" variant="primary">
-              Make a code
-            </Button>
-          </div>
-        </form>
-      </Section>
-      <Section id="link-a2a-heading" title="Link an A2A agent">
-        <form
-          className="aw-card aw-formcard aw-form"
-          onSubmit={(event: FormEvent<HTMLFormElement>) => {
-            event.preventDefault()
-            linkA2a.mutate()
-          }}
-        >
-          <TextField
-            hint="The agent’s address or its agent card’s. Workspace calls it; nothing runs here."
-            id="a2a-card-url"
-            label="Agent card address"
-            maxLength={1000}
-            onChange={(event) => setCardUrl(event.target.value)}
-            required
-            type="url"
-            value={cardUrl}
-          />
-          <TextField
-            autoComplete="off"
-            hint="Only if the agent asks for one. It is kept sealed and never shown again."
-            id="a2a-token"
-            label="Token"
-            onChange={(event) => setCardToken(event.target.value)}
-            type="password"
-            value={cardToken}
-          />
-          {linkA2a.isError && (
-            <Banner tone="danger">{`The agent wasn’t linked. ${describeError(linkA2a.error).message}`}</Banner>
-          )}
-          <div className="aw-form__actions">
-            <Button busy={linkA2a.isPending} disabled={!cardUrl.trim()} icon="plus" type="submit" variant="primary">
-              Link
-            </Button>
-          </div>
-        </form>
-      </Section>
+      {canLink ? (
+        <>
+          <Section id="link-host-heading" title="Link a host">
+            <form
+              className="aw-card aw-formcard aw-form"
+              onSubmit={(event: FormEvent<HTMLFormElement>) => {
+                event.preventDefault()
+                enrol.mutate()
+              }}
+            >
+              <TextField
+                hint={`A note for you, such as the machine’s name. The host will belong to ${owner}.`}
+                id="host-label"
+                label="Label"
+                maxLength={80}
+                onChange={(event) => setLabel(event.target.value)}
+                value={label}
+              />
+              {enrol.isError && <Banner tone="danger">{`No code was made. ${describeError(enrol.error).message}`}</Banner>}
+              <div className="aw-form__actions">
+                <Button busy={enrol.isPending} icon="plus" type="submit" variant="primary">
+                  Make a code
+                </Button>
+              </div>
+            </form>
+          </Section>
+          <Section id="link-a2a-heading" title="Link an A2A agent">
+            <form
+              className="aw-card aw-formcard aw-form"
+              onSubmit={(event: FormEvent<HTMLFormElement>) => {
+                event.preventDefault()
+                linkA2a.mutate()
+              }}
+            >
+              <TextField
+                hint="The agent’s address or its agent card’s. Workspace calls it; nothing runs here."
+                id="a2a-card-url"
+                label="Agent card address"
+                maxLength={1000}
+                onChange={(event) => setCardUrl(event.target.value)}
+                required
+                type="url"
+                value={cardUrl}
+              />
+              <TextField
+                autoComplete="off"
+                hint="Only if the agent asks for one. It is kept sealed and never shown again."
+                id="a2a-token"
+                label="Token"
+                onChange={(event) => setCardToken(event.target.value)}
+                type="password"
+                value={cardToken}
+              />
+              {linkA2a.isError && (
+                <Banner tone="danger">{`The agent wasn’t linked. ${describeError(linkA2a.error).message}`}</Banner>
+              )}
+              <div className="aw-form__actions">
+                <Button busy={linkA2a.isPending} disabled={!cardUrl.trim()} icon="plus" type="submit" variant="primary">
+                  Link
+                </Button>
+              </div>
+            </form>
+          </Section>
+        </>
+      ) : null}
       <Section id="hosts-heading" title={mode === 'workspace' ? 'Hosts here' : 'Your hosts'}>
         {hosts.isPending ? (
           <ListSkeleton label="Loading hosts" rows={2} />
@@ -207,7 +214,9 @@ export function HostsView({ mode, workspace }: { mode: 'workspace' | 'account'; 
           </RowList>
         ) : (
           <EmptyState icon="terminal" title="No hosts yet">
-            Make a code above, then run the host’s enrol step with it.
+            {canLink
+              ? 'Make a code above, then run the host’s enrol step with it.'
+              : 'Owners and admins link hosts for the workspace. You can link one of your own in your account’s Hosts settings.'}
           </EmptyState>
         )}
       </Section>

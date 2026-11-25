@@ -196,6 +196,34 @@ impl AppError {
         }
     }
 
+    /// A database refusal that is the caller's doing, as the answer to give
+    /// instead of "try again": text holding a NUL character, which
+    /// PostgreSQL can't store or compare (SQLSTATE 22021), and a row the
+    /// workspace rules turned away (42501), which is a write somewhere the
+    /// caller isn't. Every other error comes back as it is, so the edges
+    /// call this before they map an error.
+    pub fn input_problem(self) -> Self {
+        let Self::Database(sqlx::Error::Database(error)) = &self else {
+            return self;
+        };
+        match error.code().as_deref() {
+            Some("22021") => Self::Refused {
+                field: "text",
+                message: "Text can't hold a NUL character. Take it out and try again.",
+            },
+            Some("42501") => {
+                // Still worth a look: a write that should have been scoped
+                // would land here too.
+                tracing::warn!(
+                    database_code = "42501",
+                    "a write was refused by the workspace rules"
+                );
+                Self::Forbidden
+            }
+            _ => self,
+        }
+    }
+
     /// Return bounded database diagnostics suitable for structured logs.
     ///
     /// SQLSTATE and constraint names identify the failed invariant without
@@ -249,7 +277,8 @@ enum ErrorDetails {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let details = match &self {
+        let error = self.input_problem();
+        let details = match &error {
             Self::VersionConflict {
                 resource,
                 current_version,
@@ -274,7 +303,7 @@ impl IntoResponse for AppError {
             }),
             _ => None,
         };
-        let (status, code, message, retry_after_seconds) = match self {
+        let (status, code, message, retry_after_seconds) = match error {
             Self::AuthenticationRequired => (
                 StatusCode::UNAUTHORIZED,
                 "authentication_required",
@@ -380,7 +409,7 @@ impl IntoResponse for AppError {
             Self::ExecutionProfileRequired => (
                 StatusCode::CONFLICT,
                 "execution_profile_required",
-                "Connect your personal Codex account before starting a run.",
+                "Connect your own account for this agent before starting a run.",
                 None,
             ),
             Self::RateLimited {

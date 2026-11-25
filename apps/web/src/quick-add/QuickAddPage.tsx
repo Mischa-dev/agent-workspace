@@ -6,6 +6,7 @@ import { useWorkspaceHref } from '../app/workspace'
 import { useHomeExperience } from '../experience/layout'
 import { captureEntries } from '../modules/registry'
 import { useAuthenticatedSession } from '../auth/session'
+import { can } from '../auth/can'
 import { useWorkspaceProjects } from '../projects/hooks'
 import { useShellPage } from '../shell/shellStore'
 import { ButtonLink, EmptyState, ErrorState, Icon, PageHeader, SegmentedControl, SettingsSkeleton } from '../ui'
@@ -42,28 +43,39 @@ export function QuickAddPage() {
   }, [fileCount])
   const [mode, setMode] = useState<'task' | 'message' | 'note' | 'later'>('task')
   const { query: projects, projects: active } = useWorkspaceProjects()
+  // A task goes only where the person may create one; a project they only read isn't offered.
+  const taskProjects = active.filter((project) => can(project, 'tasks.create'))
 
   let body
   if (projects.isPending || files === null) {
     body = <SettingsSkeleton />
   } else if (projects.isError) {
     body = <ErrorState error={projects.error} onRetry={() => void projects.refetch()} title="Projects didn’t load" />
-  } else if (active.length === 0 && mode === 'task') {
-    body = (
-      <EmptyState
-        action={
-          <ButtonLink icon="plus" to={here('/projects/new')} variant="primary">
-            New project
-          </ButtonLink>
-        }
-        icon="work"
-        title="No project to add it to"
-      >
-        Tasks live in a project. Create one first.
-      </EmptyState>
-    )
+  } else if (taskProjects.length === 0 && mode === 'task') {
+    body =
+      active.length === 0 ? (
+        <EmptyState
+          action={
+            session.user.capabilities.createProject ? (
+              <ButtonLink icon="plus" to={here('/projects/new')} variant="primary">
+                New project
+              </ButtonLink>
+            ) : null
+          }
+          icon="work"
+          title="No project to add it to"
+        >
+          {session.user.capabilities.createProject
+            ? 'Tasks live in a project. Create one first.'
+            : 'Tasks live in a project, and you aren’t in one yet. Someone who manages the workspace can add you.'}
+        </EmptyState>
+      ) : (
+        <EmptyState icon="work" title="No project you can add tasks to">
+          Your role lets you read the projects you’re in, not add tasks to them. Someone who manages a project can change that.
+        </EmptyState>
+      )
   } else if (mode === 'task') {
-    body = <QuickTaskForm files={files} projects={active} shared={shared} />
+    body = <QuickTaskForm files={files} projects={taskProjects} shared={shared} />
   } else if (mode === 'note' || mode === 'later') {
     body = <QuickNoteForm files={files} key={mode} mode={mode} shared={shared} viewerId={session.user.actorId} />
   } else {

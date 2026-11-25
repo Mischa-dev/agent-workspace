@@ -479,7 +479,12 @@ fn score(row: &Row, unblocks: usize, today: NaiveDate) -> (i64, Vec<String>) {
             _ => 0,
         };
         if days < 0 {
-            reasons.push(format!("{what} {} days ago", -days));
+            // "Milestone Beta is due" becomes "was due" once the day has passed.
+            let what = what.replace(" is due", " was due");
+            reasons.push(match -days {
+                1 => format!("{what} yesterday"),
+                late => format!("{what} {late} days ago"),
+            });
         } else if days <= 30 {
             reasons.push(match days {
                 0 => format!("{what} today"),

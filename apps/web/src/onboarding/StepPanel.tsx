@@ -23,7 +23,7 @@ type PanelProps = { onboarding: Onboarding; project: Project | null; projects: P
 type GoTo = (step: OnboardingStepId) => void
 
 const INTRO: Record<OnboardingStepId, string> = {
-  template: 'Start from a ready-made setup: which features are on, the layout everyone sees, roles and a first project. Everything turns it all on. Nothing is deleted if you change your mind later.',
+  template: 'Say what this workspace is for and it starts with the right features on and a layout to match. Nothing is deleted if you change your mind later.',
   workspace: 'This is the name everyone in the workspace sees. You can change it later in settings.',
   roles: 'Who can do what here, in plain words, and the role new people start with. Agents acting for someone never do more than that person.',
   project: 'A project holds its own tasks, channels, repositories and agents. Agents start work from a project’s tasks.',

@@ -561,7 +561,7 @@ pub async fn search(
 const FIRST_PROJECTS_PARAMETER: usize = 12;
 
 const MESSAGES_SQL: &str = r#"
-    WITH query AS (SELECT websearch_to_tsquery('english', $2) AS q)
+    WITH query AS (SELECT search_tsquery('english', $2) AS q)
     SELECT 'message' AS kind, message.id,
            COALESCE(author.display_name, 'Someone') || ' in ' ||
                CASE WHEN conversation.kind = 'dm' THEN 'a DM' ELSE conversation.name END AS title,
@@ -630,7 +630,7 @@ const MESSAGES_SQL: &str = r#"
 "#;
 
 const THREADS_SQL: &str = r#"
-    WITH query AS (SELECT websearch_to_tsquery('english', $2) AS q)
+    WITH query AS (SELECT search_tsquery('english', $2) AS q)
     SELECT 'thread' AS kind, thread.id,
            thread.name AS title, thread.thread_status AS status,
            COALESCE(thread.thread_outcome, '') AS snippet,
@@ -667,26 +667,31 @@ const THREADS_SQL: &str = r#"
 "#;
 
 const TASKS_SQL: &str = r#"
-    WITH query AS (SELECT websearch_to_tsquery('english', $2) AS q)
+    WITH query AS (SELECT search_tsquery('english', $2) AS q)
     SELECT 'task' AS kind, item.id,
            project.project_key || '-' || item.number::text || ' ' || item.title AS title,
            status.name AS status,
-           ts_headline('english', item.description, query.q,
+           ts_headline('english', regexp_replace(item.description, '\*\*|__|`', '', 'g'), query.q,
                        'MaxWords=30, MinWords=8, StartSel=**, StopSel=**') AS snippet,
            item.project_id, project.organization_id AS workspace_id, project.name AS project_name,
            NULL::uuid AS conversation_id, NULL::text AS conversation_name,
            NULL::text AS author, item.updated_at::text AS at,
            'task' AS link_kind, item.id AS link_id,
            NULL::uuid AS link_child,
-           (ts_rank(item.search_vector, query.q) * 1.3)::real AS rank
+           (CASE WHEN key.matches THEN 10
+                 ELSE ts_rank(item.search_vector, query.q) * 1.3 END)::real AS rank
     FROM query, task_rows item
     JOIN projects project ON project.id = item.project_id
     JOIN work_item_statuses status
       ON status.project_id = item.project_id AND status.id = item.status_id
+    -- A key such as FLT-204 (any case) finds its task, whatever its words.
+    CROSS JOIN LATERAL (
+        SELECT upper(btrim($2)) = project.project_key || '-' || item.number::text AS matches
+    ) key
     -- A task's words are its record's and its description's, matched as one
     -- document (task_rows.search_vector joins the two), so a search whose
     -- words are split between the title and the description still finds it.
-    WHERE item.search_vector @@ query.q
+    WHERE (item.search_vector @@ query.q OR key.matches)
       AND item.project_id = ANY({projects})
       AND item.archived_at IS NULL
       AND $3::uuid[] IS NULL
@@ -699,9 +704,9 @@ const TASKS_SQL: &str = r#"
 "#;
 
 const PAGES_SQL: &str = r#"
-    WITH query AS (SELECT websearch_to_tsquery('english', $2) AS q)
+    WITH query AS (SELECT search_tsquery('english', $2) AS q)
     SELECT 'page' AS kind, page.id, page.title, NULL::text AS status,
-           ts_headline('english', page.body, query.q,
+           ts_headline('english', regexp_replace(page.body, '\*\*|__|`', '', 'g'), query.q,
                        'MaxWords=40, MinWords=12, StartSel=**, StopSel=**') AS snippet,
            page.project_id, project.organization_id AS workspace_id, project.name AS project_name,
            NULL::uuid AS conversation_id, NULL::text AS conversation_name,
@@ -728,7 +733,7 @@ const PAGES_SQL: &str = r#"
 "#;
 
 const DECISIONS_SQL: &str = r#"
-    WITH query AS (SELECT websearch_to_tsquery('english', $2) AS q)
+    WITH query AS (SELECT search_tsquery('english', $2) AS q)
     SELECT 'decision' AS kind, decision.id,
            decision.title AS title,
            CASE WHEN decision.status = 'superseded' THEN 'superseded' END AS status,
@@ -761,7 +766,7 @@ const DECISIONS_SQL: &str = r#"
 /// A collection's records (AWD-110), by title and text values, in
 /// collections that aren't archived. The author filter is who changed it last.
 const RECORDS_SQL: &str = r#"
-    WITH query AS (SELECT websearch_to_tsquery('english', $2) AS q)
+    WITH query AS (SELECT search_tsquery('english', $2) AS q)
     SELECT 'record' AS kind, record.id,
            CASE WHEN record.title = '' THEN 'Untitled #' || record.number::text
                 ELSE record.title END AS title,
@@ -801,7 +806,7 @@ const RECORDS_SQL: &str = r#"
 /// found; each board passes its own rule.
 const WHITEBOARDS_SQL: &str = r#"
     WITH query AS (
-        SELECT websearch_to_tsquery('simple', $2) AS q,
+        SELECT search_tsquery('simple', $2) AS q,
                '%' || replace(replace(replace($2, '\', '\\'), '%', '\%'), '_', '\_') || '%'
                    AS pattern
     )
@@ -840,7 +845,7 @@ const WHITEBOARDS_SQL: &str = r#"
 /// Sheets by name, description, tab names and text cells, in projects
 /// where Sheets is on. Archived sheets aren't found.
 const SHEETS_SQL: &str = r#"
-    WITH query AS (SELECT websearch_to_tsquery('simple', $2) AS q)
+    WITH query AS (SELECT search_tsquery('simple', $2) AS q)
     SELECT 'sheet' AS kind, sheet.id, sheet.name AS title, NULL::text AS status,
            CASE WHEN sheet.text_content = '' THEN sheet.description
                 ELSE ts_headline('simple', sheet.text_content, query.q,
@@ -869,7 +874,7 @@ const SHEETS_SQL: &str = r#"
 /// Files by name, on messages the viewer can see and on tasks.
 const FILES_SQL: &str = r#"
     WITH query AS (
-        SELECT websearch_to_tsquery('simple', $2) AS q,
+        SELECT search_tsquery('simple', $2) AS q,
                '%' || replace(replace(replace($2, '\', '\\'), '%', '\%'), '_', '\_') || '%'
                    AS pattern
     )

@@ -1760,7 +1760,7 @@ async fn create_chunk(
                         due_date: fields.due_date,
                         estimate: fields.estimate,
                     },
-                    activity_summary: "Work Item created",
+                    activity_summary: "Task created",
                     activity_metadata: json!({ "importId": record.id }),
                     activity_number_metadata: AllocatedNumberMetadata::Omit,
                     audit_action: "work_item.created",

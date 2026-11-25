@@ -51,7 +51,7 @@ export const updateOnboarding = (organizationId: string, change: OnboardingChang
   requestJson<Onboarding>(path(organizationId), { method: 'PUT', json: change })
 
 export const STEP_TITLES: Record<OnboardingStepId, string> = {
-  template: 'Pick a template',
+  template: 'Choose what it’s for',
   workspace: 'Name your workspace',
   roles: 'Decide who gets what',
   project: 'Create a project',

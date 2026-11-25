@@ -116,6 +116,12 @@
   overflow-y: auto;
 }
 
+/* A phone's Messages tab: the conversations first, the new message under them. */
+.aw-newchat__recent {
+  margin-bottom: auto;
+  padding: var(--space-3) var(--space-4);
+}
+
 .aw-newchat__group {
   max-width: var(--size-measure);
   padding: 0 var(--space-4) var(--space-4);

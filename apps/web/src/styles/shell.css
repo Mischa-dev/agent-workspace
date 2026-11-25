@@ -855,9 +855,10 @@ button.aw-sidebar__title[aria-expanded="true"] {
 
 .aw-pagehead {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-4);
+  gap: var(--space-3) var(--space-4);
   margin-bottom: var(--space-6);
 }
 
@@ -866,7 +867,10 @@ button.aw-sidebar__title[aria-expanded="true"] {
   align-items: flex-start;
 }
 
+/* The title keeps a readable width: a long row of actions drops under it
+   instead of squeezing it into a column of single words. */
 .aw-pagehead__text {
+  flex: 1 1 20rem;
   min-width: 0;
 }
 

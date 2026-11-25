@@ -411,7 +411,12 @@ pub async fn locate(
         Target::Thing { kind, id, .. } => thing(connection, kind, *id, viewer).await?,
     };
     // A target in another workspace than the one named is not found here.
-    if named.is_some_and(|named| named != located.workspace_id) {
+    // A DM or group is in no workspace (the direct scope), so it is found
+    // from whichever workspace the caller is working in: the web app calls
+    // every operation under its current workspace's address.
+    if named.is_some_and(|named| named != located.workspace_id)
+        && located.workspace_id != crate::spaces::DIRECT
+    {
         return Err(OpError::not_found(not_found_what(target)));
     }
     Ok(located)

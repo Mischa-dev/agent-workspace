@@ -346,6 +346,15 @@ pub enum WriteResult {
     TemporarilyUnavailable {
         retry_category: String,
     },
+    /// A limit or budget refused the write, such as too many comments in a
+    /// minute: the numbers, when it resets and who can raise it. Never stored
+    /// as a replay, since nothing was written.
+    #[serde(skip_deserializing)]
+    LimitReached {
+        retry_category: String,
+        message: String,
+        limit: Box<crate::metering::LimitRefusal>,
+    },
 }
 
 /// A status a task can move to.
@@ -704,14 +713,14 @@ async fn create_task(
     };
     let (summary, audit_action, changed_field, metadata, number_metadata) = match parent_id {
         Some(parent_id) => (
-            "Subtask created through MCP",
+            "Subtask created",
             "work_item.mcp_subtask_created",
             "subtask",
             serde_json::json!({"parentWorkItemId": parent_id}),
             AllocatedNumberMetadata::Omit,
         ),
         None => (
-            "Work Item created through MCP",
+            "Task created",
             "work_item.mcp_created",
             "work_item",
             serde_json::json!({}),
@@ -919,7 +928,7 @@ async fn set_status_inner(
             board_placement: None,
             labels: None,
             fields: Default::default(),
-            summary: "Work Item status updated through MCP",
+            summary: "Task status updated",
             audit_action: "work_item.mcp_status_updated",
             audit_version_metadata: AuditVersionMetadata::Include,
         },
@@ -1288,7 +1297,7 @@ async fn update_work_item_inner(
                 delegate_actor_id: delegate_update,
                 cycle_id,
             },
-            summary: "Work Item updated through MCP",
+            summary: "Task updated",
             audit_action: "work_item.mcp_updated",
             audit_version_metadata: AuditVersionMetadata::Include,
         },
@@ -1610,9 +1619,9 @@ async fn set_blocker(
                     ..TaskFieldChanges::default()
                 },
                 summary: if clearing {
-                    "Work Item unblocked through MCP"
+                    "Task unblocked"
                 } else {
-                    "Work Item marked blocked through MCP"
+                    "Task marked blocked"
                 },
                 audit_action: if clearing {
                     "work_item.mcp_unblocked"
@@ -1736,7 +1745,7 @@ pub async fn mark_ready_for_review(
                     blocked_reason: Some(None),
                     ..TaskFieldChanges::default()
                 },
-                summary: "Work Item marked ready for review through MCP",
+                summary: "Task marked ready for review",
                 audit_action: "work_item.mcp_ready_for_review",
                 audit_version_metadata: AuditVersionMetadata::Include,
             },
@@ -1827,13 +1836,13 @@ async fn set_archived_inner(
     };
     let (summary, audit_action, unchanged_action) = if arguments.archived {
         (
-            "Work Item archived through MCP",
+            "Task archived",
             "work_item.mcp_archived",
             "work_item.mcp_archive_unchanged",
         )
     } else {
         (
-            "Work Item restored through MCP",
+            "Task restored",
             "work_item.mcp_restored",
             "work_item.mcp_restore_unchanged",
         )
@@ -2825,7 +2834,7 @@ fn normalize_description(value: String) -> Option<String> {
 }
 
 fn command_error(command: &str, error: AppError) -> WriteResult {
-    match error {
+    match error.input_problem() {
         AppError::Conflict("idempotency_key", "payload mismatch") => WriteResult::Conflict {
             work_item_id: String::new(),
             current_version: 0,
@@ -2838,13 +2847,35 @@ fn command_error(command: &str, error: AppError) -> WriteResult {
             ),
         },
         AppError::Refused { field, message } => WriteResult::invalid(field, message),
+        AppError::Validation(field) | AppError::Invalid(field) => {
+            WriteResult::invalid(field, format!("{field} isn't valid."))
+        }
+        AppError::PayloadTooLarge => WriteResult::invalid("text", "That's too long."),
+        AppError::NotFound(what) => {
+            WriteResult::not_found(format!("{what} wasn't found, or you can't see it."))
+        }
+        AppError::Forbidden => WriteResult::PermissionDenied {
+            retry_category: "do_not_retry".to_owned(),
+            message: Some("You don't have permission to do that here.".to_owned()),
+        },
+        AppError::ProjectArchived => WriteResult::PermissionDenied {
+            retry_category: "do_not_retry".to_owned(),
+            message: Some("That project is archived.".to_owned()),
+        },
+        // A limit is an answer, not a fault: say when it resets instead of
+        // inviting an immediate retry.
+        AppError::LimitReached(limit) => WriteResult::LimitReached {
+            retry_category: "wait_for_reset".to_owned(),
+            message: limit.message.clone(),
+            limit,
+        },
         error => {
             let (database_code, database_constraint) = error.database_log_fields();
             tracing::error!(
                 command,
                 category = error.log_category(),
-                database_code,
-                database_constraint,
+                database_code = database_code.as_deref().unwrap_or("none"),
+                database_constraint = database_constraint.as_deref().unwrap_or("none"),
                 "MCP write failed"
             );
             WriteResult::unavailable()

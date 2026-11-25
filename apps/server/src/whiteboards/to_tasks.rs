@@ -207,7 +207,7 @@ impl Operation for WhiteboardToTasks {
                     acceptance_criteria: &[],
                     board_placement: None,
                     fields: NewTaskFields::default(),
-                    activity_summary: "Work Item created",
+                    activity_summary: "Task created",
                     activity_metadata: json!({"whiteboardId": board_id, "elementId": note.id}),
                     activity_number_metadata: AllocatedNumberMetadata::Omit,
                     audit_action: "work_item.created",

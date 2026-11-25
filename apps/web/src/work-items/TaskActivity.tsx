@@ -92,9 +92,10 @@ function DescriptionDiff({ change }: { change: Extract<FormattedChange, { kind: 
   )
 }
 
-/** History written before tasks were called tasks still says "Work Item". */
+/** After a name, "Task moved to FLT-3" reads "moved the task to FLT-3". */
 function eventSummary(summary: string) {
-  return summary.replace(/\b[Ww]ork [Ii]tem(s?)\b/g, (_match, plural: string, offset: number) => `${offset === 0 ? 'Task' : 'task'}${plural}`)
+  const match = /^(Task|Subtask) (\w+ed)\b(.*)$/.exec(summary)
+  return match ? `${match[2]} the ${match[1].toLowerCase()}${match[3]}` : summary
 }
 
 // Runs of changes longer than this fold into "Show N more changes" between their first and last entries.

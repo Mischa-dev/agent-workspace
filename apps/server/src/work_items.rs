@@ -1492,7 +1492,11 @@ pub(crate) async fn fetch_timeline_rows(
 const TIMELINE_SELECT: &str = r#"
         SELECT entry.sequence, entry.kind, entry.created_at::text AS created_at,
                activity.id AS activity_id, activity.kind AS activity_kind,
-               activity.summary AS activity_summary,
+               -- Entries written before summaries were reworded say
+               -- "Work Item" and " through MCP" (the entry's own `via`
+               -- names the app); they read as today's do.
+               replace(replace(activity.summary, ' through MCP', ''), 'Work Item', 'Task')
+                   AS activity_summary,
                activity.payload AS activity_payload,
                comment.id AS comment_id, comment.content AS comment_content,
                comment.plain_text AS comment_plain_text,
