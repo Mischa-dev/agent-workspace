@@ -352,7 +352,8 @@ pub enum WriteResult {
     #[serde(skip_deserializing)]
     LimitReached {
         retry_category: String,
-        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
         limit: Box<crate::metering::LimitRefusal>,
     },
 }
@@ -2866,7 +2867,7 @@ fn command_error(command: &str, error: AppError) -> WriteResult {
         // inviting an immediate retry.
         AppError::LimitReached(limit) => WriteResult::LimitReached {
             retry_category: "wait_for_reset".to_owned(),
-            message: limit.message.clone(),
+            message: Some(limit.message.clone()),
             limit,
         },
         error => {
