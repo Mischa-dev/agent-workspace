@@ -306,13 +306,24 @@ report_web() {
   [ "$(cat "${web_status_file}")" = "0" ]
 }
 
+# `cargo fmt` formats what it reaches from each crate's root, which leaves
+# out a module that generated code declares (`modules/core/*/mod.rs`). This
+# formats every Rust file by its path, as the commit hook does.
+every_rust_file_formatted() {
+  local edition
+  edition="$(sed -n 's/^edition = "\(.*\)"$/\1/p' Cargo.toml 2>/dev/null | head -n 1)"
+  find . -name '*.rs' -not -path '*/target/*' -not -path '*/node_modules/*' -print0 |
+    xargs -0 rustfmt --check --edition "${edition}"
+}
+
 # 1. Quick checks: formatting, lint and types, fixtures.
 if has rust && runs lint; then
+  rustup toolchain install >/dev/null 2>&1 || true
   step "CI script tests" python3 -m unittest discover -s tools/ci -p 'test_*.py'
   step "admission lock tests" tools/ci/test_admission.sh
   step "pinned Node tests" tools/ci/test_pinned_node.sh
-  rustup toolchain install >/dev/null 2>&1 || true
   step "cargo fmt" cargo fmt --check
+  step "rustfmt, every file" every_rust_file_formatted
   step "self-hosted guide" ./tools/verify-self-hosted-guide.sh
   step "hermes fixtures" python3 tools/hermes-connector/verify-fixtures.py
   step "agentos-nyx tests" python3 -m unittest discover -s integrations/agentos-nyx -p 'test_*.py'
