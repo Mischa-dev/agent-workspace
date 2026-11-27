@@ -87,6 +87,11 @@ impl Operation for ThingCreate {
 - Errors: `OpError::invalid(field, message)`, `OpError::not_found(what)`, or
   `?` on the domain's `AppError`. Messages say what to do next.
 - `Uuid` fields in outputs need `#[schemars(with = "String")]`.
+- An answer that carries a secret (a new token, a link whose address lets
+  someone in) lists that field in `SHOWN_ONCE`, as a field of the answer
+  itself, so it is shown once and a retry replays null for it. The
+  conventions test fails on a field that reads as a secret and isn't
+  listed, and on a listed name the answer doesn't have.
 
 ## 3. Register it
 

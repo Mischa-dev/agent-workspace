@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 
-use super::{Idempotency, OpKind, OpMeta};
+use super::{Idempotency, OpKind, OpMeta, registry::secrets_in_answer};
 
 /// The verbs each kind may use: `<thing>_<verb>`.
 pub const VERBS: &[(OpKind, &[&str])] = &[
@@ -233,6 +233,35 @@ pub fn check(meta: &OpMeta) -> Result<(), Vec<String>> {
             }
         }
     }
+    let output = (meta.output_schema)();
+    if meta.idempotency == Idempotency::Dispatcher {
+        let (own, inside) = secrets_in_answer(&output);
+        for field in own {
+            if !meta.shown_once.contains(&field.as_str()) {
+                problems.push(format!(
+                    "{name}: its answer is kept to replay to a retry, and {field} reads as a \
+                     secret: add it to SHOWN_ONCE, so it is shown once and never kept"
+                ));
+            }
+        }
+        for field in inside {
+            problems.push(format!(
+                "{name}: {field}, inside its answer, reads as a secret, and SHOWN_ONCE reaches \
+                 only the answer's own fields: move it to the top of the answer and add it there"
+            ));
+        }
+    }
+    // An answer without a declared shape (a wrapped tool's) can't be
+    // checked here; the dispatcher keeps secrets out of it by name.
+    let own = output.get("properties");
+    for field in meta.shown_once {
+        if own.is_some_and(|own| own.get(*field).is_none()) {
+            problems.push(format!(
+                "{name}: SHOWN_ONCE names {field}, which isn't a field of its answer, so \
+                 nothing is kept out: name the field as the answer spells it"
+            ));
+        }
+    }
     if problems.is_empty() {
         Ok(())
     } else {
@@ -312,6 +341,76 @@ mod tests {
             problems.iter().any(|problem| problem.contains("EMITS")),
             "{problems:?}"
         );
+    }
+
+    #[derive(Debug, serde::Serialize, JsonSchema)]
+    #[serde(rename_all = "camelCase")]
+    struct Delivery {
+        id: String,
+        signing_secret: String,
+    }
+
+    #[derive(Debug, serde::Serialize, JsonSchema)]
+    #[serde(rename_all = "camelCase")]
+    struct Connected {
+        id: String,
+        webhook_secret: Option<String>,
+        has_secret: bool,
+        input_tokens: i64,
+        deliveries: Vec<Delivery>,
+    }
+
+    /// A connection made as before the fix that blanked its secret: the
+    /// answer carries it and nothing keeps it out of the stored answer.
+    struct KeepsItsSecret;
+
+    impl Operation for KeepsItsSecret {
+        const NAME: &'static str = "connection_create";
+        const KIND: OpKind = OpKind::Create;
+        const MODULE: &'static str = "workspace";
+        const PERMISSION: Option<Perm> = None;
+        const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+        const SHOWN_ONCE: &'static [&'static str] = &["webhook_secret"];
+        const EMITS: &'static [&'static str] = &["connection.created"];
+        const TITLE: &'static str = "Connect something";
+        const DESCRIPTION: &'static str =
+            "Connects something that is told about events, and answers with its secret.";
+        type Input = Nothing;
+        type Output = Connected;
+
+        async fn run(_call: &mut OpCall<'_>, _input: Nothing) -> Result<Connected, OpError> {
+            Err(OpError::Unavailable)
+        }
+    }
+
+    #[test]
+    fn a_secret_an_answer_would_keep_for_a_retry_fails() {
+        let problems = check(&entry::<KeepsItsSecret>().meta).expect_err("refused");
+        let about = |field: &str| {
+            problems
+                .iter()
+                .filter(|problem| problem.contains(field))
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            about("webhookSecret")
+                .iter()
+                .any(|problem| problem.contains("add it to SHOWN_ONCE")),
+            "{problems:?}"
+        );
+        assert!(
+            about("webhook_secret")
+                .iter()
+                .any(|problem| problem.contains("isn't a field of its answer")),
+            "{problems:?}"
+        );
+        assert!(
+            about("signingSecret")
+                .iter()
+                .any(|problem| problem.contains("inside its answer")),
+            "{problems:?}"
+        );
+        assert_eq!(problems.len(), 3, "{problems:?}");
     }
 
     #[test]

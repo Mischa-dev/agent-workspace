@@ -74,26 +74,74 @@ fn needs_version(schema: &Value) -> bool {
 /// Whether any field, at any depth, holds a secret: a token, a password, a
 /// secret or private key, or an API key.
 fn takes_secret(schema: &Value) -> bool {
-    // A token is the field's last word (`token`, `accessToken`), so token
-    // counts and design tokens (`tokens`, `inputTokens`) aren't secrets.
-    const SECRET: [&str; 5] = ["secret", "password", "passphrase", "privatekey", "apikey"];
     match schema {
         Value::Object(fields) => fields.iter().any(|(key, value)| {
-            let named = if key == "properties" {
-                value.as_object().is_some_and(|properties| {
-                    properties.keys().any(|name| {
-                        let name = name.to_ascii_lowercase().replace('_', "");
-                        name.ends_with("token") || SECRET.iter().any(|secret| name.contains(secret))
-                    })
-                })
-            } else {
-                false
-            };
+            let named = key == "properties"
+                && value
+                    .as_object()
+                    .is_some_and(|properties| properties.keys().any(|name| names_a_secret(name)));
             named || takes_secret(value)
         }),
         Value::Array(items) => items.iter().any(takes_secret),
         _ => false,
     }
+}
+
+/// Whether a field's name says it holds a secret.
+pub(super) fn names_a_secret(field: &str) -> bool {
+    // A token is the field's last word (`token`, `accessToken`), so token
+    // counts and design tokens (`tokens`, `inputTokens`) aren't secrets.
+    const SECRET: [&str; 5] = ["secret", "password", "passphrase", "privatekey", "apikey"];
+    let name = field.to_ascii_lowercase().replace('_', "");
+    name.ends_with("token") || SECRET.iter().any(|secret| name.contains(secret))
+}
+
+/// The fields of an answer that read as a secret in text: the answer's own
+/// (which `SHOWN_ONCE` can keep out of a stored answer) and those further in
+/// (which it can't reach).
+pub(super) fn secrets_in_answer(schema: &Value) -> (Vec<String>, Vec<String>) {
+    fn text(field: &Value) -> bool {
+        match field.get("type") {
+            Some(Value::String(kind)) => kind == "string",
+            Some(Value::Array(kinds)) => kinds.iter().any(|kind| kind == "string"),
+            _ => false,
+        }
+    }
+    fn secrets(properties: &Value) -> Vec<String> {
+        properties
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(name, field)| names_a_secret(name) && text(field))
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+    fn further_in(schema: &Value, found: &mut Vec<String>) {
+        match schema {
+            Value::Object(fields) => {
+                for (key, value) in fields {
+                    if key == "properties" {
+                        found.extend(secrets(value));
+                    }
+                    further_in(value, found);
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|item| further_in(item, found)),
+            _ => {}
+        }
+    }
+    let own = schema.get("properties").map(secrets).unwrap_or_default();
+    let mut inside = Vec::new();
+    for (key, value) in schema.as_object().into_iter().flatten() {
+        if key == "properties" {
+            for field in value.as_object().into_iter().flat_map(|own| own.values()) {
+                further_in(field, &mut inside);
+            }
+        } else {
+            further_in(value, &mut inside);
+        }
+    }
+    (own, inside)
 }
 
 type Call = for<'a> fn(&'a AppState, DispatchRequest, Value) -> BoxFuture<'a, Answer>;
