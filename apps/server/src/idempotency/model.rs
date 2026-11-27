@@ -541,8 +541,8 @@ fn giving_back_a_failed_calls_id_ran_it_twice() {
 fn a_failed_calls_retry_is_told_the_outcome_is_unknown() {
     let explored = explore(&TODAY, STATE_LIMIT);
     let failed = |world: &World| world.calls.contains(&Call::Ended(Answer::Failed));
-    let left_unanswered = explored
-        .reaches(|world| failed(world) && !world.row.is_some_and(|row| row.answer.is_some()));
+    let left_unanswered =
+        explored.reaches(|world| failed(world) && world.row.is_none_or(|row| row.answer.is_none()));
     never(left_unanswered);
     let retry_told = explored.reaches(|world| {
         world.calls[0] == Call::Ended(Answer::Failed)
