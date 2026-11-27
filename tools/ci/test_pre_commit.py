@@ -1,5 +1,6 @@
 """tools/git-hooks/pre-commit refuses a commit whose Rust isn't formatted."""
 
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -84,15 +85,29 @@ class TurnOnTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.root = Path(temp.name)
-        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
+        self.root = Path(temp.name) / "checkout"
+        self.root.mkdir()
+        # The machine's own git settings (a global hooks path, say) stay out.
+        self.env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+        self.git("init", "-q")
+
+    def git(self, *args):
+        return subprocess.run(
+            ["git", *args], cwd=self.root, env=self.env, check=True, capture_output=True, text=True
+        )
 
     def turn_on(self):
-        return subprocess.run(["bash", str(TURN_ON)], cwd=self.root, capture_output=True, text=True)
+        return subprocess.run(
+            ["bash", str(TURN_ON)], cwd=self.root, env=self.env, capture_output=True, text=True
+        )
 
     def hooks_path(self):
         result = subprocess.run(
-            ["git", "config", "--get", "core.hooksPath"], cwd=self.root, capture_output=True, text=True
+            ["git", "config", "--get", "core.hooksPath"],
+            cwd=self.root,
+            env=self.env,
+            capture_output=True,
+            text=True,
         )
         return result.stdout.strip()
 
@@ -102,7 +117,7 @@ class TurnOnTests(unittest.TestCase):
         self.assertEqual(self.turn_on().stderr, "")
 
     def test_a_hooks_path_someone_set_is_kept(self):
-        subprocess.run(["git", "config", "core.hooksPath", ".husky"], cwd=self.root, check=True)
+        self.git("config", "core.hooksPath", ".husky")
         result = self.turn_on()
         self.assertEqual(result.returncode, 0)
         self.assertEqual(self.hooks_path(), ".husky")
@@ -123,6 +138,17 @@ class TurnOnTests(unittest.TestCase):
         hook = self.root / ".git" / "hooks" / "pre-commit"
         hook.parent.mkdir(parents=True, exist_ok=True)
         hook.symlink_to(target)
+        self.assertEqual(self.turn_on().returncode, 0)
+        self.assertEqual(self.hooks_path(), "")
+
+    def test_a_hooks_directory_that_is_a_link_is_looked_into(self):
+        shared = self.root.parent / "shared-hooks"
+        shared.mkdir()
+        (shared / "commit-msg").write_text("#!/bin/sh\n")
+        hooks = self.root / ".git" / "hooks"
+        if hooks.exists():
+            shutil.rmtree(hooks)
+        hooks.symlink_to(shared, target_is_directory=True)
         self.assertEqual(self.turn_on().returncode, 0)
         self.assertEqual(self.hooks_path(), "")
 

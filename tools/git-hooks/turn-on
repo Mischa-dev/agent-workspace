@@ -12,7 +12,7 @@ if [ "${current}" = "${ours}" ]; then
 fi
 theirs="${current}"
 if [ -z "${theirs}" ] &&
-  find "$(git rev-parse --git-path hooks)" -mindepth 1 ! -name '*.sample' 2>/dev/null | grep -q .; then
+  find -H "$(git rev-parse --git-path hooks)" -mindepth 1 ! -name '*.sample' 2>/dev/null | grep -q .; then
   theirs="$(git rev-parse --git-path hooks)"
 fi
 if [ -n "${theirs}" ]; then
