@@ -178,31 +178,10 @@ async fn readable_here(call: &mut OpCall<'_>, space_id: Uuid) -> Result<SpaceVie
 
 /// A credential confined to one space isn't told what that space is inside.
 fn within_reach(caller: &access::Caller, mut space: SpaceView) -> SpaceView {
-    if caller.confined_space.is_some()
-        || space
-            .parent_id
-            .is_some_and(|parent| !limit_allows(caller, parent))
-    {
+    if caller.confined_space.is_some() {
         space.parent_id = None;
     }
     space
-}
-
-/// The spaces a credential's own limit leaves it; `None` when it has none.
-/// A token narrowed to some spaces reads nothing about the others, though
-/// its account is in them.
-fn limited_to(caller: &access::Caller) -> Option<Vec<Uuid>> {
-    caller
-        .limits
-        .as_ref()
-        .map(|limits| limits.projects.keys().copied().collect())
-}
-
-fn limit_allows(caller: &access::Caller, space: Uuid) -> bool {
-    caller
-        .limits
-        .as_ref()
-        .is_none_or(|limits| limits.projects.contains_key(&space))
 }
 
 /// One workspace's tree changes take turns. Taken before any space's row,
@@ -663,10 +642,6 @@ impl Operation for SpaceTreeGet {
     ) -> Result<SpaceTreeView, OpError> {
         let space = readable_here(call, input.space_id.id()).await?;
         let caller = call.ctx.caller.clone();
-        if !limit_allows(&caller, space.id) {
-            return Err(OpError::not_found("That space"));
-        }
-        let limited = limited_to(&caller);
         let state = call.state;
         let tx = call.tx().await?;
         let url = |id: Uuid| {
@@ -685,13 +660,11 @@ impl Operation for SpaceTreeGet {
                 FROM spaces child JOIN spaces parent ON parent.id = child.parent_space_id
                 WHERE child.id = $1 AND space_readable_by(parent.id, $2)
                   AND $3::uuid IS NULL
-                  AND ($4::uuid[] IS NULL OR parent.id = ANY($4))
                 UNION ALL
                 SELECT parent.id, parent.key, parent.name, parent.icon,
                        parent.parent_space_id, up.level + 1
                 FROM up JOIN spaces parent ON parent.id = up.parent_space_id
                 WHERE space_readable_by(parent.id, $2) AND up.level < 16
-                  AND ($4::uuid[] IS NULL OR parent.id = ANY($4))
             )
             SELECT id, key, name, icon FROM up ORDER BY level DESC
             "#,
@@ -700,7 +673,6 @@ impl Operation for SpaceTreeGet {
         .bind(caller.account_id)
         // A credential confined to one space reads nothing above it.
         .bind(caller.confined_space)
-        .bind(&limited)
         .fetch_all(&mut **tx)
         .await
         .map_err(AppError::from)?;
@@ -717,13 +689,11 @@ impl Operation for SpaceTreeGet {
              FROM spaces space \
              WHERE space.id = ANY($1) AND space_readable_by(space.id, $2) \
                AND ($3::uuid IS NULL OR space.id = $3) \
-               AND ($4::uuid[] IS NULL OR space.id = ANY($4)) \
              ORDER BY lower(space.name), space.id",
         )
         .bind(&below_ids)
         .bind(caller.account_id)
         .bind(caller.confined_space)
-        .bind(&limited)
         .fetch_all(&mut **tx)
         .await
         .map_err(AppError::from)?;
