@@ -5,9 +5,10 @@
 //! around it are the dispatcher's, in `ops/dispatch.rs::dispatch`: with the
 //! write (`call.tx()`, where the id, the write and the answer commit
 //! together) or apart from it (`OWN_TRANSACTION`: `reserve_apart` commits,
-//! the command runs in its own transactions, then `complete` or `release`
-//! commits). Each step here is one transaction there; the advisory lock in
-//! `reserve` is what makes an arrival one step.
+//! the command runs in its own transactions, then `complete` keeps its
+//! answer, `release` gives the id back after a refusal, or `complete` keeps
+//! "outcome unknown" after a failure). Each step here is one transaction
+//! there; the advisory lock in `reserve` is what makes an arrival one step.
 //!
 //! Not in the model: a different request under the same id (`Mismatch`),
 //! what a replayed answer contains, and whether a replay re-checks access.
@@ -34,10 +35,22 @@ enum UnansweredLife {
     TenMinutes,
 }
 
+/// What the dispatcher does with the id of a command that failed, as
+/// opposed to refused (`OpError::is_refusal`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Command {
-    FailsOnlyBeforeItsCommit,
-    MayFailAfterItsCommit,
+enum AfterAFailure {
+    /// Keeps "outcome unknown" under it: the command may have committed.
+    KeepsTheId,
+    /// As it was: gave it back, as after a refusal.
+    GivesTheIdBack,
+}
+
+/// When a command may refuse. The dispatcher frees a refused call's id on
+/// the commands' word that a refusal comes before any write.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Refusals {
+    OnlyBeforeACommit,
+    AlsoAfterACommit,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -45,7 +58,8 @@ struct Receipts {
     calls: usize,
     reserved: Reserved,
     unanswered_life: UnansweredLife,
-    command: Command,
+    after_a_failure: AfterAFailure,
+    refusals: Refusals,
     /// Whether time may run past the day an id is kept for.
     past_a_day: bool,
 }
@@ -59,9 +73,16 @@ enum Age {
     ADay,
 }
 
+/// The answer kept under an id.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum Stored {
+    Done,
+    OutcomeUnknown,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct Row {
-    answered: bool,
+    answer: Option<Stored>,
     /// Since it was reserved, or since its answer was kept (`complete`
     /// pushes `expires_at` a day on).
     age: Age,
@@ -73,6 +94,7 @@ enum Call {
     Arrived,
     Reserved,
     Wrote,
+    Refusing,
     Failing,
     Ended(Answer),
 }
@@ -85,6 +107,7 @@ enum Answer {
     Wait,
     OutcomeUnknown,
     Refused,
+    Failed,
     /// The server stopped: the caller heard nothing.
     Lost,
 }
@@ -104,9 +127,12 @@ enum Step {
     ToldToWait(usize),
     ToldOutcomeUnknown(usize),
     CommandRefuses(usize),
+    CommandFails(usize),
     CommandCommits(usize),
+    CommandRefusesAfterItsCommit(usize),
     CommandFailsAfterItsCommit(usize),
     GivesBack(usize),
+    KeepsOutcomeUnknown(usize),
     KeepsAnswer(usize),
     CannotKeepAnswer(usize),
     RunsInOneTransaction(usize),
@@ -149,6 +175,11 @@ impl fmt::Display for Step {
                 "call {}'s command refuses, having made nothing",
                 call(index)
             ),
+            Self::CommandFails(index) => write!(
+                formatter,
+                "call {}'s command fails, having made nothing",
+                call(index)
+            ),
             Self::CommandCommits(index) => {
                 write!(
                     formatter,
@@ -156,6 +187,11 @@ impl fmt::Display for Step {
                     call(index)
                 )
             }
+            Self::CommandRefusesAfterItsCommit(index) => write!(
+                formatter,
+                "call {}'s command refuses after its commit",
+                call(index)
+            ),
             Self::CommandFailsAfterItsCommit(index) => write!(
                 formatter,
                 "call {}'s command fails after its commit",
@@ -164,6 +200,11 @@ impl fmt::Display for Step {
             Self::GivesBack(index) => {
                 write!(formatter, "call {} gives its reservation back", call(index))
             }
+            Self::KeepsOutcomeUnknown(index) => write!(
+                formatter,
+                "call {} keeps \"outcome unknown\" under the id",
+                call(index)
+            ),
             Self::KeepsAnswer(index) => {
                 write!(
                     formatter,
@@ -191,21 +232,28 @@ impl fmt::Display for Step {
 }
 
 impl Receipts {
-    fn kept(&self, row: Row) -> Kept<()> {
+    fn kept(&self, row: Row) -> Kept<Stored> {
         let lapses_at = match self.unanswered_life {
-            UnansweredLife::TenMinutes if !row.answered => Age::TenMinutes,
+            UnansweredLife::TenMinutes if row.answer.is_none() => Age::TenMinutes,
             UnansweredLife::TenMinutes | UnansweredLife::ADay => Age::ADay,
         };
         Kept {
             same_request: true,
-            answer: row.answered.then_some(()),
+            answer: row.answer,
             stalled: row.age >= Age::HalfAnHour,
             lapsed: row.age >= lapses_at,
         }
     }
 
-    fn standing(&self, world: &World) -> Standing<()> {
+    fn standing(&self, world: &World) -> Standing<Stored> {
         standing(world.row.map(|row| self.kept(row)))
+    }
+
+    /// Whether `complete` finds this call's reservation as it left it.
+    fn reservation_stands(&self, world: &World) -> bool {
+        world
+            .row
+            .is_some_and(|row| row.answer.is_none() && !self.kept(row).lapsed)
     }
 }
 
@@ -229,8 +277,14 @@ impl Model for Receipts {
             steps.push((step, next));
         };
         let fresh = Row {
-            answered: false,
+            answer: None,
             age: Age::Fresh,
+        };
+        let answered = |stored| {
+            Some(Row {
+                answer: Some(stored),
+                age: Age::Fresh,
+            })
         };
 
         for (index, call) in world.calls.iter().enumerate() {
@@ -256,22 +310,22 @@ impl Model for Receipts {
                         }
                         (Standing::Free, Reserved::WithTheWrite) => {
                             then(Step::RunsInOneTransaction(index), &|next| {
-                                next.row = Some(Row {
-                                    answered: true,
-                                    age: Age::Fresh,
-                                });
+                                next.row = answered(Stored::Done);
                                 next.writes += 1;
                                 next.calls[index] = Call::Ended(Answer::Done);
                             });
                             then(Step::RollsBack(index), &end(Answer::Refused));
                         }
-                        (Standing::Answered(()), _) => {
+                        (Standing::Answered(Stored::Done), _) => {
                             then(Step::Replays(index), &end(Answer::Replayed));
                         }
                         (Standing::Running, _) => {
                             then(Step::ToldToWait(index), &end(Answer::Wait));
                         }
-                        (Standing::OutcomeUnknown, _) => {
+                        (
+                            Standing::OutcomeUnknown | Standing::Answered(Stored::OutcomeUnknown),
+                            _,
+                        ) => {
                             then(
                                 Step::ToldOutcomeUnknown(index),
                                 &end(Answer::OutcomeUnknown),
@@ -285,6 +339,9 @@ impl Model for Receipts {
                 }
                 Call::Reserved => {
                     then(Step::CommandRefuses(index), &|next| {
+                        next.calls[index] = Call::Refusing;
+                    });
+                    then(Step::CommandFails(index), &|next| {
                         next.calls[index] = Call::Failing;
                     });
                     then(Step::CommandCommits(index), &|next| {
@@ -294,34 +351,47 @@ impl Model for Receipts {
                     then(Step::Stops(index), &end(Answer::Lost));
                 }
                 Call::Wrote => {
-                    let reservation_stands = world
-                        .row
-                        .is_some_and(|row| !row.answered && !self.kept(row).lapsed);
-                    if reservation_stands {
+                    if self.reservation_stands(world) {
                         then(Step::KeepsAnswer(index), &|next| {
-                            next.row = Some(Row {
-                                answered: true,
-                                age: Age::Fresh,
-                            });
+                            next.row = answered(Stored::Done);
                             next.calls[index] = Call::Ended(Answer::Done);
                         });
                     } else {
-                        then(Step::CannotKeepAnswer(index), &end(Answer::Refused));
+                        then(Step::CannotKeepAnswer(index), &end(Answer::Failed));
                     }
-                    if self.command == Command::MayFailAfterItsCommit {
-                        then(Step::CommandFailsAfterItsCommit(index), &|next| {
-                            next.calls[index] = Call::Failing;
+                    if self.refusals == Refusals::AlsoAfterACommit {
+                        then(Step::CommandRefusesAfterItsCommit(index), &|next| {
+                            next.calls[index] = Call::Refusing;
                         });
                     }
+                    then(Step::CommandFailsAfterItsCommit(index), &|next| {
+                        next.calls[index] = Call::Failing;
+                    });
                     then(Step::Stops(index), &end(Answer::Lost));
                 }
-                Call::Failing => {
-                    then(Step::GivesBack(index), &|next| {
-                        if next.row.is_some_and(|row| !row.answered) {
-                            next.row = None;
-                        }
-                        next.calls[index] = Call::Ended(Answer::Refused);
-                    });
+                Call::Refusing | Call::Failing => {
+                    let failed = *call == Call::Failing;
+                    let answer = if failed {
+                        Answer::Failed
+                    } else {
+                        Answer::Refused
+                    };
+                    if failed && self.after_a_failure == AfterAFailure::KeepsTheId {
+                        let stands = self.reservation_stands(world);
+                        then(Step::KeepsOutcomeUnknown(index), &|next| {
+                            if stands {
+                                next.row = answered(Stored::OutcomeUnknown);
+                            }
+                            next.calls[index] = Call::Ended(answer);
+                        });
+                    } else {
+                        then(Step::GivesBack(index), &|next| {
+                            if next.row.is_some_and(|row| row.answer.is_none()) {
+                                next.row = None;
+                            }
+                            next.calls[index] = Call::Ended(answer);
+                        });
+                    }
                     then(Step::Stops(index), &end(Answer::Lost));
                 }
                 Call::Ended(_) => {}
@@ -359,7 +429,8 @@ const TODAY: Receipts = Receipts {
     calls: 3,
     reserved: Reserved::Apart,
     unanswered_life: UnansweredLife::ADay,
-    command: Command::FailsOnlyBeforeItsCommit,
+    after_a_failure: AfterAFailure::KeepsTheId,
+    refusals: Refusals::OnlyBeforeACommit,
     past_a_day: false,
 };
 
@@ -436,18 +507,17 @@ fn the_ten_minute_lapse_ran_a_lost_call_twice() {
     );
 }
 
-/// A finding, not a fixed bug: the dispatcher gives a reservation back on
-/// any error (`dispatch`, "A refused or failed command made nothing"), and
-/// nothing checks that claim. A command kept apart that commits and then
-/// returns an error is run again by a retry. When the dispatcher or the
-/// commands close this, this test turns into the at-most-once one above.
+/// The bug the model found: the dispatcher gave a reservation back on any
+/// error, on the claim that a failed command made nothing. A command that
+/// committed and then failed (a read-back that couldn't reach the database)
+/// was run again by its retry.
 #[test]
-fn a_command_kept_apart_that_fails_after_its_commit_is_run_again() {
-    let receipts = Receipts {
-        command: Command::MayFailAfterItsCommit,
+fn giving_back_a_failed_calls_id_ran_it_twice() {
+    let as_it_was = Receipts {
+        after_a_failure: AfterAFailure::GivesTheIdBack,
         ..TODAY
     };
-    let path = written_twice(receipts).expect("an error after a commit frees the id");
+    let path = written_twice(as_it_was).expect("an error after a commit frees the id");
     assert_eq!(
         told(&path.steps),
         [
@@ -463,11 +533,43 @@ fn a_command_kept_apart_that_fails_after_its_commit_is_run_again() {
     );
 }
 
+/// The retry of a call whose command failed is told at once that the
+/// outcome isn't known, whether or not the command had committed.
+#[test]
+fn a_failed_calls_retry_is_told_the_outcome_is_unknown() {
+    let explored = explore(&TODAY, STATE_LIMIT);
+    let retry_told = explored.reaches(|world| {
+        world.calls[0] == Call::Ended(Answer::Failed)
+            && world.calls[1] == Call::Ended(Answer::OutcomeUnknown)
+            && world.row.is_some_and(|row| row.age == Age::Fresh)
+    });
+    assert!(retry_told.is_some(), "a failed call's retry waited");
+    let retry_ran = explored.reaches(|world| {
+        world.calls[0] == Call::Ended(Answer::Failed)
+            && matches!(world.calls[1], Call::Reserved | Call::Wrote)
+    });
+    never(retry_ran);
+}
+
+/// By contract, not checked: a command refuses before it writes. One that
+/// commits and then refuses (a read-back that finds the thing gone) has its
+/// id freed, and its retry runs it again.
+#[test]
+fn a_command_that_refuses_after_its_commit_is_run_again() {
+    let receipts = Receipts {
+        refusals: Refusals::AlsoAfterACommit,
+        ..TODAY
+    };
+    assert!(written_twice(receipts).is_some());
+}
+
 /// The promise holds for the day an id is kept (the v2 contract's window),
 /// not after it.
 #[test]
 fn past_its_day_a_lost_call_can_run_again() {
+    // Two calls, so both wrote and the first was lost after its write.
     let receipts = Receipts {
+        calls: 2,
         past_a_day: true,
         ..TODAY
     };

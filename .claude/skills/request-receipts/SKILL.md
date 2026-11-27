@@ -31,31 +31,38 @@ other Rust tests.
 | "reserves the id and commits" | `idempotency::reserve_apart`, then the commit, in `ops/dispatch.rs::dispatch` (`apart`) |
 | "reserves, writes and keeps its answer in one transaction" | `idempotency::reserve` on `call.tx()`, `O::run`, `idempotency::complete`, one commit |
 | "the command commits its write" | `O::run` of an `OWN_TRANSACTION` operation (every `tool_op!`) |
-| "gives its reservation back" | `idempotency::release` in `dispatch`'s `Err(error)` arm |
+| "refuses" / "fails" | `OpError::is_refusal` on the command's error: a refusal turns the request down, anything else (`Unavailable`) is a failure |
+| "gives its reservation back" | `idempotency::release` in `dispatch`'s `Err(error)` arm, after a refusal |
+| "keeps "outcome unknown" under the id" | `idempotency::complete` with `OpError::request_outcome_unknown`, in the same arm, after a failure |
 | "keeps its answer under the id" | `idempotency::complete` |
 | "time passes" | `stalled` and `lapsed` in `row_for_key!`: 30 minutes (`STALLED_AFTER`) and the 24 hours a row is kept |
 | An arrival is one step | The advisory lock `reserve` takes first |
 
-Last confirmed against the code at commit `ac493904`. When any file above
+Last confirmed against the code at commit `31ce8ffe`, with the change that
+made the dispatcher keep a failed call's id. When any file above
 has changed since then, read the change against this table before trusting
 a pass, then move the commit here forward.
 
 ## What it found
 
 - **Holds:** an id kept with the write is written once, and no caller sees
-  it unanswered. An id kept apart is written once within its day, when its
-  command fails only before its commit. A caller told done, or replayed,
-  has its write. A call whose command refused can run again.
-- **The past bug it replays:** before #358 an unanswered reservation lapsed
-  after ten minutes (`reserve_briefly`). The model finds the double write in
-  seven steps (`the_ten_minute_lapse_ran_a_lost_call_twice`).
-- **Open:** the dispatcher gives a reservation back on any error, on the
-  claim that a failed command made nothing. Nothing checks the claim. A
-  command kept apart that commits and then returns an error is run again by
-  a retry (`a_command_kept_apart_that_fails_after_its_commit_is_run_again`).
-  `mcp/memory_tools.rs::page_write` is one: it commits, then reads the page
-  back, and a failed read-back becomes the call's error.
-- **By contract:** past the day an id is kept, a lost call can run again.
+  it unanswered. An id kept apart is written once within its day, whether
+  its command fails before its commit or after it. A caller told done, or
+  replayed, has its write. A call whose command refused can run again. The
+  retry of a call whose command failed is told at once that the outcome
+  isn't known.
+- **The past bugs it replays:** before #358 an unanswered reservation lapsed
+  after ten minutes (`reserve_briefly`), and the model finds the double
+  write in seven steps (`the_ten_minute_lapse_ran_a_lost_call_twice`). The
+  dispatcher gave a reservation back on any error, so a command that
+  committed and then failed was run again by its retry; the model found
+  this one itself (`giving_back_a_failed_calls_id_ran_it_twice`).
+  `mcp/memory_tools.rs::page_write` was one such command: it commits, then
+  reads the page back, and a failed read-back becomes the call's error.
+- **By contract, not checked:** a command refuses before it writes. One
+  that commits and then refuses has its id freed and is run again by a
+  retry (`a_command_that_refuses_after_its_commit_is_run_again`). Past the
+  day an id is kept, a lost call can run again.
 
 ## Reading a failure
 
