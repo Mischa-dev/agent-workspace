@@ -13,7 +13,7 @@ import { useProjects, useSetRailOrder, useUpdateProjectNavigation } from '../pro
 import type { Project } from '../projects/types'
 import { IconButton, showToast, type MenuEntry } from '../ui'
 import { projectSection } from './projectSections'
-import { railOrderAfterStep, railOrderKeepingOthers, railProjects } from './railProjects'
+import { projectsInside, railOrderAfterStep, railOrderKeepingOthers, railProjects } from './railProjects'
 import { SidebarFrame, SidebarLink, SidebarSection, type SidebarAttention } from './SidebarParts'
 import { projectSettingsHref } from '../settings/paths'
 
@@ -77,6 +77,11 @@ export function ProjectSidebar({
         ['Move down in the rail', 'arrow-down', keepingOthers(railOrderAfterStep(rail, project.id, 1))],
       ] as const)
     : []
+  // Sub-projects: the ones inside this project, and the one it is inside.
+  const inside = projectsInside(open, project.id)
+  const parent = project.parentId ? open.find((candidate) => candidate.id === project.parentId) : undefined
+  const newInside = here(`/projects/new?inside=${encodeURIComponent(project.id)}`)
+  const named = (candidate: Project) => (candidate.icon ? `${candidate.icon} ${candidate.name}` : candidate.name)
   const togglePin = () => {
     updateNavigation
       .mutateAsync({ projectId: project.id, expectedVersion: project.navigation.version, navigation: project.navigation, pinned: !pinned })
@@ -85,6 +90,7 @@ export function ProjectSidebar({
   }
   const menu: MenuEntry[] = [
     ...(canCreate ? [{ label: 'New channel', icon: 'plus' as const, onSelect: () => setCreating(true) }] : []),
+    ...(project.capabilities.manage ? [{ label: 'New project inside', icon: 'layers' as const, onSelect: () => go(newInside) }] : []),
     ...(project.capabilities.manage
       ? [{ label: 'Invite people', icon: 'user-plus' as const, onSelect: () => go(projectSettingsHref(project.id, 'members')) }]
       : []),
@@ -133,12 +139,31 @@ export function ProjectSidebar({
       title={project.icon ? `${project.icon} ${project.name}` : project.name}
     >
       <ul className="aw-section__list aw-sidebar__top">
+        {parent ? <SidebarLink icon="arrow-left" label={`Back to ${parent.name}`} onNavigate={onNavigate} to={spaceHref(parent.id)} /> : null}
         <SidebarLink end icon="home" label="Overview" onNavigate={onNavigate} to={base} />
         {topRows}
         <Suspense fallback={null}>
           <BuiltModuleRows onNavigate={onNavigate} project={project} />
         </Suspense>
       </ul>
+      {inside.length ? (
+        <SidebarSection
+          addLabel={`New project inside ${project.name}`}
+          label="Projects inside"
+          onAdd={project.capabilities.manage ? () => go(newInside) : undefined}
+        >
+          {inside.map((child) => (
+            <SidebarLink
+              badge={child.attentionCount || undefined}
+              icon="layers"
+              key={child.id}
+              label={named(child)}
+              onNavigate={onNavigate}
+              to={child.navigation.href || spaceHref(child.id)}
+            />
+          ))}
+        </SidebarSection>
+      ) : null}
       {experience.shows('talk.sidebar_sections') ? (
         <Suspense fallback={null}>
           <SidebarSections onNavigate={onNavigate} />

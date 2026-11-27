@@ -1,6 +1,6 @@
 import { lazy, Suspense, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { isApiError } from '../api/errors'
 import { useWorkspace } from '../app/workspace'
@@ -8,7 +8,7 @@ import { useAuthenticatedSession } from '../auth/session'
 import { useShellPage } from '../shell/shellStore'
 import { Banner, Button, ButtonLink, ErrorState, PageHeader, SelectField, TextField, describeError, showToast } from '../ui'
 import { listProjectTemplates, viewKeys } from '../views/api'
-import { useCreateProject, useSwitchProject } from './hooks'
+import { useCreateProject, useProjects, useSwitchProject } from './hooks'
 import { projectKeyPattern, suggestKey } from './projectKey'
 import '../styles/pages.css'
 import { here, spaceHref } from '../app/href'
@@ -43,12 +43,23 @@ export function CreateProjectPage() {
   const [templateId, setTemplateId] = useState('')
   // A preset for the new project's layout; none follows the workspace's default.
   const [preset, setPreset] = useState<string | null>(null)
+  // "New project inside" opens this page with the parent in the address.
+  const [search] = useSearchParams()
+  const [parentId, setParentId] = useState(search.get('inside') ?? '')
+  const [people, setPeople] = useState<'parent' | 'own'>('parent')
   if (followed !== addressed) {
     setFollowed(addressed)
     setOrganizationId(preferredId)
     setTemplateId('')
     setPreset(null)
+    setParentId('')
   }
+  // A project can go inside any project of this workspace you manage.
+  const projects = useProjects()
+  const parents = (projects.data?.projects ?? [])
+    .filter((project) => !project.archivedAt && project.capabilities.manage && project.kind === 'project')
+    .sort((left, right) => left.name.localeCompare(right.name))
+  const parent = parents.find((project) => project.id === parentId && project.organizationId === organizationId)
   const templates = useQuery({
     queryKey: viewKeys.projectTemplates(organizationId),
     queryFn: () => listProjectTemplates(organizationId),
@@ -106,6 +117,7 @@ export function CreateProjectPage() {
         key: normalizedKey,
         name: name.trim(),
         ...(template ? { templateId: template.id } : {}),
+        ...(parent ? { parentId: parent.id, people } : {}),
         idempotencyKey,
       })
       if (preset) {
@@ -185,6 +197,44 @@ export function CreateProjectPage() {
             spellCheck={false}
             value={key}
           />
+          {parents.some((project) => project.organizationId === organizationId) ? (
+            <SelectField
+              hint={
+                parent
+                  ? `It shows in ${parent.name}’s sidebar, with its own tasks and channels.`
+                  : 'Put it inside another project when it is one part of that project’s work.'
+              }
+              id="project-inside"
+              label="Inside"
+              onChange={(event) => setParentId(event.target.value)}
+              value={parent?.id ?? ''}
+            >
+              <option value="">Nothing, it stands on its own</option>
+              {parents
+                .filter((project) => project.organizationId === organizationId)
+                .map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+            </SelectField>
+          ) : null}
+          {parent ? (
+            <SelectField
+              hint={
+                people === 'parent'
+                  ? `Everyone in ${parent.name} is here too, with the same role, and stays in step as people join or leave. You can add more people here.`
+                  : `Only you to start with. People in ${parent.name} can’t see it until you add them.`
+              }
+              id="project-people"
+              label="People"
+              onChange={(event) => setPeople(event.target.value === 'own' ? 'own' : 'parent')}
+              value={people}
+            >
+              <option value="parent">The same people as {parent.name}</option>
+              <option value="own">Only people I add</option>
+            </SelectField>
+          ) : null}
           {templates.data?.templates.length ? (
             <SelectField
               hint={
@@ -220,7 +270,7 @@ export function CreateProjectPage() {
             </Suspense>
           ) : null}
           <div className="aw-form__actions">
-            <Button onClick={() => navigate(here('/home'))} variant="secondary">
+            <Button onClick={() => navigate(parent ? spaceHref(parent.id) : here('/home'))} variant="secondary">
               Cancel
             </Button>
             <Button busy={createProject.isPending} disabled={Boolean(validation)} type="submit" variant="primary">

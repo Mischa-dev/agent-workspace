@@ -35,7 +35,7 @@ import {
 import { useWorkItems } from '../work-items/hooks'
 import { StatusIcon } from '../work-items/WorkItemIcons'
 import { roleLabel } from './format'
-import { useProject, useRestoreProject } from './hooks'
+import { useProject, useProjects, useRestoreProject } from './hooks'
 import { MoreLink } from './MoreLink'
 import { NavigationSyncAlert } from './NavigationSyncAlert'
 import './overview.css'
@@ -48,6 +48,7 @@ import '../styles/pages.css'
 // The project's whiteboards and the New channel dialog load in their own small chunks.
 const ProjectWhiteboards = lazy(() => import('./ProjectWhiteboards'))
 const ChannelCreator = lazy(() => import('../shell/ChannelCreator'))
+const ProjectsInside = lazy(() => import('./ProjectsInside'))
 const ProjectStatus = lazy(() => import('../work-items/ProjectStatus'))
 
 const RECENT_WORK = { limit: 5 }
@@ -57,6 +58,7 @@ export function ProjectOverviewPage() {
   const { projectId = '' } = useParams()
   const project = useProject(projectId)
   const experience = useProjectExperience(projectId)
+  const projects = useProjects()
   const navigationSync = useRememberProjectLocation(
     projectId,
     { kind: 'project_overview' },
@@ -78,6 +80,8 @@ export function ProjectOverviewPage() {
   }
 
   const base = spaceHref(project.data.id)
+  const parentId = project.data.parentId
+  const parent = parentId ? projects.data?.projects.find((candidate) => candidate.id === parentId) : undefined
   return (
     <>
       <div className="aw-page">
@@ -95,8 +99,17 @@ export function ProjectOverviewPage() {
         >
           {experience.shows('tech.task_keys') ? `${project.data.key} · ` : ''}
           {roleLabel(project.data.role)}
+          {parent ? (
+            <>
+              {' · Inside '}
+              <Link to={spaceHref(parent.id)}>{parent.name}</Link>
+            </>
+          ) : null}
         </PageHeader>
         {project.data.archivedAt && <ArchivedBanner project={project.data} />}
+        <Suspense fallback={null}>
+          <ProjectsInside project={project.data} tasks={experience.shows('area.tasks')} />
+        </Suspense>
         <div className="aw-overview">
           <div className="aw-overview__column">
             {experience.shows('area.tasks') && experience.shows('workspace.project_updates') ? (

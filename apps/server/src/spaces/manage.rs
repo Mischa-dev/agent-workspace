@@ -39,6 +39,121 @@ pub struct NewSpace<'a> {
     pub visibility: SpaceVisibility,
     pub icon: Option<&'a str>,
     pub owner: Owner<'a>,
+    /// The project or team space it is made inside, if any.
+    pub inside: Option<Inside>,
+}
+
+/// Where a space sits: inside another one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Inside {
+    pub parent: Uuid,
+    /// Its people are its parent's: everyone there holds a seat here with
+    /// the same role, kept in step by the database (`space_group_seat_sync`).
+    pub people_from_parent: bool,
+}
+
+/// How many levels a space and what is under it may be (the database's
+/// `space_tree_max_depth`).
+pub const MAX_TREE_DEPTH: i64 = 3;
+
+/// One workspace's moves take turns, as the database's own check does, so
+/// what is read here is still true when the row is written.
+async fn lock_tree(connection: &mut PgConnection, workspace_id: Uuid) -> Result<(), AppError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('space-tree:' || $1::text, 0))")
+        .bind(workspace_id)
+        .execute(&mut *connection)
+        .await?;
+    Ok(())
+}
+
+/// Whether `space` (a new one when `None`) may go inside `parent`: a
+/// project or team space of the same workspace that isn't archived, isn't
+/// the space or something under it, and leaves the tree within its depth.
+/// The database refuses the same things; this says why in words.
+pub async fn check_parent(
+    connection: &mut PgConnection,
+    workspace_id: Uuid,
+    space: Option<Uuid>,
+    parent: Uuid,
+) -> Result<(), AppError> {
+    lock_tree(connection, workspace_id).await?;
+    let found = sqlx::query_as::<_, (Uuid, String, bool)>(
+        "SELECT workspace_id, kind, archived_at IS NOT NULL FROM spaces WHERE id = $1",
+    )
+    .bind(parent)
+    .fetch_optional(&mut *connection)
+    .await?;
+    let Some((parent_workspace, kind, archived)) = found else {
+        return Err(AppError::NotFound("project"));
+    };
+    if parent_workspace != workspace_id {
+        return Err(AppError::NotFound("project"));
+    }
+    if !matches!(
+        SpaceKind::from_stored(&kind),
+        Some(SpaceKind::Project | SpaceKind::Team)
+    ) {
+        return Err(AppError::Refused {
+            field: "parentId",
+            message: "A project goes inside a project or a team space.",
+        });
+    }
+    if archived {
+        return Err(AppError::Refused {
+            field: "parentId",
+            message: "That project is archived. Restore it first, or pick another.",
+        });
+    }
+    let (above, loops) = sqlx::query_as::<_, (i64, bool)>(
+        r#"
+        WITH RECURSIVE up AS (
+            SELECT space.id, space.parent_space_id, 1 AS level
+            FROM spaces space WHERE space.id = $1
+            UNION ALL
+            SELECT space.id, space.parent_space_id, up.level + 1
+            FROM spaces space JOIN up ON space.id = up.parent_space_id
+            WHERE up.level < 16
+        )
+        SELECT COALESCE(max(level), 0)::bigint, COALESCE(bool_or(id = $2), false) FROM up
+        "#,
+    )
+    .bind(parent)
+    .bind(space)
+    .fetch_one(&mut *connection)
+    .await?;
+    if loops {
+        return Err(AppError::Refused {
+            field: "parentId",
+            message: "A project can't go inside itself or inside something under it.",
+        });
+    }
+    let below = match space {
+        Some(space) => {
+            sqlx::query_scalar::<_, i64>(
+                r#"
+                WITH RECURSIVE down AS (
+                    SELECT space.id, 1 AS level FROM spaces space WHERE space.parent_space_id = $1
+                    UNION ALL
+                    SELECT space.id, down.level + 1
+                    FROM spaces space JOIN down ON space.parent_space_id = down.id
+                    WHERE down.level < 16
+                )
+                SELECT COALESCE(max(level), 0)::bigint FROM down
+                "#,
+            )
+            .bind(space)
+            .fetch_one(&mut *connection)
+            .await?
+        }
+        None => 0,
+    };
+    if above + 1 + below > MAX_TREE_DEPTH {
+        return Err(AppError::Refused {
+            field: "parentId",
+            message: "Projects nest three levels deep at most. Put it one level higher.",
+        });
+    }
+    Ok(())
 }
 
 /// A space's key: 2 to 10 letters or digits, starting with a letter, in
@@ -134,14 +249,17 @@ pub async fn create(
     // H1.24: no new space in a suspended or deleting workspace, whichever
     // edge asked.
     crate::workspace::lifecycle::ensure_open(transaction, new.workspace_id, "space_create").await?;
+    if let Some(inside) = new.inside {
+        check_parent(transaction, new.workspace_id, None, inside.parent).await?;
+    }
     let space_id = Uuid::now_v7();
     let insert = sqlx::query(
         r#"
         INSERT INTO spaces (
             id, workspace_id, key, name, kind, description, visibility,
-            created_by_actor_id, icon
+            created_by_actor_id, icon, parent_space_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         "#,
     )
     .bind(space_id)
@@ -153,6 +271,7 @@ pub async fn create(
     .bind(new.visibility.stored())
     .bind(new.owner.account_id)
     .bind(new.icon)
+    .bind(new.inside.map(|inside| inside.parent))
     .execute(&mut **transaction)
     .await;
     if let Err(error) = insert {
@@ -169,6 +288,14 @@ pub async fn create(
         &new.owner,
     )
     .await?;
+    // Its owner has their own seat by now, so the parent's people join
+    // around it.
+    if new.inside.is_some_and(|inside| inside.people_from_parent) {
+        sqlx::query("UPDATE spaces SET people_from_parent = true WHERE id = $1")
+            .bind(space_id)
+            .execute(&mut **transaction)
+            .await?;
+    }
     Ok(space_id)
 }
 
@@ -239,6 +366,11 @@ pub struct Changes {
     pub description: Option<String>,
     pub icon: Option<Option<String>>,
     pub visibility: Option<SpaceVisibility>,
+    /// `Some(None)` moves it to the top; `Some(Some(parent))` inside
+    /// another space.
+    pub parent: Option<Option<Uuid>>,
+    /// Whether its people are its parent's.
+    pub people_from_parent: Option<bool>,
 }
 
 /// A space as a change sees it, locked.
@@ -252,6 +384,10 @@ pub struct Locked {
     pub visibility: String,
     pub archived: bool,
     pub version: i64,
+    pub parent_space_id: Option<Uuid>,
+    pub people_from_parent: bool,
+    /// When it was archived: what went with it carries the same moment.
+    pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Locked {
@@ -269,7 +405,8 @@ pub async fn lock(
     let row = sqlx::query_as::<_, Locked>(
         r#"
         SELECT workspace_id, kind, name, description, icon, visibility,
-               archived_at IS NOT NULL AS archived, version
+               archived_at IS NOT NULL AS archived, version,
+               parent_space_id, people_from_parent, archived_at
         FROM spaces WHERE id = $1
         FOR UPDATE
         "#,
@@ -326,8 +463,48 @@ pub async fn update(
         }
         changed.push("visibility");
     }
+    let parent = changes.parent.unwrap_or(current.parent_space_id);
+    if parent != current.parent_space_id {
+        if !matches!(current.kind(), Some(SpaceKind::Project | SpaceKind::Team)) {
+            return Err(AppError::Refused {
+                field: "parentId",
+                message: "Only a project or team space can be moved.",
+            });
+        }
+        if let Some(parent) = parent {
+            check_parent(connection, current.workspace_id, Some(space_id), parent).await?;
+        }
+        changed.push("parent");
+    }
+    // At the top a space has its own people. One that had its parent's
+    // people and moves under another takes the new parent's.
+    let people_from_parent = parent.is_some()
+        && changes
+            .people_from_parent
+            .unwrap_or(current.people_from_parent);
+    if changes.people_from_parent == Some(true) && parent.is_none() {
+        return Err(AppError::Refused {
+            field: "people",
+            message: "Only a project inside another can have that one's people. Give it a \
+                parent first.",
+        });
+    }
+    if people_from_parent != current.people_from_parent {
+        changed.push("people");
+    }
     if changed.is_empty() {
         return Ok((changed, current.version));
+    }
+    if current.people_from_parent && !people_from_parent {
+        // Its own people from here on: everyone the parent gave a seat
+        // keeps it as their own, so nobody loses the space by the change.
+        sqlx::query(
+            "UPDATE project_memberships SET via_group = false \
+             WHERE project_id = $1 AND via_parent AND enabled",
+        )
+        .bind(space_id)
+        .execute(&mut *connection)
+        .await?;
     }
     let version = sqlx::query_scalar::<_, i64>(
         r#"
@@ -336,6 +513,8 @@ pub async fn update(
             description = COALESCE($3, description),
             icon = CASE WHEN $4 THEN $5 ELSE icon END,
             visibility = COALESCE($6, visibility),
+            parent_space_id = $7,
+            people_from_parent = $8,
             version = version + 1, updated_at = now()
         WHERE id = $1
         RETURNING version
@@ -347,6 +526,8 @@ pub async fn update(
     .bind(changes.icon.is_some())
     .bind(changes.icon.flatten())
     .bind(changes.visibility.map(SpaceVisibility::stored))
+    .bind(parent)
+    .bind(people_from_parent)
     .fetch_one(&mut *connection)
     .await?;
     events::emit_on(
@@ -361,9 +542,34 @@ pub async fn update(
     Ok((changed, version))
 }
 
-/// Archives a locked, active space: nothing in it can change until it is
-/// brought back. A space with a run still going is not archived. The
-/// workspace's own space and personal spaces stay.
+/// The active spaces under `space_id`, nearest first.
+async fn active_below(
+    connection: &mut PgConnection,
+    space_id: Uuid,
+) -> Result<Vec<(Uuid, i64)>, AppError> {
+    Ok(sqlx::query_as::<_, (Uuid, i64)>(
+        r#"
+        WITH RECURSIVE down AS (
+            SELECT space.id, space.version, 1 AS level
+            FROM spaces space
+            WHERE space.parent_space_id = $1 AND space.archived_at IS NULL
+            UNION ALL
+            SELECT space.id, space.version, down.level + 1
+            FROM spaces space JOIN down ON space.parent_space_id = down.id
+            WHERE space.archived_at IS NULL AND down.level < 16
+        )
+        SELECT id, version FROM down ORDER BY level, id
+        "#,
+    )
+    .bind(space_id)
+    .fetch_all(&mut *connection)
+    .await?)
+}
+
+/// Archives a locked, active space and every space under it: nothing in
+/// them can change until it is brought back. A space with a run still
+/// going, here or under it, is not archived. The workspace's own space and
+/// personal spaces stay. Answers the space's new version.
 pub async fn archive(
     connection: &mut PgConnection,
     actor: Uuid,
@@ -379,34 +585,49 @@ pub async fn archive(
     if current.archived {
         return Ok(current.version);
     }
-    if crate::runs::store::active_under_space(&mut *connection, space_id).await? {
-        return Err(AppError::ProjectHasActiveRuns);
+    lock_tree(connection, current.workspace_id).await?;
+    let below = active_below(connection, space_id).await?;
+    let mut all = vec![space_id];
+    all.extend(below.iter().map(|(id, _)| *id));
+    for id in &all {
+        if crate::runs::store::active_under_space(&mut *connection, *id).await? {
+            return Err(AppError::ProjectHasActiveRuns);
+        }
     }
-    let version = sqlx::query_scalar::<_, i64>(
+    // One moment for the whole tree (the transaction's), which is how
+    // restoring finds what went with it.
+    let archived = sqlx::query_as::<_, (Uuid, i64)>(
         r#"
         UPDATE spaces
         SET archived_at = now(), archived_by_actor_id = $2,
             version = version + 1, updated_at = now()
-        WHERE id = $1
-        RETURNING version
+        WHERE id = ANY($1) AND archived_at IS NULL
+        RETURNING id, version
         "#,
     )
-    .bind(space_id)
+    .bind(&all)
     .bind(actor)
-    .fetch_one(&mut *connection)
+    .fetch_all(&mut *connection)
     .await?;
-    events::emit_on(
-        &mut *connection,
-        NewEvent::thing(&catalog::SPACE_ARCHIVED, space_id, "space", space_id)
-            .workspace(current.workspace_id)
-            .actor(actor)
-            .version(version),
-    )
-    .await?;
+    let mut version = current.version;
+    for (id, new_version) in archived {
+        if id == space_id {
+            version = new_version;
+        }
+        events::emit_on(
+            &mut *connection,
+            NewEvent::thing(&catalog::SPACE_ARCHIVED, id, "space", id)
+                .workspace(current.workspace_id)
+                .actor(actor)
+                .version(new_version),
+        )
+        .await?;
+    }
     Ok(version)
 }
 
-/// Brings an archived space back as it was.
+/// Brings an archived space back as it was, with the spaces under it that
+/// were archived with it. One inside an archived space waits for that one.
 pub async fn restore(
     connection: &mut PgConnection,
     actor: Uuid,
@@ -422,26 +643,60 @@ pub async fn restore(
     if !current.archived {
         return Ok(current.version);
     }
-    let version = sqlx::query_scalar::<_, i64>(
+    lock_tree(connection, current.workspace_id).await?;
+    if let Some(parent) = current.parent_space_id {
+        let parent_archived = sqlx::query_scalar::<_, bool>(
+            "SELECT archived_at IS NOT NULL FROM spaces WHERE id = $1",
+        )
+        .bind(parent)
+        .fetch_optional(&mut *connection)
+        .await?
+        .unwrap_or(false);
+        if parent_archived {
+            return Err(AppError::Refused {
+                field: "space",
+                message: "It is inside an archived project. Restore that one, and this comes \
+                    back with it.",
+            });
+        }
+    }
+    let restored = sqlx::query_as::<_, (Uuid, i64)>(
         r#"
-        UPDATE spaces
-        SET archived_at = NULL, archived_by_actor_id = NULL,
-            version = version + 1, updated_at = now()
-        WHERE id = $1
-        RETURNING version
+        WITH RECURSIVE down AS (
+            SELECT space.id FROM spaces space WHERE space.id = $1
+            UNION ALL
+            SELECT space.id
+            FROM spaces space JOIN down ON space.parent_space_id = down.id
+            WHERE space.archived_at = $2
+        ),
+        back AS (
+            UPDATE spaces
+            SET archived_at = NULL, archived_by_actor_id = NULL,
+                version = version + 1, updated_at = now()
+            WHERE id IN (SELECT id FROM down) AND archived_at IS NOT NULL
+            RETURNING id, version
+        )
+        SELECT id, version FROM back
         "#,
     )
     .bind(space_id)
-    .fetch_one(&mut *connection)
+    .bind(current.archived_at)
+    .fetch_all(&mut *connection)
     .await?;
-    events::emit_on(
-        &mut *connection,
-        NewEvent::thing(&catalog::SPACE_RESTORED, space_id, "space", space_id)
-            .workspace(current.workspace_id)
-            .actor(actor)
-            .version(version),
-    )
-    .await?;
+    let mut version = current.version;
+    for (id, new_version) in restored {
+        if id == space_id {
+            version = new_version;
+        }
+        events::emit_on(
+            &mut *connection,
+            NewEvent::thing(&catalog::SPACE_RESTORED, id, "space", id)
+                .workspace(current.workspace_id)
+                .actor(actor)
+                .version(new_version),
+        )
+        .await?;
+    }
     Ok(version)
 }
 
