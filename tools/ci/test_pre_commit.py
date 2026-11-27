@@ -117,6 +117,15 @@ class TurnOnTests(unittest.TestCase):
         self.assertEqual(self.hooks_path(), "")
         self.assertIn("tools/git-hooks/pre-commit", result.stderr)
 
+    def test_a_hook_that_is_a_link_is_kept(self):
+        target = self.root / "shared-hook"
+        target.write_text("#!/bin/sh\n")
+        hook = self.root / ".git" / "hooks" / "pre-commit"
+        hook.parent.mkdir(parents=True, exist_ok=True)
+        hook.symlink_to(target)
+        self.assertEqual(self.turn_on().returncode, 0)
+        self.assertEqual(self.hooks_path(), "")
+
 
 if __name__ == "__main__":
     unittest.main()
