@@ -534,10 +534,16 @@ fn giving_back_a_failed_calls_id_ran_it_twice() {
 }
 
 /// The retry of a call whose command failed is told at once that the
-/// outcome isn't known, whether or not the command had committed.
+/// outcome isn't known, whether or not the command had committed: however
+/// the command failed, an answer is kept under its id before the caller
+/// hears of it, so no later call finds the id unanswered and waits.
 #[test]
 fn a_failed_calls_retry_is_told_the_outcome_is_unknown() {
     let explored = explore(&TODAY, STATE_LIMIT);
+    let failed = |world: &World| world.calls.contains(&Call::Ended(Answer::Failed));
+    let left_unanswered = explored
+        .reaches(|world| failed(world) && !world.row.is_some_and(|row| row.answer.is_some()));
+    never(left_unanswered);
     let retry_told = explored.reaches(|world| {
         world.calls[0] == Call::Ended(Answer::Failed)
             && world.calls[1] == Call::Ended(Answer::OutcomeUnknown)
