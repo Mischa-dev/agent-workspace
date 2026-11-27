@@ -13,3 +13,5 @@ agents can read them directly.
 - `check-in-browser`: looking at a web change in a real browser.
 - `steward`: the checks to run before pushing, and driving a pull request
   to green.
+- `request-receipts`: changing how a retried call is answered (request
+  ids); it has a model that checks every order of steps.
