@@ -122,7 +122,7 @@ export type CollectionSummary = { actsLikeTask?: boolean; archived: boolean; bui
 
 export type ColumnWrite = { field: string; hidden?: boolean; width?: number | null }
 
-export type CommentItem = { at: string; author: string; files?: FileSummary[]; id: string; replyToCommentId?: string | null; text: string; via?: string | null }
+export type CommentItem = { at: string; author: string; files?: FileSummary[]; id: string; note?: boolean; replyToCommentId?: string | null; text: string; via?: string | null }
 
 export type CommentLine = { at: string; author?: string | null; authorKind: string; deleted?: boolean; edited?: boolean; id: string; text: string }
 
@@ -1044,11 +1044,11 @@ export type ChannelCreateOutput = { archived: boolean; created?: boolean | null;
 
 export type ChannelGetInput = { channelId: string }
 
-export type ChannelGetOutput = { archived: boolean; autoJoin: boolean; canEdit: boolean; canManage: boolean; description?: string | null; id: string; joined: boolean; memberCount: number; name: string; private: boolean; spaceId: string; topic?: string | null; version: number }
+export type ChannelGetOutput = { archived: boolean; autoJoin: boolean; canEdit: boolean; canManage: boolean; description?: string | null; id: string; joined: boolean; memberCount: number; name: string; private: boolean; spaceId: string; topic?: string | null; version: number; workingNotes: boolean }
 
 export type ChannelJoinInput = { channelId: string }
 
-export type ChannelJoinOutput = { archived: boolean; autoJoin: boolean; canEdit: boolean; canManage: boolean; description?: string | null; id: string; joined: boolean; memberCount: number; name: string; private: boolean; spaceId: string; topic?: string | null; version: number }
+export type ChannelJoinOutput = { archived: boolean; autoJoin: boolean; canEdit: boolean; canManage: boolean; description?: string | null; id: string; joined: boolean; memberCount: number; name: string; private: boolean; spaceId: string; topic?: string | null; version: number; workingNotes: boolean }
 
 export type ChannelLeaveInput = { channelId: string }
 
@@ -1058,9 +1058,9 @@ export type ChannelListInput = { query?: string | null; spaceId: string }
 
 export type ChannelListOutput = { channels: BrowsedChannel[] }
 
-export type ChannelUpdateInput = { autoJoin?: boolean | null; channelId: string; description?: string | null; expectedVersion?: number | null; topic?: string | null }
+export type ChannelUpdateInput = { autoJoin?: boolean | null; channelId: string; description?: string | null; expectedVersion?: number | null; topic?: string | null; workingNotes?: boolean | null }
 
-export type ChannelUpdateOutput = { archived: boolean; autoJoin: boolean; canEdit: boolean; canManage: boolean; description?: string | null; id: string; joined: boolean; memberCount: number; name: string; private: boolean; spaceId: string; topic?: string | null; version: number }
+export type ChannelUpdateOutput = { archived: boolean; autoJoin: boolean; canEdit: boolean; canManage: boolean; description?: string | null; id: string; joined: boolean; memberCount: number; name: string; private: boolean; spaceId: string; topic?: string | null; version: number; workingNotes: boolean }
 
 export type CollectionCreateInput = { actsLikeTask?: boolean | null; archived?: boolean | null; clientRequestId?: string | null; collection?: string | null; description?: string | null; expectedVersion?: number | null; fields?: FieldWrite[] | null; name?: string | null; position?: number | null; projectId: string; startStatus?: string | null; taskStatuses?: string[] | null; titleName?: string | null; views?: ViewWrite[] | null }
 
@@ -1078,7 +1078,7 @@ export type CollectionUpdateInput = { actsLikeTask?: boolean | null; archived?: 
 
 export type CollectionUpdateOutput = { changes: string[]; collection: CollectionSummary; created: boolean; idempotentReplay?: boolean; url: string }
 
-export type CommentCreateInput = { anchor?: unknown; attachmentIds?: string[]; content?: unknown; newThread?: boolean; replyToMessageId?: string | null; text?: string | null; thing: ThingInput; threadId?: string | null }
+export type CommentCreateInput = { anchor?: unknown; attachmentIds?: string[]; content?: unknown; newThread?: boolean; note?: boolean | null; replyToMessageId?: string | null; text?: string | null; thing: ThingInput; threadId?: string | null }
 
 export type CommentCreateOutput = { conversationId: string; href?: string | null; messageId: string; threadId?: string | null }
 
@@ -1654,7 +1654,7 @@ export type MessageScheduleInput = { content?: MessageContent | null; conversati
 
 export type MessageScheduleOutput = { idempotentReplay?: boolean; scheduled: ScheduledLine }
 
-export type MessageSendInput = { attachmentIds?: string[] | null; content?: MessageContent | null; conversationId: string; replyToMessageId?: string | null; text?: string | null }
+export type MessageSendInput = { attachmentIds?: string[] | null; content?: MessageContent | null; conversationId: string; note?: boolean | null; replyToMessageId?: string | null; text?: string | null }
 
 export type MessageSendOutput = { conversationId: string; idempotentReplay: boolean; messageId: string; sentAt: string; sequence: number; text: string }
 
@@ -2358,7 +2358,7 @@ export type TaskClaimInput = { minutes?: number | null; note?: string | null; ta
 
 export type TaskClaimOutput = { claimedAt: string; claimedBy: string; expiresAt: string; handoff?: HandoffNote | null; note?: string | null; taskId: string }
 
-export type TaskCommentCreateInput = { attachmentIds?: string[] | null; content?: MessageContent | null; replyToCommentId?: string | null; taskId: string; text?: string | null }
+export type TaskCommentCreateInput = { attachmentIds?: string[] | null; content?: MessageContent | null; note?: boolean | null; replyToCommentId?: string | null; taskId: string; text?: string | null }
 
 export type TaskCommentCreateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; proposalId?: string | null; proposed?: unknown[]; resultId: string; url?: string | null; version: number; workItemId: string }
 

@@ -103,6 +103,8 @@ const ACCESS_COLUMNS: &str = r#"
             parent.kind AS parent_kind,
             COALESCE(parent.kind, conversation.kind) = 'channel'
                 AND COALESCE(parent.visibility, conversation.visibility) = 'members' AS private,
+            conversation.default_register = 'note'
+                OR COALESCE(parent.default_register = 'note', false) AS working_notes,
             conversation.thread_status,
             conversation.thread_outcome,
             conversation.next_entry_sequence,
@@ -162,6 +164,10 @@ pub(crate) struct ConversationAccessRow {
     /// reads it; false elsewhere.
     #[sqlx(default)]
     pub(crate) private: bool,
+    /// What's said here is a working note by default (AWD-220): its own
+    /// setting, or the channel's for a thread. Read with `ACCESS_COLUMNS`.
+    #[sqlx(default)]
+    pub(crate) working_notes: bool,
     pub(crate) thread_status: String,
     pub(crate) thread_outcome: Option<String>,
     pub(crate) next_entry_sequence: i64,
@@ -318,6 +324,10 @@ pub struct ConversationView {
     /// A private channel (or a thread in one): its members only (C2.6).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub private: bool,
+    /// A working channel (or a thread in one): what's said here is a
+    /// working note unless its sender says otherwise (AWD-220).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub working_notes: bool,
 }
 
 impl From<&ConversationAccessRow> for ConversationView {
@@ -344,6 +354,7 @@ impl From<&ConversationAccessRow> for ConversationView {
                 None
             },
             private: row.private,
+            working_notes: row.working_notes,
         }
     }
 }
@@ -406,6 +417,10 @@ pub struct MessageView {
     /// What this message was made into (C2.20), for the reader.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub made_into: Vec<system_entries::MadeIntoView>,
+    /// A working note (AWD-220): kept and readable like any message, but it
+    /// made nothing unread and told nobody it didn't address.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub note: bool,
 }
 
 /// The viewer's own saved-for-later mark on a message.
@@ -714,6 +729,8 @@ struct TimelineEntryRow {
     removed_via: Option<String>,
     forwarded_message_id: Option<Uuid>,
     reply_to_message_id: Option<Uuid>,
+    #[sqlx(default)]
+    note: Option<bool>,
     agent_run_event_id: Option<Uuid>,
     agent_run_id: Option<Uuid>,
     event_kind: Option<String>,
@@ -942,6 +959,7 @@ async fn list_channels(
                     thread_outcome: None,
                     parent_kind: None,
                     private: row.private,
+                    working_notes: false,
                 },
                 highest_sequence,
                 unread,
@@ -1519,6 +1537,9 @@ pub(crate) struct AppendExtras {
     /// The run whose agent said it (a host reporting a `text_message` for
     /// the thread, `runs::say`): the message links to the run.
     pub(crate) agent_run_id: Option<Uuid>,
+    /// Send it as a working note (AWD-220) or as an ordinary message. Left
+    /// out, the conversation's own default decides.
+    pub(crate) note: Option<bool>,
 }
 
 /// `append_message_command` with files the sender uploaded to this
@@ -1673,6 +1694,27 @@ pub(crate) async fn append_message_command_with(
         None => None,
     };
 
+    // AWD-220: a working note is recorded like any message and taps nobody
+    // it doesn't address. The sender says, or the conversation's default does.
+    let note = match extras.note {
+        Some(note) => note,
+        None => {
+            sqlx::query_scalar::<_, bool>(
+                r#"
+            -- visibility: by id, the conversation this sender was just checked to post in
+            -- A thread follows the channel it is in.
+            SELECT conversation.default_register = 'note'
+                   OR COALESCE(parent.default_register = 'note', false)
+            FROM conversations conversation
+            LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
+            WHERE conversation.id = $1
+            "#,
+            )
+            .bind(conversation.id)
+            .fetch_one(&mut *transaction)
+            .await?
+        }
+    };
     let message_id = Uuid::now_v7();
     // A2.14: the sender's budgets, and the default message rate that holds
     // two agents answering each other.
@@ -1692,9 +1734,9 @@ pub(crate) async fn append_message_command_with(
         INSERT INTO messages (
             id, project_id, conversation_id, author_actor_id,
             content_version, content, plain_text, via_oauth_grant_id, forwarded_message_id,
-            reply_to_message_id, may_notify_everyone, agent_run_id
+            reply_to_message_id, may_notify_everyone, agent_run_id, register
         )
-        VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8, $9, $10, $11, $12)
         "#,
     )
     .bind(message_id)
@@ -1708,6 +1750,7 @@ pub(crate) async fn append_message_command_with(
     .bind(extras.reply_to_message_id)
     .bind(notify_everyone)
     .bind(extras.agent_run_id)
+    .bind(if note { "note" } else { "message" })
     .execute(&mut *transaction)
     .await?;
     insert_message_projections(
@@ -1869,6 +1912,7 @@ pub(crate) async fn append_message_command_with(
         reply_to,
         saved: None,
         made_into: Vec::new(),
+        note,
     };
     let body = MessageAppendResponse {
         conversation_id: conversation.id,
@@ -1925,6 +1969,8 @@ pub(crate) async fn append_message_command_with(
             message_id,
             author_actor_id: actor.actor_id,
             mentioned_actor_ids: &mentioned_actor_ids,
+            note,
+            reply_to_message_id: extras.reply_to_message_id,
         },
     ))
     .await?;
@@ -2368,6 +2414,7 @@ const TIMELINE_ENTRY_SELECT: &str = r#"
             author_membership.handle AS author_handle,
             message.content,
             message.plain_text,
+            message.register = 'note' AS note,
             COALESCE(mentions.actors, '[]'::jsonb) AS mentioned_actors,
             COALESCE(work_item_references.items, '[]'::jsonb) AS referenced_work_items,
             COALESCE(attachments.files, '[]'::jsonb) AS attachments,
@@ -3998,6 +4045,7 @@ fn timeline_entry_view(row: TimelineEntryRow) -> Result<TimelineEntryView, AppEr
                     .map(crate::forwarding::ForwardedView::unread),
                 saved: None,
                 made_into: Vec::new(),
+                note: row.note.unwrap_or(false),
             })
         }
         None => None,

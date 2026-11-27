@@ -30,6 +30,7 @@ mod awd110_records_everywhere;
 mod awd110_task_like_collections;
 mod awd110_task_records;
 mod awd110_tasks_collection;
+mod awd220_working_notes;
 mod awd53_attribution;
 mod awd53_discussion;
 mod awd53_live_pages;

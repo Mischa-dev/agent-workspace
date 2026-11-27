@@ -625,6 +625,8 @@ pub(crate) async fn apply_edit(
             message_id: locked.id,
             author_actor_id: actor.actor_id,
             mentioned_actor_ids: &newly_mentioned,
+            note: false,
+            reply_to_message_id: None,
         },
     )
     .await?;

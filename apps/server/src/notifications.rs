@@ -565,10 +565,23 @@ pub async fn fan_out(
     let notifications = match payload {
         OutboxEventPayload::MessageCreated(created) => {
             let mut found = message_mentions(transaction, created.message_id).await?;
-            found.extend(followed_messages(transaction, created.message_id).await?);
-            found.extend(direct_messages(transaction, created.message_id).await?);
-            found.extend(thing_comments(transaction, created.message_id).await?);
-            found.extend(keyword_messages(transaction, created.message_id).await?);
+            if is_note(transaction, created.message_id).await? {
+                // AWD-220: a working note tells only whom it addresses: the
+                // people it names (above; `@everyone` and `@here` in a note
+                // reach nobody) and the author of the comment it answers.
+                // Not followers, DM members, watchers or keywords.
+                found.extend(
+                    thing_comments(transaction, created.message_id)
+                        .await?
+                        .into_iter()
+                        .filter(|notification| notification.kind == kind::MENTION),
+                );
+            } else {
+                found.extend(followed_messages(transaction, created.message_id).await?);
+                found.extend(direct_messages(transaction, created.message_id).await?);
+                found.extend(thing_comments(transaction, created.message_id).await?);
+                found.extend(keyword_messages(transaction, created.message_id).await?);
+            }
             found
         }
         OutboxEventPayload::MessageUpdated(updated) if updated.removed => {
@@ -619,6 +632,23 @@ pub async fn fan_out(
         announce(transaction, *project_id, *actor_id).await?;
     }
     Ok(recipients.len())
+}
+
+/// Whether a message was sent as a working note (AWD-220).
+async fn is_note(
+    transaction: &mut Transaction<'_, Postgres>,
+    message_id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        r#"
+        -- visibility: a worker reading the message it was told of; it reads only the register
+        SELECT register = 'note' FROM messages WHERE id = $1
+        "#,
+    )
+    .bind(message_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .unwrap_or(false))
 }
 
 /// Tells the recipient's open browsers their notifications changed.
@@ -834,7 +864,7 @@ async fn message_mentions(
         WITH message AS (
             SELECT id, COALESCE(project_id, direct_scope_id()) AS project_id, conversation_id,
                    author_actor_id, content,
-                   may_notify_everyone
+                   may_notify_everyone, register
             FROM messages
             WHERE id = $1 AND removed_at IS NULL
         ),
@@ -851,7 +881,8 @@ async fn message_mentions(
             JOIN actors actor ON actor.id = membership.actor_id AND actor.kind = 'human' -- // kind-check: mechanical (people are notified; agents are asked to reply by the reply rules)
             -- Written in the text itself, so a person whose handle happens
             -- to be "everyone" is still only a mention of them.
-            WHERE (EXISTS (
+            -- AWD-220: a working note addresses the accounts it names, never a crowd.
+            WHERE message.register = 'message' AND (EXISTS (
                     SELECT 1
                     FROM jsonb_array_elements(message.content -> 'nodes') node
                     WHERE node ->> 'type' = 'text' AND node ->> 'text' ~* $2

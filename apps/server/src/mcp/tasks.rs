@@ -1903,6 +1903,9 @@ pub(crate) struct CommentItem {
     /// The comment on this task that this one replies to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_to_comment_id: Option<String>,
+    /// A working note: said for the record, not to get attention.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub note: bool,
     /// Files posted with the comment: read them with file_read.
     #[sqlx(skip)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2059,7 +2062,8 @@ pub(crate) async fn task_open(
                    COALESCE(author.display_name, 'Former member') AS author,
                    comment.plain_text AS text, comment.created_at::text AS at,
                    via_client.client_name AS via,
-                   comment.reply_to_message_id::text AS reply_to_comment_id
+                   comment.reply_to_message_id::text AS reply_to_comment_id,
+                   comment.register = 'note' AS note
             FROM conversations comments
             JOIN messages comment ON comment.conversation_id = comments.id
             LEFT JOIN project_memberships author

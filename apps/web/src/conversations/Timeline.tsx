@@ -593,12 +593,59 @@ export function SystemRow({ createdAt, event }: { createdAt: string; event?: Con
   )
 }
 
+/** "Mara", "Mara and Rook", "Mara, Rook and 2 others". */
+function namesLabel(names: readonly string[]) {
+  if (names.length <= 2) return names.join(' and ')
+  return `${names[0]}, ${names[1]} and ${countLabel(names.length - 2, 'other')}`
+}
+
+/**
+ * A run of working notes (AWD-220), folded to one line: how many, who wrote
+ * them, when, and the start of the newest. Opening it shows the notes as
+ * they were written. A link to one of them opens the fold.
+ */
+function NotesFold({ children, entries }: { children: ReactNode; entries: readonly ConversationTimelineEntry[] }) {
+  const location = useLocation()
+  const linked = entries.some((entry) => entry.message && location.hash === `#message-${entry.message.id}`)
+  const [open, setOpen] = useState(linked)
+  if (linked && !open) setOpen(true)
+  const first = entries[0]
+  const last = entries[entries.length - 1]
+  const names = [...new Set(entries.map((entry) => entry.message?.author.displayName ?? ''))].filter(Boolean)
+  const from = formatTime(first.createdAt)
+  const to = formatTime(last.createdAt)
+  const preview = last.message?.plainText.trim().split('\n')[0] ?? ''
+  return (
+    <div className={open ? 'aw-notes is-open' : 'aw-notes'} data-part="working-notes">
+      <button aria-expanded={open} className="aw-notes__toggle" onClick={() => setOpen(!open)} type="button">
+        <span className="aw-notes__icon">
+          <Icon name={open ? 'chevron-down' : 'chevron-right'} size={14} />
+        </span>
+        <span className="aw-notes__line">
+          <span className="aw-notes__count">{countLabel(entries.length, 'working note')}</span>
+          <span className="aw-notes__meta">
+            {' · '}
+            {namesLabel(names)}
+            {' · '}
+            <time dateTime={first.createdAt} title={formatFullDate(first.createdAt)}>
+              {from === to ? from : `${from} to ${to}`}
+            </time>
+          </span>
+          {open || !preview ? null : <span className="aw-notes__preview">{preview}</span>}
+        </span>
+      </button>
+      {open ? <div className="aw-notes__list">{children}</div> : null}
+    </div>
+  )
+}
+
 /** Day dividers, the New line and Slack-style grouping for a run of timeline entries. */
 export function TimelineEntries({
   agentName,
   conversationId,
   entries,
   firstUnreadSequence,
+  foldNotes = true,
   onOpenHistory,
   renderEditor,
   renderExtras,
@@ -613,6 +660,12 @@ export function TimelineEntries({
   entries: ConversationTimelineEntry[]
   /** Show the New line before the first entry at or past this sequence (above them all when unread starts earlier). */
   firstUnreadSequence?: number | null
+  /**
+   * Fold runs of working notes to one line each. Off in a working channel,
+   * where notes are what you came to read. Your own notes, and notes that
+   * mention you, are never folded.
+   */
+  foldNotes?: boolean
   onOpenHistory?: (message: ConversationMessage) => void
   /** The inline editor for the message being edited, if any. */
   renderEditor?: (entry: ConversationTimelineEntry) => ReactNode
@@ -624,7 +677,19 @@ export function TimelineEntries({
 }) {
   const rows: ReactNode[] = []
   let previous: ConversationTimelineEntry | null = null
+  let previousFolded = false
   let newShown = false
+  // The run of notes being folded, and its rows.
+  let run: { entries: ConversationTimelineEntry[]; rows: ReactNode[] } | null = null
+  const closeRun = () => {
+    if (!run) return
+    rows.push(
+      <NotesFold entries={run.entries} key={`notes-${run.entries[0].id}`}>
+        {run.rows}
+      </NotesFold>,
+    )
+    run = null
+  }
   for (const entry of entries) {
     const dividers: ReactNode[] = []
     if (!previous || dayKey(previous.createdAt) !== dayKey(entry.createdAt)) {
@@ -633,7 +698,15 @@ export function TimelineEntries({
     // What you wrote yourself is never new to you, even when it was sent from
     // somewhere that didn't mark the conversation read (a notification reply).
     const own = Boolean(viewerId && entry.message?.author.id === viewerId)
-    if (!newShown && firstUnreadSequence != null && entry.sequence >= firstUnreadSequence && !own) {
+    const folded = Boolean(
+      foldNotes &&
+        entry.message?.note &&
+        !entry.message.removed &&
+        !own &&
+        !(viewerId && entry.message.mentionedActors?.some((actor) => actor.id === viewerId)),
+    )
+    // A folded note is never what's new: it didn't make the conversation unread.
+    if (!newShown && firstUnreadSequence != null && entry.sequence >= firstUnreadSequence && !own && !folded) {
       newShown = true
       dividers.push(<NewDivider key="new" />)
     }
@@ -641,11 +714,13 @@ export function TimelineEntries({
       entry.message &&
         previous?.message &&
         dividers.length === 0 &&
+        previousFolded === folded &&
         previous.message.author.id === entry.message.author.id &&
         previous.message.via === entry.message.via &&
         Date.parse(entry.createdAt) - Date.parse(previous.createdAt) < GROUP_WINDOW_MS,
     )
     previous = entry
+    previousFolded = folded
     let row: ReactNode
     if (entry.message) {
       const highlighted = Boolean(viewerId && entry.message.mentionedActors?.some((actor) => actor.id === viewerId))
@@ -668,6 +743,18 @@ export function TimelineEntries({
     } else {
       row = <SystemRow createdAt={entry.createdAt} event={entry.system} />
     }
+    if (folded) {
+      // A day or New line ends the run: it stays where it belongs.
+      if (dividers.length) {
+        closeRun()
+        rows.push(<Fragment key={`dividers-${entry.id}`}>{dividers}</Fragment>)
+      }
+      run ??= { entries: [], rows: [] }
+      run.entries.push(entry)
+      run.rows.push(<Fragment key={entry.id}>{row}</Fragment>)
+      continue
+    }
+    closeRun()
     rows.push(
       <Fragment key={entry.id}>
         {dividers}
@@ -675,6 +762,7 @@ export function TimelineEntries({
       </Fragment>,
     )
   }
+  closeRun()
   return <>{rows}</>
 }
 

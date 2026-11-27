@@ -257,6 +257,7 @@ export function ThreadPanel({
             agentName={(runId) => runAgent([activeRun, latestTerminalRun].find((run) => run?.id === runId)).name}
             conversationId={threadId}
             entries={entries}
+            foldNotes={!timeline?.conversation.workingNotes}
             firstUnreadSequence={unread.firstUnreadSequence}
             onOpenHistory={messageActions.openHistory}
             renderEditor={messageActions.editorFor}

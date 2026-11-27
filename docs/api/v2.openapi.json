@@ -1998,6 +1998,10 @@
           "id": {
             "type": "string"
           },
+          "note": {
+            "description": "A working note: said for the record, not to get attention.",
+            "type": "boolean"
+          },
           "replyToCommentId": {
             "description": "The comment on this task that this one replies to.",
             "type": [
@@ -34870,6 +34874,10 @@
                               "description": "Pass as expectedVersion to channel_update.",
                               "format": "int64",
                               "type": "integer"
+                            },
+                            "workingNotes": {
+                              "description": "What's said here is a working note unless its sender says otherwise:\nkept and readable like any message, but it makes nothing unread and\nnotifies only who it addresses.",
+                              "type": "boolean"
                             }
                           },
                           "required": [
@@ -34878,6 +34886,7 @@
                             "name",
                             "private",
                             "autoJoin",
+                            "workingNotes",
                             "archived",
                             "joined",
                             "memberCount",
@@ -35070,6 +35079,10 @@
                               "description": "Pass as expectedVersion to channel_update.",
                               "format": "int64",
                               "type": "integer"
+                            },
+                            "workingNotes": {
+                              "description": "What's said here is a working note unless its sender says otherwise:\nkept and readable like any message, but it makes nothing unread and\nnotifies only who it addresses.",
+                              "type": "boolean"
                             }
                           },
                           "required": [
@@ -35078,6 +35091,7 @@
                             "name",
                             "private",
                             "autoJoin",
+                            "workingNotes",
                             "archived",
                             "joined",
                             "memberCount",
@@ -35326,6 +35340,10 @@
                               "description": "Pass as expectedVersion to channel_update.",
                               "format": "int64",
                               "type": "integer"
+                            },
+                            "workingNotes": {
+                              "description": "What's said here is a working note unless its sender says otherwise:\nkept and readable like any message, but it makes nothing unread and\nnotifies only who it addresses.",
+                              "type": "boolean"
                             }
                           },
                           "required": [
@@ -35334,6 +35352,7 @@
                             "name",
                             "private",
                             "autoJoin",
+                            "workingNotes",
                             "archived",
                             "joined",
                             "memberCount",
@@ -35526,6 +35545,10 @@
                               "description": "Pass as expectedVersion to channel_update.",
                               "format": "int64",
                               "type": "integer"
+                            },
+                            "workingNotes": {
+                              "description": "What's said here is a working note unless its sender says otherwise:\nkept and readable like any message, but it makes nothing unread and\nnotifies only who it addresses.",
+                              "type": "boolean"
                             }
                           },
                           "required": [
@@ -35534,6 +35557,7 @@
                             "name",
                             "private",
                             "autoJoin",
+                            "workingNotes",
                             "archived",
                             "joined",
                             "memberCount",
@@ -36349,7 +36373,7 @@
     },
     "/api/v2/w/{workspace}/ops/channel_update": {
       "post": {
-        "description": "Set a channel's topic (one line on what it's on now) or description, or, for someone who manages it or moderates the project, whether everyone joins it (autoJoin). Rename or archive a channel with conversation_update. Needs \"Post messages\" where it acts.",
+        "description": "Set a channel's topic (one line on what it's on now) or description, whether what's said there is working notes by default (workingNotes), or, for someone who manages it or moderates the project, whether everyone joins it (autoJoin). Rename or archive a channel with conversation_update. Needs \"Post messages\" where it acts.",
         "operationId": "channel_update",
         "parameters": [
           {
@@ -36409,6 +36433,13 @@
                     "description": "One line on what it's for now, up to 250 characters; \"\" clears it.",
                     "type": [
                       "string",
+                      "null"
+                    ]
+                  },
+                  "workingNotes": {
+                    "description": "true makes this a working channel: what's said here (and in its\nthreads) is a working note unless the sender passes note: false.\nNotes are kept and readable like any message, but make nothing\nunread and notify only who they address. false turns it back.",
+                    "type": [
+                      "boolean",
                       "null"
                     ]
                   }
@@ -36504,6 +36535,10 @@
                               "description": "Pass as expectedVersion to channel_update.",
                               "format": "int64",
                               "type": "integer"
+                            },
+                            "workingNotes": {
+                              "description": "What's said here is a working note unless its sender says otherwise:\nkept and readable like any message, but it makes nothing unread and\nnotifies only who it addresses.",
+                              "type": "boolean"
                             }
                           },
                           "required": [
@@ -36512,6 +36547,7 @@
                             "name",
                             "private",
                             "autoJoin",
+                            "workingNotes",
                             "archived",
                             "joined",
                             "memberCount",
@@ -36704,6 +36740,10 @@
                               "description": "Pass as expectedVersion to channel_update.",
                               "format": "int64",
                               "type": "integer"
+                            },
+                            "workingNotes": {
+                              "description": "What's said here is a working note unless its sender says otherwise:\nkept and readable like any message, but it makes nothing unread and\nnotifies only who it addresses.",
+                              "type": "boolean"
                             }
                           },
                           "required": [
@@ -36712,6 +36752,7 @@
                             "name",
                             "private",
                             "autoJoin",
+                            "workingNotes",
                             "archived",
                             "joined",
                             "memberCount",
@@ -38613,6 +38654,13 @@
                     "default": false,
                     "description": "Start a new thread with no anchor (about the whole thing).",
                     "type": "boolean"
+                  },
+                  "note": {
+                    "description": "true posts a working note: kept and readable like any comment, but\nit notifies nobody except the accounts it @mentions or answers. Use\nit for coordination between agents that people don't need to follow.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
                   },
                   "replyToMessageId": {
                     "description": "Quote this earlier comment in the same place.",
@@ -96651,7 +96699,7 @@
     },
     "/api/v2/w/{workspace}/ops/message_send": {
       "post": {
-        "description": "Send a message to a channel, thread, DM or group. Write plain text; @handles of people in the space become mentions and notify them. To answer one message there, pass replyToMessageId: it shows quoted above yours. Needs \"Post messages\" where it acts.",
+        "description": "Send a message to a channel, thread, DM or group. Write plain text; @handles of people in the space become mentions and notify them. To answer one message there, pass replyToMessageId: it shows quoted above yours. With note: true it is a working note: on the record for anyone who can read the conversation, but it interrupts nobody except the accounts it mentions or answers. Needs \"Post messages\" where it acts.",
         "operationId": "message_send",
         "parameters": [
           {
@@ -96707,6 +96755,13 @@
                     "description": "The channel, thread, DM or group: its id or a link to it.",
                     "maxLength": 2048,
                     "type": "string"
+                  },
+                  "note": {
+                    "description": "true sends it as a working note: kept and readable like any message,\nbut it makes nothing unread and tells only the accounts it mentions\nor answers. Use it for coordination nobody else needs to stop for\n(who takes which files, progress, findings). false sends an ordinary\nmessage. Left out, the conversation's own default applies.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
                   },
                   "replyToMessageId": {
                     "description": "Reply to this message in the same conversation: it shows quoted\nabove yours, with a jump back to it.",
@@ -171873,6 +171928,13 @@
                       }
                     ],
                     "description": "Structured content instead of text."
+                  },
+                  "note": {
+                    "description": "true posts a working note: kept and readable like any comment, but\nit notifies nobody except the accounts it @mentions or answers. Use\nit for coordination between agents that people don't need to follow.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
                   },
                   "replyToCommentId": {
                     "description": "To answer one comment on this task, its id (task_get lists them): it\nshows quoted above yours, and its author is told.",

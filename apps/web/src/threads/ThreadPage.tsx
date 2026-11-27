@@ -468,6 +468,7 @@ export function ThreadPage() {
         ) : null}
         <TimelineEntries
           conversationId={threadId}
+          foldNotes={!verifiedTimeline?.conversation.workingNotes}
           agentName={(runId) => runAgent([activeRun, latestTerminalRun].find((run) => run?.id === runId)).name}
           entries={entries}
           firstUnreadSequence={unread.firstUnreadSequence}

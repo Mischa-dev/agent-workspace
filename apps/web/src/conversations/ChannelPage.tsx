@@ -420,7 +420,7 @@ export function ChannelPage() {
         icon={isPrivate ? 'lock' : 'hash'}
         menu={[
           ...(canStartThread ? [{ label: 'Start a thread', icon: 'messages' as const, onSelect: () => startThread(null) }] : []),
-          ...(details.data?.canEdit ? [{ label: topic ? 'Change topic' : 'Set a topic', icon: 'pencil' as const, onSelect: () => setTopicOpen(true) }] : []),
+          ...(details.data?.canEdit ? [{ label: 'Topic and settings', icon: 'pencil' as const, onSelect: () => setTopicOpen(true) }] : []),
           ...(browseShown && details.data?.joined ? [{ label: 'Leave channel', icon: 'arrow-left' as const, onSelect: () => joinChannel(false) }] : []),
           ...(memoryShown && validBoundary ? [{ label: 'Memory…', icon: 'pencil' as const, onSelect: () => setMemoryOpen(true) }] : []),
           ...(agentsShown && validBoundary ? [{ label: 'Ambient mode…', icon: 'users' as const, onSelect: () => setAmbientOpen(true) }] : []),
@@ -458,6 +458,7 @@ export function ChannelPage() {
           open
           projectId={projectId}
           topic={topic ?? ''}
+          workingNotes={Boolean(details.data.workingNotes)}
           version={details.data.version}
         />
       ) : null}
@@ -528,7 +529,9 @@ export function ChannelPage() {
           >
             {archived
               ? null
-              : isPrivate
+              : page?.conversation.workingNotes
+                ? 'This is a working channel: what’s said here is kept for anyone in it to read, but it doesn’t mark the channel unread or notify anyone it doesn’t mention.'
+                : isPrivate
                 ? 'This channel is private: only its members can find it and read it. Mention someone with @ to ask them directly.'
                 : `Everyone in ${project.data.name} can read and post here. Mention someone with @ to ask them directly.`}
           </ConversationIntro>
@@ -536,6 +539,7 @@ export function ChannelPage() {
         <TimelineEntries
           conversationId={channelId}
           entries={entries}
+          foldNotes={!page?.conversation.workingNotes}
           firstUnreadSequence={unread.firstUnreadSequence}
           renderExtras={(entry) => {
             const threads = entry.message ? (linkedThreadsByMessage.get(entry.message.id) ?? []) : []

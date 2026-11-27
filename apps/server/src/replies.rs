@@ -72,6 +72,10 @@ pub(crate) struct NewMessage<'a> {
     pub message_id: Uuid,
     pub author_actor_id: Uuid,
     pub mentioned_actor_ids: &'a [Uuid],
+    /// A working note (AWD-220): it asks only the accounts it addresses.
+    pub note: bool,
+    /// The message this one answers, if any. A note addresses its author.
+    pub reply_to_message_id: Option<Uuid>,
 }
 
 /// The loop limits that apply in a space: the deepest chain of asks
@@ -149,6 +153,9 @@ pub(crate) async fn ask_for_replies(
         "channel" | "thread" | "dm" | "group"
     ) {
         return Ok(());
+    }
+    if message.note {
+        return ask_addressed(transaction, &message).await;
     }
     let limits = limits(transaction, message.project_id).await?;
     let depth = chain_depth(transaction, &message).await?;
@@ -249,6 +256,73 @@ pub(crate) async fn ask_for_replies(
             .await?;
         }
     }
+    Ok(())
+}
+
+/// A working note asks only the accounts it addresses: those it mentions,
+/// and the author of the message it answers (AWD-220). Nobody else in the
+/// room is asked, whatever the kind of conversation, and no ambient invite
+/// goes out. The turn and depth rules don't count it: they protect a room
+/// people are talking in, and a note taps nobody there. Stop and pause
+/// still apply to the requests it makes, as to any.
+async fn ask_addressed(
+    transaction: &mut Transaction<'_, Postgres>,
+    message: &NewMessage<'_>,
+) -> Result<(), AppError> {
+    let mut addressed = message.mentioned_actor_ids.to_vec();
+    if let Some(answered) = message.reply_to_message_id {
+        let author = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            -- visibility: the author of a message in the conversation the sender just posted in
+            SELECT author_actor_id FROM messages
+            WHERE id = $1 AND conversation_id = $2 AND removed_at IS NULL
+            "#,
+        )
+        .bind(answered)
+        .bind(message.conversation_id)
+        .fetch_optional(&mut **transaction)
+        .await?;
+        addressed.extend(author);
+    }
+    if addressed.is_empty() {
+        return Ok(());
+    }
+    let agents = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT actor.id
+        FROM actors actor
+        WHERE actor.id = ANY($1)
+          AND actor.id <> $2
+          AND actor.accepts_reply_requests
+          AND actor.status = 'active'
+          AND ($4 = direct_scope_id() OR EXISTS (
+                  SELECT 1 FROM project_memberships membership
+                  WHERE membership.project_id = $4 AND membership.actor_id = actor.id
+                    AND membership.enabled))
+          AND conversation_visible_to($3, actor.id)
+        ORDER BY actor.id
+        "#,
+    )
+    .bind(&addressed)
+    .bind(message.author_actor_id)
+    .bind(message.conversation_id)
+    .bind(message.project_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    if agents.is_empty() {
+        return Ok(());
+    }
+    // Each note is its own ask: one about an earlier note isn't superseded.
+    insert_requests(transaction, message, &agents, true, false, 0).await?;
+    crate::launch::queue_tag_launches(
+        transaction,
+        message.project_id,
+        message.conversation_id,
+        message.message_id,
+        &agents,
+        !matches!(message.conversation_kind, "channel" | "thread"),
+    )
+    .await?;
     Ok(())
 }
 
@@ -973,6 +1047,8 @@ pub(crate) async fn continue_conversation_in(
                 message_id: *message_id,
                 author_actor_id: *author_actor_id,
                 mentioned_actor_ids: &[],
+                note: false,
+                reply_to_message_id: None,
             },
             false,
             0,

@@ -292,6 +292,7 @@ async fn direct_overview(
                     thread_outcome: None,
                     parent_kind: None,
                     private: false,
+                    working_notes: false,
                 },
                 members: serde_json::from_value(row.members)
                     .map_err(|_| AppError::Internal("direct conversation members"))?,
@@ -1193,6 +1194,7 @@ async fn conversation_response(
             thread_outcome: None,
             parent_kind: None,
             private: false,
+            working_notes: false,
         },
         read_state: ReadStateView {
             highest_seen_sequence: seen,

@@ -283,6 +283,39 @@ pub(crate) async fn post(
     attachments: &[Uuid],
     reply_to_message_id: Option<Uuid>,
 ) -> Result<PostedComment, AppError> {
+    post_in_register(
+        state,
+        actor,
+        creator,
+        kind,
+        thing_id,
+        place,
+        key,
+        body,
+        attachments,
+        reply_to_message_id,
+        None,
+    )
+    .await
+}
+
+/// [`post`], saying whether the comment is a working note (AWD-220): kept
+/// like any comment, but it taps only the accounts it addresses. `None`
+/// follows the discussion's default.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn post_in_register(
+    state: &AppState,
+    actor: MessageCommandActor,
+    creator: ThreadCreator,
+    kind: SubjectKind,
+    thing_id: Uuid,
+    place: CommentPlace,
+    key: IdempotencyKey,
+    body: CommentBody,
+    attachments: &[Uuid],
+    reply_to_message_id: Option<Uuid>,
+    note: Option<bool>,
+) -> Result<PostedComment, AppError> {
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
     let (comments_id, project_id) = open_for(&mut transaction, &creator, kind, thing_id).await?;
     // A task's discussion only while the author, and an app acting for
@@ -398,6 +431,7 @@ pub(crate) async fn post(
         None,
         AppendExtras {
             reply_to_message_id,
+            note,
             ..AppendExtras::default()
         },
     )

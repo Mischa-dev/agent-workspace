@@ -392,6 +392,7 @@ pub(crate) async fn comment(
     body: CommentText,
     attachment_ids: Option<Vec<String>>,
     reply_to_comment_id: Option<String>,
+    note: Option<bool>,
 ) -> Result<TaskWritten, OpError> {
     let principal = principal_of(ctx);
     written(
@@ -405,6 +406,7 @@ pub(crate) async fn comment(
                 attachment_ids,
                 reply_to_comment_id,
                 content: body.content,
+                note,
             },
         )
         .await,
