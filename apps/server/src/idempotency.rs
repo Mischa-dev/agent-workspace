@@ -116,14 +116,85 @@ struct IdempotencyRow {
     request_hash: Vec<u8>,
     response_status: Option<i32>,
     response_body: Option<serde_json::Value>,
-    /// Reserved long enough ago that its command can't still be running.
     stalled: bool,
+    lapsed: bool,
 }
 
-/// How long a reserved call may take before a retry stops waiting for it:
-/// past this, its command stopped midway (a reservation kept apart from its
-/// write is the only kind others can see unanswered).
+impl IdempotencyRow {
+    fn kept(self, request_hash: RequestHash) -> Kept<IdempotencyReplay> {
+        let status = self
+            .response_status
+            .and_then(|value| u16::try_from(value).ok())
+            .and_then(|value| StatusCode::from_u16(value).ok());
+        Kept {
+            same_request: self.request_hash.as_slice() == request_hash.as_bytes(),
+            answer: status
+                .zip(self.response_body)
+                .map(|(status, response_body)| IdempotencyReplay {
+                    status,
+                    response_body,
+                }),
+            stalled: self.stalled,
+            lapsed: self.lapsed,
+        }
+    }
+}
+
+/// How long a reserved call may take before a retry stops waiting for it.
 const STALLED_AFTER: &str = "30 minutes";
+
+macro_rules! row_for_key {
+    () => {
+        "SELECT request_hash, response_status, response_body, \
+                created_at < now() - $4::interval AS stalled, \
+                expires_at <= now() AS lapsed \
+         FROM idempotency_keys \
+         WHERE actor_id = $1 AND scope = $2 AND key = $3"
+    };
+}
+
+/// What is kept under a request id when a call arrives with it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Kept<Answer> {
+    pub(crate) same_request: bool,
+    pub(crate) answer: Option<Answer>,
+    /// Unanswered for longer than any command runs.
+    pub(crate) stalled: bool,
+    pub(crate) lapsed: bool,
+}
+
+/// What a call that arrives with a request id may do.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Standing<Answer> {
+    /// Nothing is kept for the id: the call runs.
+    Free,
+    /// The first call with the id finished: this one gets its answer.
+    Answered(Answer),
+    /// The first call may still be running.
+    Running,
+    /// The first call stopped midway, with its write made or not.
+    OutcomeUnknown,
+    /// The id was used for a different request.
+    Mismatch,
+}
+
+/// The one rule for a retried call, which `reserve` and `finished` both
+/// follow and `idempotency/model.rs` checks in every order of steps. An
+/// unanswered id never becomes free before it lapses: a call that stopped
+/// between its command's commit and its answer may have made its write.
+pub(crate) fn standing<Answer>(kept: Option<Kept<Answer>>) -> Standing<Answer> {
+    let Some(kept) = kept.filter(|kept| !kept.lapsed) else {
+        return Standing::Free;
+    };
+    if !kept.same_request {
+        return Standing::Mismatch;
+    }
+    match kept.answer {
+        Some(answer) => Standing::Answered(answer),
+        None if kept.stalled => Standing::OutcomeUnknown,
+        None => Standing::Running,
+    }
+}
 
 pub fn resource_bound_scope(
     namespace: &str,
@@ -148,56 +219,34 @@ pub async fn reserve(
         .execute(&mut **transaction)
         .await?;
 
-    sqlx::query(
-        "DELETE FROM idempotency_keys WHERE actor_id = $1 AND scope = $2 AND key = $3 AND expires_at <= now()",
-    )
-    .bind(actor_id)
-    .bind(scope)
-    .bind(key.as_str())
-    .execute(&mut **transaction)
-    .await?;
-
-    let existing = sqlx::query_as::<_, IdempotencyRow>(
-        r#"
-        SELECT request_hash, response_status, response_body,
-               created_at < now() - $4::interval AS stalled
-        FROM idempotency_keys
-        WHERE actor_id = $1 AND scope = $2 AND key = $3
-          AND expires_at > now()
-        FOR UPDATE
-        "#,
-    )
-    .bind(actor_id)
-    .bind(scope)
-    .bind(key.as_str())
-    .bind(STALLED_AFTER)
-    .fetch_optional(&mut **transaction)
-    .await?;
-
-    if let Some(existing) = existing {
-        if existing.request_hash.as_slice() != request_hash.as_bytes() {
+    let row = sqlx::query_as::<_, IdempotencyRow>(concat!(row_for_key!(), " FOR UPDATE"))
+        .bind(actor_id)
+        .bind(scope)
+        .bind(key.as_str())
+        .bind(STALLED_AFTER)
+        .fetch_optional(&mut **transaction)
+        .await?;
+    let replaces_lapsed_row = row.is_some();
+    match standing(row.map(|row| row.kept(request_hash))) {
+        Standing::Free => {}
+        Standing::Answered(replay) => return Ok(IdempotencyOutcome::Replay(replay)),
+        Standing::Running => {
+            return Err(AppError::Conflict("idempotency_key", "command in progress"));
+        }
+        Standing::OutcomeUnknown => {
+            return Err(AppError::Conflict("idempotency_key", "outcome unknown"));
+        }
+        Standing::Mismatch => {
             return Err(AppError::Conflict("idempotency_key", "payload mismatch"));
         }
-        // Unanswered: still running, or (after a while) stopped midway with
-        // its write made or not; a retry never runs it a second time.
-        let unanswered = if existing.stalled {
-            AppError::Conflict("idempotency_key", "outcome unknown")
-        } else {
-            AppError::Conflict("idempotency_key", "command in progress")
-        };
-        let (Some(status), Some(response_body)) = (
-            existing
-                .response_status
-                .and_then(|value| u16::try_from(value).ok())
-                .and_then(|value| StatusCode::from_u16(value).ok()),
-            existing.response_body,
-        ) else {
-            return Err(unanswered);
-        };
-        return Ok(IdempotencyOutcome::Replay(IdempotencyReplay {
-            status,
-            response_body,
-        }));
+    }
+    if replaces_lapsed_row {
+        sqlx::query("DELETE FROM idempotency_keys WHERE actor_id = $1 AND scope = $2 AND key = $3")
+            .bind(actor_id)
+            .bind(scope)
+            .bind(key.as_str())
+            .execute(&mut **transaction)
+            .await?;
     }
 
     sqlx::query(
@@ -224,9 +273,6 @@ pub async fn reserve(
     }))
 }
 
-/// A finished answer already kept for this key, read without reserving it
-/// (nothing is held after it returns). For a check that has to run before
-/// the call's own transaction opens; [`reserve`] still settles a race.
 /// As `reserve`, for a command that runs outside the reserving transaction
 /// (it commits before the command starts, and `complete` keeps the answer
 /// in another after it). The reservation lasts as long as any: a call that
@@ -265,6 +311,9 @@ pub async fn release(
     Ok(())
 }
 
+/// A finished answer already kept for this key, read without reserving it
+/// (nothing is held after it returns). For a check that has to run before
+/// the call's own transaction opens; [`reserve`] still settles a race.
 pub async fn finished(
     connection: &mut sqlx::PgConnection,
     actor_id: Uuid,
@@ -273,39 +322,18 @@ pub async fn finished(
     request_hash: RequestHash,
 ) -> Result<Option<IdempotencyReplay>, AppError> {
     validate_scope(scope)?;
-    let existing = sqlx::query_as::<_, IdempotencyRow>(
-        r#"
-        SELECT request_hash, response_status, response_body,
-               created_at < now() - $4::interval AS stalled
-        FROM idempotency_keys
-        WHERE actor_id = $1 AND scope = $2 AND key = $3
-          AND expires_at > now()
-        "#,
-    )
-    .bind(actor_id)
-    .bind(scope)
-    .bind(key.as_str())
-    .bind(STALLED_AFTER)
-    .fetch_optional(&mut *connection)
-    .await?;
-    let Some(existing) = existing else {
-        return Ok(None);
-    };
-    if existing.request_hash.as_slice() != request_hash.as_bytes() {
-        return Err(AppError::Conflict("idempotency_key", "payload mismatch"));
+    let row = sqlx::query_as::<_, IdempotencyRow>(row_for_key!())
+        .bind(actor_id)
+        .bind(scope)
+        .bind(key.as_str())
+        .bind(STALLED_AFTER)
+        .fetch_optional(&mut *connection)
+        .await?;
+    match standing(row.map(|row| row.kept(request_hash))) {
+        Standing::Answered(replay) => Ok(Some(replay)),
+        Standing::Mismatch => Err(AppError::Conflict("idempotency_key", "payload mismatch")),
+        Standing::Free | Standing::Running | Standing::OutcomeUnknown => Ok(None),
     }
-    let status = existing
-        .response_status
-        .and_then(|value| u16::try_from(value).ok())
-        .and_then(|value| StatusCode::from_u16(value).ok());
-    Ok(match (status, existing.response_body) {
-        (Some(status), Some(response_body)) => Some(IdempotencyReplay {
-            status,
-            response_body,
-        }),
-        // Still running: `reserve` answers that once it gets there.
-        _ => None,
-    })
 }
 
 pub async fn complete<T: Serialize>(
@@ -368,6 +396,9 @@ fn validate_scope(scope: &str) -> Result<(), AppError> {
         Err(AppError::Internal("invalid idempotency scope"))
     }
 }
+
+#[cfg(test)]
+mod model;
 
 #[cfg(test)]
 mod tests {
