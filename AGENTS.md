@@ -28,7 +28,8 @@ request to green). Claude Code loads them by itself.
 
 Some protocols have a model that checks every order of their steps, with a
 skill that says what it covers and how to read a failure: `request-receipts`
-(how a retried call is answered). Read it before changing that code.
+(how a retried call is answered) and `job-leases` (how a background job's
+lease is claimed, renewed and given up). Read it before changing that code.
 
 ## Commands
 
