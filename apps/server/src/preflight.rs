@@ -1,13 +1,18 @@
 //! `preflight`: what the release script runs with a new build, against the live
 //! service configuration and database, before it switches `current` to it.
 //!
-//! It only reads. It loads the configuration (which already refuses a keyring
-//! inside a Git checkout), opens the secrets keyring, looks for the harness
-//! CLIs, says whether email is set up and how the last nightly backup went,
-//! checks free disk, and compares the build's migrations with the ones the
-//! database has run. Settings > Workspace > Server shows the same report. It never prints a configuration value or secret.
+//! It keeps nothing. It loads the configuration (which already refuses a
+//! keyring inside a Git checkout), opens the secrets keyring, looks for the
+//! harness CLIs, says whether email is set up and how the last nightly backup
+//! went, checks free disk, and compares the build's migrations with the ones
+//! the database has run. Settings > Workspace > Server shows the same report.
+//! It never prints a configuration value or secret.
+//!
+//! For a release it then rehearses the migrations still to run ([`rehearse`])
+//! on the database's own data, so one that the data stops is found while the
+//! old release is still serving, not at the new one's first start.
 
-use sqlx::PgPool;
+use sqlx::{PgPool, migrate::Migration};
 
 use crate::{config::AppConfig, secrets, storage_admission};
 
@@ -267,6 +272,188 @@ fn migrator() -> sqlx::migrate::Migrator {
     sqlx::migrate!()
 }
 
+/// How long a rehearsed migration waits for a table the running server is
+/// using, before the rehearsal gives up.
+const REHEARSAL_LOCK_WAIT: &str = "5s";
+
+/// What a commit would do to the constraints that wait for one, without the
+/// commit: every deferrable constraint is checked now, then put back as it
+/// was declared, so the next migration starts as it would in a transaction
+/// of its own.
+const SETTLE_CONSTRAINTS: &str = r"
+DO $$
+DECLARE
+    deferrable_ones text;
+    deferred_ones text;
+BEGIN
+    SELECT string_agg(DISTINCT format('%I.%I', current_schema(), conname), ', '),
+           string_agg(DISTINCT format('%I.%I', current_schema(), conname), ', ')
+               FILTER (WHERE condeferred)
+      INTO deferrable_ones, deferred_ones
+      FROM pg_constraint
+     WHERE condeferrable AND connamespace = current_schema()::regnamespace;
+    IF deferrable_ones IS NOT NULL THEN
+        EXECUTE 'SET CONSTRAINTS ' || deferrable_ones || ' IMMEDIATE';
+    END IF;
+    IF deferred_ones IS NOT NULL THEN
+        EXECUTE 'SET CONSTRAINTS ' || deferred_ones || ' DEFERRED';
+    END IF;
+END $$;
+";
+
+/// How a rehearsal of the migrations still to run ended.
+#[derive(Debug, Eq, PartialEq)]
+pub enum Rehearsal {
+    /// Every one applies to this database's data: how many.
+    Applies(usize),
+    /// This one stops on it, for the database's reason.
+    Stops { migration: String, reason: String },
+    /// It couldn't be tried here: why.
+    NotTried(String),
+}
+
+/// Applies `pending`, in order, to the database's own data in one transaction
+/// that is rolled back whatever happens: what the server would do at its next
+/// start, without keeping any of it.
+///
+/// While it runs, the server that is serving waits on the tables a migration
+/// changes, as it would on any schema change.
+pub async fn rehearse(pool: &PgPool, pending: &[Migration]) -> Result<Rehearsal, sqlx::Error> {
+    let name = |migration: &Migration| format!("{} {}", migration.version, migration.description);
+    if let Some(own) = pending
+        .iter()
+        .find(|migration| migration.no_tx || ends_its_transaction(&migration.sql))
+    {
+        return Ok(Rehearsal::NotTried(format!(
+            "{} runs outside a transaction, so it can't be rolled back",
+            name(own)
+        )));
+    }
+    let mut transaction = crate::db::scoped_tx(pool).await?;
+    // As the migrator runs them: in no tenancy scope, with row rules observing.
+    sqlx::query(
+        "SELECT set_config('app.tenancy', '', true), set_config('app.tenancy_strict', '', true), \
+                set_config('lock_timeout', $1, true)",
+    )
+    .bind(REHEARSAL_LOCK_WAIT)
+    .execute(&mut *transaction)
+    .await?;
+    let mut outcome = Rehearsal::Applies(pending.len());
+    for migration in pending {
+        let applied = match sqlx::raw_sql(&migration.sql)
+            .execute(&mut *transaction)
+            .await
+        {
+            Ok(_) => {
+                sqlx::raw_sql(SETTLE_CONSTRAINTS)
+                    .execute(&mut *transaction)
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        let Err(error) = applied else { continue };
+        let sqlx::Error::Database(refusal) = &error else {
+            return Err(error);
+        };
+        outcome = match refusal.code().as_deref() {
+            // lock_not_available
+            Some("55P03") => Rehearsal::NotTried(format!(
+                "{} waited more than {REHEARSAL_LOCK_WAIT} for a table the running server is using",
+                name(migration)
+            )),
+            // A new enum value used in the transaction that adds it, or the
+            // server out of room (locks, memory): one transaction for all of
+            // them is the rehearsal's doing, not the migration's.
+            Some(code) if code == "55P04" || code.starts_with("53") => {
+                Rehearsal::NotTried(format!(
+                    "{} can't share one transaction with the migrations before it: {}",
+                    name(migration),
+                    refusal.message()
+                ))
+            }
+            // The message only: the detail names the rows' values.
+            _ => Rehearsal::Stops {
+                migration: name(migration),
+                reason: refusal.message().to_owned(),
+            },
+        };
+        break;
+    }
+    transaction.rollback().await?;
+    Ok(outcome)
+}
+
+/// Whether a migration's SQL ends the transaction it runs in, which would
+/// keep what a rehearsal had applied so far.
+fn ends_its_transaction(sql: &str) -> bool {
+    sql.lines().any(|line| {
+        let mut words = line
+            .split(|c: char| c.is_whitespace() || c == ';')
+            .filter(|word| !word.is_empty())
+            .map(str::to_ascii_uppercase);
+        match words.next().as_deref() {
+            Some("COMMIT" | "ABORT") => true,
+            Some("ROLLBACK") => words.next().as_deref() != Some("TO"),
+            _ => false,
+        }
+    })
+}
+
+/// The report the release script acts on: [`run`], and then, unless that
+/// already failed or `rehearsing` is off, the migrations still to run are
+/// rehearsed on this database's data.
+pub async fn before_a_release(
+    config: &AppConfig,
+    pool: &PgPool,
+    rehearsing: bool,
+) -> anyhow::Result<Report> {
+    let mut report = run(config, pool).await?;
+    if report.failed() || !migrations_table_exists(pool).await? {
+        return Ok(report);
+    }
+    let applied: Vec<i64> =
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE success")
+            .fetch_all(crate::db::scoped(pool))
+            .await?;
+    let pending: Vec<Migration> = migrator()
+        .iter()
+        .filter(|migration| !migration.migration_type.is_down_migration())
+        .filter(|migration| !applied.contains(&migration.version))
+        .cloned()
+        .collect();
+    if pending.is_empty() {
+        return Ok(report);
+    }
+    if !rehearsing {
+        report.push(
+            Level::Warn,
+            "the migrations weren't tried on this database's data (--no-rehearsal)",
+        );
+        return Ok(report);
+    }
+    match rehearse(pool, &pending).await? {
+        Rehearsal::Applies(count) => report.push(
+            Level::Ok,
+            format!(
+                "they apply to this database's data ({count} rehearsed in a transaction, then \
+                 rolled back)"
+            ),
+        ),
+        Rehearsal::Stops { migration, reason } => report.push(
+            Level::Fail,
+            format!(
+                "migration {migration} stops on this database's data: {reason}. Nothing was \
+                 changed. Repair the data in a new migration that sorts before it"
+            ),
+        ),
+        Rehearsal::NotTried(why) => report.push(
+            Level::Warn,
+            format!("the migrations weren't tried on this database's data: {why}"),
+        ),
+    }
+    Ok(report)
+}
+
 /// The newest migration this release carries: the schema version it
 /// expects (readiness, K5.7).
 pub fn expected_schema_version() -> i64 {
@@ -295,6 +482,17 @@ mod tests {
         assert_eq!(plan.pending, vec!["3 m3"]);
         assert_eq!(plan.changed, vec!["2 m2"]);
         assert_eq!(plan.unknown, vec!["7"]);
+    }
+
+    #[test]
+    fn a_migration_that_ends_its_transaction_is_not_rehearsed() {
+        assert!(ends_its_transaction("CREATE TABLE a (id int);\nCOMMIT;\n"));
+        assert!(ends_its_transaction("  rollback ;"));
+        assert!(ends_its_transaction("ABORT;"));
+        assert!(!ends_its_transaction(
+            "SAVEPOINT a;\nROLLBACK TO a;\n-- COMMIT;\nCREATE TABLE b (\n    commit_sha TEXT,\n    \
+             committed_at TIMESTAMPTZ\n);"
+        ));
     }
 
     #[test]

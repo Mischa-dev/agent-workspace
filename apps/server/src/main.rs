@@ -43,9 +43,12 @@ async fn main() -> anyhow::Result<()> {
     // with a new build to see whether it can take over.
     if std::env::args().nth(1).as_deref() == Some("preflight") {
         // Host-only, across every workspace (its mail transports and more).
+        let rehearsing = !std::env::args().any(|argument| argument == "--no-rehearsal");
         let report = agent_workspace_server::tenancy::system(
             "server.operator",
-            Box::pin(agent_workspace_server::preflight::run(&config, &pool)),
+            Box::pin(agent_workspace_server::preflight::before_a_release(
+                &config, &pool, rehearsing,
+            )),
         )
         .await?;
         report.print();

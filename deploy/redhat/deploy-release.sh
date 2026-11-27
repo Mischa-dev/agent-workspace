@@ -118,9 +118,12 @@ sudo cp -R "${web_dist}/." "${release_root}/web/"
 sudo chown -R root:root "${release_root}"
 
 # The new build checks the live configuration and database before it takes
-# over: keyring, harness CLIs, disk, and which migrations it would run. It
-# changes nothing; a failure stops here with the old release still serving.
-sudo "${release_root}/bin/agent-workspace-service-command" --release "${release_root}" preflight
+# over: keyring, harness CLIs, disk, which migrations it would run, and
+# whether they apply to the live data (rehearsed in a transaction it rolls
+# back). It keeps nothing; a failure stops here with the old release still
+# serving.
+sudo "${release_root}/bin/agent-workspace-service-command" --release "${release_root}" preflight \
+  ${AGENT_WORKSPACE_PREFLIGHT_NO_REHEARSAL:+--no-rehearsal}
 
 sudo ln -sfn "${release_root}" "${install_root}/current.next"
 sudo mv -Tf "${install_root}/current.next" "${install_root}/current"

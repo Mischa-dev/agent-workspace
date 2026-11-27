@@ -55,6 +55,13 @@ last `CREATE OR REPLACE`. It isn't checked in, so run it again after a merge.
   m0_database` checks the name and applies every migration to a fresh
   schema.
 - Any integration test applies them too (`sqlx::migrate!` in the test setup).
-- The server's `preflight` command checks a release's migrations against a
-  live database before a deploy; nothing to do here, but list the new
-  migration under the pull request's deploy notes.
+- Tests run a migration on empty tables. One that changes or checks rows
+  already there (a backfill, a new constraint, a trigger firing on the rows
+  it updates) is only tried for real by the server's `preflight` command,
+  which before a deploy rehearses the migrations still to run on the live
+  database's own data, in a transaction it rolls back, and stops the deploy
+  on the one the data refuses. When it names yours, repair the rows in a new
+  migration that sorts before it. List a new migration under the pull
+  request's deploy notes.
+- Don't `COMMIT` inside a migration or mark one to run outside a transaction:
+  the rehearsal can't roll such a migration back, so it tries none of them.

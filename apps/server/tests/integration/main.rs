@@ -135,6 +135,7 @@ mod message_edits;
 mod message_reactions;
 mod message_replies;
 mod metering;
+mod migration_rehearsal;
 mod migrations_guard;
 mod modules;
 mod modules_ids;
