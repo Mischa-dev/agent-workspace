@@ -34,25 +34,36 @@ other Rust tests.
 | "claims the job" | `claim`: a queued job, or a running one whose `lease_expires_at < now()` |
 | "starts the handler" | `confirm_lease` in `execute`, which renews before any effect |
 | "sends a renewal (answered N sixths later)" | `extend_lease`, which answers within `renewal_patience` |
-| "renews its lease" / "is told the lease is no longer its own" | `extend_lease` answering `Ok(true)` / `Ok(false)` |
-| "renewal can't reach the database" / "extends the lease but its answer is lost" | `extend_lease` answering `Err(())`, with the row unchanged or extended |
+| "renewal reaches the database" | `extend_lease`'s statement, at any moment before its answer: the lease runs from `now()` there, not from when the worker hears |
+| "hears its lease was renewed" / "is told the lease is no longer its own" | `extend_lease` answering `Ok(true)` / `Ok(false)`; on `Ok(true)` the worker counts from when it sent the renewal |
+| "renewal can't reach the database" / "extended the lease but its answer is lost" / "was refused but its answer is lost" | `extend_lease` answering `Err(())`, whatever its statement did |
 | "stops the handler" | `renew_lease` returning, which ends the `select!` in `execute` |
 
 Last confirmed against the code at commit `d0b13f8b`. When `jobs.rs` has
 changed since then, read the change against this table before trusting a
 pass, then move the commit here forward.
 
-It assumes what the code assumes: a worker's clock and the database's run
-at the same rate, a sleeping worker wakes on time, and dropping a handler
-stops it at once. It does not cover what a handler does, `finish` (which
-only counts while the lease token is still the job's), or the cluster
-leases in `cluster/leases.rs`.
+Time in the model moves in sixths of a lease, and it refuses to run if a
+timing stops being a whole number of them (change `TICK` to divide the new
+timings). It assumes what the code assumes: a worker's clock and the
+database's run at the same rate, a sleeping worker wakes on time, and
+dropping a handler stops it at once. It does not cover what a handler does,
+`finish` (which only counts while the lease token is still the job's), or
+the cluster leases in `cluster/leases.rs`.
 
 ## What it found
 
 - **Holds:** a handler never runs at or after the end of its lease, a job
-  whose worker stopped is taken over, and one failed renewal doesn't stop
-  a handler.
+  whose handler started and then stopped is taken over, and a renewal that
+  fails fast doesn't stop a handler.
+- **Worth knowing:** a renewal that takes its whole patience to fail does
+  stop the handler, at the first failure. By then half the lease is gone,
+  and another wait and another full renewal would end exactly as the lease
+  does, so `lease_still_held` says no. A database that hangs, as opposed to
+  one that refuses at once, therefore costs each running job its run (the
+  job is retried). A shorter `renewal_wait` would leave room for a second
+  try; the model will say whether a new pair of timings still keeps the
+  promise.
 - **The past bugs it replays:** a claim that reached its worker late
   started a second handler (fixed in 2c013368 by `confirm_lease`), and a
   worker whose renewals kept failing ran beside its successor (fixed in

@@ -5,9 +5,10 @@
 //! Time moves in sixths of the lease, the smallest span the code uses: a
 //! worker waits `renewal_wait` (a third) between renewals and gives one up
 //! after `renewal_patience` (a sixth). A renewal takes anything up to that
-//! long, and then extends the lease, is refused, fails, or extends the lease
-//! and loses its answer on the way back. The decision to keep running after
-//! a failed renewal is the server's own `lease_still_held`. The steps around
+//! long. Its statement runs at any moment in between, extending the lease
+//! from then or finding it gone, or never reaches the database; its answer
+//! arrives or is lost on the way back. The decision to keep running after a
+//! failed renewal is the server's own `lease_still_held`. The steps around
 //! it are `claim`, `confirm_lease`, `renew_lease` and `extend_lease`.
 //!
 //! Assumed, as the code assumes: a worker's clock and the database's run at
@@ -27,6 +28,10 @@ const TICK: Duration = Duration::from_secs(10);
 const LEASE_TICKS: u8 = 6;
 
 fn ticks(span: Duration) -> u8 {
+    assert!(
+        span.as_nanos().is_multiple_of(TICK.as_nanos()),
+        "{span:?} isn't a whole number of ticks: make TICK divide every timing the code uses"
+    );
     u8::try_from(span.as_secs() / TICK.as_secs()).expect("a span of a few ticks")
 }
 
@@ -64,12 +69,15 @@ enum Worker {
         renewed_at: u8,
         wakes_at: u8,
     },
-    /// A renewal sent at `sent_at` is answered at `answered_at`.
+    /// A renewal sent at `sent_at` is answered at `answered_at`. Its
+    /// statement runs at some moment in between (`extended`: whether it
+    /// found the lease still the worker's), or never.
     Renewing {
         token: u8,
         renewed_at: u8,
         sent_at: u8,
         answered_at: u8,
+        extended: Option<bool>,
     },
 }
 
@@ -95,11 +103,13 @@ enum Step {
     Starts(usize),
     FindsItsLeaseGone(usize),
     SendsRenewal(usize, u8),
+    RenewalRuns(usize, bool),
     Renews(usize),
     RenewalRefused(usize),
     RenewalFails {
         worker: usize,
-        landed: bool,
+        /// What its statement did, if it ran.
+        extended: Option<bool>,
         stops: bool,
     },
     TimePasses(u8),
@@ -121,7 +131,21 @@ impl fmt::Display for Step {
                 "worker {} sends a renewal (answered {takes} sixths later)",
                 worker(index)
             ),
-            Self::Renews(index) => write!(formatter, "worker {} renews its lease", worker(index)),
+            Self::RenewalRuns(index, extended) => write!(
+                formatter,
+                "worker {}'s renewal reaches the database: {}",
+                worker(index),
+                if *extended {
+                    "the lease runs a whole lease from now"
+                } else {
+                    "the lease is no longer its own"
+                }
+            ),
+            Self::Renews(index) => write!(
+                formatter,
+                "worker {} hears its lease was renewed",
+                worker(index)
+            ),
             Self::RenewalRefused(index) => write!(
                 formatter,
                 "worker {} is told the lease is no longer its own and stops the handler",
@@ -129,16 +153,16 @@ impl fmt::Display for Step {
             ),
             Self::RenewalFails {
                 worker: index,
-                landed,
+                extended,
                 stops,
             } => write!(
                 formatter,
                 "worker {}'s renewal {}: it {}",
                 worker(index),
-                if *landed {
-                    "extends the lease but its answer is lost"
-                } else {
-                    "can't reach the database"
+                match extended {
+                    Some(true) => "extended the lease but its answer is lost",
+                    Some(false) => "was refused but its answer is lost",
+                    None => "can't reach the database",
                 },
                 if *stops {
                     "can't be sure of its lease and stops the handler"
@@ -244,6 +268,7 @@ impl Model for Leases {
                                 renewed_at,
                                 sent_at: now,
                                 answered_at: now + takes,
+                                extended: None,
                             };
                         });
                     }
@@ -254,38 +279,48 @@ impl Model for Leases {
                     renewed_at,
                     sent_at,
                     answered_at,
-                } if answered_at == now => {
-                    let held = Self::held(world.row, token, now);
-                    if held {
-                        then(Step::Renews(index), &|next| {
-                            next.row = Self::renewed(token, now);
-                            next.workers[index] = Worker::Running {
+                    extended,
+                } => {
+                    // `extend_lease`'s statement dates the lease from when
+                    // it runs, which is any moment before its answer.
+                    if extended.is_none() {
+                        let held = Self::held(world.row, token, now);
+                        then(Step::RenewalRuns(index, held), &|next| {
+                            if held {
+                                next.row = Self::renewed(token, now);
+                            }
+                            next.workers[index] = Worker::Renewing {
                                 token,
-                                renewed_at: sent_at,
-                                wakes_at: now + wait,
+                                renewed_at,
+                                sent_at,
+                                answered_at,
+                                extended: Some(held),
                             };
                         });
-                    } else {
-                        then(Step::RenewalRefused(index), &|next| {
-                            next.workers[index] = Worker::Idle;
-                        });
                     }
-                    let sure = lease_still_held(span(now - renewed_at), LEASE);
-                    let stops = self.stops_when_unsure && !sure;
-                    for landed in [false, true] {
-                        if landed && !held {
-                            continue;
+                    if answered_at == now {
+                        match extended {
+                            Some(true) => then(Step::Renews(index), &|next| {
+                                next.workers[index] = Worker::Running {
+                                    token,
+                                    renewed_at: sent_at,
+                                    wakes_at: now + wait,
+                                };
+                            }),
+                            Some(false) => then(Step::RenewalRefused(index), &|next| {
+                                next.workers[index] = Worker::Idle;
+                            }),
+                            None => {}
                         }
+                        let sure = lease_still_held(span(now - renewed_at), LEASE);
+                        let stops = self.stops_when_unsure && !sure;
                         then(
                             Step::RenewalFails {
                                 worker: index,
-                                landed,
+                                extended,
                                 stops,
                             },
                             &|next| {
-                                if landed {
-                                    next.row = Self::renewed(token, now);
-                                }
                                 next.workers[index] = if stops {
                                     Worker::Idle
                                 } else {
@@ -299,7 +334,6 @@ impl Model for Leases {
                         );
                     }
                 }
-                Worker::Renewing { .. } => {}
             }
         }
 
@@ -347,17 +381,37 @@ fn a_handler_never_runs_at_or_after_the_end_of_its_lease() {
     never(explored.reaches(two_handlers));
 }
 
+/// The same steps, from a state already reached.
+struct After(Leases, World);
+
+impl Model for After {
+    type State = World;
+    type Step = Step;
+
+    fn start(&self) -> World {
+        self.1.clone()
+    }
+
+    fn steps(&self, world: &World) -> Vec<(Step, World)> {
+        self.0.steps(world)
+    }
+}
+
+/// A handler that started and then lost its lease doesn't hold the job for
+/// good: another worker runs it.
 #[test]
-fn a_worker_that_stops_lets_the_job_run_again() {
-    let explored = explore(&TODAY, STATE_LIMIT);
-    let taken_over = explored.reaches(|world| {
-        world.row.is_some_and(|row| row.token == 2) && world.workers[1].handler_token() == Some(2)
-    });
+fn a_job_whose_handler_stopped_is_run_again() {
+    let started = explore(&TODAY, STATE_LIMIT)
+        .reaches(|world| world.workers[0].handler_token() == Some(1))
+        .expect("a handler starts");
+    let taken_over = explore(&After(TODAY, started.end), STATE_LIMIT)
+        .reaches(|world| world.workers[1].handler_token() == Some(2));
     assert!(taken_over.is_some(), "a lost lease was never taken over");
 }
 
-/// One renewal that can't reach the database doesn't cost the job its run:
-/// the worker tries again while its lease is sure to hold.
+/// A renewal that fails fast doesn't cost the job its run: the worker tries
+/// again while its lease is sure to hold. (One that takes its whole patience
+/// does stop the handler: a second try couldn't be sure to end in time.)
 #[test]
 fn a_blip_does_not_stop_the_handler() {
     let wait = ticks(renewal_wait(LEASE));
