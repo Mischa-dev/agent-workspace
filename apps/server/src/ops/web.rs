@@ -4,7 +4,9 @@
 //! - `POST /api/v2/w/{workspace}/ops/{name}`: an operation in a workspace,
 //!   named by its id or slug. A target in another workspace is `not_found`.
 //! - `POST /api/v2/ops/{name}`: an operation whose target says where it acts
-//!   (or, for a caller in one workspace, one that needs none named).
+//!   (or, for a caller in one workspace, one that needs none named). The web
+//!   app sends the workspace on screen as `x-current-workspace`, which is
+//!   where such a call acts for someone who reaches several.
 //! - `GET /api/v2/openapi.json`: the document for them (`codegen::openapi`).
 //!
 //! The body is the operation's input. A session cookie (with the CSRF
@@ -32,6 +34,10 @@ use super::{
     registry, target,
 };
 use crate::{AppState, auth, error::AppError, mcp};
+
+/// The workspace the web app has on screen, by id or slug, sent with every
+/// call (`DispatchRequest::on_screen`).
+pub(crate) const CURRENT_WORKSPACE_HEADER: &str = "x-current-workspace";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -110,6 +116,7 @@ pub(crate) async fn run_for_session(
         },
         trace_id: text(crate::REQUEST_ID_HEADER.as_str()),
         workspace: None,
+        on_screen: None,
         // v1 never asked for a request id: a write without one runs once.
         request_id: text("idempotency-key"),
         unkeyed: Unkeyed::RunOnce,
@@ -259,6 +266,7 @@ async fn call(
         edge,
         trace_id: text(crate::REQUEST_ID_HEADER.as_str()),
         workspace,
+        on_screen: text(CURRENT_WORKSPACE_HEADER),
         request_id: text("idempotency-key"),
         // The web app and scripts on v2 always send one (R52).
         unkeyed: Unkeyed::Refuse("Idempotency-Key"),

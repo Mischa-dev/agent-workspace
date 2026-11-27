@@ -30,6 +30,11 @@ pub struct DispatchRequest {
     pub trace_id: Option<String>,
     /// The workspace the call names (its path, or a `workspace` argument).
     pub workspace: Option<Uuid>,
+    /// The workspace the caller has on screen, by id or slug (the web app's
+    /// `x-current-workspace`). It names nothing: it only settles where a
+    /// call acts when the call names no workspace, its target doesn't say,
+    /// and the caller reaches several.
+    pub on_screen: Option<String>,
     /// The caller's request id (`Idempotency-Key`, `clientRequestId`).
     pub request_id: Option<String>,
     /// What a write without a request id does (ruling R52).
@@ -429,11 +434,14 @@ fn decode_error(error: &serde_json::Error) -> OpError {
 /// Where a call acts, located, once the module gate and access let the
 /// caller run `O` there. A call that can't name its workspace gets the one
 /// the caller reaches, when there is one; a spanning read that names none
-/// lists across every one (`spans`).
+/// lists across every one (`spans`); any other call from a caller who reaches
+/// several acts in the one they have on screen (`on_screen`), when they
+/// reach it.
 async fn admit<O: Operation>(
     state: &AppState,
     caller: &Caller,
     workspace: &mut Option<Uuid>,
+    on_screen: Option<&str>,
     target: &Target,
 ) -> Result<Admitted, OpError> {
     let writes = O::KIND.writes();
@@ -449,10 +457,22 @@ async fn admit<O: Operation>(
             [only] => *workspace = Some(*only),
             [] => {}
             _ if O::SPANS_WORKSPACES && !writes => spans = true,
-            several => match home_workspace::<O>(&mut connection, caller, several).await? {
-                Some(home) => *workspace = Some(home),
-                None => return Err(name_the_workspace(&mut connection, several).await),
-            },
+            several => {
+                let here = match on_screen {
+                    Some(named) => target::workspace_named(&mut connection, named)
+                        .await
+                        .ok()
+                        .filter(|here| several.contains(here)),
+                    None => None,
+                };
+                match here {
+                    Some(here) => *workspace = Some(here),
+                    None => match home_workspace::<O>(&mut connection, caller, several).await? {
+                        Some(home) => *workspace = Some(home),
+                        None => return Err(name_the_workspace(&mut connection, several).await),
+                    },
+                }
+            }
         }
     }
     if spans {
@@ -566,7 +586,7 @@ pub(super) async fn check<O: Operation>(
     target: &Target,
 ) -> Result<(), OpError> {
     let mut workspace = workspace;
-    admit::<O>(state, caller, &mut workspace, target)
+    admit::<O>(state, caller, &mut workspace, None, target)
         .await
         .map(|_| ())
 }
@@ -616,7 +636,14 @@ async fn pipeline<O: Operation>(
         located,
         paused,
         spans,
-    } = admit::<O>(state, &request.caller, &mut request.workspace, &target).await?;
+    } = admit::<O>(
+        state,
+        &request.caller,
+        &mut request.workspace,
+        request.on_screen.as_deref(),
+        &target,
+    )
+    .await?;
     // A2.10: a paused account's changes do nothing here; each answers ok,
     // saying so, so a client that retries doesn't loop on a refusal.
     if paused {

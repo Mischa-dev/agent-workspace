@@ -1055,6 +1055,7 @@ impl Operation for ButtonPress {
                 edge: call.ctx.edge.clone(),
                 trace_id: call.ctx.trace_id.clone(),
                 workspace: Some(call.ctx.workspace_id),
+                on_screen: None,
                 request_id: step_request_id(call.ctx.request_id.as_deref(), index),
                 unkeyed: Unkeyed::RunOnce,
                 preview: false,

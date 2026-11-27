@@ -279,6 +279,7 @@ async fn request(
             edge,
             trace_id,
             workspace,
+            on_screen: None,
             request_id,
             // Agents were never required to send one: without it a write
             // runs once and says it isn't retry-safe (R52).

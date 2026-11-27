@@ -351,6 +351,7 @@ async fn run_task(context: JobContext) -> Result<(), JobError> {
                 },
                 trace_id: None,
                 workspace: Some(claimed.workspace_id),
+                on_screen: None,
                 // A job runs at least once: its own request id makes a second
                 // attempt answer with the first one's result.
                 request_id: Some(

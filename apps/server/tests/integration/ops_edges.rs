@@ -555,6 +555,71 @@ async fn every_edge_runs_the_same_operation() {
     .await
     .expect("note rows");
     assert_eq!(workspaces, [workspace, other]);
+
+    // The web app says which workspace is on screen with every call, so a
+    // page that names none (as three did, #362) is never asked which: the
+    // call acts there.
+    let on_screen = |request_id: &'static str, input: Value, here: Option<&str>| {
+        let mut request =
+            setup
+                .browser
+                .request("POST", "/api/v2/ops/echo_note", Some(request_id), input);
+        if let Some(here) = here {
+            request
+                .headers_mut()
+                .insert("x-current-workspace", here.parse().expect("a header value"));
+        }
+        request
+    };
+    let (status, asked) = send(app, on_screen("web-5", json!({ "text": "where?" }), None)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{asked}");
+    assert_eq!(asked["field"], "workspace", "{asked}");
+    let (status, there) = send(
+        app,
+        on_screen("web-6", json!({ "text": "on screen" }), Some(&other_slug)),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {there}");
+    let acted_in: Uuid = sqlx::query_scalar(
+        "SELECT organization_id FROM audit_events WHERE action = 'echo_note' \
+         ORDER BY occurred_at DESC, id DESC LIMIT 1",
+    )
+    .fetch_one(&setup.pool)
+    .await
+    .expect("the note's row");
+    assert_eq!(acted_in, other);
+    // It names nothing: a workspace the caller isn't in doesn't let them in,
+    // and a target elsewhere is still found where it is.
+    let strangers = Uuid::now_v7();
+    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Strangers', $2)")
+        .bind(strangers)
+        .bind(format!("strangers-{}", strangers.simple()))
+        .execute(&setup.pool)
+        .await
+        .expect("a workspace the owner isn't in");
+    let (status, refused) = send(
+        app,
+        on_screen(
+            "web-7",
+            json!({ "text": "not mine" }),
+            Some(&strangers.to_string()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert_eq!(refused["field"], "workspace", "{refused}");
+    let mut elsewhere = setup.browser.request(
+        "POST",
+        "/api/v2/ops/echo_create",
+        Some("web-8"),
+        json!({ "space": space, "text": "found where it is" }),
+    );
+    elsewhere.headers_mut().insert(
+        "x-current-workspace",
+        other_slug.parse().expect("a header value"),
+    );
+    let (status, found) = send(app, elsewhere).await;
+    assert!(status.is_success(), "{status}: {found}");
     // Through the other workspace's path, neither an operation (a write)
     // nor a hand-written tool (a read) reaches this workspace's space;
     // through its own path it does.
