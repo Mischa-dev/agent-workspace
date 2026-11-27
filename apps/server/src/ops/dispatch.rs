@@ -880,20 +880,31 @@ async fn pipeline<O: Operation>(
     {
         Ok(output) => output,
         Err(error) => {
-            // A refused or failed command made nothing: its reservation goes,
-            // so a retry runs, and the reviewer's hold it used is given back,
-            // so the retry needs no second review (as both roll back when
-            // they are held in the call's transaction).
             if apart && (reservation.is_some() || used_hold.is_some()) {
                 drop(call.tx.take());
                 let mut tx = begin(state, &ctx).await?;
-                if let Some(reservation) = reservation.as_ref() {
-                    idempotency::release(&mut tx, reservation).await?;
-                }
-                if let Some(hold) = used_hold {
-                    crate::guards::give_back_hold(&mut tx, hold)
-                        .await
-                        .map_err(|given| OpError::logged(O::NAME, &given))?;
+                if error.is_refusal() {
+                    // A command that refused made nothing: its reservation
+                    // goes, so a retry runs, and the reviewer's hold it used
+                    // is given back, so the retry needs no second review (as
+                    // both roll back when they are held in the call's
+                    // transaction).
+                    if let Some(reservation) = reservation.as_ref() {
+                        idempotency::release(&mut tx, reservation).await?;
+                    }
+                    if let Some(hold) = used_hold {
+                        crate::guards::give_back_hold(&mut tx, hold)
+                            .await
+                            .map_err(|given| OpError::logged(O::NAME, &given))?;
+                    }
+                } else if let Some(reservation) = reservation.as_ref() {
+                    // A command that failed may have committed first, so its
+                    // id and the hold it used stay spent: a retry is told
+                    // the outcome isn't known, at once, and never runs it a
+                    // second time.
+                    let unknown = Answer::error(&OpError::request_outcome_unknown());
+                    idempotency::complete(&mut tx, reservation, unknown.status, &unknown.body)
+                        .await?;
                 }
                 tx.commit()
                     .await
