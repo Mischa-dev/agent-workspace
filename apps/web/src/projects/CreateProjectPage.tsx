@@ -71,7 +71,7 @@ export function CreateProjectPage() {
   const parent = parents.find((project) => project.id === parentId && project.organizationId === organizationId)
   // The one asked for can't hold it (not yours to manage, archived, another
   // workspace): say so, so it isn't quietly made on its own.
-  if (parentId && !parent && !askedParent.isPending && !projects.isPending) {
+  if (parentId && !parent && !(asked && askedParent.isPending) && !projects.isPending) {
     setParentId('')
     setError('This project can’t go inside the one you came from. It will stand on its own unless you pick another under Inside.')
   }
@@ -176,7 +176,11 @@ export function CreateProjectPage() {
             <SelectField
               id="project-organization"
               label="Workspace"
-              onChange={(event) => setOrganizationId(event.target.value)}
+              onChange={(event) => {
+                setOrganizationId(event.target.value)
+                // A parent belongs to one workspace.
+                setParentId('')
+              }}
               value={organizationId}
             >
               {creatableOrganizations.map((organization) => (
