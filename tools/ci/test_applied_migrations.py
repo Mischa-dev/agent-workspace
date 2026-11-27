@@ -71,6 +71,16 @@ class AppliedMigrationsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn(APPLIED, result.stderr)
 
+    def test_turning_one_into_a_link_to_other_sql_is_refused(self):
+        self.branch.write("sql/roles.sql", "CREATE TABLE roles (name text);\n")
+        applied = self.branch.root / APPLIED
+        applied.unlink()
+        applied.symlink_to("../../../sql/roles.sql")
+        self.branch.commit("share the SQL")
+        result = self.branch.check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(APPLIED, result.stderr)
+
     def test_a_new_migration_may_be_added_and_then_edited(self):
         added = f"{MIGRATIONS}/20261119133117_starting_role_names.sql"
         self.branch.write(added, "ALTER TABLE roles ADD COLUMN name text;\n")

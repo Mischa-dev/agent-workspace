@@ -12,7 +12,7 @@ base="${1:?base sha}"
 head="${2:?head sha}"
 migrations="apps/server/migrations"
 
-changed="$(git diff --no-renames --diff-filter=MD --name-only "${base}...${head}" -- "${migrations}")"
+changed="$(git diff --no-renames --diff-filter=MDT --name-only "${base}...${head}" -- "${migrations}")"
 if [ -z "${changed}" ]; then
   exit 0
 fi
