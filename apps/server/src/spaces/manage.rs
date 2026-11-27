@@ -633,6 +633,7 @@ pub async fn restore(
     actor: Uuid,
     space_id: Uuid,
     current: &Locked,
+    with_it: &[Uuid],
 ) -> Result<i64, AppError> {
     if !matches!(current.kind(), Some(SpaceKind::Project | SpaceKind::Team)) {
         return Err(AppError::Refused {
@@ -662,18 +663,11 @@ pub async fn restore(
     }
     let restored = sqlx::query_as::<_, (Uuid, i64)>(
         r#"
-        WITH RECURSIVE down AS (
-            SELECT space.id FROM spaces space WHERE space.id = $1
-            UNION ALL
-            SELECT space.id
-            FROM spaces space JOIN down ON space.parent_space_id = down.id
-            WHERE space.archived_at = $2
-        ),
-        back AS (
+        WITH back AS (
             UPDATE spaces
             SET archived_at = NULL, archived_by_actor_id = NULL,
                 version = version + 1, updated_at = now()
-            WHERE id IN (SELECT id FROM down) AND archived_at IS NOT NULL
+            WHERE (id = $1 OR (id = ANY($3) AND archived_at = $2)) AND archived_at IS NOT NULL
             RETURNING id, version
         )
         SELECT id, version FROM back
@@ -681,6 +675,7 @@ pub async fn restore(
     )
     .bind(space_id)
     .bind(current.archived_at)
+    .bind(with_it)
     .fetch_all(&mut *connection)
     .await?;
     let mut version = current.version;
@@ -708,24 +703,25 @@ fn constraint(error: &sqlx::Error) -> Option<&str> {
 }
 
 /// The spaces inside `space_id`, at any depth, that were archived in the same
-/// step as it: what restoring it brings back with it.
+/// step as it, nearest first, each with the space it is inside: what
+/// restoring it can bring back with it.
 pub async fn archived_with(
     connection: &mut PgConnection,
     space_id: Uuid,
     archived_at: Option<chrono::DateTime<chrono::Utc>>,
-) -> Result<Vec<Uuid>, AppError> {
-    Ok(sqlx::query_scalar::<_, Uuid>(
+) -> Result<Vec<(Uuid, Uuid)>, AppError> {
+    Ok(sqlx::query_as::<_, (Uuid, Uuid)>(
         r#"
         WITH RECURSIVE down AS (
-            SELECT space.id, 1 AS level
+            SELECT space.id, space.parent_space_id, 1 AS level
             FROM spaces space
             WHERE space.parent_space_id = $1 AND space.archived_at = $2
             UNION ALL
-            SELECT space.id, down.level + 1
+            SELECT space.id, space.parent_space_id, down.level + 1
             FROM spaces space JOIN down ON space.parent_space_id = down.id
             WHERE space.archived_at = $2 AND down.level < 16
         )
-        SELECT DISTINCT id FROM down
+        SELECT id, parent_space_id FROM down ORDER BY level, id
         "#,
     )
     .bind(space_id)

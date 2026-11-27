@@ -59,7 +59,9 @@ export function CreateProjectPage() {
     setParentId('')
   }
   // A layout that hides projects inside projects hides these two fields too.
-  const nests = useWorkspaceExperience(organizationId).shows('area.subprojects')
+  // Coming from a project's "New project inside" shows them whatever the workspace's layout says.
+  const hidden = !useWorkspaceExperience(organizationId).shows('area.subprojects')
+  const nests = !hidden || Boolean(asked)
   // A project can go inside any project of this workspace you manage.
   const projects = useProjects()
   const listed = projects.data?.projects ?? []

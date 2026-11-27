@@ -1225,7 +1225,8 @@ impl Operation for SpaceRestore {
     const EMITS: &'static [&'static str] = &["space.restored"];
     const TITLE: &'static str = "Restore a space";
     const DESCRIPTION: &'static str = "Bring an archived space back as it was, with the \
-        projects inside it that were archived with it, for someone who could manage it. Find \
+        projects inside it that were archived with it and that you manage, for someone who \
+        could manage it. Find \
         archived spaces with space_list includeArchived. Returns the space.";
 
     type Input = SpaceRestoreInput;
@@ -1252,32 +1253,32 @@ impl Operation for SpaceRestore {
         checked
             .map(|_| ())
             .map_err(|denied| denied_here(denied, "restore"))?;
+        let mut with_it = Vec::new();
         if current.archived {
             check_version(input.expected_version, &current)?;
-            // What was archived with it comes back with it, so that takes
-            // "Manage projects" in each of those too, as archiving did.
-            let with_it = manage::archived_with(tx, space_id, current.archived_at)
+            // What was archived with it comes back with it, where the
+            // caller manages that too. A project inside that isn't theirs
+            // stays archived, with what is inside it, for whoever manages
+            // it to bring back; nothing here says it exists.
+            let inside = manage::archived_with(tx, space_id, current.archived_at)
                 .await
                 .map_err(refused)?;
-            let mut all = !(caller.confined_space.is_some() && !with_it.is_empty());
-            for inside in with_it {
-                let need = Need::permission(Perm::ProjectsManage).writes();
-                if !all {
-                    break;
+            let mut back = vec![space_id];
+            for (id, parent) in inside {
+                if caller.confined_space.is_some() || !back.contains(&parent) {
+                    continue;
                 }
-                all = access::check_archived_space(tx, &caller, need, inside)
+                let need = Need::permission(Perm::ProjectsManage).writes();
+                if access::check_archived_space(tx, &caller, need, id)
                     .await?
-                    .is_ok();
+                    .is_ok()
+                {
+                    back.push(id);
+                }
             }
-            if !all {
-                return Err(refused(AppError::Conflict(
-                    "space",
-                    "projects inside this one were archived with it and you don't manage \
-                     them all; ask someone who does to restore it",
-                )));
-            }
+            with_it = back.split_off(1);
         }
-        manage::restore(tx, caller.account_id, space_id, &current)
+        manage::restore(tx, caller.account_id, space_id, &current, &with_it)
             .await
             .map_err(refused)?;
         call.audit_target(

@@ -346,20 +346,23 @@ async fn archiving_a_parent_needs_manage_in_what_is_inside_it() {
         .await
         .expect("seats");
     assert_eq!(after, before);
-    // Bringing it back brings the closed one back too, so that isn't hers
-    // either.
-    let refused = op(&world, "mara", "space_restore", json!({"spaceId": work})).await;
-    assert_eq!(refused["outcome"], "conflict", "{refused}");
-    let back = op(&world, "owner", "space_restore", json!({"spaceId": work})).await;
+    // Mara brings back what is hers: the parent and the open project. The
+    // closed one stays archived until someone who manages it restores it.
+    let back = op(&world, "mara", "space_restore", json!({"spaceId": work})).await;
     assert_eq!(back["outcome"], "ok", "{back}");
-    let archived = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM spaces WHERE id = ANY($1::uuid[]) AND archived_at IS NOT NULL",
-    )
-    .bind(vec![work.clone(), quiet.clone(), open.clone()])
-    .fetch_one(world.pool())
-    .await
-    .expect("archived");
-    assert_eq!(archived, 0);
+    let archived = "SELECT archived_at IS NOT NULL FROM spaces WHERE id = $1::uuid";
+    for (space, expected) in [(&work, false), (&open, false), (&quiet, true)] {
+        let is = sqlx::query_scalar::<_, bool>(archived)
+            .bind(space)
+            .fetch_one(world.pool())
+            .await
+            .expect("archived");
+        assert_eq!(is, expected);
+    }
+    let mine = op(&world, "mara", "space_restore", json!({"spaceId": quiet})).await;
+    assert_ne!(mine["outcome"], "ok", "{mine}");
+    let back = op(&world, "owner", "space_restore", json!({"spaceId": quiet})).await;
+    assert_eq!(back["outcome"], "ok", "{back}");
     world.finish().await;
 }
 

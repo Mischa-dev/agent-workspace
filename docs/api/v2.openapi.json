@@ -169118,7 +169118,7 @@
     },
     "/api/v2/w/{workspace}/ops/space_restore": {
       "post": {
-        "description": "Bring an archived space back as it was, with the projects inside it that were archived with it, for someone who could manage it. Find archived spaces with space_list includeArchived. Returns the space.",
+        "description": "Bring an archived space back as it was, with the projects inside it that were archived with it and that you manage, for someone who could manage it. Find archived spaces with space_list includeArchived. Returns the space.",
         "operationId": "space_restore",
         "parameters": [
           {

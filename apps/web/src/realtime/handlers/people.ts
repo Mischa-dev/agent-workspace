@@ -1,6 +1,6 @@
 import { agentKeys } from '../../agents/keys'
 import { queryKeys } from '../../api/queryKeys'
-import { direct, inbox, opAnswers, payloadId, rail, treesHolding, type Handler } from './touches'
+import { direct, inbox, opAnswers, payloadId, rail, type Handler } from './touches'
 
 // Membership, notifications and account managers.
 
@@ -12,7 +12,8 @@ import { direct, inbox, opAnswers, payloadId, rail, treesHolding, type Handler }
 const membershipUpdated: Handler = (event) => [
   { id: `space:${event.projectId}`, filters: { queryKey: queryKeys.project(event.projectId) } },
   { id: 'projects', filters: { queryKey: queryKeys.projectLists } },
-  treesHolding(event.projectId),
+  // Joining a project can make it show inside a tree that didn't list it, so every open tree refetches.
+  { id: 'project-trees', filters: { queryKey: queryKeys.projectTrees } },
   direct,
 ]
 
