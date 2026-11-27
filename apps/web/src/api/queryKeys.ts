@@ -8,6 +8,9 @@ export const queryKeys = {
   projectSearch: (query: string) => ['projects', 'search', query] as const,
   projectsArchived: ['projects', 'archived'] as const,
   project: (projectId: string) => ['project', projectId] as const,
+  /** Every project's tree: what is inside it, with task counts. */
+  projectTrees: ['project-tree'] as const,
+  projectTree: (projectId: string) => ['project-tree', projectId] as const,
   /** A workspace's own emoji (`customEmojiKeys`); without a workspace, every workspace's. */
   customEmoji: ['custom-emoji'] as const,
   customEmojiOf: (workspaceId: string | null) => ['custom-emoji', workspaceId] as const,

@@ -172,6 +172,7 @@ mod space_ops;
 mod spaces;
 mod startup_lease;
 mod statuses;
+mod sub_projects;
 mod support;
 mod t1_buttons;
 mod t1_cycles;

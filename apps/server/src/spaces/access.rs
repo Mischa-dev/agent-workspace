@@ -148,3 +148,29 @@ pub async fn readable_by(
             .await?,
     )
 }
+
+/// The active spaces under any of `roots`, at any depth (AWD-221), nearest
+/// first, with the space each is inside and how far down it is (1: directly
+/// inside a root). Nothing here checks who may read them.
+pub async fn below(
+    connection: &mut PgConnection,
+    roots: &[Uuid],
+) -> Result<Vec<(Uuid, Uuid, i32)>, AppError> {
+    Ok(sqlx::query_as::<_, (Uuid, Uuid, i32)>(
+        r#"
+        WITH RECURSIVE down AS (
+            SELECT space.id, space.parent_space_id, 1 AS level
+            FROM spaces space
+            WHERE space.parent_space_id = ANY($1) AND space.archived_at IS NULL
+            UNION ALL
+            SELECT space.id, space.parent_space_id, down.level + 1
+            FROM spaces space JOIN down ON space.parent_space_id = down.id
+            WHERE space.archived_at IS NULL AND down.level < 16
+        )
+        SELECT DISTINCT ON (id) id, parent_space_id, level FROM down ORDER BY id, level
+        "#,
+    )
+    .bind(roots)
+    .fetch_all(&mut *connection)
+    .await?)
+}

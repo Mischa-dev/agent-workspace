@@ -9,11 +9,11 @@ import { queryKeys } from '../../api/queryKeys'
 import { describeError } from '../../app/mutations'
 import { useProjectExperience } from '../../experience/layout'
 import { roleLabel } from '../../projects/format'
-import { renameProject } from '../../projects/api'
-import { useArchiveProject, useProject } from '../../projects/hooks'
+import { placeProject, renameProject } from '../../projects/api'
+import { useArchiveProject, useProject, useProjects } from '../../projects/hooks'
 import { ProjectInitials } from '../../projects/ProjectInitials'
 import type { Project } from '../../projects/types'
-import { Banner, Button, DetailList, PageHeader, Section, TextField, showToast } from '../../ui'
+import { Banner, Button, DetailList, PageHeader, Section, SelectField, TextField, showToast } from '../../ui'
 import { markArchiving } from '../archiving'
 import type { SettingsPageProps } from '../types'
 import '../../styles/pages.css'
@@ -80,9 +80,13 @@ export default function GeneralPage({ project: given, workspace }: SettingsPageP
       </Section>
       {current.capabilities.manage && !current.archivedAt && <RenameSection project={current} />}
       {current.capabilities.manage && !current.archivedAt && <IconSection project={current} />}
+      {current.capabilities.manage &&
+        !current.archivedAt &&
+        current.kind === 'project' &&
+        experience.shows('area.subprojects') && <PlaceSection project={current} />}
       {current.capabilities.archive && !current.archivedAt && (
         <Section
-          description={`Archiving takes it out of everyone’s sidebar and stops new ${stopped(experience.moduleOn)}. Everything already in it is kept and stays readable.`}
+          description={`Archiving takes it out of everyone’s sidebar and stops new ${stopped(experience.moduleOn)}. Projects inside it are archived with it. Everything already in them is kept and stays readable.`}
           id="archive-project-heading"
           title="Archive this project"
         >
@@ -237,6 +241,121 @@ function IconSection({ project }: { project: Project }) {
             Remove
           </Button>
         ) : null}
+      </form>
+      {error && <Banner tone="warning">{error}</Banner>}
+    </Section>
+  )
+}
+
+/** Where the project sits: inside another project or on its own, and whose people it has. */
+function PlaceSection({ project }: { project: Project }) {
+  const queryClient = useQueryClient()
+  const projects = useProjects()
+  const open = (projects.data?.projects ?? []).filter((candidate) => !candidate.archivedAt && candidate.organizationId === project.organizationId)
+  // Not itself, and nothing that is already inside it.
+  const under = (candidate: Project) => {
+    let at: Project | undefined = candidate
+    for (let step = 0; at && step < 8; step += 1) {
+      if (at.id === project.id) return true
+      const parentId: string | null | undefined = at.parentId
+      at = parentId ? open.find((other) => other.id === parentId) : undefined
+    }
+    return false
+  }
+  const parents = open
+    .filter((candidate) => candidate.kind === 'project' && candidate.capabilities.manage && !under(candidate))
+    .sort((left, right) => left.name.localeCompare(right.name))
+  const [draftParent, setDraftParent] = useState<string | null>(null)
+  const [draftPeople, setDraftPeople] = useState<'parent' | 'own' | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const savedParent = project.parentId ?? ''
+  const savedPeople = project.peopleFromParent ? 'parent' : 'own'
+  const parentId = draftParent ?? savedParent
+  // A project newly put inside another takes its people unless you say otherwise.
+  const people = draftPeople ?? (parentId && parentId !== savedParent ? 'parent' : savedPeople)
+  const parent = open.find((candidate) => candidate.id === parentId)
+  const changed = parentId !== savedParent || (Boolean(parentId) && people !== savedPeople)
+  const save = useMutation({
+    mutationFn: () =>
+      placeProject(
+        project.id,
+        {
+          ...(parentId !== savedParent ? { parentId: parentId || null } : {}),
+          ...(parentId && people !== savedPeople ? { people } : {}),
+        },
+        project.version,
+      ),
+    onSuccess: (placed) => {
+      setDraftParent(null)
+      setDraftPeople(null)
+      setError(null)
+      queryClient.setQueryData(queryKeys.project(placed.id), placed)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.projectLists })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.projectTrees })
+      showToast({ tone: 'success', title: placed.parentId && parent ? `Now inside ${parent.name}` : 'Now a project on its own' })
+    },
+    onError: async (reason) => {
+      if (isVersionConflict(reason)) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.project(project.id) })
+        setError('Someone changed this project while you were here. Try again.')
+        setDraftParent(null)
+        setDraftPeople(null)
+      } else {
+        setError(`The project wasn’t moved. ${describeError(reason).message}`)
+      }
+    },
+  })
+  // Inside a project you can’t see or manage: say so, and leave it be.
+  if (savedParent && !parents.some((candidate) => candidate.id === savedParent)) {
+    return (
+      <Section id="project-place-heading" title="Inside">
+        <Banner role="note" tone="info">
+          This project is inside another one. Someone who manages both can move it.
+        </Banner>
+      </Section>
+    )
+  }
+  if (!parents.length) return null
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (changed) save.mutate()
+  }
+  return (
+    <Section
+      description="A project inside another shows in that project’s sidebar and keeps its own tasks, channels and key."
+      id="project-place-heading"
+      title="Inside"
+    >
+      <form className="aw-form" onSubmit={submit}>
+        <SelectField id="project-inside" label="Inside" onChange={(event) => setDraftParent(event.target.value)} value={parentId}>
+          <option value="">Nothing, it stands on its own</option>
+          {parents.map((candidate) => (
+            <option key={candidate.id} value={candidate.id}>
+              {candidate.name}
+            </option>
+          ))}
+        </SelectField>
+        {parent ? (
+          <SelectField
+            hint={
+              people === 'parent'
+                ? `Everyone in ${parent.name} is here too, with the same role, and stays in step as people join or leave.`
+                : `Only the people added here. If it had ${parent.name}’s people, they stay until you remove them.`
+            }
+            id="project-people"
+            label="People"
+            onChange={(event) => setDraftPeople(event.target.value === 'own' ? 'own' : 'parent')}
+            value={people}
+          >
+            <option value="parent">The same people as {parent.name}</option>
+            <option value="own">Only people added here</option>
+          </SelectField>
+        ) : null}
+        <div>
+          <Button busy={save.isPending} disabled={!changed} type="submit" variant="primary">
+            Save
+          </Button>
+        </div>
       </form>
       {error && <Banner tone="warning">{error}</Banner>}
     </Section>

@@ -486,6 +486,8 @@ export type PartRef = { id: string; kind: string }
 
 export type PartView = { id: string; kind: string; name?: string | null }
 
+export type People = "parent" | "own"
+
 export type PermissionEntry = { builtIn: string[]; key: string; label: string; level?: string | null; meaning: string; module: string; required: boolean; scope: string; thingKind?: string | null }
 
 export type Person = { id: string; name: string }
@@ -720,13 +722,17 @@ export type Source = "launch" | "project" | "user" | "workspace" | "default"
 
 export type SourceView = { error?: string | null; fetchedAt?: string | null; id: string; name: string; url: string }
 
+export type SpaceAbove = { icon?: string | null; id: string; key: string; name: string; url: string }
+
+export type SpaceInside = { depth: number; description: string; icon?: string | null; id: string; key: string; name: string; parentId?: string | null; peopleFromParent: boolean; role?: string | null; tasks?: TaskCounts | null; url: string }
+
 export type SpaceKind = "workspace" | "project" | "team" | "personal"
 
 export type SpaceShape = { channels?: ShapeChannel[]; kind?: string | null; pages?: ShapePage[] }
 
 export type SpaceStatus = { canUpdate?: boolean | null; health?: string | null; healthLabel?: string | null; latestUpdate?: LatestUpdate | null; lead?: Person | null; spaceId: string; targetDate?: string | null; version: number }
 
-export type SpaceView = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+export type SpaceView = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; parentId?: string | null; peopleFromParent: boolean; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
 
 export type SpaceVisibility = "members" | "workspace"
 
@@ -755,6 +761,8 @@ export type SuggestionMade = { message: string; status: string; suggestionId: st
 export type TabLine = { conditionalFormats?: ConditionalRule[]; frozenRows: number; id: string; name: string; used?: string; validations?: unknown[] }
 
 export type TabWrite = { add?: string | null; columnWidths?: Record<string, unknown> | null; count?: number | null; deleteColumnsAt?: string | null; deleteRowsAt?: number | null; frozenRows?: number | null; insertColumnsAt?: string | null; insertRowsAt?: number | null; position?: number | null; remove?: boolean | null; rename?: string | null; tab?: string | null }
+
+export type TaskCounts = { done: number; open: number }
 
 export type TaskFieldValue = { name: string; type: FieldType; value: unknown }
 
@@ -2284,11 +2292,11 @@ export type SkillListOutput = { skills: SkillLine[] }
 
 export type SpaceArchiveInput = { expectedVersion?: number | null; spaceId: string }
 
-export type SpaceArchiveOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+export type SpaceArchiveOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; parentId?: string | null; peopleFromParent: boolean; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
 
-export type SpaceCreateInput = { description?: string | null; icon?: string | null; key: string; kind?: CreatableKind | null; name: string; shape?: SpaceShape | null; templateId?: string | null; visibility?: SpaceVisibility | null }
+export type SpaceCreateInput = { description?: string | null; icon?: string | null; key: string; kind?: CreatableKind | null; name: string; parentId?: string | null; people?: People | null; shape?: SpaceShape | null; templateId?: string | null; visibility?: SpaceVisibility | null }
 
-export type SpaceCreateOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+export type SpaceCreateOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; parentId?: string | null; peopleFromParent: boolean; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
 
 export type SpaceGroupAddInput = { group: string; role?: string | null; spaceId: string }
 
@@ -2300,11 +2308,11 @@ export type SpaceGroupRemoveOutput = { groupId: string; removed: boolean; spaceI
 
 export type SpaceJoinInput = { spaceId: string }
 
-export type SpaceJoinOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
+export type SpaceJoinOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean; viaParent: boolean }
 
 export type SpaceLeaveInput = { spaceId: string }
 
-export type SpaceLeaveOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
+export type SpaceLeaveOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean; viaParent: boolean }
 
 export type SpaceListInput = { includeArchived?: boolean; kinds?: SpaceKind[] | null }
 
@@ -2312,31 +2320,35 @@ export type SpaceListOutput = { spaces: SpaceView[] }
 
 export type SpaceMemberAddInput = { account: string; expectedVersion?: number | null; expiresAt?: string | null; role?: string | null; spaceId: string }
 
-export type SpaceMemberAddOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
+export type SpaceMemberAddOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean; viaParent: boolean }
 
 export type SpaceMemberRemoveInput = { account: string; expectedVersion?: number | null; spaceId: string }
 
-export type SpaceMemberRemoveOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
+export type SpaceMemberRemoveOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean; viaParent: boolean }
 
 export type SpaceMemberUpdateInput = { account: string; expectedVersion?: number | null; expiresAt?: string | null; role: string; spaceId: string }
 
-export type SpaceMemberUpdateOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean }
+export type SpaceMemberUpdateOutput = { accountId: string; active: boolean; expiresAt?: string | null; handle: string; name: string; role: string; roleId?: string | null; spaceId: string; version: number; viaGroup: boolean; viaParent: boolean }
 
 export type SpaceOpenInput = { spaceId: string }
 
-export type SpaceOpenOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+export type SpaceOpenOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; parentId?: string | null; peopleFromParent: boolean; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
 
 export type SpacePersonalOpenInput = Record<string, never>
 
-export type SpacePersonalOpenOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+export type SpacePersonalOpenOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; parentId?: string | null; peopleFromParent: boolean; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
 
 export type SpaceRestoreInput = { expectedVersion?: number | null; spaceId: string }
 
-export type SpaceRestoreOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+export type SpaceRestoreOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; parentId?: string | null; peopleFromParent: boolean; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
 
-export type SpaceUpdateInput = { description?: string | null; expectedVersion?: number | null; icon?: string | null; name?: string | null; spaceId: string; visibility?: SpaceVisibility | null }
+export type SpaceTreeGetInput = { spaceId: string }
 
-export type SpaceUpdateOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
+export type SpaceTreeGetOutput = { inside: SpaceInside[]; path: SpaceAbove[]; space: SpaceView; tasks?: TaskCounts | null; tasksWithInside: TaskCounts }
+
+export type SpaceUpdateInput = { clearParent?: boolean; description?: string | null; expectedVersion?: number | null; icon?: string | null; name?: string | null; parentId?: string | null; people?: People | null; spaceId: string; visibility?: SpaceVisibility | null }
+
+export type SpaceUpdateOutput = { archived: boolean; description: string; icon?: string | null; id: string; key: string; kind: StoredKind; name: string; parentId?: string | null; peopleFromParent: boolean; role?: string | null; url: string; version: number; visibility: SpaceVisibility; workspaceId: string }
 
 export type StatusDeleteInput = { account?: string | null; workspaceOnly?: boolean }
 
@@ -2402,7 +2414,7 @@ export type TaskLinkManyInput = { links: DependencyLinks[]; projectId?: string |
 
 export type TaskLinkManyOutput = { changed: number; tasks: DependencyChange[] }
 
-export type TaskListInput = { anyLabels?: string[] | null; assignee?: string[] | null; blocked?: boolean | null; claimed?: string | null; collection?: string | null; createdBy?: string | null; cursor?: string | null; delegate?: string[] | null; dueAfter?: string | null; dueBefore?: string | null; fieldFilters?: FieldFilterArgument[] | null; includeArchived?: boolean | null; includeDone?: boolean | null; labels?: string[] | null; limit?: number | null; milestone?: string[] | null; notAssignee?: string[] | null; notLabels?: string[] | null; notMilestone?: string[] | null; notPriority?: string[] | null; notStatus?: string[] | null; notType?: string[] | null; overdue?: boolean | null; parentId?: string | null; priority?: string[] | null; projectId?: string | null; projectIds?: string[] | null; query?: string | null; ready?: boolean | null; sort?: string | null; status?: string[] | null; type?: string[] | null; updatedSince?: string | null; view?: string | null }
+export type TaskListInput = { anyLabels?: string[] | null; assignee?: string[] | null; blocked?: boolean | null; claimed?: string | null; collection?: string | null; createdBy?: string | null; cursor?: string | null; delegate?: string[] | null; dueAfter?: string | null; dueBefore?: string | null; fieldFilters?: FieldFilterArgument[] | null; includeArchived?: boolean | null; includeDone?: boolean | null; includeSubProjects?: boolean | null; labels?: string[] | null; limit?: number | null; milestone?: string[] | null; notAssignee?: string[] | null; notLabels?: string[] | null; notMilestone?: string[] | null; notPriority?: string[] | null; notStatus?: string[] | null; notType?: string[] | null; overdue?: boolean | null; parentId?: string | null; priority?: string[] | null; projectId?: string | null; projectIds?: string[] | null; query?: string | null; ready?: boolean | null; sort?: string | null; status?: string[] | null; type?: string[] | null; updatedSince?: string | null; view?: string | null }
 
 export type TaskListOutput = { nextCursor?: string | null; tasks: TaskSummary[]; total: number }
 
@@ -3043,6 +3055,7 @@ export type Operations = {
   space_open: { input: SpaceOpenInput; output: SpaceOpenOutput }
   space_personal_open: { input: SpacePersonalOpenInput; output: SpacePersonalOpenOutput }
   space_restore: { input: SpaceRestoreInput; output: SpaceRestoreOutput }
+  space_tree_get: { input: SpaceTreeGetInput; output: SpaceTreeGetOutput }
   space_update: { input: SpaceUpdateInput; output: SpaceUpdateOutput }
   status_delete: { input: StatusDeleteInput; output: StatusDeleteOutput }
   status_list: { input: StatusListInput; output: StatusListOutput }

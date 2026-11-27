@@ -42,6 +42,9 @@ struct ProjectRow {
     name: String,
     icon: Option<String>,
     kind: String,
+    /// The project it is inside (AWD-221), when the caller can read that one.
+    parent_id: Option<Uuid>,
+    people_from_parent: bool,
     role: String,
     role_permissions: Option<Vec<String>>,
     /// What the caller's groups are given here (K1.27).
@@ -96,6 +99,13 @@ pub struct ProjectView {
     /// workspace's own space, which is never listed as a project.
     #[serde(default = "project_kind")]
     kind: SpaceKind,
+    /// The project this one is inside (AWD-221), when the caller can read
+    /// that one; absent at the top.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent_id: Option<Uuid>,
+    /// Its people are its parent's, kept in step; false when it has its own.
+    #[serde(default)]
+    people_from_parent: bool,
 }
 
 fn project_kind() -> SpaceKind {
@@ -228,6 +238,9 @@ async fn list_projects(
             p.icon,
             p.name,
             p.kind,
+            CASE WHEN space_readable_by(p.parent_space_id, pm.actor_id)
+                 THEN p.parent_space_id END AS parent_id,
+            p.people_from_parent,
             pm.role,
             workspace_role_permissions(pm.role_id) AS role_permissions,
             space_group_permissions(pm.actor_id, pm.project_id) AS group_permissions,
@@ -453,6 +466,9 @@ async fn update_navigation(
             (SELECT project_key FROM projects WHERE id = $1) AS project_key,
             (SELECT name FROM projects WHERE id = $1) AS name,
             (SELECT kind FROM projects WHERE id = $1) AS kind,
+            (SELECT CASE WHEN space_readable_by(parent_space_id, $2) THEN parent_space_id END
+               FROM projects WHERE id = $1) AS parent_id,
+            (SELECT people_from_parent FROM projects WHERE id = $1) AS people_from_parent,
             (SELECT role FROM project_memberships WHERE project_id = $1 AND actor_id = $2) AS role,
             (SELECT workspace_role_permissions(role_id) FROM project_memberships
               WHERE project_id = $1 AND actor_id = $2) AS role_permissions,
@@ -700,6 +716,9 @@ async fn fetch_project_row(
             p.icon,
             p.name,
             p.kind,
+            CASE WHEN space_readable_by(p.parent_space_id, pm.actor_id)
+                 THEN p.parent_space_id END AS parent_id,
+            p.people_from_parent,
             pm.role,
             workspace_role_permissions(pm.role_id) AS role_permissions,
             space_group_permissions(pm.actor_id, pm.project_id) AS group_permissions,
@@ -834,6 +853,8 @@ fn project_view(row: ProjectRow) -> Result<ProjectView, AppError> {
         attention_count: 0,
         modules_off: Vec::new(),
         kind: SpaceKind::from_stored(&row.kind).unwrap_or(SpaceKind::Project),
+        parent_id: row.parent_id,
+        people_from_parent: row.people_from_parent,
     })
 }
 

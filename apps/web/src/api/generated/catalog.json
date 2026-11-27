@@ -5648,6 +5648,20 @@
     "title": "Restore a space"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "space_tree_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Open a space's tree"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { Project } from '../projects/types'
-import { railOrderAfterDrop, railOrderAfterStep, railOrderKeepingOthers, railProjects } from './railProjects'
+import { projectsInside, railOrderAfterDrop, railOrderAfterStep, railOrderKeepingOthers, railProjects, topProjectId } from './railProjects'
 
 function project(name: string, lastOpenedAt: string | null, pinned = false, railPosition: number | null = null): Project {
   return {
@@ -26,6 +26,27 @@ function project(name: string, lastOpenedAt: string | null, pinned = false, rail
 }
 
 const names = (projects: Project[]) => projects.map((item) => item.name)
+
+describe('sub-projects', () => {
+  const site = project('Site', '2026-10-19T07:00:00Z')
+  const launch = { ...project('Launch', '2026-10-19T09:00:00Z'), parentId: 'site' }
+  const copy = { ...project('Copy', '2026-10-19T08:00:00Z'), parentId: 'launch' }
+  const all = [site, launch, copy]
+
+  it('gives a sub-project no tile of its own, and stands its top project in for it', () => {
+    expect(names(railProjects(all, 'copy'))).toEqual(['Site'])
+    expect(topProjectId(all, 'copy')).toBe('site')
+    expect(names(projectsInside(all, 'site'))).toEqual(['Launch'])
+  })
+
+  it('shows a pinned sub-project, and one whose parent you cannot see', () => {
+    const pinned = { ...launch, navigation: { ...launch.navigation, pinned: true } }
+    expect(names(railProjects([site, pinned], null))).toEqual(['Launch', 'Site'])
+    const orphan = { ...project('Orphan', null), parentId: 'hidden' }
+    expect(names(railProjects([orphan], null))).toEqual(['Orphan'])
+    expect(topProjectId([orphan], 'orphan')).toBe('orphan')
+  })
+})
 
 describe('railProjects', () => {
   it('keeps recent tiles in name order, so opening one does not move the others', () => {

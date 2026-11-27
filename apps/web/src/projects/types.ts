@@ -52,6 +52,10 @@ export type Project = {
   modulesOff?: string[]
   /** The kind of space (K4.10); `workspace` is the workspace's own space, never listed as a project. */
   kind?: SpaceKind
+  /** The project this one is inside, when it is a sub-project you can see the parent of. */
+  parentId?: string | null
+  /** Its people are the parent's, kept in step, plus anyone added here. */
+  peopleFromParent?: boolean
   capabilities: ProjectCapabilities
   navigation: ProjectNavigation
 }

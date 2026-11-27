@@ -65,6 +65,7 @@ import {
   Users,
   WifiOff,
   X,
+  Layers,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -97,6 +98,7 @@ const icons = {
   inbox: Inbox,
   info: Info,
   key: KeyRound,
+  layers: Layers,
   link: Link,
   list: List,
   loader: LoaderCircle,

@@ -1,6 +1,6 @@
 import { requestJson } from '../api/client'
 import { isApiError } from '../api/errors'
-import { callOp, heldForReview } from '../api/ops'
+import { callOp, heldForReview, ranOrThrow } from '../api/ops'
 import { normalizeLocation, safeProjectHref } from './locations'
 import type {
   Project,
@@ -92,6 +92,8 @@ export function normalizeProject(value: unknown): Project {
     attentionCount: Math.max(0, asNumber(record.attentionCount)),
     modulesOff: record.modulesOff as string[] | undefined,
     kind: record.kind === 'workspace' || record.kind === 'team' || record.kind === 'personal' ? record.kind : 'project',
+    parentId: asNullableString(record.parentId),
+    peopleFromParent: asBoolean(record.peopleFromParent),
     capabilities: normalizeCapabilities(record.capabilities),
     navigation: archivedAt
       ? {
@@ -126,6 +128,9 @@ export async function createProject(input: {
   key: string
   name: string
   templateId?: string
+  /** The project it goes inside, and whether it takes that project's people. */
+  parentId?: string
+  people?: 'parent' | 'own'
   idempotencyKey: string
 }): Promise<Project> {
   const space = await callOp(
@@ -134,6 +139,7 @@ export async function createProject(input: {
       key: input.key,
       name: input.name,
       ...(input.templateId ? { templateId: input.templateId } : {}),
+      ...(input.parentId ? { parentId: input.parentId, people: input.people ?? 'parent' } : {}),
     },
     { workspaceId: input.organizationId, requestId: input.idempotencyKey },
   )
@@ -188,6 +194,27 @@ export async function renameProject(
   expectedVersion: number,
 ): Promise<Project> {
   await callOp('space_update', { spaceId: projectId, name }, { expectedVersion })
+  return getProject(projectId)
+}
+
+/** Puts a project inside another, takes it out (null), or changes whose people it has. */
+export async function placeProject(
+  projectId: string,
+  change: { parentId?: string | null; people?: 'parent' | 'own' },
+  expectedVersion: number,
+): Promise<Project> {
+  const answer = await callOp(
+    'space_update',
+    {
+      spaceId: projectId,
+      ...(change.parentId ? { parentId: change.parentId } : {}),
+      ...(change.parentId === null ? { clearParent: true } : {}),
+      ...(change.people ? { people: change.people } : {}),
+    },
+    { expectedVersion },
+  )
+  // A workspace guard can hold it for a reviewer: nothing moved yet.
+  ranOrThrow(answer, 'Moving this project')
   return getProject(projectId)
 }
 

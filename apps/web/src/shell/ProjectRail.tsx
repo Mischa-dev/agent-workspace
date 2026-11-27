@@ -21,7 +21,7 @@ import { useNeedsYouBadge } from './homeSpace'
 import { loadShellLazy } from './loadShellLazy'
 import { isMobileWidth } from './mobileNavigation'
 import { usePausedUntil } from './pauseStatus'
-import { railOrderAfterDrop, railOrderKeepingOthers, railProjects } from './railProjects'
+import { railOrderAfterDrop, railOrderKeepingOthers, railProjects, topProjectId } from './railProjects'
 
 // Loaded after the first paint: whether you've paused notifications.
 const PausedMark = lazy(() => loadShellLazy().then((module) => ({ default: module.PausedMark })))
@@ -193,6 +193,9 @@ export function ProjectRail({
   // with Projects off at Home, where a new project goes.
   const experience = useHomeExperience()
   const visibleProjects = railProjects(projects, currentProjectId)
+  // Inside a sub-project, the tile of the project it sits under is the lit one
+  // (its own, when it is pinned).
+  const litProjectId = visibleProjects.some((project) => project.id === currentProjectId) ? currentProjectId : topProjectId(projects, currentProjectId)
   // Tiles drag into your own order (not on phones, where the rail is a drawer).
   const setRailOrder = useSetRailOrder()
   const [drag, setDrag] = useState<RailDrag | null>(null)
@@ -306,7 +309,7 @@ export function ProjectRail({
           >
             {projectsQuery.isPending ? <span aria-label="Loading projects" className="aw-rail__loading" role="status" /> : null}
             {visibleProjects.map((project) => {
-              const active = project.id === currentProjectId
+              const active = project.id === litProjectId
               const dropMark = drag?.over?.id === project.id && drag.id !== project.id ? (drag.over.after ? ' is-drop-after' : ' is-drop-before') : ''
               return (
                 <Tooltip key={project.id} label={project.name} side="right">
