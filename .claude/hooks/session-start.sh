@@ -5,7 +5,7 @@ set -euo pipefail
 
 root="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 # Commits are checked for formatting before they are made, on any machine.
-git -C "${root}" config core.hooksPath tools/git-hooks 2>/dev/null || true
+(cd "${root}" && tools/git-hooks/turn-on) >&2 || true
 
 if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
   exit 0

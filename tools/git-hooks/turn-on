@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Point the checkout you are in at these hooks, unless it has hooks of its
+# own: git runs one hooks directory, so taking over would turn theirs off.
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+cd "${root}"
+ours="tools/git-hooks"
+current="$(git config --get core.hooksPath || true)"
+if [ "${current}" = "${ours}" ]; then
+  exit 0
+fi
+theirs="${current}"
+if [ -z "${theirs}" ] &&
+  find "$(git rev-parse --git-path hooks)" -type f ! -name '*.sample' 2>/dev/null | grep -q .; then
+  theirs="$(git rev-parse --git-path hooks)"
+fi
+if [ -n "${theirs}" ]; then
+  echo "This checkout has git hooks of its own (${theirs}), so they are left as they are." \
+    "To check formatting at commit, run ${ours}/pre-commit from your pre-commit hook." >&2
+  exit 0
+fi
+git config core.hooksPath "${ours}"

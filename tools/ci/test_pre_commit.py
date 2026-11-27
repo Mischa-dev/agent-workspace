@@ -9,6 +9,7 @@ import unittest
 
 REPO = Path(__file__).resolve().parents[2]
 HOOK = REPO / "tools" / "git-hooks" / "pre-commit"
+TURN_ON = REPO / "tools" / "git-hooks" / "turn-on"
 FORMATTED = "pub fn one() -> u8 {\n    1\n}\n"
 UNFORMATTED = "pub fn one() -> u8 { 1 }\n"
 
@@ -77,6 +78,44 @@ class PreCommitTests(unittest.TestCase):
         self.write("notes.md", "two\n")
         self.git("add", "notes.md")
         self.assertEqual(self.commit_check().returncode, 0)
+
+
+class TurnOnTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
+
+    def turn_on(self):
+        return subprocess.run(["bash", str(TURN_ON)], cwd=self.root, capture_output=True, text=True)
+
+    def hooks_path(self):
+        result = subprocess.run(
+            ["git", "config", "--get", "core.hooksPath"], cwd=self.root, capture_output=True, text=True
+        )
+        return result.stdout.strip()
+
+    def test_a_checkout_without_hooks_gets_these(self):
+        self.assertEqual(self.turn_on().returncode, 0)
+        self.assertEqual(self.hooks_path(), "tools/git-hooks")
+        self.assertEqual(self.turn_on().stderr, "")
+
+    def test_a_hooks_path_someone_set_is_kept(self):
+        subprocess.run(["git", "config", "core.hooksPath", ".husky"], cwd=self.root, check=True)
+        result = self.turn_on()
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(self.hooks_path(), ".husky")
+        self.assertIn("tools/git-hooks/pre-commit", result.stderr)
+
+    def test_a_hook_someone_installed_is_kept(self):
+        hook = self.root / ".git" / "hooks" / "commit-msg"
+        hook.parent.mkdir(parents=True, exist_ok=True)
+        hook.write_text("#!/bin/sh\n")
+        result = self.turn_on()
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(self.hooks_path(), "")
+        self.assertIn("tools/git-hooks/pre-commit", result.stderr)
 
 
 if __name__ == "__main__":

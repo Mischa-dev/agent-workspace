@@ -80,7 +80,8 @@ running the build another way, and don't use plain `systemd-run --user
   everything else; `tools/ci/run.sh` runs the same checks on a free machine
   when you want them before pushing. Formatting is checked when you commit
   (`tools/git-hooks/pre-commit`; the cloud setup and the Claude Code session
-  hook turn it on, elsewhere `git config core.hooksPath tools/git-hooks`).
+  hook turn it on, elsewhere `tools/git-hooks/turn-on`, which leaves a
+  checkout's own hooks alone).
 - Before a deploy: `tools/ci/run.sh`, then try the change once on the live
   server.
 - Write tests where a bug would be silent and costly: permissions and private

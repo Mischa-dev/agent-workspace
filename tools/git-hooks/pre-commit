@@ -6,9 +6,8 @@
 # the commit will hold, not the files on disk: a file formatted after
 # `git add` and not added again is still refused. Each file is checked on
 # its own, which also reaches the ones `cargo fmt` can't find (a module
-# declared inside a macro). `tools/cloud/setup.sh`
-# and the Claude Code session hook turn this on (`core.hooksPath`); so does
-#   git config core.hooksPath tools/git-hooks
+# that generated code declares). `tools/cloud/setup.sh` and the Claude Code
+# session hook turn this on; so does `tools/git-hooks/turn-on`.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"

@@ -36,7 +36,7 @@ cd "${repo}"
 
 # Commits are checked for formatting before they are made
 # (tools/git-hooks/pre-commit), not by CI some minutes after a push.
-git config core.hooksPath tools/git-hooks 2>/dev/null || true
+tools/git-hooks/turn-on || true
 
 db_user="agent_workspace"
 db_password="agent_workspace"
