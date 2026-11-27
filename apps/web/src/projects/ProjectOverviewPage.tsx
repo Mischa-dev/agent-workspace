@@ -107,9 +107,11 @@ export function ProjectOverviewPage() {
           ) : null}
         </PageHeader>
         {project.data.archivedAt && <ArchivedBanner project={project.data} />}
-        <Suspense fallback={null}>
-          <ProjectsInside project={project.data} tasks={experience.shows('area.tasks')} />
-        </Suspense>
+        {experience.shows('area.subprojects') ? (
+          <Suspense fallback={null}>
+            <ProjectsInside project={project.data} tasks={experience.shows('area.tasks')} />
+          </Suspense>
+        ) : null}
         <div className="aw-overview">
           <div className="aw-overview__column">
             {experience.shows('area.tasks') && experience.shows('workspace.project_updates') ? (

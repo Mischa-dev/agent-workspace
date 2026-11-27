@@ -12,6 +12,7 @@ import { direct, inbox, opAnswers, payloadId, rail, type Handler } from './touch
 const membershipUpdated: Handler = (event) => [
   { id: `space:${event.projectId}`, filters: { queryKey: queryKeys.project(event.projectId) } },
   { id: 'projects', filters: { queryKey: queryKeys.projectLists } },
+  { id: 'project-trees', filters: { queryKey: queryKeys.projectTrees } },
   direct,
 ]
 

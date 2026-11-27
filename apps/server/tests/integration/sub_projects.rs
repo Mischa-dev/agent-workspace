@@ -295,6 +295,36 @@ async fn a_sub_project_with_its_own_people_is_closed_to_the_parents() {
 }
 
 #[tokio::test]
+async fn archiving_a_parent_needs_manage_in_what_is_inside_it() {
+    let Some(world) = WorldBuilder::default()
+        .project("WORK")
+        .person("mara", "admin")
+        .build("awd221_archive_closed")
+        .await
+    else {
+        return;
+    };
+    let work = world.project("WORK").to_owned();
+    let quiet = id(&inside(&world, "owner", &work, "QUIET", Some("own")).await);
+    // Mara manages the parent and isn't in the closed project inside it, so
+    // archiving the parent, which would take that one too, isn't hers.
+    let refused = op(&world, "mara", "space_archive", json!({"spaceId": work})).await;
+    assert_eq!(refused["outcome"], "conflict", "{refused}");
+    let archived = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM spaces WHERE id = ANY($1::uuid[]) AND archived_at IS NOT NULL",
+    )
+    .bind(vec![work.clone(), quiet.clone()])
+    .fetch_one(world.pool())
+    .await
+    .expect("archived");
+    assert_eq!(archived, 0);
+    // Whoever manages both can.
+    let done = op(&world, "owner", "space_archive", json!({"spaceId": work})).await;
+    assert_eq!(done["outcome"], "ok", "{done}");
+    world.finish().await;
+}
+
+#[tokio::test]
 async fn projects_nest_three_deep_and_never_in_a_loop() {
     let Some(world) = WorldBuilder::default()
         .project("TOP")

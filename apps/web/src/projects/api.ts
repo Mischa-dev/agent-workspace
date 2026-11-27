@@ -1,6 +1,6 @@
 import { requestJson } from '../api/client'
 import { isApiError } from '../api/errors'
-import { callOp, heldForReview } from '../api/ops'
+import { callOp, heldForReview, ranOrThrow } from '../api/ops'
 import { normalizeLocation, safeProjectHref } from './locations'
 import type {
   Project,
@@ -203,7 +203,7 @@ export async function placeProject(
   change: { parentId?: string | null; people?: 'parent' | 'own' },
   expectedVersion: number,
 ): Promise<Project> {
-  await callOp(
+  const answer = await callOp(
     'space_update',
     {
       spaceId: projectId,
@@ -213,6 +213,8 @@ export async function placeProject(
     },
     { expectedVersion },
   )
+  // A workspace guard can hold it for a reviewer: nothing moved yet.
+  ranOrThrow(answer, 'Moving this project')
   return getProject(projectId)
 }
 

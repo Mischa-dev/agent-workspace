@@ -288,6 +288,7 @@ function PlaceSection({ project }: { project: Project }) {
       setError(null)
       queryClient.setQueryData(queryKeys.project(placed.id), placed)
       void queryClient.invalidateQueries({ queryKey: queryKeys.projectLists })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.projectTrees })
       showToast({ tone: 'success', title: placed.parentId && parent ? `Now inside ${parent.name}` : 'Now a project on its own' })
     },
     onError: async (reason) => {

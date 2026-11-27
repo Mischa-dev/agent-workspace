@@ -58,7 +58,7 @@ pub const MAX_TREE_DEPTH: i64 = 3;
 
 /// One workspace's moves take turns, as the database's own check does, so
 /// what is read here is still true when the row is written.
-async fn lock_tree(connection: &mut PgConnection, workspace_id: Uuid) -> Result<(), AppError> {
+pub async fn lock_tree(connection: &mut PgConnection, workspace_id: Uuid) -> Result<(), AppError> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('space-tree:' || $1::text, 0))")
         .bind(workspace_id)
         .execute(&mut *connection)

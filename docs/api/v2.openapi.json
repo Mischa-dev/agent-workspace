@@ -14562,8 +14562,11 @@
             "type": "string"
           },
           "parentId": {
-            "description": "The space it is directly inside.",
-            "type": "string"
+            "description": "The space it is directly inside; absent when you can't read that one.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "peopleFromParent": {
             "description": "True when its people are its parent's.",
@@ -14593,7 +14596,6 @@
         },
         "required": [
           "id",
-          "parentId",
           "depth",
           "key",
           "name",
@@ -164301,7 +164303,7 @@
                     "type": "string"
                   },
                   "parentId": {
-                    "description": "Make it inside this project or team space (its id, link or key), as\na sub-project with its own tasks, chat and pages. You need \"Manage\nprojects\" there. Three levels deep at most.",
+                    "description": "Make it inside this project or team space (its id or link), as\na sub-project with its own tasks, chat and pages. You need \"Manage\nprojects\" there. Three levels deep at most.",
                     "maxLength": 2048,
                     "type": [
                       "string",
@@ -170055,7 +170057,7 @@
                     ]
                   },
                   "parentId": {
-                    "description": "Move it inside this project or team space (its id, link or key).\nWhat is under it moves with it. You need \"Manage projects\" there\ntoo. Three levels deep at most.",
+                    "description": "Move it inside this project or team space (its id or link).\nWhat is under it moves with it. You need \"Manage projects\" there\ntoo. Three levels deep at most.",
                     "maxLength": 2048,
                     "type": [
                       "string",

@@ -22,6 +22,7 @@ export const PART_IDS = [
   'area.code',
   'area.bug_reports',
   'area.files',
+  'area.subprojects',
   'task.type',
   'task.priority',
   'task.delegate',

@@ -724,7 +724,7 @@ export type SourceView = { error?: string | null; fetchedAt?: string | null; id:
 
 export type SpaceAbove = { icon?: string | null; id: string; key: string; name: string; url: string }
 
-export type SpaceInside = { depth: number; description: string; icon?: string | null; id: string; key: string; name: string; parentId: string; peopleFromParent: boolean; role?: string | null; tasks?: TaskCounts | null; url: string }
+export type SpaceInside = { depth: number; description: string; icon?: string | null; id: string; key: string; name: string; parentId?: string | null; peopleFromParent: boolean; role?: string | null; tasks?: TaskCounts | null; url: string }
 
 export type SpaceKind = "workspace" | "project" | "team" | "personal"
 

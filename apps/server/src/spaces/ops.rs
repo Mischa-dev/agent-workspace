@@ -172,7 +172,26 @@ async fn readable_here(call: &mut OpCall<'_>, space_id: Uuid) -> Result<SpaceVie
     view(state, tx, caller.account_id, space_id)
         .await?
         .filter(|space| space.workspace_id == workspace_id)
+        .map(|space| within_reach(&caller, space))
         .ok_or_else(|| OpError::not_found("That space"))
+}
+
+/// A credential confined to one space isn't told what that space is inside.
+fn within_reach(caller: &access::Caller, mut space: SpaceView) -> SpaceView {
+    if caller.confined_space.is_some() {
+        space.parent_id = None;
+    }
+    space
+}
+
+/// One workspace's tree changes take turns. Taken before any space's row,
+/// so a move and an archive that touch the same spaces can't wait on each
+/// other.
+async fn lock_tree(call: &mut OpCall<'_>) -> Result<(), OpError> {
+    let workspace_id = call.ctx.workspace_id;
+    let tx = call.tx().await?;
+    manage::lock_tree(tx, workspace_id).await?;
+    Ok(())
 }
 
 fn refused(error: AppError) -> OpError {
@@ -337,11 +356,12 @@ async fn locked(call: &mut OpCall<'_>, space_id: Uuid) -> Result<Locked, OpError
 }
 
 async fn answer(call: &mut OpCall<'_>, space_id: Uuid) -> Result<SpaceView, OpError> {
-    let account = call.account_id();
+    let caller = call.ctx.caller.clone();
     let state = call.state;
     let tx = call.tx().await?;
-    view(state, tx, account, space_id)
+    view(state, tx, caller.account_id, space_id)
         .await?
+        .map(|space| within_reach(&caller, space))
         .ok_or_else(|| OpError::not_found("That space"))
 }
 
@@ -416,7 +436,10 @@ impl Operation for SpaceList {
         .await
         .map_err(AppError::from)?;
         Ok(SpaceListView {
-            spaces: rows.into_iter().map(|row| with_url(state, row)).collect(),
+            spaces: rows
+                .into_iter()
+                .map(|row| with_url(state, within_reach(&caller, row)))
+                .collect(),
         })
     }
 }
@@ -503,9 +526,10 @@ pub struct SpaceAbove {
 pub struct SpaceInside {
     #[schemars(with = "String")]
     pub id: Uuid,
-    /// The space it is directly inside.
-    #[schemars(with = "String")]
-    pub parent_id: Uuid,
+    /// The space it is directly inside; absent when you can't read that one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub parent_id: Option<Uuid>,
     /// 1 when it is directly inside the space asked for, 2 one further down.
     pub depth: i32,
     pub key: String,
@@ -635,6 +659,7 @@ impl Operation for SpaceTreeGet {
                        parent.parent_space_id, 1 AS level
                 FROM spaces child JOIN spaces parent ON parent.id = child.parent_space_id
                 WHERE child.id = $1 AND space_readable_by(parent.id, $2)
+                  AND $3::uuid IS NULL
                 UNION ALL
                 SELECT parent.id, parent.key, parent.name, parent.icon,
                        parent.parent_space_id, up.level + 1
@@ -646,6 +671,8 @@ impl Operation for SpaceTreeGet {
         )
         .bind(space.id)
         .bind(caller.account_id)
+        // A credential confined to one space reads nothing above it.
+        .bind(caller.confined_space)
         .fetch_all(&mut **tx)
         .await
         .map_err(AppError::from)?;
@@ -678,6 +705,7 @@ impl Operation for SpaceTreeGet {
             total.open += count.open;
             total.done += count.done;
         }
+        let shown: std::collections::HashSet<Uuid> = counted.iter().copied().collect();
         // Parents before what is in them: by depth, then by name as read.
         let mut inside: Vec<SpaceInside> = rows
             .into_iter()
@@ -686,7 +714,7 @@ impl Operation for SpaceTreeGet {
                 tasks: counts.get(&row.id).copied(),
                 url: url(row.id),
                 id: row.id,
-                parent_id: row.parent_id,
+                parent_id: Some(row.parent_id).filter(|parent| shown.contains(parent)),
                 key: row.key,
                 name: row.name,
                 description: row.description,
@@ -808,7 +836,7 @@ pub struct SpaceCreateInput {
     /// own (a team space starts with #general and a guide page).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shape: Option<super::shape::SpaceShape>,
-    /// Make it inside this project or team space (its id, link or key), as
+    /// Make it inside this project or team space (its id or link), as
     /// a sub-project with its own tasks, chat and pages. You need "Manage
     /// projects" there. Three levels deep at most.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -980,7 +1008,7 @@ pub struct SpaceUpdateInput {
     /// `members` or `workspace`; projects and team spaces only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visibility: Option<SpaceVisibility>,
-    /// Move it inside this project or team space (its id, link or key).
+    /// Move it inside this project or team space (its id or link).
     /// What is under it moves with it. You need "Manage projects" there
     /// too. Three levels deep at most.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1060,12 +1088,19 @@ impl Operation for SpaceUpdate {
         };
         let space_id = input.space_id.id();
         let account = call.account_id();
+        if changes.parent.is_some() || changes.people_from_parent.is_some() {
+            lock_tree(call).await?;
+        }
         let current = locked(call, space_id).await?;
         recheck_manage(call, space_id, "change").await?;
         check_version(input.expected_version, &current)?;
-        // Going inside another space is a change to that one too.
-        if let Some(Some(parent)) = changes.parent
-            && Some(parent) != current.parent_space_id
+        // Going inside another space is a change to that one too, and so is
+        // taking its people: both need "Manage projects" there.
+        let parent_after = changes.parent.unwrap_or(current.parent_space_id);
+        let moves = changes.parent.is_some() && parent_after != current.parent_space_id;
+        let takes_people = changes.people_from_parent == Some(true) && !current.people_from_parent;
+        if let Some(parent) = parent_after
+            && (moves || takes_people)
         {
             check_parent_manage(call, parent).await?;
         }
@@ -1122,10 +1157,29 @@ impl Operation for SpaceArchive {
     async fn run(call: &mut OpCall<'_>, input: SpaceArchiveInput) -> Result<SpaceView, OpError> {
         let space_id = input.space_id.id();
         let account = call.account_id();
+        lock_tree(call).await?;
         let current = locked(call, space_id).await?;
         recheck_manage(call, space_id, "archive").await?;
         if !current.archived {
             check_version(input.expected_version, &current)?;
+        }
+        if !current.archived {
+            // What is inside goes with it, so that takes "Manage projects"
+            // in each of those too: a project with its own people isn't
+            // archived by someone who only manages the one around it.
+            let below = {
+                let tx = call.tx().await?;
+                super::access::below(tx, &[space_id]).await?
+            };
+            for (inside, _, _) in below {
+                if recheck_manage(call, inside, "archive").await.is_err() {
+                    return Err(refused(AppError::Conflict(
+                        "space",
+                        "there are projects inside this one that you don't manage; \
+                         move them out or ask whoever manages them, then archive it",
+                    )));
+                }
+            }
         }
         let tx = call.tx().await?;
         manage::archive(tx, account, space_id, &current)
@@ -1186,6 +1240,7 @@ impl Operation for SpaceRestore {
         {
             return Err(OpError::not_found("That space"));
         }
+        lock_tree(call).await?;
         let current = locked(call, space_id).await?;
         let tx = call.tx().await?;
         let need = Need::permission(Perm::ProjectsManage).writes();

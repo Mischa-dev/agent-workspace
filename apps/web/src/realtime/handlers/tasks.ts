@@ -32,6 +32,8 @@ const workItemUpdated: Handler = (event) => {
     { id: `task-timeline:${workItemId}`, filters: { queryKey: queryKeys.workItemTimeline(projectId, workItemId) } },
     myWork,
     dashboards,
+    // A parent's overview counts the tasks of the projects inside it.
+    { id: 'project-trees', filters: { queryKey: queryKeys.projectTrees } },
     thing('task', workItemId),
     // Its description or comments may have added or dropped a link.
     references,

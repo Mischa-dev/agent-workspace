@@ -19,10 +19,11 @@
 
 ALTER TABLE projects
     ADD COLUMN parent_space_id UUID REFERENCES projects(id) ON DELETE SET NULL,
-    ADD COLUMN people_from_parent BOOLEAN NOT NULL DEFAULT false,
-    ADD CONSTRAINT projects_parent_not_self CHECK (parent_space_id <> id),
-    ADD CONSTRAINT projects_people_need_a_parent
-        CHECK (NOT people_from_parent OR parent_space_id IS NOT NULL);
+    ADD COLUMN people_from_parent BOOLEAN NOT NULL DEFAULT false;
+-- No CHECK reads parent_space_id: a workspace import writes the rows first
+-- and their parents afterwards (a project moved under a newer one comes
+-- before it in the archive), so the trigger below holds the rules instead.
+-- people_from_parent means nothing while there is no parent.
 CREATE INDEX projects_parent ON projects (parent_space_id) WHERE parent_space_id IS NOT NULL;
 
 ALTER TABLE project_memberships
@@ -58,7 +59,6 @@ DECLARE
     loops BOOLEAN;
 BEGIN
     IF NEW.parent_space_id IS NULL THEN
-        NEW.people_from_parent := false;
         RETURN NEW;
     END IF;
     IF TG_OP = 'UPDATE'
@@ -143,7 +143,9 @@ DECLARE
 BEGIN
     SELECT organization_id, CASE WHEN people_from_parent THEN parent_space_id END
     INTO org, parent
-    FROM projects WHERE id = space AND archived_at IS NULL;
+    FROM projects WHERE id = space;
+    -- An archived space is kept in step too: a seat lost in the parent or a
+    -- group is lost there as well, since an archived space can still be read.
     IF org IS NULL THEN
         RETURN;
     END IF;

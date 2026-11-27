@@ -8,7 +8,7 @@ import { useAuthenticatedSession } from '../auth/session'
 import { useShellPage } from '../shell/shellStore'
 import { Banner, Button, ButtonLink, ErrorState, PageHeader, SelectField, TextField, describeError, showToast } from '../ui'
 import { listProjectTemplates, viewKeys } from '../views/api'
-import { useCreateProject, useProjects, useSwitchProject } from './hooks'
+import { useCreateProject, useProject, useProjects, useSwitchProject } from './hooks'
 import { projectKeyPattern, suggestKey } from './projectKey'
 import '../styles/pages.css'
 import { here, spaceHref } from '../app/href'
@@ -45,7 +45,10 @@ export function CreateProjectPage() {
   const [preset, setPreset] = useState<string | null>(null)
   // "New project inside" opens this page with the parent in the address.
   const [search] = useSearchParams()
-  const [parentId, setParentId] = useState(search.get('inside') ?? '')
+  const asked = search.get('inside') ?? ''
+  const [parentId, setParentId] = useState(asked)
+  // The list holds a person's first hundred projects; the one asked for is read on its own.
+  const askedParent = useProject(asked)
   const [people, setPeople] = useState<'parent' | 'own'>('parent')
   if (followed !== addressed) {
     setFollowed(addressed)
@@ -56,10 +59,17 @@ export function CreateProjectPage() {
   }
   // A project can go inside any project of this workspace you manage.
   const projects = useProjects()
-  const parents = (projects.data?.projects ?? [])
+  const listed = projects.data?.projects ?? []
+  const parents = [...listed, ...(askedParent.data && !listed.some((project) => project.id === asked) ? [askedParent.data] : [])]
     .filter((project) => !project.archivedAt && project.capabilities.manage && project.kind === 'project')
     .sort((left, right) => left.name.localeCompare(right.name))
   const parent = parents.find((project) => project.id === parentId && project.organizationId === organizationId)
+  // The one asked for can't hold it (not yours to manage, archived, another
+  // workspace): say so, so it isn't quietly made on its own.
+  if (parentId && !parent && !askedParent.isPending && !projects.isPending) {
+    setParentId('')
+    setError('This project can’t go inside the one you came from. It will stand on its own unless you pick another under Inside.')
+  }
   const templates = useQuery({
     queryKey: viewKeys.projectTemplates(organizationId),
     queryFn: () => listProjectTemplates(organizationId),
@@ -77,7 +87,9 @@ export function CreateProjectPage() {
         ? 'Use 2–10 letters or numbers for the key, starting with a letter.'
         : !organizationId
           ? 'There’s no workspace to create this project in.'
-          : null
+          : parentId && !parent
+            ? 'Still finding the project this goes inside. Try again in a moment.'
+            : null
   const canCreate = session.user.capabilities.createProject && creatableOrganizations.length > 0
 
   useShellPage({ mainClassName: 'aw-main--page' })

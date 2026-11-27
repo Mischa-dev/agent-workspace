@@ -19,6 +19,7 @@ vi.mock('../auth/session', () => ({
 const created = vi.hoisted(() => ({ mutateAsync: vi.fn() }))
 vi.mock('./hooks', () => ({
   useCreateProject: () => ({ mutateAsync: created.mutateAsync, isPending: false }),
+  useProject: () => ({ data: undefined, isPending: false }),
   useProjects: () => ({
     data: {
       projects: [

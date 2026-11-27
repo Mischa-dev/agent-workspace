@@ -796,7 +796,7 @@ async fn lock_and_require_other_owners(
     .fetch_all(&mut **transaction)
     .await?;
     let project_owners = sqlx::query_scalar::<_, Uuid>(
-        "SELECT actor_id FROM project_memberships WHERE project_id = $1 AND role = $2 AND enabled FOR UPDATE",
+        "SELECT actor_id FROM project_memberships WHERE project_id = $1 AND role = $2 AND enabled AND NOT via_parent FOR UPDATE",
     )
     .bind(project_id)
     .bind(crate::access::tier::OWNER)
@@ -1140,7 +1140,8 @@ pub(crate) async fn leave(
     if crate::policy::MembershipRole::parse(&role) == Some(crate::policy::MembershipRole::Owner) {
         let others = sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM project_memberships \
-             WHERE project_id = $1 AND role = $3 AND enabled AND actor_id <> $2",
+             WHERE project_id = $1 AND role = $3 AND enabled AND NOT via_parent \
+               AND actor_id <> $2",
         )
         .bind(space)
         .bind(account)
