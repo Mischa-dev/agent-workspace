@@ -471,5 +471,19 @@ fn past_its_day_a_lost_call_can_run_again() {
         past_a_day: true,
         ..TODAY
     };
-    assert!(written_twice(receipts).is_some());
+    let lost_then_run_again = explore(&receipts, STATE_LIMIT)
+        .reaches(|world| world.calls[0] == Call::Ended(Answer::Lost) && world.writes == 2);
+    assert!(lost_then_run_again.is_some());
+}
+
+/// A retry of a call that never answered waits only while that call could
+/// still be running: after half an hour it is told the outcome isn't known.
+#[test]
+fn a_lost_calls_retry_stops_waiting() {
+    let explored = explore(&TODAY, STATE_LIMIT);
+    let told_unknown = explored.reaches(|world| {
+        world.calls[0] == Call::Ended(Answer::Lost)
+            && world.calls[1] == Call::Ended(Answer::OutcomeUnknown)
+    });
+    assert!(told_unknown.is_some(), "a lost call's retries wait all day");
 }
