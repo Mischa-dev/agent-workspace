@@ -6,7 +6,7 @@
 //! question about the reachable states: one that must hold in all of them
 //! (`breaks`), or one that some state must reach (`reaches`).
 //!
-//! A model that uses it (`idempotency/model.rs` is the first) calls the same
+//! A model that uses it (`idempotency/model.rs`, `jobs/model.rs`) calls the same
 //! pure decision functions the server runs, so a change to one of those is
 //! checked against every order of steps, not only the orders someone wrote a
 //! test for.

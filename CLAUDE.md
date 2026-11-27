@@ -15,3 +15,5 @@ agents can read them directly.
   to green.
 - `request-receipts`: changing how a retried call is answered (request
   ids); it has a model that checks every order of steps.
+- `job-leases`: changing how a background job's lease is claimed, renewed
+  or given up; it has a model too.
