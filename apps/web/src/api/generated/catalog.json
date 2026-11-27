@@ -2990,6 +2990,20 @@
     "title": "Message history"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "messages",
+    "name": "message_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List messages"
+  },
+  {
     "automation": true,
     "destructive": false,
     "emits": [
@@ -5745,6 +5759,22 @@
     "automation": true,
     "destructive": false,
     "emits": [
+      "task.updated"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "tasks",
+    "name": "task_claim_next",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Claim the next ready task"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
       "task.commented"
     ],
     "idempotent": true,
@@ -5836,6 +5866,23 @@
     "preview": false,
     "proposable": false,
     "title": "Task acceptance criteria"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "task.commented",
+      "task.updated"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "tasks",
+    "name": "task_finish",
+    "permission": "tasks.edit",
+    "preview": false,
+    "proposable": false,
+    "title": "Finish task"
   },
   {
     "automation": false,

@@ -54,7 +54,9 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<ProjectStatusSet>()
         .add::<ProjectUpdatePost>()
         .add::<claims::TaskClaim>()
-        .add::<claims::TaskRelease>();
+        .add::<claims::TaskRelease>()
+        .add::<claims::TaskClaimNext>()
+        .add::<claims::TaskFinish>();
     planning::register_ops(registry);
     reads::register_ops(registry);
 }

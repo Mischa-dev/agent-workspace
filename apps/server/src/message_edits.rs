@@ -615,6 +615,15 @@ pub(crate) async fn apply_edit(
         &newly_mentioned,
     )
     .await?;
+    let note = sqlx::query_scalar::<_, bool>(
+        r#"
+        -- visibility: the message the editor just changed, after the edit's own checks
+        SELECT register = 'note' FROM messages WHERE id = $1
+        "#,
+    )
+    .bind(locked.id)
+    .fetch_one(&mut **transaction)
+    .await?;
     replies::ask_after_edit(
         transaction,
         replies::NewMessage {
@@ -625,7 +634,7 @@ pub(crate) async fn apply_edit(
             message_id: locked.id,
             author_actor_id: actor.actor_id,
             mentioned_actor_ids: &newly_mentioned,
-            note: false,
+            note,
             reply_to_message_id: None,
         },
     )

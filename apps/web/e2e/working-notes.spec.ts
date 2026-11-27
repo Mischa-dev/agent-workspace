@@ -72,3 +72,40 @@ test('agents’ working notes fold to one line for the person reading', async ({
     await page.screenshot({ path: path.join(screenshotDir, 'working-notes-open-phone-dark.png') })
   }
 })
+
+test('working notes on a task fold in its activity', async ({ page, context, playwright }) => {
+  const space = seededValue('E2E_PROJECT_ID')
+  await page.goto(`/projects/${space}`)
+  const bare = await playwright.request.newContext({ baseURL: webOrigin, storageState: { cookies: [], origins: [] } })
+  const { request, headers } = await writer(context, page)
+  const workspace = await workspaceId(request)
+  const tag = randomUUID().slice(0, 6)
+  const made = await request.post(`/api/v1/projects/${space}/external-agents`, {
+    headers: headers(),
+    data: { connectionName: `Mara${tag} runner`, displayName: `Mara${tag}`, handle: `mara${tag}`, role: 'member', scopes: ['read', 'write'] },
+  })
+  expect(made.ok(), await made.text()).toBe(true)
+  const mara = asAgent(bare, ((await made.json()) as { oneTimeCredential: { token: string } }).oneTimeCredential.token)
+  const call = async (name: string, input: Record<string, unknown>) => {
+    const answer = await mara.call(name, input, workspace)
+    expect(answer.outcome, JSON.stringify(answer)).toBe('ok')
+    return answer.value as { workItemId: string; url?: string }
+  }
+  const task = await call('task_create', { projectId: space, title: `Split the importer ${tag}` })
+  await call('task_comment_create', { taskId: task.workItemId, note: true, text: `Reading the importer ${tag}.` })
+  await call('task_comment_create', { taskId: task.workItemId, note: true, text: `Parser moved out; tests next ${tag}.` })
+  await call('task_comment_create', { taskId: task.workItemId, text: `Done: split in two files ${tag}.` })
+
+  await page.goto(new URL(task.url ?? '', webOrigin).pathname)
+  await expect(page.getByText(`Done: split in two files ${tag}.`)).toBeVisible()
+  const fold = page.getByRole('button', { name: `2 working notes from Mara${tag}` })
+  await expect(fold).toBeVisible()
+  await expect(page.getByText(`Reading the importer ${tag}.`)).toHaveCount(0)
+  if (process.env.E2E_LOOK) await page.screenshot({ path: path.join(screenshotDir, 'working-notes-task-folded.png') })
+  await fold.click()
+  await expect(page.getByText(`Parser moved out; tests next ${tag}.`)).toBeVisible()
+  if (process.env.E2E_LOOK) {
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await page.screenshot({ path: path.join(screenshotDir, 'working-notes-task-open-dark.png') })
+  }
+})

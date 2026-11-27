@@ -423,3 +423,125 @@ async fn a_note_on_a_task_is_kept_without_notifying_its_watchers() {
         vec!["thing_comment".to_owned()]
     );
 }
+
+#[tokio::test]
+async fn a_note_reaches_who_it_answers_and_who_an_edit_names_and_is_never_chased() {
+    let Some(world) = WorldBuilder::default()
+        .project("RV")
+        .person("ben", "member")
+        .agent("codex", "member")
+        .agent("rook", "member")
+        .private_group("ops", &["ben", "codex", "rook"])
+        .build("awd220_review")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let pool = world.pool();
+    let project = world.project("RV").to_owned();
+    let ben = &world.people["ben"];
+    let codex = &world.agents["codex"];
+    let rook = &world.agents["rook"];
+    let (status, channel) = send(
+        app,
+        world.owner.browser.request(
+            "POST",
+            &format!("/api/v1/projects/{project}/channels"),
+            Some("channel-review"),
+            json!({ "name": "review" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{channel}");
+    let channel = channel["conversation"]["id"]
+        .as_str()
+        .expect("channel")
+        .to_owned();
+
+    // A note that answers a person's message tells that person, unnamed.
+    let (status, said) = send(
+        app,
+        ben.browser.request(
+            "POST",
+            &format!("/api/v1/conversations/{channel}/messages"),
+            Some("review-ben"),
+            json!({"content": {"version": 1, "nodes": [{"type": "text", "text": "Who has the importer?"}]}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{said}");
+    let question = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM messages WHERE conversation_id = $1::uuid ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&channel)
+    .fetch_one(pool)
+    .await
+    .expect("message");
+    drain(pool).await;
+    call(
+        app,
+        codex,
+        "message_send",
+        json!({
+            "conversationId": channel, "note": true, "replyToMessageId": question,
+            "text": "I do. Splitting it now."
+        }),
+    )
+    .await;
+    drain(pool).await;
+    assert_eq!(notified(pool, ben.actor).await, ["mention"]);
+    assert!(notified(pool, world.owner.actor).await.is_empty());
+
+    // The same request id and words as a message is another request.
+    let quiet = json!({
+        "conversationId": channel, "note": true, "clientRequestId": "review-1",
+        "text": "Parking this."
+    });
+    call(app, codex, "message_send", quiet.clone()).await;
+    let replay = call(app, codex, "message_send", quiet).await;
+    assert_eq!(replay["idempotentReplay"], true, "{replay}");
+    let loud = tool(
+        app,
+        &codex.token,
+        &codex.session,
+        "message_send",
+        json!({
+            "conversationId": channel, "note": false, "clientRequestId": "review-1",
+            "text": "Parking this."
+        }),
+    )
+    .await;
+    assert_eq!(loud["outcome"], "conflict", "{loud}");
+
+    // In a group, a note asks nobody until it names someone, an edit that
+    // names them asks them, and the request is never chased.
+    let group = world.conversations["ops"].clone();
+    let parked = call(
+        app,
+        codex,
+        "message_send",
+        json!({"conversationId": group, "note": true, "text": "Parking the importer here."}),
+    )
+    .await;
+    assert_eq!(asked(pool, rook).await, 0);
+    call(
+        app,
+        codex,
+        "message_update",
+        json!({"messageId": parked["messageId"], "text": "Parking the importer here, @rook."}),
+    )
+    .await;
+    assert_eq!(asked(pool, rook).await, 1, "named by the edit");
+    let chased = sqlx::query_scalar::<_, bool>(
+        "SELECT bool_or(required OR claim_due_at IS NOT NULL) FROM reply_requests WHERE agent_actor_id = $1",
+    )
+    .bind(rook.actor)
+    .fetch_one(pool)
+    .await
+    .expect("requests");
+    assert!(
+        !chased,
+        "a note's request has no deadline and tells no manager"
+    );
+}

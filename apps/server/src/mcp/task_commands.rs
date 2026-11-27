@@ -413,6 +413,147 @@ pub(crate) async fn comment(
     )
 }
 
+/// Where a walk through the workflow ended.
+pub(crate) struct Walked {
+    /// The task's version now.
+    pub version: i64,
+    /// Whether the task is in a status of the group asked for.
+    pub arrived: bool,
+    /// The status it was heading for, when the space has one in that group.
+    pub status: Option<String>,
+}
+
+/// Move a task to the space's first status in a group (`started`,
+/// `review`, `completed`), one allowed change at a time, the way a caller
+/// would with several `task_update` calls (AWD-220: `task_claim_next` and
+/// `task_finish` shouldn't make a worker learn each space's workflow).
+/// `from_groups`, when given, limits the walk to tasks sitting in one of
+/// those groups. Each step is its own command with its own retry key, so a
+/// retry of the whole call picks up where the first one stopped.
+pub(crate) async fn walk_to(
+    state: &AppState,
+    ctx: &OpContext,
+    space: Uuid,
+    task_id: Uuid,
+    group: &str,
+    from_groups: Option<&[&str]>,
+) -> Result<Walked, OpError> {
+    use sha2::{Digest, Sha256};
+    let (workflow, current, mut version) = {
+        let mut tx = crate::db::scoped_tx(&state.pool)
+            .await
+            .map_err(crate::error::AppError::from)?;
+        let workflow = super::workflow::Workflow::load(&mut tx, space).await?;
+        let row = sqlx::query_as::<_, (Uuid, i64)>(
+            "SELECT status_id, version FROM task_rows WHERE id = $1 AND project_id = $2",
+        )
+        .bind(task_id)
+        .bind(space)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(crate::error::AppError::from)?
+        .ok_or(OpError::not_found("That task"))?;
+        (workflow, row.0, row.1)
+    };
+    let group_of = |id: Uuid| {
+        workflow
+            .statuses
+            .iter()
+            .find(|status| status.id == id)
+            .map(|status| status.category.as_str())
+    };
+    if group_of(current) == Some(group) {
+        return Ok(Walked {
+            version,
+            arrived: true,
+            status: Some(workflow.status_name(current).to_owned()),
+        });
+    }
+    let Some(target) = workflow
+        .statuses
+        .iter()
+        .find(|status| status.enabled && status.category == group)
+    else {
+        return Ok(Walked {
+            version,
+            arrived: false,
+            status: None,
+        });
+    };
+    let stays = from_groups
+        .is_some_and(|groups| !group_of(current).is_some_and(|group| groups.contains(&group)));
+    let path = if stays {
+        None
+    } else {
+        workflow.shortest_path(current, target.id)
+    };
+    let Some(path) = path else {
+        return Ok(Walked {
+            version,
+            arrived: false,
+            status: Some(target.name.clone()),
+        });
+    };
+    let base = request_id(ctx);
+    for step in path {
+        let mut step_ctx = ctx.clone();
+        let digest = Sha256::digest(format!("{base}:{step}").as_bytes());
+        step_ctx.request_id = Some(
+            digest
+                .iter()
+                .take(16)
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+        );
+        let moved = update(
+            state,
+            &step_ctx,
+            &json!({
+                "taskId": task_id.to_string(),
+                "expectedVersion": version,
+                "status": step.to_string(),
+            }),
+        )
+        .await?;
+        version = moved.version;
+    }
+    Ok(Walked {
+        version,
+        arrived: true,
+        status: Some(target.name.clone()),
+    })
+}
+
+/// The space's tasks that can start now, best first, as `task_ready_list`
+/// ranks them for this caller (AWD-220, `task_claim_next`). `strict` keeps
+/// only those that also pass the checks for unattended work.
+pub(crate) async fn ready_candidates(
+    state: &AppState,
+    ctx: &OpContext,
+    space: Uuid,
+    strict: bool,
+) -> Result<Vec<crate::ai::ready::RankedTask>, OpError> {
+    use crate::ai::ready::{RankFilter, RankScope, rank};
+    let principal = principal_in(ctx, Some(space));
+    let ranking = rank(
+        &state.pool,
+        super::planning::reader(state, &principal),
+        space,
+        &RankFilter {
+            scope: if strict {
+                RankScope::Agents
+            } else {
+                RankScope::Ready
+            },
+            milestone_id: None,
+            limit: 200,
+            offset: 0,
+        },
+    )
+    .await?;
+    Ok(ranking.tasks)
+}
+
 pub(crate) async fn comment_edit(
     state: &AppState,
     ctx: &OpContext,

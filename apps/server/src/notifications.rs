@@ -576,6 +576,14 @@ pub async fn fan_out(
                         .into_iter()
                         .filter(|notification| notification.kind == kind::MENTION),
                 );
+                for answered in note_answers(transaction, created.message_id).await? {
+                    if !found
+                        .iter()
+                        .any(|told| told.recipient_actor_id == answered.recipient_actor_id)
+                    {
+                        found.push(answered);
+                    }
+                }
             } else {
                 found.extend(followed_messages(transaction, created.message_id).await?);
                 found.extend(direct_messages(transaction, created.message_id).await?);
@@ -649,6 +657,61 @@ async fn is_note(
     .fetch_optional(&mut **transaction)
     .await?
     .unwrap_or(false))
+}
+
+/// The person a working note answers (its `replyToMessageId`), in a
+/// channel, thread, DM or group: told as if named, since the note is
+/// addressed to them (AWD-220). A thing's discussion tells them through
+/// `thing_comments`.
+async fn note_answers(
+    transaction: &mut Transaction<'_, Postgres>,
+    message_id: Uuid,
+) -> Result<Vec<NewNotification>, AppError> {
+    let rows = sqlx::query_as::<_, (Uuid, Uuid, Uuid, Uuid)>(
+        r#"
+        -- visibility: a worker reading the message it was told of; the recipient
+        -- is checked with conversation_visible_to
+        SELECT COALESCE(note.project_id, direct_scope_id()), note.conversation_id,
+               note.author_actor_id, answered.author_actor_id
+        FROM messages note
+        JOIN conversations conversation ON conversation.id = note.conversation_id
+        LEFT JOIN conversations parent ON parent.id = conversation.parent_channel_id
+        JOIN messages answered
+          ON answered.id = note.reply_to_message_id
+         AND answered.conversation_id = note.conversation_id
+         AND answered.removed_at IS NULL
+        JOIN actors recipient ON recipient.id = answered.author_actor_id AND recipient.kind = 'human' -- // kind-check: mechanical (people are notified; agents are asked to reply by the reply rules)
+        WHERE note.id = $1 AND note.removed_at IS NULL
+          AND COALESCE(parent.kind, conversation.kind) <> 'comments'
+          AND answered.author_actor_id <> note.author_actor_id
+          AND (note.project_id IS NULL
+               OR actor_can_access_project(answered.author_actor_id, NULL, note.project_id))
+          AND conversation_visible_to(note.conversation_id, answered.author_actor_id)
+          AND conversation_notification_level(answered.author_actor_id, note.conversation_id)
+              <> 'nothing'
+        "#,
+    )
+    .bind(message_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(project_id, conversation_id, author, recipient)| {
+            let mut notification = NewNotification::new(
+                project_id,
+                recipient,
+                kind::MENTION,
+                "conversation",
+                conversation_id,
+                format!("mention:{conversation_id}"),
+                format!("mention:{message_id}"),
+            );
+            notification.actor_id = Some(author);
+            notification.conversation_id = Some(conversation_id);
+            notification.message_id = Some(message_id);
+            notification
+        })
+        .collect())
 }
 
 /// Tells the recipient's open browsers their notifications changed.

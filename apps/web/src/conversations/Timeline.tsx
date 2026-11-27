@@ -698,15 +698,16 @@ export function TimelineEntries({
     // What you wrote yourself is never new to you, even when it was sent from
     // somewhere that didn't mark the conversation read (a notification reply).
     const own = Boolean(viewerId && entry.message?.author.id === viewerId)
-    const folded = Boolean(
-      foldNotes &&
-        entry.message?.note &&
+    // A note that doesn't name you: it never made the conversation unread.
+    const quiet = Boolean(
+      entry.message?.note &&
         !entry.message.removed &&
         !own &&
         !(viewerId && entry.message.mentionedActors?.some((actor) => actor.id === viewerId)),
     )
-    // A folded note is never what's new: it didn't make the conversation unread.
-    if (!newShown && firstUnreadSequence != null && entry.sequence >= firstUnreadSequence && !own && !folded) {
+    const folded = foldNotes && quiet
+    // So it is never what's new, folded or not (a working channel shows its notes in full).
+    if (!newShown && firstUnreadSequence != null && entry.sequence >= firstUnreadSequence && !own && !quiet) {
       newShown = true
       dividers.push(<NewDivider key="new" />)
     }

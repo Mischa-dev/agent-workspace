@@ -282,6 +282,8 @@ mod tests {
         };
         assert!(file("mcp.json").contains("https://w.test/api/v1/mcp"));
         assert!(file("catalogue.json").contains("reply.requested"));
+        // The command line calls this server unless told another.
+        assert!(file("bin/aw").contains("\"https://w.test\""));
         assert!(parts.iter().all(|(path, bytes)| !path.contains("recipes/")
             && !String::from_utf8_lossy(bytes).contains("{origin}")));
         assert!(!package("https://w.test").is_empty());

@@ -284,6 +284,18 @@ async fn ask_addressed(
         .await?;
         addressed.extend(author);
     }
+    ask_accounts(transaction, message, &addressed).await
+}
+
+/// Ask those of `addressed` who take reply requests and can read the
+/// conversation about a working note. The requests are optional: nobody
+/// was put on the spot in front of people, so an unanswered one isn't
+/// chased and no manager is told.
+async fn ask_accounts(
+    transaction: &mut Transaction<'_, Postgres>,
+    message: &NewMessage<'_>,
+    addressed: &[Uuid],
+) -> Result<(), AppError> {
     if addressed.is_empty() {
         return Ok(());
     }
@@ -303,7 +315,7 @@ async fn ask_addressed(
         ORDER BY actor.id
         "#,
     )
-    .bind(&addressed)
+    .bind(addressed)
     .bind(message.author_actor_id)
     .bind(message.conversation_id)
     .bind(message.project_id)
@@ -313,7 +325,7 @@ async fn ask_addressed(
         return Ok(());
     }
     // Each note is its own ask: one about an earlier note isn't superseded.
-    insert_requests(transaction, message, &agents, true, false, 0).await?;
+    insert_requests(transaction, message, &agents, false, false, 0).await?;
     crate::launch::queue_tag_launches(
         transaction,
         message.project_id,
@@ -337,6 +349,11 @@ pub(crate) async fn ask_after_edit(
     transaction: &mut Transaction<'_, Postgres>,
     message: NewMessage<'_>,
 ) -> Result<(), AppError> {
+    if message.note {
+        // A note asked only who it addressed, wherever it was sent, so
+        // someone it names now is asked now.
+        return ask_accounts(transaction, &message, message.mentioned_actor_ids).await;
+    }
     if !matches!(message.conversation_kind, "channel" | "thread")
         || message.mentioned_actor_ids.is_empty()
     {
@@ -1026,6 +1043,8 @@ pub(crate) async fn continue_conversation_in(
         JOIN actors actor ON actor.id = message.author_actor_id
         WHERE entry.conversation_id = $1
           AND message.removed_at IS NULL
+          -- A working note isn't part of the exchange that stopped.
+          AND message.register = 'message'
         ORDER BY entry.sequence DESC
         LIMIT 1
         "#,

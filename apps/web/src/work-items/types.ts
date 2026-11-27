@@ -462,6 +462,8 @@ export type WorkItemTimelineEntry = {
     removed: { removedAt: string; removedBy: AssignableActor | null } | null
     /** The comment on this task it answers, read live: no text once that one is deleted. */
     replyTo: { commentId: string; authorName: string | null; text: string | null; removed: boolean } | null
+    /** A working note: kept, and told only to whom it addresses. */
+    note?: boolean
   } | null
 }
 

@@ -7526,6 +7526,96 @@
         ],
         "type": "object"
       },
+      "ListedConversation": {
+        "description": "A conversation that messages of the page were said in.",
+        "properties": {
+          "aboutId": {
+            "description": "That thing's id: thing_open or task_get opens it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "aboutKind": {
+            "description": "The kind of thing it discusses (task, page, ...), for a discussion\nand its threads.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "channel, thread or comments (a thing's discussion).",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parentId": {
+            "description": "A thread's channel or discussion.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "name"
+        ],
+        "type": "object"
+      },
+      "ListedMessage": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "authorHandle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conversationId": {
+            "description": "Which of `conversations` it was said in.",
+            "type": "string"
+          },
+          "edited": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "note": {
+            "description": "A working note: a record that asked for nobody's attention.",
+            "type": "boolean"
+          },
+          "replyToMessageId": {
+            "description": "The message it answers.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "conversationId",
+          "at",
+          "author",
+          "text"
+        ],
+        "type": "object"
+      },
       "MadeTask": {
         "properties": {
           "elementId": {
@@ -8714,6 +8804,43 @@
         },
         "required": [
           "title"
+        ],
+        "type": "object"
+      },
+      "NextTask": {
+        "description": "The task a `task_claim_next` took.",
+        "properties": {
+          "key": {
+            "description": "Its key, such as AWD-12.",
+            "type": "string"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "taskId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "why": {
+            "description": "Why it was the next one, in words.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "taskId",
+          "key",
+          "title",
+          "priority",
+          "why",
+          "url"
         ],
         "type": "object"
       },
@@ -95553,6 +95680,426 @@
         "x-operation-kind": "query"
       }
     },
+    "/api/v2/w/{workspace}/ops/message_list": {
+      "post": {
+        "description": "Catch up on a space in one read: every message you can see there after a point (channels, threads, and the discussions on tasks, pages and other things; working notes too), oldest first, with its text, who wrote it and where. conversationId or thingId narrows it to one channel or one thing's discussion. Pages are sized in characters of text (maxCharacters), not in messages; pass nextCursor back as cursor to read on. A message sent in the last two seconds waits for the next read. DMs and groups aren't in a space: read those with conversation_read.",
+        "operationId": "message_list",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "conversationId": {
+                    "description": "Only this channel or thread, and for a channel its threads too.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "cursor": {
+                    "description": "Where the last read stopped (its nextCursor). Left out: from `since`,\nor from the start.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "maxCharacters": {
+                    "description": "About how much message text one page holds, in characters (default\n100,000, at most 1,000,000). A message is never cut: a page ends\nwith the message that reaches the size.",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "notes": {
+                    "description": "false leaves working notes out. They are included by default.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "since": {
+                    "description": "For a first read: only messages after this time, such as\n2026-11-27T20:00:00Z.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "spaceId": {
+                    "description": "The space to read: its ID or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "thingId": {
+                    "description": "Only the discussion of this task, page, sheet, whiteboard or record\n(its comments and their threads): its ID or a link to it.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "spaceId"
+                ],
+                "title": "MessageListInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "conversations": {
+                              "description": "Each conversation the messages name, once.",
+                              "items": {
+                                "$ref": "#/components/schemas/ListedConversation"
+                              },
+                              "type": "array"
+                            },
+                            "messages": {
+                              "description": "Oldest first.",
+                              "items": {
+                                "$ref": "#/components/schemas/ListedMessage"
+                              },
+                              "type": "array"
+                            },
+                            "more": {
+                              "description": "true: more is waiting already; read again now.",
+                              "type": "boolean"
+                            },
+                            "nextCursor": {
+                              "description": "Pass it back as cursor to read on from here, now or later.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "messages",
+                            "conversations",
+                            "nextCursor",
+                            "more"
+                          ],
+                          "title": "MessagePage",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "conversations": {
+                              "description": "Each conversation the messages name, once.",
+                              "items": {
+                                "$ref": "#/components/schemas/ListedConversation"
+                              },
+                              "type": "array"
+                            },
+                            "messages": {
+                              "description": "Oldest first.",
+                              "items": {
+                                "$ref": "#/components/schemas/ListedMessage"
+                              },
+                              "type": "array"
+                            },
+                            "more": {
+                              "description": "true: more is waiting already; read again now.",
+                              "type": "boolean"
+                            },
+                            "nextCursor": {
+                              "description": "Pass it back as cursor to read on from here, now or later.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "messages",
+                            "conversations",
+                            "nextCursor",
+                            "more"
+                          ],
+                          "title": "MessagePage",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "List messages",
+        "tags": [
+          "messages"
+        ],
+        "x-operation-kind": "query"
+      }
+    },
     "/api/v2/w/{workspace}/ops/message_preview_hide": {
       "post": {
         "description": "Hide the link previews under a message, for everyone, as the remove button on a preview does: the one for url, or all of them. Your own messages, or anyone's if you own or administer the space. The message and its links stay.",
@@ -171877,6 +172424,443 @@
         "x-operation-kind": "change"
       }
     },
+    "/api/v2/w/{workspace}/ops/task_claim_next": {
+      "post": {
+        "description": "Take the best task that is ready in a space and claim it in one step, so several workers can share a queue without picking the same one. It takes tasks that can start now (blockers done, not marked blocked), that nobody holds and that aren't assigned or handed to someone else; labels narrows it. waitSeconds waits for one to become ready. The task moves to the space's in-progress status. Open it with task_get, do the work, then task_finish (or task_release with a handoff if you stop early). Needs \"Edit tasks\" where it acts.",
+        "operationId": "task_claim_next",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "labels": {
+                    "description": "Only tasks that carry every one of these labels, by name (at most 10).",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "minutes": {
+                    "description": "How long the claim lasts, in minutes (default 120, at most 1440).\ntask_claim on the task renews it.",
+                    "format": "uint16",
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "note": {
+                    "description": "What you're doing, shown to others on the task you get.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "spaceId": {
+                    "description": "The space whose tasks to take from: its ID or a link to it.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  },
+                  "strict": {
+                    "description": "true takes only tasks that also pass the checks for unattended work\n(acceptance criteria, a description, somewhere to run), as\ntask_ready_list with scope agents lists them.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "waitSeconds": {
+                    "description": "Seconds to wait for a task when none is ready (at most 30). When the\nwait ends with nothing, call again.",
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "spaceId"
+                ],
+                "title": "TaskClaimNextInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "What `task_claim_next` did.",
+                          "properties": {
+                            "claim": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ClaimValue"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Your claim on it, with the last handoff note if one was left."
+                            },
+                            "claimed": {
+                              "description": "false: nothing was ready for you; nothing changed.",
+                              "type": "boolean"
+                            },
+                            "message": {
+                              "description": "What to do next.",
+                              "type": "string"
+                            },
+                            "task": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/NextTask"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "claimed",
+                            "message"
+                          ],
+                          "title": "ClaimNextValue",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "What `task_claim_next` did.",
+                          "properties": {
+                            "claim": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/ClaimValue"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Your claim on it, with the last handoff note if one was left."
+                            },
+                            "claimed": {
+                              "description": "false: nothing was ready for you; nothing changed.",
+                              "type": "boolean"
+                            },
+                            "message": {
+                              "description": "What to do next.",
+                              "type": "string"
+                            },
+                            "task": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/NextTask"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "claimed",
+                            "message"
+                          ],
+                          "title": "ClaimNextValue",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Claim the next ready task",
+        "tags": [
+          "tasks"
+        ],
+        "x-operation-kind": "change"
+      }
+    },
     "/api/v2/w/{workspace}/ops/task_comment_create": {
       "post": {
         "description": "Comment on a task: progress, a handoff, or what's left. Keep it useful; skip status-only noise. @handles of people in the space are notified. To answer one comment, pass replyToCommentId: it shows quoted above yours and its author is told. Needs \"Comment on tasks\" where it acts.",
@@ -174718,6 +175702,414 @@
           "tasks"
         ],
         "x-operation-kind": "change"
+      }
+    },
+    "/api/v2/w/{workspace}/ops/task_finish": {
+      "post": {
+        "description": "End your work on a task with its result, in one step: the result is posted on the task (its watchers and whoever asked are told), the task moves on (outcome done, review or failed) through whatever statuses lie between, and your claim is released. Refused while someone else holds the task. To stop without a result, use task_release with a handoff. Needs \"Edit tasks\" where it acts.",
+        "operationId": "task_finish",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Your id for this change, kept the same when you retry it: a retry with the same id and input is answered once, with replayed: true; the same id with other input is a conflict. A change without one is refused.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "outcome": {
+                    "description": "done (the default): the task moves to its finished status. review:\nit moves to review for someone to check. failed: it stays open and\nis marked blocked with your result as the reason.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "result": {
+                    "description": "What came of it, for whoever asked and whoever reads the task later:\nwhat you did, where it is (a branch, a pull request, a page), and\nanything left. For outcome failed: what stopped you and what would\nunblock it. Markdown, up to 8,000 characters. It is posted on the\ntask, so its watchers are told.",
+                    "type": "string"
+                  },
+                  "taskId": {
+                    "description": "The task: its ID, link, or key such as AWD-12.",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "taskId",
+                  "result"
+                ],
+                "title": "TaskFinishInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "What `task_finish` did.",
+                          "properties": {
+                            "outcome": {
+                              "description": "done, review or failed.",
+                              "type": "string"
+                            },
+                            "released": {
+                              "description": "Whether a claim of yours was released.",
+                              "type": "boolean"
+                            },
+                            "resultCommentId": {
+                              "description": "The comment that holds your result.",
+                              "type": "string"
+                            },
+                            "taskId": {
+                              "type": "string"
+                            },
+                            "url": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "version": {
+                              "description": "The task's version now.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "taskId",
+                            "outcome",
+                            "resultCommentId",
+                            "version",
+                            "released"
+                          ],
+                          "title": "TaskFinished",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "description": "What `task_finish` did.",
+                          "properties": {
+                            "outcome": {
+                              "description": "done, review or failed.",
+                              "type": "string"
+                            },
+                            "released": {
+                              "description": "Whether a claim of yours was released.",
+                              "type": "boolean"
+                            },
+                            "resultCommentId": {
+                              "description": "The comment that holds your result.",
+                              "type": "string"
+                            },
+                            "taskId": {
+                              "type": "string"
+                            },
+                            "url": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "version": {
+                              "description": "The task's version now.",
+                              "format": "int64",
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "taskId",
+                            "outcome",
+                            "resultCommentId",
+                            "version",
+                            "released"
+                          ],
+                          "title": "TaskFinished",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Finish task",
+        "tags": [
+          "tasks"
+        ],
+        "x-operation-kind": "create"
       }
     },
     "/api/v2/w/{workspace}/ops/task_get": {

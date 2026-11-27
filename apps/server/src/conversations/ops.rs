@@ -32,6 +32,7 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<MessageDelete>()
         .add::<MessagePreviewHide>()
         .add::<MessageHistory>()
+        .add::<super::catch_up::MessageList>()
         .add::<MessageReact>()
         .add::<ConversationMarkRead>()
         .add::<ConversationMemberList>()

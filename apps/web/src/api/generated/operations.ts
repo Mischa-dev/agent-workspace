@@ -376,6 +376,10 @@ export type LinkedTask = { id: string; key: string; status: string; title: strin
 
 export type LinkedThread = { id: string; name: string; url: string }
 
+export type ListedConversation = { aboutId?: string | null; aboutKind?: string | null; id: string; kind: string; name: string; parentId?: string | null }
+
+export type ListedMessage = { at: string; author: string; authorHandle?: string | null; conversationId: string; edited?: boolean; id: string; note?: boolean; replyToMessageId?: string | null; text: string }
+
 export type MadeTask = { elementId: string; id: string; key: string; title: string }
 
 export type ManifestSummary = { accountName: string; description: string; digest: string; events: string[]; fileSource?: boolean; frameOrigins: string[]; key: string; kinds: string[]; name: string; operations: OperationSummary[]; panels: PanelSummary[]; publisher?: string | null; scopes: ScopeView[]; version: string }
@@ -433,6 +437,8 @@ export type NavView = { icon?: string | null; id: string; label: string; spaceId
 export type NewSpace = { key: string; name: string }
 
 export type NewTask = { acceptanceCriteria?: string[]; assignee?: string | null; blockedByRefs?: string[] | null; description?: string | null; dueDate?: string | null; estimate?: number | null; fields?: Record<string, unknown> | null; labels?: string[]; milestone?: string | null; parentId?: string | null; parentRef?: string | null; priority?: string | null; ref?: string | null; startDate?: string | null; status?: string | null; title: string; type?: string | null }
+
+export type NextTask = { key: string; priority: string; taskId: string; title: string; url: string; why: string[] }
 
 export type NotificationLine = { at: string; count: number; id: string; kind: string; preview?: string | null; project: string; read: boolean; snoozedUntil?: string | null; subject: string; subjectId: string; subjectKind: string; title: string; untilActivity?: boolean; url: string }
 
@@ -1642,6 +1648,10 @@ export type MessageHistoryInput = { messageId: string }
 
 export type MessageHistoryOutput = { conversationId: string; messageId: string; removed?: boolean; revision: number; revisions: RevisionItem[] }
 
+export type MessageListInput = { conversationId?: string | null; cursor?: string | null; maxCharacters?: number | null; notes?: boolean | null; since?: string | null; spaceId: string; thingId?: string | null }
+
+export type MessageListOutput = { conversations: ListedConversation[]; messages: ListedMessage[]; more: boolean; nextCursor: string }
+
 export type MessagePreviewHideInput = { messageId: string; url?: string | null }
 
 export type MessagePreviewHideOutput = { hidden: number; messageId: string }
@@ -2358,6 +2368,10 @@ export type TaskClaimInput = { minutes?: number | null; note?: string | null; ta
 
 export type TaskClaimOutput = { claimedAt: string; claimedBy: string; expiresAt: string; handoff?: HandoffNote | null; note?: string | null; taskId: string }
 
+export type TaskClaimNextInput = { labels?: string[]; minutes?: number | null; note?: string | null; spaceId: string; strict?: boolean | null; waitSeconds?: number | null }
+
+export type TaskClaimNextOutput = { claim?: ClaimValue | null; claimed: boolean; message: string; task?: NextTask | null }
+
 export type TaskCommentCreateInput = { attachmentIds?: string[] | null; content?: MessageContent | null; note?: boolean | null; replyToCommentId?: string | null; taskId: string; text?: string | null }
 
 export type TaskCommentCreateOutput = { activityId?: string | null; changedFields: string[]; idempotentReplay: boolean; key?: string | null; labels?: string[] | null; message?: string | null; proposalId?: string | null; proposed?: unknown[]; resultId: string; url?: string | null; version: number; workItemId: string }
@@ -2381,6 +2395,10 @@ export type TaskCreateManyOutput = { idempotentReplay?: boolean; labelsCreated?:
 export type TaskCriteriaUpdateInput = { expectedVersion: number; operations: CriterionOperationArgument[]; taskId: string }
 
 export type TaskCriteriaUpdateOutput = { completed: number; criteria: CriterionValue[]; idempotentReplay?: boolean; key: string; operations: CriterionOperationOutcome[]; taskId: string; total: number; url: string; version: number }
+
+export type TaskFinishInput = { outcome?: string | null; result: string; taskId: string }
+
+export type TaskFinishOutput = { outcome: string; released: boolean; resultCommentId: string; taskId: string; url?: string | null; version: number }
 
 export type TaskGetInput = { historyBefore?: string | null; historyLimit?: number | null; include?: string[] | null; taskId: string }
 
@@ -2870,6 +2888,7 @@ export type Operations = {
   message_draft_set: { input: MessageDraftSetInput; output: MessageDraftSetOutput }
   message_forward: { input: MessageForwardInput; output: MessageForwardOutput }
   message_history: { input: MessageHistoryInput; output: MessageHistoryOutput }
+  message_list: { input: MessageListInput; output: MessageListOutput }
   message_preview_hide: { input: MessagePreviewHideInput; output: MessagePreviewHideOutput }
   message_react: { input: MessageReactInput; output: MessageReactOutput }
   message_schedule: { input: MessageScheduleInput; output: MessageScheduleOutput }
@@ -3049,12 +3068,14 @@ export type Operations = {
   status_set: { input: StatusSetInput; output: StatusSetOutput }
   task_archive: { input: TaskArchiveInput; output: TaskArchiveOutput }
   task_claim: { input: TaskClaimInput; output: TaskClaimOutput }
+  task_claim_next: { input: TaskClaimNextInput; output: TaskClaimNextOutput }
   task_comment_create: { input: TaskCommentCreateInput; output: TaskCommentCreateOutput }
   task_comment_delete: { input: TaskCommentDeleteInput; output: TaskCommentDeleteOutput }
   task_comment_update: { input: TaskCommentUpdateInput; output: TaskCommentUpdateOutput }
   task_create: { input: TaskCreateInput; output: TaskCreateOutput }
   task_create_many: { input: TaskCreateManyInput; output: TaskCreateManyOutput }
   task_criteria_update: { input: TaskCriteriaUpdateInput; output: TaskCriteriaUpdateOutput }
+  task_finish: { input: TaskFinishInput; output: TaskFinishOutput }
   task_get: { input: TaskGetInput; output: TaskGetOutput }
   task_import: { input: TaskImportInput; output: TaskImportOutput }
   task_launch: { input: TaskLaunchInput; output: TaskLaunchOutput }

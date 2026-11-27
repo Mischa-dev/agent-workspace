@@ -40,9 +40,16 @@ export function useFirstUnread({
 
   const unread = useMemo<UnreadSummary | null>(() => {
     if (sequence == null || entries.length === 0) return null
+    // Working notes that don't name you aren't new messages: they never made the conversation unread.
     const count = entries.filter(
-      (entry) => entry.sequence >= sequence && entry.message && !entry.message.removed && entry.message.author.id !== viewerId,
+      (entry) =>
+        entry.sequence >= sequence &&
+        entry.message &&
+        !entry.message.removed &&
+        entry.message.author.id !== viewerId &&
+        !(entry.message.note && !entry.message.mentionedActors?.some((actor) => actor.id === viewerId)),
     ).length
+    if (count === 0 && entries.some((entry) => entry.sequence >= sequence && entry.message?.note)) return null
     const loadedFrom = entries[0].sequence
     const first = entries.find((entry) => entry.sequence >= sequence)
     return {

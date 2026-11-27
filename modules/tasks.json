@@ -35,6 +35,8 @@
     "task_comment_delete": "change",
     "task_reorder": "change",
     "task_claim": "change",
+    "task_claim_next": "change",
+    "task_finish": "create",
     "task_release": "change",
     "task_link": "change",
     "task_link_many": "change",

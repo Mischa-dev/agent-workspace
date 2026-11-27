@@ -1011,6 +1011,7 @@ export async function getWorkItemTimeline(
               editedAt: nullableString(comment.editedAt),
               removed: comment.removed ? commentRemoval(record(comment.removed)) : null,
               replyTo: commentReply(comment.replyTo),
+              ...(comment.note === true ? { note: true } : {}),
             }
           : null,
     }

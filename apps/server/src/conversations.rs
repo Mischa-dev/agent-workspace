@@ -1,4 +1,5 @@
 // K2.7: the message operations.
+pub mod catch_up;
 pub mod channel_ops;
 pub mod ops;
 pub mod sidebar_ops;
@@ -1592,6 +1593,16 @@ pub(crate) async fn append_message_command_with(
                 "attachments": attachments,
             }))?,
         }
+    };
+    // Said as a note or as a message on purpose: the same key and words
+    // with the other choice is a different request, not a replay. Left
+    // out, the hash is as it always was, so earlier replays still match.
+    let request_hash = match extras.note {
+        Some(note) => RequestHash::for_value(&serde_json::json!({
+            "request": request_hash.as_bytes(),
+            "note": note,
+        }))?,
+        None => request_hash,
     };
     let scope = idempotency::resource_bound_scope("conversation", conversation_id, "message_send")?;
     let mut transaction = crate::db::scoped_tx(&state.pool).await?;
