@@ -14,7 +14,8 @@ and duplicate timestamps. Several branches add migrations at once, so:
 
 - Use the range your workstream was given (the brief or the roadmap says), or
   the current UTC time if none was.
-- Never edit a migration that's on `main`; add another one.
+- A migration that's on `main` can't change (CI refuses the pull request with
+  the fix); add another one.
 - A migration must apply on top of any other branch's migration, in either
   order. Don't depend on something a branch that hasn't merged adds.
 
