@@ -2,28 +2,39 @@
 # Refuse a commit whose Rust isn't formatted, and say how to fix it.
 #
 # CI's first job refuses the same thing some minutes after a push, and the
-# fix is then a second commit and a second CI run. `tools/cloud/setup.sh`
+# fix is then a second commit and a second CI run. What is checked is what
+# the commit will hold, not the files on disk: a file formatted after
+# `git add` and not added again is still refused. Each file is checked on
+# its own, which also reaches the ones `cargo fmt` can't find (a module
+# declared inside a macro). `tools/cloud/setup.sh`
 # and the Claude Code session hook turn this on (`core.hooksPath`); so does
 #   git config core.hooksPath tools/git-hooks
 set -euo pipefail
 
-if git diff --cached --quiet --diff-filter=ACMR -- '*.rs'; then
-  exit 0
-fi
-if ! command -v cargo >/dev/null 2>&1; then
-  exit 0
-fi
-
 cd "$(git rev-parse --show-toplevel)"
-if unformatted="$(cargo fmt --all --check -- --files-with-diff 2>&1)"; then
+if ! rustfmt --version >/dev/null 2>&1; then
+  exit 0
+fi
+edition="$(sed -n 's/^edition = "\(.*\)"$/\1/p' Cargo.toml 2>/dev/null | head -n 1)"
+
+unformatted=()
+while IFS= read -r -d '' path; do
+  if ! git show ":${path}" | rustfmt ${edition:+--edition "${edition}"} 2>/dev/null |
+    cmp -s - <(git show ":${path}"); then
+    unformatted+=("${path}")
+  fi
+done < <(git diff --cached --name-only -z --diff-filter=ACMR -- '*.rs')
+
+if [ "${#unformatted[@]}" -eq 0 ]; then
   exit 0
 fi
 
 {
   echo "These files aren't formatted as rustfmt formats them:"
-  echo "${unformatted}" | sed "s|^${PWD}/|  |"
+  printf '  %s\n' "${unformatted[@]}"
   echo
-  echo "Format them and commit again:"
-  echo "  cargo fmt --all && git add -u && git commit"
+  files="$(printf ' %q' "${unformatted[@]}")"
+  echo "Format them, add them again and commit:"
+  echo "  rustfmt${edition:+ --edition ${edition}}${files} && git add${files} && git commit"
 } >&2
 exit 1

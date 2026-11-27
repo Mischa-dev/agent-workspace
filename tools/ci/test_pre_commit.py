@@ -7,12 +7,19 @@ import tempfile
 import unittest
 
 
-HOOK = Path(__file__).resolve().parents[1] / "git-hooks" / "pre-commit"
+REPO = Path(__file__).resolve().parents[2]
+HOOK = REPO / "tools" / "git-hooks" / "pre-commit"
 FORMATTED = "pub fn one() -> u8 {\n    1\n}\n"
 UNFORMATTED = "pub fn one() -> u8 { 1 }\n"
 
 
-@unittest.skipUnless(shutil.which("cargo"), "needs cargo fmt")
+def has_rustfmt():
+    if not shutil.which("rustfmt"):
+        return False
+    return subprocess.run(["rustfmt", "--version"], cwd=REPO, capture_output=True).returncode == 0
+
+
+@unittest.skipUnless(has_rustfmt(), "needs rustfmt")
 class PreCommitTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -20,6 +27,7 @@ class PreCommitTests(unittest.TestCase):
         self.root = Path(temp.name)
         self.git("init", "-q")
         self.write("Cargo.toml", '[package]\nname = "scratch"\nversion = "0.0.0"\nedition = "2024"\n')
+        shutil.copy(REPO / "rust-toolchain.toml", self.root)
         self.write("src/lib.rs", FORMATTED)
         self.write("notes.md", "one\n")
 
@@ -40,10 +48,26 @@ class PreCommitTests(unittest.TestCase):
         result = self.commit_check()
         self.assertEqual(result.returncode, 1)
         self.assertIn("  src/lib.rs", result.stderr)
-        self.assertIn("cargo fmt --all && git add -u && git commit", result.stderr)
+        self.assertIn("rustfmt --edition 2024 src/lib.rs && git add src/lib.rs && git commit", result.stderr)
 
     def test_formatted_rust_is_committed(self):
         self.git("add", "-A")
+        self.assertEqual(self.commit_check().returncode, 0)
+
+    def test_what_is_checked_is_what_the_commit_holds(self):
+        self.write("src/lib.rs", UNFORMATTED)
+        self.git("add", "-A")
+        self.write("src/lib.rs", FORMATTED)
+        self.assertEqual(self.commit_check().returncode, 1)
+
+        self.git("add", "-A")
+        self.write("src/lib.rs", UNFORMATTED)
+        self.assertEqual(self.commit_check().returncode, 0)
+
+    def test_a_file_whose_modules_are_elsewhere_is_checked_alone(self):
+        self.write("src/lib.rs", "mod other;\n" + FORMATTED)
+        self.write("src/other.rs", UNFORMATTED)
+        self.git("add", "src/lib.rs", "Cargo.toml")
         self.assertEqual(self.commit_check().returncode, 0)
 
     def test_a_commit_without_rust_is_not_checked(self):
