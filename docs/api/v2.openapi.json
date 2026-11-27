@@ -9956,6 +9956,21 @@
         ],
         "type": "object"
       },
+      "People": {
+        "description": "Whose people a space inside another has.",
+        "oneOf": [
+          {
+            "const": "parent",
+            "description": "Everyone in its parent, with the role they hold there, kept in step.",
+            "type": "string"
+          },
+          {
+            "const": "own",
+            "description": "Only the people added to it.",
+            "type": "string"
+          }
+        ]
+      },
       "PermissionEntry": {
         "properties": {
           "builtIn": {
@@ -14621,6 +14636,106 @@
         ],
         "type": "object"
       },
+      "SpaceAbove": {
+        "description": "A space above the one asked for.",
+        "properties": {
+          "icon": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "name",
+          "url"
+        ],
+        "type": "object"
+      },
+      "SpaceInside": {
+        "description": "A space inside the one asked for, at any depth.",
+        "properties": {
+          "depth": {
+            "description": "1 when it is directly inside the space asked for, 2 one further down.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "description": {
+            "type": "string"
+          },
+          "icon": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parentId": {
+            "description": "The space it is directly inside; absent when you can't read that one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "peopleFromParent": {
+            "description": "True when its people are its parent's.",
+            "type": "boolean"
+          },
+          "role": {
+            "description": "Your role in it; absent when you read it without being a member.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tasks": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskCounts"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its own tasks, where you may see tasks there and Tasks is on."
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "depth",
+          "key",
+          "name",
+          "description",
+          "peopleFromParent",
+          "url"
+        ],
+        "type": "object"
+      },
       "SpaceKind": {
         "oneOf": [
           {
@@ -14767,6 +14882,17 @@
           "name": {
             "type": "string"
           },
+          "parentId": {
+            "description": "The project or team space it is inside, when it is inside one you\ncan read. Absent at the top.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "peopleFromParent": {
+            "description": "True when its people are its parent's: everyone in the parent is in\nit with the same role, and members are changed there. False when it\nhas its own people.",
+            "type": "boolean"
+          },
           "role": {
             "description": "Your role in it; absent when you read it without being a member.",
             "type": [
@@ -14800,6 +14926,7 @@
           "visibility",
           "archived",
           "version",
+          "peopleFromParent",
           "url"
         ],
         "type": "object"
@@ -15350,6 +15477,26 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "TaskCounts": {
+        "description": "How a space's tasks stand, as the reader sees them.",
+        "properties": {
+          "done": {
+            "description": "Finished.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "open": {
+            "description": "Not finished and not canceled.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "open",
+          "done"
+        ],
         "type": "object"
       },
       "TaskFieldValue": {
@@ -164212,7 +164359,7 @@
     },
     "/api/v2/w/{workspace}/ops/space_archive": {
       "post": {
-        "description": "Archive a project or team space: it leaves everyone's lists and nothing in it changes until space_restore brings it back. A space with a run still going isn't archived. Returns the space. Needs \"Change and archive projects\" where it acts.",
+        "description": "Archive a project or team space, with the projects inside it: they leave everyone's lists and nothing in them changes until space_restore brings them back. A space with a run still going, in it or under it, isn't archived. Returns the space. Needs \"Change and archive projects\" where it acts.",
         "operationId": "space_archive",
         "parameters": [
           {
@@ -164324,6 +164471,17 @@
                             "name": {
                               "type": "string"
                             },
+                            "parentId": {
+                              "description": "The project or team space it is inside, when it is inside one you\ncan read. Absent at the top.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "peopleFromParent": {
+                              "description": "True when its people are its parent's: everyone in the parent is in\nit with the same role, and members are changed there. False when it\nhas its own people.",
+                              "type": "boolean"
+                            },
                             "role": {
                               "description": "Your role in it; absent when you read it without being a member.",
                               "type": [
@@ -164357,6 +164515,7 @@
                             "visibility",
                             "archived",
                             "version",
+                            "peopleFromParent",
                             "url"
                           ],
                           "title": "SpaceView",
@@ -164522,6 +164681,17 @@
                             "name": {
                               "type": "string"
                             },
+                            "parentId": {
+                              "description": "The project or team space it is inside, when it is inside one you\ncan read. Absent at the top.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "peopleFromParent": {
+                              "description": "True when its people are its parent's: everyone in the parent is in\nit with the same role, and members are changed there. False when it\nhas its own people.",
+                              "type": "boolean"
+                            },
                             "role": {
                               "description": "Your role in it; absent when you read it without being a member.",
                               "type": [
@@ -164555,6 +164725,7 @@
                             "visibility",
                             "archived",
                             "version",
+                            "peopleFromParent",
                             "url"
                           ],
                           "title": "SpaceView",
@@ -164672,7 +164843,7 @@
     },
     "/api/v2/w/{workspace}/ops/space_create": {
       "post": {
-        "description": "Make a project or a team space in this workspace; you become its owner. Give it a key for task numbers (it can't change later), a name, and optionally a description, an icon, who may find it and a project template to start from. Returns the space. Needs \"Create projects\" where it acts.",
+        "description": "Make a project or a team space in this workspace; you become its owner. Give it a key for task numbers (it can't change later), a name, and optionally a description, an icon, who may find it and a project template to start from. With parentId it is made inside another project as a sub-project, with that project's people unless people is own. Returns the space. Needs \"Create projects\" where it acts.",
         "operationId": "space_create",
         "parameters": [
           {
@@ -164732,6 +164903,25 @@
                   },
                   "name": {
                     "type": "string"
+                  },
+                  "parentId": {
+                    "description": "Make it inside this project or team space (its id or link), as\na sub-project with its own tasks, chat and pages. You need \"Manage\nprojects\" there. Three levels deep at most.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "people": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/People"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "With parentId, whose people it has: `parent` (the default: everyone\nin the parent, with their role there, kept in step) or `own` (only\nyou to start, and whoever you add)."
                   },
                   "shape": {
                     "anyOf": [
@@ -164834,6 +165024,17 @@
                             "name": {
                               "type": "string"
                             },
+                            "parentId": {
+                              "description": "The project or team space it is inside, when it is inside one you\ncan read. Absent at the top.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "peopleFromParent": {
+                              "description": "True when its people are its parent's: everyone in the parent is in\nit with the same role, and members are changed there. False when it\nhas its own people.",
+                              "type": "boolean"
+                            },
                             "role": {
                               "description": "Your role in it; absent when you read it without being a member.",
                               "type": [
@@ -164867,6 +165068,7 @@
                             "visibility",
                             "archived",
                             "version",
+                            "peopleFromParent",
                             "url"
                           ],
                           "title": "SpaceView",
@@ -165032,6 +165234,17 @@
                             "name": {
                               "type": "string"
                             },
+                            "parentId": {
+                              "description": "The project or team space it is inside, when it is inside one you\ncan read. Absent at the top.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "peopleFromParent": {
+                              "description": "True when its people are its parent's: everyone in the parent is in\nit with the same role, and members are changed there. False when it\nhas its own people.",
+                              "type": "boolean"
+                            },
                             "role": {
                               "description": "Your role in it; absent when you read it without being a member.",
                               "type": [
@@ -165065,6 +165278,7 @@
                             "visibility",
                             "archived",
                             "version",
+                            "peopleFromParent",
                             "url"
                           ],
                           "title": "SpaceView",
@@ -166064,7 +166278,11 @@
                               "type": "integer"
                             },
                             "viaGroup": {
-                              "description": "In through a group that holds a role here (K1.27), not added\nthemselves.",
+                              "description": "In through a group that holds a role here (K1.27) or through the\nproject this one is inside (see viaParent), not added themselves.",
+                              "type": "boolean"
+                            },
+                            "viaParent": {
+                              "description": "In because they are in the project this one is inside, with their\nrole there: change or remove them in that project.",
                               "type": "boolean"
                             }
                           },
@@ -166076,6 +166294,7 @@
                             "role",
                             "active",
                             "viaGroup",
+                            "viaParent",
                             "version"
                           ],
                           "title": "SpaceMemberView",
@@ -166254,7 +166473,11 @@
                               "type": "integer"
                             },
                             "viaGroup": {
-                              "description": "In through a group that holds a role here (K1.27), not added\nthemselves.",
+                              "description": "In through a group that holds a role here (K1.27) or through the\nproject this one is inside (see viaParent), not added themselves.",
+                              "type": "boolean"
+                            },
+                            "viaParent": {
+                              "description": "In because they are in the project this one is inside, with their\nrole there: change or remove them in that project.",
                               "type": "boolean"
                             }
                           },
@@ -166266,6 +166489,7 @@
                             "role",
                             "active",
                             "viaGroup",
+                            "viaParent",
                             "version"
                           ],
                           "title": "SpaceMemberView",
@@ -166500,7 +166724,11 @@
                               "type": "integer"
                             },
                             "viaGroup": {
-                              "description": "In through a group that holds a role here (K1.27), not added\nthemselves.",
+                              "description": "In through a group that holds a role here (K1.27) or through the\nproject this one is inside (see viaParent), not added themselves.",
+                              "type": "boolean"
+                            },
+                            "viaParent": {
+                              "description": "In because they are in the project this one is inside, with their\nrole there: change or remove them in that project.",
                               "type": "boolean"
                             }
                           },
@@ -166512,6 +166740,7 @@
                             "role",
                             "active",
                             "viaGroup",
+                            "viaParent",
                             "version"
                           ],
                           "title": "SpaceMemberView",
@@ -166690,7 +166919,11 @@
                               "type": "integer"
                             },
                             "viaGroup": {
-                              "description": "In through a group that holds a role here (K1.27), not added\nthemselves.",
+                              "description": "In through a group that holds a role here (K1.27) or through the\nproject this one is inside (see viaParent), not added themselves.",
+                              "type": "boolean"
+                            },
+                            "viaParent": {
+                              "description": "In because they are in the project this one is inside, with their\nrole there: change or remove them in that project.",
                               "type": "boolean"
                             }
                           },
@@ -166702,6 +166935,7 @@
                             "role",
                             "active",
                             "viaGroup",
+                            "viaParent",
                             "version"
                           ],
                           "title": "SpaceMemberView",
@@ -166819,7 +167053,7 @@
     },
     "/api/v2/w/{workspace}/ops/space_list": {
       "post": {
-        "description": "The spaces in this workspace you can read, by name: the workspace's own space, projects, team spaces and your personal space, with each one's key, icon, who may find it and your role. includeArchived also lists archived ones you're a member of.",
+        "description": "The spaces in this workspace you can read, by name: the workspace's own space, projects, team spaces and your personal space, with each one's key, icon, who may find it, your role, and the project it is inside (parentId) when it is a sub-project. includeArchived also lists archived ones you're a member of.",
         "operationId": "space_list",
         "parameters": [
           {
@@ -167305,7 +167539,11 @@
                               "type": "integer"
                             },
                             "viaGroup": {
-                              "description": "In through a group that holds a role here (K1.27), not added\nthemselves.",
+                              "description": "In through a group that holds a role here (K1.27) or through the\nproject this one is inside (see viaParent), not added themselves.",
+                              "type": "boolean"
+                            },
+                            "viaParent": {
+                              "description": "In because they are in the project this one is inside, with their\nrole there: change or remove them in that project.",
                               "type": "boolean"
                             }
                           },
@@ -167317,6 +167555,7 @@
                             "role",
                             "active",
                             "viaGroup",
+                            "viaParent",
                             "version"
                           ],
                           "title": "SpaceMemberView",
@@ -167495,7 +167734,11 @@
                               "type": "integer"
                             },
                             "viaGroup": {
-                              "description": "In through a group that holds a role here (K1.27), not added\nthemselves.",
+                              "description": "In through a group that holds a role here (K1.27) or through the\nproject this one is inside (see viaParent), not added themselves.",
+                              "type": "boolean"
+                            },
+                            "viaParent": {
+                              "description": "In because they are in the project this one is inside, with their\nrole there: change or remove them in that project.",
                               "type": "boolean"
                             }
                           },
@@ -167507,6 +167750,7 @@
                             "role",
                             "active",
                             "viaGroup",
+                            "viaParent",
                             "version"
                           ],
                           "title": "SpaceMemberView",
@@ -167754,7 +167998,11 @@
                               "type": "integer"
                             },
                             "viaGroup": {
-                              "description": "In through a group that holds a role here (K1.27), not added\nthemselves.",
+                              "description": "In through a group that holds a role here (K1.27) or through the\nproject this one is inside (see viaParent), not added themselves.",
+                              "type": "boolean"
+                            },
+                            "viaParent": {
+                              "description": "In because they are in the project this one is inside, with their\nrole there: change or remove them in that project.",
                               "type": "boolean"
                             }
                           },
@@ -167766,6 +168014,7 @@
                             "role",
                             "active",
                             "viaGroup",
+                            "viaParent",
                             "version"
                           ],
                           "title": "SpaceMemberView",
@@ -167944,7 +168193,11 @@
                               "type": "integer"
                             },
                             "viaGroup": {
-                              "description": "In through a group that holds a role here (K1.27), not added\nthemselves.",
+                              "description": "In through a group that holds a role here (K1.27) or through the\nproject this one is inside (see viaParent), not added themselves.",
+                              "type": "boolean"
+                            },
+                            "viaParent": {
+                              "description": "In because they are in the project this one is inside, with their\nrole there: change or remove them in that project.",
                               "type": "boolean"
                             }
                           },
@@ -167956,6 +168209,7 @@
                             "role",
                             "active",
                             "viaGroup",
+                            "viaParent",
                             "version"
                           ],
                           "title": "SpaceMemberView",
@@ -168215,7 +168469,11 @@
                               "type": "integer"
                             },
                             "viaGroup": {
-                              "description": "In through a group that holds a role here (K1.27), not added\nthemselves.",
+                              "description": "In through a group that holds a role here (K1.27) or through the\nproject this one is inside (see viaParent), not added themselves.",
+                              "type": "boolean"
+                            },
+                            "viaParent": {
+                              "description": "In because they are in the project this one is inside, with their\nrole there: change or remove them in that project.",
                               "type": "boolean"
                             }
                           },
@@ -168227,6 +168485,7 @@
                             "role",
                             "active",
                             "viaGroup",
+                            "viaParent",
                             "version"
                           ],
                           "title": "SpaceMemberView",
@@ -168405,7 +168664,11 @@
                               "type": "integer"
                             },
                             "viaGroup": {
-                              "description": "In through a group that holds a role here (K1.27), not added\nthemselves.",
+                              "description": "In through a group that holds a role here (K1.27) or through the\nproject this one is inside (see viaParent), not added themselves.",
+                              "type": "boolean"
+                            },
+                            "viaParent": {
+                              "description": "In because they are in the project this one is inside, with their\nrole there: change or remove them in that project.",
                               "type": "boolean"
                             }
                           },
@@ -168417,6 +168680,7 @@
                             "role",
                             "active",
                             "viaGroup",
+                            "viaParent",
                             "version"
                           ],
                           "title": "SpaceMemberView",
@@ -168628,6 +168892,17 @@
                             "name": {
                               "type": "string"
                             },
+                            "parentId": {
+                              "description": "The project or team space it is inside, when it is inside one you\ncan read. Absent at the top.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "peopleFromParent": {
+                              "description": "True when its people are its parent's: everyone in the parent is in\nit with the same role, and members are changed there. False when it\nhas its own people.",
+                              "type": "boolean"
+                            },
                             "role": {
                               "description": "Your role in it; absent when you read it without being a member.",
                               "type": [
@@ -168661,6 +168936,7 @@
                             "visibility",
                             "archived",
                             "version",
+                            "peopleFromParent",
                             "url"
                           ],
                           "title": "SpaceView",
@@ -168826,6 +169102,17 @@
                             "name": {
                               "type": "string"
                             },
+                            "parentId": {
+                              "description": "The project or team space it is inside, when it is inside one you\ncan read. Absent at the top.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "peopleFromParent": {
+                              "description": "True when its people are its parent's: everyone in the parent is in\nit with the same role, and members are changed there. False when it\nhas its own people.",
+                              "type": "boolean"
+                            },
                             "role": {
                               "description": "Your role in it; absent when you read it without being a member.",
                               "type": [
@@ -168859,6 +169146,7 @@
                             "visibility",
                             "archived",
                             "version",
+                            "peopleFromParent",
                             "url"
                           ],
                           "title": "SpaceView",
@@ -169060,6 +169348,17 @@
                             "name": {
                               "type": "string"
                             },
+                            "parentId": {
+                              "description": "The project or team space it is inside, when it is inside one you\ncan read. Absent at the top.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "peopleFromParent": {
+                              "description": "True when its people are its parent's: everyone in the parent is in\nit with the same role, and members are changed there. False when it\nhas its own people.",
+                              "type": "boolean"
+                            },
                             "role": {
                               "description": "Your role in it; absent when you read it without being a member.",
                               "type": [
@@ -169093,6 +169392,7 @@
                             "visibility",
                             "archived",
                             "version",
+                            "peopleFromParent",
                             "url"
                           ],
                           "title": "SpaceView",
@@ -169258,6 +169558,17 @@
                             "name": {
                               "type": "string"
                             },
+                            "parentId": {
+                              "description": "The project or team space it is inside, when it is inside one you\ncan read. Absent at the top.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "peopleFromParent": {
+                              "description": "True when its people are its parent's: everyone in the parent is in\nit with the same role, and members are changed there. False when it\nhas its own people.",
+                              "type": "boolean"
+                            },
                             "role": {
                               "description": "Your role in it; absent when you read it without being a member.",
                               "type": [
@@ -169291,6 +169602,7 @@
                             "visibility",
                             "archived",
                             "version",
+                            "peopleFromParent",
                             "url"
                           ],
                           "title": "SpaceView",
@@ -169408,7 +169720,7 @@
     },
     "/api/v2/w/{workspace}/ops/space_restore": {
       "post": {
-        "description": "Bring an archived space back as it was, for someone who could manage it. Find archived spaces with space_list includeArchived. Returns the space.",
+        "description": "Bring an archived space back as it was, with the projects inside it that were archived with it and that you manage, for someone who could manage it. Find archived spaces with space_list includeArchived. Returns the space.",
         "operationId": "space_restore",
         "parameters": [
           {
@@ -169520,6 +169832,17 @@
                             "name": {
                               "type": "string"
                             },
+                            "parentId": {
+                              "description": "The project or team space it is inside, when it is inside one you\ncan read. Absent at the top.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "peopleFromParent": {
+                              "description": "True when its people are its parent's: everyone in the parent is in\nit with the same role, and members are changed there. False when it\nhas its own people.",
+                              "type": "boolean"
+                            },
                             "role": {
                               "description": "Your role in it; absent when you read it without being a member.",
                               "type": [
@@ -169553,6 +169876,7 @@
                             "visibility",
                             "archived",
                             "version",
+                            "peopleFromParent",
                             "url"
                           ],
                           "title": "SpaceView",
@@ -169718,6 +170042,17 @@
                             "name": {
                               "type": "string"
                             },
+                            "parentId": {
+                              "description": "The project or team space it is inside, when it is inside one you\ncan read. Absent at the top.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "peopleFromParent": {
+                              "description": "True when its people are its parent's: everyone in the parent is in\nit with the same role, and members are changed there. False when it\nhas its own people.",
+                              "type": "boolean"
+                            },
                             "role": {
                               "description": "Your role in it; absent when you read it without being a member.",
                               "type": [
@@ -169751,6 +170086,7 @@
                             "visibility",
                             "archived",
                             "version",
+                            "peopleFromParent",
                             "url"
                           ],
                           "title": "SpaceView",
@@ -169866,9 +170202,403 @@
         "x-operation-kind": "change"
       }
     },
+    "/api/v2/w/{workspace}/ops/space_tree_get": {
+      "post": {
+        "description": "One space with the projects it is inside and the projects inside it (sub-projects, at any depth) that you can read, each with its open and finished task counts where you may see its tasks, and the totals for the whole tree. Make a sub-project with space_create parentId; move one with space_update.",
+        "operationId": "space_tree_get",
+        "parameters": [
+          {
+            "description": "The workspace the operation acts in, by id or slug. A target in another workspace is not found.",
+            "in": "path",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "spaceId": {
+                    "description": "The space: its id, link or key (such as \"WEB\").",
+                    "maxLength": 2048,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spaceId"
+                ],
+                "title": "SpaceTreeGetInput",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "inside": {
+                              "description": "The spaces inside it that you can read, parents before what is in\nthem, by name. task_list with includeSubProjects lists their tasks.",
+                              "items": {
+                                "$ref": "#/components/schemas/SpaceInside"
+                              },
+                              "type": "array"
+                            },
+                            "path": {
+                              "description": "The spaces it is inside that you can read, outermost first. Empty at\nthe top.",
+                              "items": {
+                                "$ref": "#/components/schemas/SpaceAbove"
+                              },
+                              "type": "array"
+                            },
+                            "space": {
+                              "$ref": "#/components/schemas/SpaceView"
+                            },
+                            "tasks": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/TaskCounts"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The space's own tasks, where you may see them."
+                            },
+                            "tasksWithInside": {
+                              "$ref": "#/components/schemas/TaskCounts",
+                              "description": "Its tasks and those of everything inside it that you may see."
+                            }
+                          },
+                          "required": [
+                            "space",
+                            "path",
+                            "inside",
+                            "tasksWithInside"
+                          ],
+                          "title": "SpaceTreeView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Done: outcome ok, with the value."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "paused": {
+                          "const": false
+                        },
+                        "pendingReview": {
+                          "const": false
+                        },
+                        "preview": {
+                          "type": "boolean"
+                        },
+                        "replaySafe": {
+                          "type": "boolean"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "requestId": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "properties": {
+                            "inside": {
+                              "description": "The spaces inside it that you can read, parents before what is in\nthem, by name. task_list with includeSubProjects lists their tasks.",
+                              "items": {
+                                "$ref": "#/components/schemas/SpaceInside"
+                              },
+                              "type": "array"
+                            },
+                            "path": {
+                              "description": "The spaces it is inside that you can read, outermost first. Empty at\nthe top.",
+                              "items": {
+                                "$ref": "#/components/schemas/SpaceAbove"
+                              },
+                              "type": "array"
+                            },
+                            "space": {
+                              "$ref": "#/components/schemas/SpaceView"
+                            },
+                            "tasks": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/TaskCounts"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The space's own tasks, where you may see them."
+                            },
+                            "tasksWithInside": {
+                              "$ref": "#/components/schemas/TaskCounts",
+                              "description": "Its tasks and those of everything inside it that you may see."
+                            }
+                          },
+                          "required": [
+                            "space",
+                            "path",
+                            "inside",
+                            "tasksWithInside"
+                          ],
+                          "title": "SpaceTreeView",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "details": {
+                          "type": "object"
+                        },
+                        "field": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "module": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "enum": [
+                            "unauthenticated",
+                            "not_found",
+                            "invalid_request",
+                            "permission_denied",
+                            "conflict",
+                            "rate_limited",
+                            "limit_reached",
+                            "workspace_suspended",
+                            "too_large",
+                            "temporarily_unavailable"
+                          ]
+                        },
+                        "retryCategory": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "message",
+                        "retryCategory"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "paused": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "paused"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "pendingReview": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "pendingReview"
+                          ]
+                        }
+                      ],
+                      "properties": {
+                        "outcome": {
+                          "const": "ok"
+                        },
+                        "value": {
+                          "properties": {
+                            "requestId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "enum": [
+                                "paused",
+                                "pending_review"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "outcome",
+                        "value"
+                      ]
+                    }
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Refused or failed: the outcome says why, and the status follows it."
+          }
+        },
+        "summary": "Open a space's tree",
+        "tags": [
+          "workspace"
+        ],
+        "x-operation-kind": "describe"
+      }
+    },
     "/api/v2/w/{workspace}/ops/space_update": {
       "post": {
-        "description": "Rename a space, or change its description, icon (an emoji) or who may find it. The key stays. Pass expectedVersion from what you read. Returns the space. Needs \"Change and archive projects\" where it acts.",
+        "description": "Rename a space, or change its description, icon (an emoji) or who may find it. parentId moves it inside another project, clearParent moves it back to the top, and people says whether it has its parent's people or its own. The key stays. Pass expectedVersion from what you read. Returns the space. Needs \"Change and archive projects\" where it acts.",
         "operationId": "space_update",
         "parameters": [
           {
@@ -169897,6 +170627,10 @@
               "schema": {
                 "additionalProperties": false,
                 "properties": {
+                  "clearParent": {
+                    "description": "true moves it back to the top, out of the project it is inside. It\nkeeps the people it has, as its own.",
+                    "type": "boolean"
+                  },
                   "description": {
                     "type": [
                       "string",
@@ -169923,6 +170657,25 @@
                       "string",
                       "null"
                     ]
+                  },
+                  "parentId": {
+                    "description": "Move it inside this project or team space (its id or link).\nWhat is under it moves with it. You need \"Manage projects\" there\ntoo. Three levels deep at most.",
+                    "maxLength": 2048,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "people": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/People"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "For a project inside another: `parent` gives it its parent's people\n(everyone there, with their role, kept in step; people it had who\naren't in the parent leave unless they were added by hand), `own`\nlets it keep the people it has and change them by itself."
                   },
                   "spaceId": {
                     "description": "The space: its id, link or key.",
@@ -170010,6 +170763,17 @@
                             "name": {
                               "type": "string"
                             },
+                            "parentId": {
+                              "description": "The project or team space it is inside, when it is inside one you\ncan read. Absent at the top.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "peopleFromParent": {
+                              "description": "True when its people are its parent's: everyone in the parent is in\nit with the same role, and members are changed there. False when it\nhas its own people.",
+                              "type": "boolean"
+                            },
                             "role": {
                               "description": "Your role in it; absent when you read it without being a member.",
                               "type": [
@@ -170043,6 +170807,7 @@
                             "visibility",
                             "archived",
                             "version",
+                            "peopleFromParent",
                             "url"
                           ],
                           "title": "SpaceView",
@@ -170208,6 +170973,17 @@
                             "name": {
                               "type": "string"
                             },
+                            "parentId": {
+                              "description": "The project or team space it is inside, when it is inside one you\ncan read. Absent at the top.",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "peopleFromParent": {
+                              "description": "True when its people are its parent's: everyone in the parent is in\nit with the same role, and members are changed there. False when it\nhas its own people.",
+                              "type": "boolean"
+                            },
                             "role": {
                               "description": "Your role in it; absent when you read it without being a member.",
                               "type": [
@@ -170241,6 +171017,7 @@
                             "visibility",
                             "archived",
                             "version",
+                            "peopleFromParent",
                             "url"
                           ],
                           "title": "SpaceView",
@@ -178663,6 +179440,13 @@
                   },
                   "includeDone": {
                     "description": "Include completed and canceled tasks.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "includeSubProjects": {
+                    "description": "With projectId or projectIds: also the projects inside them\n(sub-projects, at any depth) that you can reach. See space_tree_get\nfor the tree.",
                     "type": [
                       "boolean",
                       "null"

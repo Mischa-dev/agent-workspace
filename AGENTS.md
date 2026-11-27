@@ -26,6 +26,11 @@ database change), `check-in-browser` (looking at a web change in a real
 browser) and `steward` (the checks before pushing, and driving a pull
 request to green). Claude Code loads them by itself.
 
+Some protocols have a model that checks every order of their steps, with a
+skill that says what it covers and how to read a failure: `request-receipts`
+(how a retried call is answered) and `job-leases` (how a background job's
+lease is claimed, renewed and given up). Read it before changing that code.
+
 ## Commands
 
 - Install frontend dependencies: `corepack pnpm install`

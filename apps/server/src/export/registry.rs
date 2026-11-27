@@ -579,6 +579,7 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 table: "projects",
                 references: &[
                     ("id", "projects"),
+                    ("parent_space_id", "projects"),
                     ("archived_by_actor_id", "actors"),
                     ("owner_actor_id", "actors"),
                     ("created_by_actor_id", "actors"),

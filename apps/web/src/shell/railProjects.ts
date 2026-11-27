@@ -11,20 +11,48 @@ const byName = (left: Project, right: Project) => left.name.localeCompare(right.
 const byPlace = (left: Project, right: Project) =>
   (left.navigation.railPosition ?? Number.MAX_SAFE_INTEGER) - (right.navigation.railPosition ?? Number.MAX_SAFE_INTEGER)
 
+/** The project `id` is inside, among the ones listed for you. */
+function listedParent(projects: Project[], id: string) {
+  const parentId = projects.find((project) => project.id === id)?.parentId
+  return parentId ? projects.find((project) => project.id === parentId) : undefined
+}
+
+/**
+ * The top project a sub-project sits under, as far up as you can see; the
+ * project itself when it is inside nothing.
+ */
+export function topProjectId(projects: Project[], id: string | null): string | null {
+  let top = id
+  // A tree is at most a few levels deep; the bound only guards odd data.
+  for (let step = 0; top && step < 8; step += 1) {
+    const parent = listedParent(projects, top)
+    if (!parent) break
+    top = parent.id
+  }
+  return top
+}
+
+/** The projects straight inside `parentId`, by name. */
+export function projectsInside(projects: Project[], parentId: string) {
+  return projects.filter((project) => project.parentId === parentId && !project.archivedAt).sort(byName)
+}
+
 /**
  * The rail's projects: pins first, in the order you dragged them into (or
  * pinned them), then the five opened most recently. Those five sit in name
- * order, so opening one doesn't shuffle the tiles under your pointer.
+ * order, so opening one doesn't shuffle the tiles under your pointer. A
+ * sub-project has no tile of its own unless you pin it: it is reached from
+ * the project it is inside, whose tile stands for it.
  */
 export function railProjects(projects: Project[], currentProjectId: string | null) {
   const pinned = projects.filter((project) => project.navigation.pinned).sort(byPlace)
   const recent = projects
-    .filter((project) => !project.navigation.pinned)
+    .filter((project) => !project.navigation.pinned && !listedParent(projects, project.id))
     .sort((left, right) => projectRecency(right) - projectRecency(left))
     .slice(0, 5)
     .sort(byName)
   const visible = [...pinned, ...recent]
-  const active = projects.find((project) => project.id === currentProjectId)
+  const active = projects.find((project) => project.id === topProjectId(projects, currentProjectId))
   if (active && !visible.some((project) => project.id === active.id)) visible.push(active)
   return visible
 }

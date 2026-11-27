@@ -118,6 +118,8 @@ pub mod realtime;
 pub mod recovery {
     pub use crate::hosts::builtin::recovery::*;
 }
+#[cfg(test)]
+mod model_check;
 pub mod releases;
 pub mod replies;
 pub mod repositories;

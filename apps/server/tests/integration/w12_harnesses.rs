@@ -444,6 +444,7 @@ async fn agents_are_made_by_managers_tagged_into_runs_and_turned_off() {
             description: "",
             visibility: agent_workspace_server::spaces::SpaceVisibility::Members,
             icon: None,
+            inside: None,
             owner: agent_workspace_server::spaces::manage::Owner {
                 account_id: member_actor,
                 display_name: "Member",

@@ -159,6 +159,13 @@
       "default": true
     },
     {
+      "id": "area.subprojects",
+      "group": "areas",
+      "label": "Projects inside",
+      "description": "The projects inside this one, listed in the sidebar and on the overview.",
+      "default": true
+    },
+    {
       "id": "task.type",
       "group": "task",
       "label": "Type",
@@ -587,6 +594,7 @@
       "only": [
         "area.chat",
         "area.tasks",
+        "area.subprojects",
         "area.board",
         "area.milestones",
         "area.pages",
@@ -643,6 +651,7 @@
       "only": [
         "area.chat",
         "area.tasks",
+        "area.subprojects",
         "area.board",
         "area.pages",
         "area.collections",
@@ -692,7 +701,7 @@
       "name": "Bug reporting",
       "description": "Just the list of bugs and a way to add one, for people who report problems.",
       "tone": "Someone reporting bugs. Ask what they did, what they expected and what happened instead, and skip internal jargon.",
-      "only": ["area.tasks", "area.files"],
+      "only": ["area.tasks", "area.subprojects", "area.files"],
       "words": {
         "task": { "one": "bug", "many": "bugs" }
       }
@@ -702,7 +711,7 @@
       "name": "Simple to-do list",
       "description": "One list of things to do, with due dates.",
       "tone": "A simple to-do list. Keep replies short.",
-      "only": ["area.tasks", "task.dates", "workspace.my_work"],
+      "only": ["area.tasks", "area.subprojects", "task.dates", "workspace.my_work"],
       "words": {
         "task": { "one": "to-do", "many": "to-dos" }
       }
@@ -715,6 +724,7 @@
       "only": [
         "area.chat",
         "area.tasks",
+        "area.subprojects",
         "area.board",
         "area.files",
         "task.priority",
@@ -747,6 +757,7 @@
       "only": [
         "area.chat",
         "area.tasks",
+        "area.subprojects",
         "area.pages",
         "area.decisions",
         "area.whiteboards",
@@ -800,6 +811,7 @@
       "only": [
         "area.chat",
         "area.tasks",
+        "area.subprojects",
         "area.pages",
         "area.decisions",
         "area.whiteboards",
@@ -859,6 +871,7 @@
       "only": [
         "area.chat",
         "area.tasks",
+        "area.subprojects",
         "area.board",
         "area.milestones",
         "area.pages",
@@ -911,6 +924,7 @@
       "only": [
         "area.chat",
         "area.tasks",
+        "area.subprojects",
         "area.board",
         "area.timeline",
         "area.milestones",
@@ -969,6 +983,7 @@
       "only": [
         "area.chat",
         "area.tasks",
+        "area.subprojects",
         "area.board",
         "area.timeline",
         "area.pages",
@@ -1021,6 +1036,7 @@
       "only": [
         "area.chat",
         "area.tasks",
+        "area.subprojects",
         "area.board",
         "area.pages",
         "area.collections",
@@ -1087,6 +1103,7 @@
       "tone": "Planning work: scope, order and dates. Plan the tasks, don't start doing them.",
       "only": [
         "area.tasks",
+        "area.subprojects",
         "area.board",
         "area.timeline",
         "area.milestones",
@@ -1139,6 +1156,7 @@
       "only": [
         "area.chat",
         "area.tasks",
+        "area.subprojects",
         "area.timeline",
         "area.milestones",
         "area.pages",
@@ -1178,7 +1196,7 @@
       "name": "Minimal",
       "description": "Just tasks and chat, nothing else.",
       "tone": "Keep it simple and short.",
-      "only": ["area.chat", "area.tasks"]
+      "only": ["area.chat", "area.tasks", "area.subprojects"]
     }
   ]
 }

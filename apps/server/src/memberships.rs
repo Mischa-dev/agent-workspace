@@ -255,9 +255,13 @@ pub(crate) async fn change_member(
     let next_role = next_role.as_str();
     authorize_target(&access, &target, next_role)?;
     let next_enabled = enabled.unwrap_or(target.enabled);
-    let via_group = group_seat(transaction, project_id, actor_id).await?;
+    let (via_group, via_parent) = derived_seat(transaction, project_id, actor_id).await?;
     if via_group && target.enabled && !next_enabled {
-        return Err(THROUGH_A_GROUP);
+        return Err(if via_parent {
+            THROUGH_THE_PARENT
+        } else {
+            THROUGH_A_GROUP
+        });
     }
     // Bringing someone back hands their role out again, so it has to be
     // within what the caller holds, as a role change is.
@@ -416,20 +420,30 @@ const THROUGH_A_GROUP: AppError = AppError::Conflict(
     "they're in this space through a group: take them out of the group, or the group out of the space",
 );
 
-/// Whether `actor_id`'s seat in `project_id` is a group's (K1.27).
-async fn group_seat(
+/// Refused when someone in a project because they are in the one it is
+/// inside (AWD-221) is removed or leaves: their seat there is what gives
+/// them this one.
+const THROUGH_THE_PARENT: AppError = AppError::Conflict(
+    "project_membership",
+    "they're in this project because they're in the one it is inside: take them out there, or give this project its own people",
+);
+
+/// Whether `actor_id`'s seat in `project_id` is a derived one (a group's,
+/// K1.27, or the parent space's, AWD-221), and whether the parent gave it.
+async fn derived_seat(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     actor_id: Uuid,
-) -> Result<bool, AppError> {
-    Ok(sqlx::query_scalar::<_, bool>(
-        "SELECT via_group FROM project_memberships WHERE project_id = $1 AND actor_id = $2",
+) -> Result<(bool, bool), AppError> {
+    Ok(sqlx::query_as::<_, (bool, bool)>(
+        "SELECT via_group, via_parent FROM project_memberships \
+         WHERE project_id = $1 AND actor_id = $2",
     )
     .bind(project_id)
     .bind(actor_id)
     .fetch_optional(&mut **transaction)
     .await?
-    .unwrap_or(false))
+    .unwrap_or((false, false)))
 }
 
 /// Brings `actor_id`'s group seat in `project_id` in step with the group
@@ -782,7 +796,7 @@ async fn lock_and_require_other_owners(
     .fetch_all(&mut **transaction)
     .await?;
     let project_owners = sqlx::query_scalar::<_, Uuid>(
-        "SELECT actor_id FROM project_memberships WHERE project_id = $1 AND role = $2 AND enabled FOR UPDATE",
+        "SELECT actor_id FROM project_memberships WHERE project_id = $1 AND role = $2 AND enabled AND NOT via_parent FOR UPDATE",
     )
     .bind(project_id)
     .bind(crate::access::tier::OWNER)
@@ -1099,14 +1113,15 @@ pub(crate) async fn leave(
             message: "Only a project or team space can be left; everyone in the workspace is in its own space.",
         });
     }
-    let Some((role, enabled, via_group)) = sqlx::query_as::<_, (String, bool, bool)>(
-        "SELECT role, enabled, via_group FROM project_memberships \
+    let Some((role, enabled, via_group, via_parent)) =
+        sqlx::query_as::<_, (String, bool, bool, bool)>(
+            "SELECT role, enabled, via_group, via_parent FROM project_memberships \
          WHERE project_id = $1 AND actor_id = $2 FOR UPDATE",
-    )
-    .bind(space)
-    .bind(account)
-    .fetch_optional(&mut **tx)
-    .await?
+        )
+        .bind(space)
+        .bind(account)
+        .fetch_optional(&mut **tx)
+        .await?
     else {
         return Ok(SelfChange::Unchanged);
     };
@@ -1114,14 +1129,19 @@ pub(crate) async fn leave(
         return Ok(SelfChange::Unchanged);
     }
     if via_group {
-        return Err(THROUGH_A_GROUP);
+        return Err(if via_parent {
+            THROUGH_THE_PARENT
+        } else {
+            THROUGH_A_GROUP
+        });
     }
     let owner = crate::policy::MembershipRole::Owner.key();
     // The owner tier, by its stored key: a space keeps one.
     if crate::policy::MembershipRole::parse(&role) == Some(crate::policy::MembershipRole::Owner) {
         let others = sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM project_memberships \
-             WHERE project_id = $1 AND role = $3 AND enabled AND actor_id <> $2",
+             WHERE project_id = $1 AND role = $3 AND enabled AND NOT via_parent \
+               AND actor_id <> $2",
         )
         .bind(space)
         .bind(account)

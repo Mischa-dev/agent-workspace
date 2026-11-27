@@ -61,7 +61,7 @@
   "web": { "folder": "projects" },
   "slots": {
     "pages": ["/projects", "/projects/new", "/projects/:projectId", "/projects/:projectId/*"],
-    "parts": [],
+    "parts": ["area.subprojects"],
     "sidebar": ["rail.projects", "project.overview"],
     "home": ["recent"],
     "settings": ["workspace/project-templates", "project/general", "project/layout", "project/members"],

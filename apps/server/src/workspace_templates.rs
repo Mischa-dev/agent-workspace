@@ -1164,6 +1164,7 @@ async fn starter_project(
                 display_name: &display_name,
                 login_name: &login_name,
             },
+            inside: None,
         },
     )
     .await?;

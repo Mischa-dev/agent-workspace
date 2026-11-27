@@ -71,6 +71,7 @@
     "module_list": "query",
     "space_list": "query",
     "space_open": "describe",
+    "space_tree_get": "describe",
     "space_personal_open": "describe",
     "space_create": "create",
     "space_update": "change",

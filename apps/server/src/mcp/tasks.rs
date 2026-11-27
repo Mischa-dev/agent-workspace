@@ -67,6 +67,10 @@ pub(crate) struct TaskListArguments {
     /// Several projects at once (IDs, links, or keys), 1 to 50. Not together
     /// with projectId.
     pub project_ids: Option<Vec<String>>,
+    /// With projectId or projectIds: also the projects inside them
+    /// (sub-projects, at any depth) that you can reach. See space_tree_get
+    /// for the tree.
+    pub include_sub_projects: Option<bool>,
     /// Status names (such as "In Progress"), IDs, or groups: backlog,
     /// unstarted, started, review, verification, completed, canceled. Tasks
     /// in any of them, finished ones included when you name them.
@@ -601,6 +605,25 @@ async fn list_tasks(
             projects
         }
         None => scope_projects(state, principal).await?,
+    };
+    // AWD-221: with the projects inside the named ones, as far as the
+    // caller reaches.
+    let projects = if arguments.include_sub_projects == Some(true)
+        && (arguments.project_ids.is_some() || principal.project_explicit)
+    {
+        let reachable = accessible_project_ids(state, principal).await?;
+        let mut connection = crate::db::scoped_tx(&state.pool).await?;
+        let below = crate::spaces::access::below(&mut connection, &projects).await?;
+        let mut all = projects;
+        all.extend(
+            below
+                .into_iter()
+                .map(|(id, _, _)| id)
+                .filter(|id| reachable.contains(id)),
+        );
+        all
+    } else {
+        projects
     };
     // The tool gate takes "see tasks" in any project; list only those where
     // the caller's role (and an app's limit) keeps it.

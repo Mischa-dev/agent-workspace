@@ -65,6 +65,12 @@ jobs:
             echo "areas=rust,web" >> "$GITHUB_OUTPUT"
           fi
           cat "$GITHUB_OUTPUT"
+      - name: Migrations the base already has are unchanged
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: ./tools/ci/applied-migrations.sh "${BASE_SHA}" "${HEAD_SHA}"
 
   lint:
     needs: changes

@@ -114,3 +114,21 @@ export const sidebarSections: Touch = opAnswers('sidebar_list')
 
 /** A dashboard tile over tasks counts them. */
 export const dashboards: Touch = opAnswers('dashboard_get')
+
+/**
+ * The open project trees that hold a space: the tree of that space, and any
+ * tree that lists it inside. Only those refetch when something in it changes.
+ */
+export function treesHolding(spaceId: string): Touch {
+  return {
+    id: `project-trees:${spaceId}`,
+    filters: {
+      queryKey: queryKeys.projectTrees,
+      predicate: (query) => {
+        if (query.queryKey[1] === spaceId) return true
+        const data = query.state.data as { inside?: Array<{ id?: unknown }> } | undefined
+        return Boolean(data?.inside?.some((row) => row.id === spaceId))
+      },
+    },
+  }
+}

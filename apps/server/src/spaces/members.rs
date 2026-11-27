@@ -52,9 +52,12 @@ pub struct SpaceMemberView {
     pub role_id: Option<Uuid>,
     /// False once they left or were removed.
     pub active: bool,
-    /// In through a group that holds a role here (K1.27), not added
-    /// themselves.
+    /// In through a group that holds a role here (K1.27) or through the
+    /// project this one is inside (see viaParent), not added themselves.
     pub via_group: bool,
+    /// In because they are in the project this one is inside, with their
+    /// role there: change or remove them in that project.
+    pub via_parent: bool,
     /// When their membership ends by itself, if it does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,
@@ -69,7 +72,7 @@ async fn member(
 ) -> Result<SpaceMemberView, AppError> {
     sqlx::query_as::<_, SpaceMemberView>(
         "SELECT project_id AS space_id, actor_id AS account_id, display_name AS name, handle, \
-         role, custom_role_id(role_id) AS role_id, enabled AS active, via_group, \
+         role, custom_role_id(role_id) AS role_id, enabled AS active, via_group, via_parent, \
          to_char(expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS expires_at, \
          version \
          FROM project_memberships WHERE project_id = $1 AND actor_id = $2",

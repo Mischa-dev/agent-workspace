@@ -883,3 +883,59 @@ async fn an_unanswered_call_is_never_run_again() {
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
     assert_eq!(pages().await, 1, "a retry never makes it again");
 }
+
+/// A command that keeps its own transactions and fails may have committed
+/// before it failed, and the dispatcher can't tell. Its request id stays
+/// spent: a retry is told at once that the outcome isn't known, and the
+/// command never runs a second time under that id.
+#[tokio::test]
+async fn a_failed_call_is_never_run_again() {
+    let Some(setup) = setup("k2_ops_failed").await else {
+        return;
+    };
+    let app = &setup.app;
+    let space = create_project(&setup, "FLD", "Failed").await;
+    let create = |request_id: &'static str| {
+        setup.browser.request(
+            "POST",
+            "/api/v2/ops/page_create",
+            Some(request_id),
+            json!({ "projectId": space, "title": "Once", "body": "Made once." }),
+        )
+    };
+    let pages = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM project_pages WHERE title = 'Once'")
+            .fetch_one(&setup.pool)
+            .await
+            .expect("pages")
+    };
+
+    // The database fails the command partway, as a lost connection would.
+    for statement in [
+        "CREATE FUNCTION pages_fail() RETURNS trigger LANGUAGE plpgsql AS \
+         $$ BEGIN RAISE EXCEPTION 'pages fail'; END $$",
+        "CREATE TRIGGER pages_fail BEFORE INSERT ON project_pages \
+         FOR EACH ROW EXECUTE FUNCTION pages_fail()",
+    ] {
+        sqlx::query(statement)
+            .execute(&setup.pool)
+            .await
+            .expect("failing pages");
+    }
+    let (status, failed) = super::support::app::send(app, create("page-failed")).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{failed}");
+    sqlx::query("DROP TRIGGER pages_fail ON project_pages")
+        .execute(&setup.pool)
+        .await
+        .expect("pages work again");
+
+    let (status, retried) = super::support::app::send(app, create("page-failed")).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{retried}");
+    assert_eq!(retried["code"], "request_outcome_unknown", "{retried}");
+    assert_eq!(pages().await, 0, "the retry didn't run the command");
+
+    // Having checked, the caller sends it again under a new id.
+    let (status, again) = super::support::app::send(app, create("page-again")).await;
+    assert!(status.is_success(), "{status}: {again}");
+    assert_eq!(pages().await, 1);
+}

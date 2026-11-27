@@ -118,6 +118,7 @@ export function useArchiveProject() {
       queryClient.setQueryData(queryKeys.project(project.id), project)
       removeProjectFromListCaches(queryClient, project.id)
       void queryClient.invalidateQueries({ queryKey: queryKeys.projectLists })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.projectTrees })
     },
   })
 }
@@ -136,6 +137,7 @@ export function useRestoreProject() {
       queryClient.setQueryData(queryKeys.project(project.id), project)
       removeProjectFromListCaches(queryClient, project.id)
       void queryClient.invalidateQueries({ queryKey: queryKeys.projectLists })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.projectTrees })
     },
   })
 }
