@@ -1254,6 +1254,28 @@ impl Operation for SpaceRestore {
             .map_err(|denied| denied_here(denied, "restore"))?;
         if current.archived {
             check_version(input.expected_version, &current)?;
+            // What was archived with it comes back with it, so that takes
+            // "Manage projects" in each of those too, as archiving did.
+            let with_it = manage::archived_with(tx, space_id, current.archived_at)
+                .await
+                .map_err(refused)?;
+            let mut all = !(caller.confined_space.is_some() && !with_it.is_empty());
+            for inside in with_it {
+                let need = Need::permission(Perm::ProjectsManage).writes();
+                if !all {
+                    break;
+                }
+                all = access::check_archived_space(tx, &caller, need, inside)
+                    .await?
+                    .is_ok();
+            }
+            if !all {
+                return Err(refused(AppError::Conflict(
+                    "space",
+                    "projects inside this one were archived with it and you don't manage \
+                     them all; ask someone who does to restore it",
+                )));
+            }
         }
         manage::restore(tx, caller.account_id, space_id, &current)
             .await

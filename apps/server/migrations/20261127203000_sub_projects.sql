@@ -163,10 +163,11 @@ BEGIN
     ORDER BY CASE held.base_role WHEN 'member' THEN 0 ELSE 1 END, grant_row.created_at, grant_row.id
     LIMIT 1;
 
+    -- The parent's seats count while it is archived too: a tree is archived
+    -- as one, and its people keep reading what is inside it.
     IF parent IS NOT NULL THEN
         SELECT held.role, held.role_id INTO parent_role, parent_role_id
         FROM project_memberships held
-        JOIN projects above ON above.id = held.project_id AND above.archived_at IS NULL
         JOIN organization_memberships workspace_membership
           ON workspace_membership.organization_id = org AND workspace_membership.actor_id = account
          AND workspace_membership.enabled

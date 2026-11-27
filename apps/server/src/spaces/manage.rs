@@ -707,6 +707,33 @@ fn constraint(error: &sqlx::Error) -> Option<&str> {
     }
 }
 
+/// The spaces inside `space_id`, at any depth, that were archived in the same
+/// step as it: what restoring it brings back with it.
+pub async fn archived_with(
+    connection: &mut PgConnection,
+    space_id: Uuid,
+    archived_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<Vec<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        WITH RECURSIVE down AS (
+            SELECT space.id, 1 AS level
+            FROM spaces space
+            WHERE space.parent_space_id = $1 AND space.archived_at = $2
+            UNION ALL
+            SELECT space.id, down.level + 1
+            FROM spaces space JOIN down ON space.parent_space_id = down.id
+            WHERE space.archived_at = $2 AND down.level < 16
+        )
+        SELECT DISTINCT id FROM down
+        "#,
+    )
+    .bind(space_id)
+    .bind(archived_at)
+    .fetch_all(&mut *connection)
+    .await?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

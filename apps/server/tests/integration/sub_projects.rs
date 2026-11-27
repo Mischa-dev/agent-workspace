@@ -306,6 +306,7 @@ async fn archiving_a_parent_needs_manage_in_what_is_inside_it() {
     };
     let work = world.project("WORK").to_owned();
     let quiet = id(&inside(&world, "owner", &work, "QUIET", Some("own")).await);
+    let open = id(&inside(&world, "owner", &work, "OPEN", None).await);
     // Mara manages the parent and isn't in the closed project inside it, so
     // archiving the parent, which would take that one too, isn't hers.
     let refused = op(&world, "mara", "space_archive", json!({"spaceId": work})).await;
@@ -321,6 +322,44 @@ async fn archiving_a_parent_needs_manage_in_what_is_inside_it() {
     // Whoever manages both can.
     let done = op(&world, "owner", "space_archive", json!({"spaceId": work})).await;
     assert_eq!(done["outcome"], "ok", "{done}");
+    // An archived tree keeps its people: a later sync of the seats that come
+    // from the archived parent leaves them in place.
+    let seats = "SELECT count(*) FROM project_memberships \
+        WHERE project_id = $1::uuid AND via_parent AND enabled";
+    let before = sqlx::query_scalar::<_, i64>(seats)
+        .bind(&open)
+        .fetch_one(world.pool())
+        .await
+        .expect("seats");
+    assert!(before > 0);
+    sqlx::query(
+        "SELECT space_group_seat_sync(project_id, actor_id) FROM project_memberships \
+         WHERE project_id = $1::uuid AND via_parent",
+    )
+    .bind(&open)
+    .execute(world.pool())
+    .await
+    .expect("sync");
+    let after = sqlx::query_scalar::<_, i64>(seats)
+        .bind(&open)
+        .fetch_one(world.pool())
+        .await
+        .expect("seats");
+    assert_eq!(after, before);
+    // Bringing it back brings the closed one back too, so that isn't hers
+    // either.
+    let refused = op(&world, "mara", "space_restore", json!({"spaceId": work})).await;
+    assert_eq!(refused["outcome"], "conflict", "{refused}");
+    let back = op(&world, "owner", "space_restore", json!({"spaceId": work})).await;
+    assert_eq!(back["outcome"], "ok", "{back}");
+    let archived = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM spaces WHERE id = ANY($1::uuid[]) AND archived_at IS NOT NULL",
+    )
+    .bind(vec![work.clone(), quiet.clone(), open.clone()])
+    .fetch_one(world.pool())
+    .await
+    .expect("archived");
+    assert_eq!(archived, 0);
     world.finish().await;
 }
 
