@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Refuse a commit whose Rust isn't formatted, and say how to fix it.
+#
+# CI's first job refuses the same thing some minutes after a push, and the
+# fix is then a second commit and a second CI run. `tools/cloud/setup.sh`
+# and the Claude Code session hook turn this on (`core.hooksPath`); so does
+#   git config core.hooksPath tools/git-hooks
+set -euo pipefail
+
+if git diff --cached --quiet --diff-filter=ACMR -- '*.rs'; then
+  exit 0
+fi
+if ! command -v cargo >/dev/null 2>&1; then
+  exit 0
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+if unformatted="$(cargo fmt --all --check -- --files-with-diff 2>&1)"; then
+  exit 0
+fi
+
+{
+  echo "These files aren't formatted as rustfmt formats them:"
+  echo "${unformatted}" | sed "s|^${PWD}/|  |"
+  echo
+  echo "Format them and commit again:"
+  echo "  cargo fmt --all && git add -u && git commit"
+} >&2
+exit 1

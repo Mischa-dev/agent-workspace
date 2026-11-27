@@ -34,6 +34,10 @@ case "${warm}" in wait | background | skip) ;; *) echo "--warm: wait, background
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo}"
 
+# Commits are checked for formatting before they are made
+# (tools/git-hooks/pre-commit), not by CI some minutes after a push.
+git config core.hooksPath tools/git-hooks 2>/dev/null || true
+
 db_user="agent_workspace"
 db_password="agent_workspace"
 db_name="agent_workspace_test"

@@ -3,10 +3,14 @@
 # Does nothing outside the cloud. See tools/cloud/setup.sh.
 set -euo pipefail
 
+root="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
+# Commits are checked for formatting before they are made, on any machine.
+git -C "${root}" config core.hooksPath tools/git-hooks 2>/dev/null || true
+
 if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
   exit 0
 fi
 
 # The cargo build warms in the background so the session starts sooner; the
 # first cargo command waits for it on cargo's own lock.
-exec "${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}/tools/cloud/setup.sh" --warm background >&2
+exec "${root}/tools/cloud/setup.sh" --warm background >&2
