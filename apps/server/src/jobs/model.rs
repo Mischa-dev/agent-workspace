@@ -7,7 +7,11 @@
 //! after `renewal_patience` (a sixth). A renewal takes anything up to that
 //! long. Its statement runs at any moment in between, extending the lease
 //! from then or finding it gone, or never reaches the database; its answer
-//! arrives or is lost on the way back. The decision to keep running after a
+//! arrives or is lost on the way back. (The statement is one step: it dates
+//! the lease from when its transaction began and holds the row until it
+//! commits, and a claim skips a held row, so nobody acts on the row in
+//! between and a lease dated earlier is one the model tries anyway.) The
+//! decision to keep running after a
 //! failed renewal is the server's own `lease_still_held`. The steps around
 //! it are `claim`, `confirm_lease`, `renew_lease` and `extend_lease`.
 //!
@@ -26,6 +30,7 @@ use crate::model_check::{Model, Path, explore, never};
 const LEASE: Duration = Duration::from_secs(60);
 const TICK: Duration = Duration::from_secs(10);
 const LEASE_TICKS: u8 = 6;
+const _: () = assert!(TICK.as_secs() * LEASE_TICKS as u64 == LEASE.as_secs());
 
 fn ticks(span: Duration) -> u8 {
     assert!(
@@ -409,9 +414,10 @@ fn a_job_whose_handler_stopped_is_run_again() {
     assert!(taken_over.is_some(), "a lost lease was never taken over");
 }
 
-/// A renewal that fails fast doesn't cost the job its run: the worker tries
-/// again while its lease is sure to hold. (One that takes its whole patience
-/// does stop the handler: a second try couldn't be sure to end in time.)
+/// A failed renewal doesn't always cost the job its run: when it and the
+/// renewal before it were quick, the worker tries again while its lease is
+/// sure to hold. (When the two took a sixth of the lease or more between
+/// them, the handler stops: a second try couldn't be sure to end in time.)
 #[test]
 fn a_blip_does_not_stop_the_handler() {
     let wait = ticks(renewal_wait(LEASE));

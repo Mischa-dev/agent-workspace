@@ -54,16 +54,18 @@ the cluster leases in `cluster/leases.rs`.
 ## What it found
 
 - **Holds:** a handler never runs at or after the end of its lease, a job
-  whose handler started and then stopped is taken over, and a renewal that
-  fails fast doesn't stop a handler.
-- **Worth knowing:** a renewal that takes its whole patience to fail does
-  stop the handler, at the first failure. By then half the lease is gone,
-  and another wait and another full renewal would end exactly as the lease
-  does, so `lease_still_held` says no. A database that hangs, as opposed to
-  one that refuses at once, therefore costs each running job its run (the
-  job is retried). A shorter `renewal_wait` would leave room for a second
-  try; the model will say whether a new pair of timings still keeps the
-  promise.
+  whose handler started and then stopped is taken over, and a failed
+  renewal can be survived (when it and the renewal before it were quick).
+- **Worth knowing:** one failed renewal stops the handler whenever it and
+  the renewal before it took a sixth of the lease or more between them: a
+  renewal that takes its whole patience to fail, or a quick failure after
+  a slow success. By then half the lease is gone, and another wait and
+  another full renewal would end exactly as the lease does, so
+  `lease_still_held` says no. A database that hangs or is slow, as opposed
+  to one that refuses at once, therefore costs each running job its run
+  (the job is retried). A shorter `renewal_wait` would leave room for a
+  second try; the model will say whether a new pair of timings still keeps
+  the promise.
 - **The past bugs it replays:** a claim that reached its worker late
   started a second handler (fixed in 2c013368 by `confirm_lease`), and a
   worker whose renewals kept failing ran beside its successor (fixed in
