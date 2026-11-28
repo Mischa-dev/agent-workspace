@@ -340,7 +340,9 @@ pub(crate) async fn tools_list(app: &axum::Router, token: &str, session: &str) -
         app,
         token,
         Some(session),
-        json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/list" }),
+        // Its own id: `tool` lists after every call, and two calls
+        // overlapping in one session would otherwise share this one.
+        json!({ "jsonrpc": "2.0", "id": next_request_id(), "method": "tools/list" }),
     )
     .await;
     let bytes = to_bytes(response.into_body(), 4_000_000)
