@@ -1000,6 +1000,14 @@ pub static THING_SHARE_CHANGED: EventType = signal(
     None,
     "One thing was shared, or a share or link was revoked",
 );
+/// The Docs tree changed (AWD-223): a folder was made, renamed or removed,
+/// something moved, or who may see something changed. Ids only.
+pub static DOC_TREE_CHANGED: EventType = signal(
+    "doc.tree_changed",
+    "workspace",
+    None,
+    "A folder changed, a document moved, or who may see one changed",
+);
 /// Every event type, in module order.
 pub fn catalog() -> &'static [&'static EventType] {
     static CATALOG: &[&EventType] = &[
@@ -1136,6 +1144,7 @@ pub fn catalog() -> &'static [&'static EventType] {
         &SESSION_REVOKED,
         &ACCOUNT_REF_CHANGED,
         &THING_SHARE_CHANGED,
+        &DOC_TREE_CHANGED,
         &GROUP_CHANGED,
     ];
     CATALOG

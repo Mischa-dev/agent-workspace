@@ -60,12 +60,12 @@
   "embeds": [],
   "web": { "folder": "projects" },
   "slots": {
-    "pages": ["/projects", "/projects/new", "/projects/:projectId", "/projects/:projectId/*"],
-    "parts": ["area.subprojects"],
+    "pages": ["/projects", "/projects/new", "/projects/:projectId", "/projects/:projectId/docs", "/projects/:projectId/*"],
+    "parts": ["area.subprojects", "area.docs"],
     "sidebar": ["rail.projects", "project.overview"],
     "home": ["recent"],
     "settings": ["workspace/project-templates", "project/general", "project/layout", "project/members"],
-    "palette": ["p:overview", "p:settings", "s:project", "a:pin", "a:create-project", "g:projects", "pr:*"],
+    "palette": ["p:overview", "p:docs", "p:settings", "s:project", "a:pin", "a:create-project", "g:projects", "pr:*"],
     "shortcuts": [],
     "slash": [],
     "setup": ["project"]

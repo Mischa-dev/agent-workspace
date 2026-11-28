@@ -5,7 +5,7 @@ export default {
   shell: 'project',
   routes: [{ path: '/projects/:projectId/collections/*', space: 'project', page: () => import('./CollectionsArea') }],
   publicRoutes: [{ path: '/forms/:token', space: 'none', layout: 'public', page: () => import('../forms/Form') }],
-  sidebar: [{ id: 'collections', space: 'project', rank: 30, part: 'area.collections', icon: 'table', label: 'Collections', path: '/collections' }],
+  sidebar: [{ id: 'collections', space: 'project', rank: 30, part: 'area.collections', unless: 'area.docs', icon: 'table', label: 'Collections', path: '/collections' }],
   palette: [
     {
       id: 'p:collections',

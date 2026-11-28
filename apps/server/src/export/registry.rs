@@ -400,6 +400,14 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                 "a cache or index derived from other rows, rebuilt on import (the registry's backfill, K3.10)",
             ),
             (
+                "doc_folders",
+                "the Docs tree's folders (AWD-223): an import puts every document at the top of its space's tree, to be filed again",
+            ),
+            (
+                "doc_places",
+                "where each document sits in the Docs tree and whether it is restricted (AWD-223); the people a restriction names aren't exported either, so an import starts open to the space",
+            ),
+            (
                 "workspace_slugs",
                 "the addresses a workspace had on this server; an import takes its own slug",
             ),

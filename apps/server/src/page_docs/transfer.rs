@@ -617,7 +617,13 @@ async fn sheet_picture(
     {
         return Ok(None);
     }
-    let Some(sheet) = sheets::find(&state.pool, project_id, &sheet_id.to_string()).await? else {
+    let Some(sheet) = sheets::find(
+        crate::db::scoped(&state.pool),
+        project_id,
+        &sheet_id.to_string(),
+    )
+    .await?
+    else {
         return Ok(None);
     };
     // A named range is read where it is now; a name that's gone shows the

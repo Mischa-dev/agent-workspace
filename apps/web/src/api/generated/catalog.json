@@ -1809,6 +1809,98 @@
     "title": "Get DM standing"
   },
   {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "describe",
+    "long": false,
+    "module": "workspace",
+    "name": "doc_access_get",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "See who can see a document or folder"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "doc.tree_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "doc_access_set",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Say who can see a document or folder"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "doc.tree_changed"
+    ],
+    "idempotent": true,
+    "kind": "create",
+    "long": false,
+    "module": "workspace",
+    "name": "doc_folder_create",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Make a folder"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "doc.tree_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "doc_folder_update",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Rename or remove a folder"
+  },
+  {
+    "automation": false,
+    "destructive": false,
+    "emits": [],
+    "idempotent": false,
+    "kind": "query",
+    "long": false,
+    "module": "workspace",
+    "name": "doc_list",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "List a space's documents"
+  },
+  {
+    "automation": true,
+    "destructive": false,
+    "emits": [
+      "doc.tree_changed"
+    ],
+    "idempotent": true,
+    "kind": "change",
+    "long": false,
+    "module": "workspace",
+    "name": "doc_move",
+    "permission": null,
+    "preview": false,
+    "proposable": false,
+    "title": "Move a document or folder"
+  },
+  {
     "automation": true,
     "destructive": true,
     "emits": [

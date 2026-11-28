@@ -3400,7 +3400,7 @@ async fn task_link_inner(
     let target = match request.record_id {
         Some(id) => {
             if !record_visible(
-                &state.pool,
+                crate::db::scoped(&state.pool),
                 principal,
                 project_id,
                 request.kind,

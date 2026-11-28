@@ -274,7 +274,7 @@ pub(crate) async fn collection_list(
             connection.commit().await?;
         }
         let listed = collections::list(
-            &state.pool,
+            crate::db::scoped(&state.pool),
             principal.project_id,
             arguments.include_archived.unwrap_or(false),
         )

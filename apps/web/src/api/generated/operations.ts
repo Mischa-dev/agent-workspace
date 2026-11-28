@@ -200,6 +200,14 @@ export type Direction = "asc" | "desc"
 
 export type DmRequestView = { direction: string; state: string }
 
+export type DocAbove = { id: string; title?: string | null }
+
+export type DocEntry = { id: string; kind: DocKind; parentId?: string | null; restricted: boolean; restrictedHere: boolean; title: string; updatedAt: string }
+
+export type DocKind = "folder" | "page" | "sheet" | "whiteboard" | "collection" | "dashboard"
+
+export type DocPerson = { account: string; displayName: string }
+
 export type DraftView = { conversationId: string; conversationKind: string; conversationName?: string | null; draft: unknown; previous?: unknown; spaceId: string; updatedAt: string }
 
 export type EditOutcome = { changed: string[]; proposalId?: string | null; results: OperationResult[]; savedRevision?: number | null; sceneSeq: number }
@@ -1341,6 +1349,30 @@ export type DmRequestRespondOutput = { canSend: boolean; otherAccountId?: string
 export type DmStandingGetInput = { conversationId: string }
 
 export type DmStandingGetOutput = { canSend: boolean; otherAccountId?: string | null; reason?: string | null; request?: DmRequestView | null; youBlocked: boolean }
+
+export type DocAccessGetInput = { id: string }
+
+export type DocAccessGetOutput = { canChange: boolean; id: string; inheritedFrom?: DocAbove | null; kind: DocKind; people: DocPerson[]; restricted: boolean; you: string }
+
+export type DocAccessSetInput = { id: string; people?: string[]; restricted: boolean }
+
+export type DocAccessSetOutput = { canChange: boolean; id: string; inheritedFrom?: DocAbove | null; kind: DocKind; people: DocPerson[]; restricted: boolean; you: string }
+
+export type DocFolderCreateInput = { parentFolderId?: string | null; spaceId: string; title: string }
+
+export type DocFolderCreateOutput = { id: string; kind: DocKind; parentId?: string | null; title: string }
+
+export type DocFolderUpdateInput = { folderId: string; remove?: boolean; title?: string | null }
+
+export type DocFolderUpdateOutput = { id: string; removed: boolean; title: string }
+
+export type DocListInput = { deep?: boolean; folderId?: string | null; spaceId: string }
+
+export type DocListOutput = { canEdit: DocKind[]; entries: DocEntry[] }
+
+export type DocMoveInput = { folderId?: string | null; id: string }
+
+export type DocMoveOutput = { id: string; kind: DocKind; parentId?: string | null; title: string }
 
 export type EnvironmentArchiveInput = { environment: string; projectId: string }
 
@@ -2805,6 +2837,12 @@ export type Operations = {
   directory_source_remove: { input: DirectorySourceRemoveInput; output: DirectorySourceRemoveOutput }
   dm_request_respond: { input: DmRequestRespondInput; output: DmRequestRespondOutput }
   dm_standing_get: { input: DmStandingGetInput; output: DmStandingGetOutput }
+  doc_access_get: { input: DocAccessGetInput; output: DocAccessGetOutput }
+  doc_access_set: { input: DocAccessSetInput; output: DocAccessSetOutput }
+  doc_folder_create: { input: DocFolderCreateInput; output: DocFolderCreateOutput }
+  doc_folder_update: { input: DocFolderUpdateInput; output: DocFolderUpdateOutput }
+  doc_list: { input: DocListInput; output: DocListOutput }
+  doc_move: { input: DocMoveInput; output: DocMoveOutput }
   environment_archive: { input: EnvironmentArchiveInput; output: EnvironmentArchiveOutput }
   environment_check: { input: EnvironmentCheckInput; output: EnvironmentCheckOutput }
   environment_create: { input: EnvironmentCreateInput; output: EnvironmentCreateOutput }

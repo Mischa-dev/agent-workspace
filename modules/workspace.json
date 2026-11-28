@@ -72,6 +72,12 @@
     "space_list": "query",
     "space_open": "describe",
     "space_tree_get": "describe",
+    "doc_list": "query",
+    "doc_folder_create": "create",
+    "doc_folder_update": "change",
+    "doc_move": "change",
+    "doc_access_get": "describe",
+    "doc_access_set": "change",
     "space_personal_open": "describe",
     "space_create": "create",
     "space_update": "change",
@@ -194,7 +200,7 @@
     "/api/v1/workspaces/by-slug/*"
   ],
   "events": {
-    "emits": ["account.access_changed", "account.profile_changed", "account.status_changed", "budgets.changed", "connected_thing.changed", "custom_emoji.changed",
+    "emits": ["account.access_changed", "account.profile_changed", "account.status_changed", "budgets.changed", "connected_thing.changed", "custom_emoji.changed", "doc.tree_changed",
       "file.attached", "file.removed", "file.upload_started", "follows.changed", "group.changed", "link.created",
       "link.deleted", "module.connected", "module.created", "module.event", "module.operation_ran", "module.panel_pressed",
       "module.removed", "module.switched", "module.updated", "proposal.created",
