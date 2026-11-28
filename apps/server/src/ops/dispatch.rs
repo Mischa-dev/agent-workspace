@@ -458,19 +458,20 @@ async fn admit<O: Operation>(
             [] => {}
             _ if O::SPANS_WORKSPACES && !writes => spans = true,
             several => {
-                let here = match on_screen {
-                    Some(named) => target::workspace_named(&mut connection, named)
+                // A credential's own workspace first: the hint only settles
+                // what would otherwise be asked.
+                let home = home_workspace::<O>(&mut connection, caller, several).await?;
+                let here = match (home, on_screen) {
+                    (Some(home), _) => Some(home),
+                    (None, Some(named)) => target::workspace_named(&mut connection, named)
                         .await
                         .ok()
                         .filter(|here| several.contains(here)),
-                    None => None,
+                    (None, None) => None,
                 };
                 match here {
                     Some(here) => *workspace = Some(here),
-                    None => match home_workspace::<O>(&mut connection, caller, several).await? {
-                        Some(home) => *workspace = Some(home),
-                        None => return Err(name_the_workspace(&mut connection, several).await),
-                    },
+                    None => return Err(name_the_workspace(&mut connection, several).await),
                 }
             }
         }

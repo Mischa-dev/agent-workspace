@@ -14,6 +14,8 @@ export type CallOptions = {
   requestId?: string
   /** Run it and roll it back (operations that have a preview). */
   preview?: boolean
+  /** The workspace on screen when the call was first made, for its retries. */
+  onScreen?: string
   signal?: AbortSignal
 }
 
@@ -28,7 +30,7 @@ export async function callOp<N extends OpName>(
     : `/api/v2/ops/${name}`
   // The workspace on screen: where a call that names none acts, when its
   // target doesn't say and the person reaches several.
-  const onScreen = currentWorkspaceSlug()
+  const onScreen = options.onScreen ?? currentWorkspaceSlug()
   const envelope = await requestJson<Envelope<Operations[N]['output']>>(
     options.preview ? `${base}?preview=true` : base,
     {
