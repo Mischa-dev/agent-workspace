@@ -72,7 +72,38 @@ fn contains(operation: &str, input: &Value) -> &'static [&'static str] {
             None => &["task_update"],
         },
         "record_create_many" => &["record_create"],
-        "record_update_many" => &["record_update"],
+        // An entry that names no record is added in the same batch.
+        "record_update_many" => {
+            let adds = input
+                .get("records")
+                .and_then(Value::as_array)
+                .is_some_and(|records| {
+                    records
+                        .iter()
+                        .any(|entry| entry.get("record").is_none_or(Value::is_null))
+                });
+            if adds {
+                &["record_update", "record_create"]
+            } else {
+                &["record_update"]
+            }
+        }
+        _ => &[],
+    }
+}
+
+/// The kinds of thing a combined call changes, whatever it was aimed at:
+/// a bulk task update that names its space still changes tasks, and
+/// adding records changes their collection as adding one does, so a guard
+/// on that kind sees it.
+fn combined_kinds(operation: &str, contained: &[&str]) -> &'static [&'static str] {
+    match operation {
+        "task_claim_next" | "task_finish" | "task_create_many" | "task_link_many"
+        | "task_update_many" => &["task"],
+        "record_create_many" | "record_update_many" if contained.contains(&"record_create") => {
+            &["record", "collection"]
+        }
+        "record_update_many" => &["record"],
         _ => &[],
     }
 }
@@ -94,7 +125,7 @@ impl GuardRow {
         &self,
         operation: &str,
         contained: &[&str],
-        kind: &str,
+        kinds: &[&str],
         account: Uuid,
         text: &str,
     ) -> bool {
@@ -103,7 +134,11 @@ impl GuardRow {
                 .operations
                 .iter()
                 .any(|name| name == operation || contained.contains(&name.as_str())))
-            && (self.target_kinds.is_empty() || self.target_kinds.iter().any(|name| name == kind))
+            && (self.target_kinds.is_empty()
+                || self
+                    .target_kinds
+                    .iter()
+                    .any(|name| kinds.contains(&name.as_str())))
             && (self.accounts.is_empty() || self.accounts.contains(&account))
             && (self.terms.is_empty()
                 || self
@@ -240,9 +275,11 @@ pub async fn check(
     let kind = target_kind(kind);
     let text = text_of(input);
     let contained = contains(operation, input);
+    let mut kinds = vec![kind];
+    kinds.extend(combined_kinds(operation, contained));
     let Some(guard) = guards
         .iter()
-        .find(|guard| guard.matches(operation, contained, kind, caller.account_id, &text))
+        .find(|guard| guard.matches(operation, contained, &kinds, caller.account_id, &text))
     else {
         return Ok(Verdict::Allow { hold: None });
     };
@@ -684,6 +721,17 @@ mod tests {
             ["task_archive"]
         );
         assert!(super::contains("task_update", &plain).is_empty());
+        let mixed = json!({"records": [{"record": "#1"}, {"title": "New"}]});
+        assert!(super::contains("record_update_many", &mixed).contains(&"record_create"));
+        let changes = json!({"records": [{"record": "#1"}]});
+        assert_eq!(
+            super::contains("record_update_many", &changes),
+            ["record_update"]
+        );
+        assert_eq!(super::combined_kinds("task_update_many", &[]), ["task"]);
+        assert!(
+            super::combined_kinds("record_create_many", &["record_create"]).contains(&"collection")
+        );
     }
 
     #[test]

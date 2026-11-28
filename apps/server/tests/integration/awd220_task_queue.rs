@@ -338,7 +338,7 @@ async fn a_guard_on_task_changes_holds_inside_the_queue_operations() {
     };
 
     let stop = guard(json!({"name": "Statuses stay put", "action": "deny",
-                            "operations": ["task_update"]}))
+                            "operations": ["task_update"], "targetKinds": ["task"]}))
     .await;
     let refused = tool(
         app,
