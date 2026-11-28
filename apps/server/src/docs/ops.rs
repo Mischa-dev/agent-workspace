@@ -166,6 +166,20 @@ async fn holds_guide(
     .await?)
 }
 
+/// `id` read again once the call holds the tree: still there, still in
+/// `space`, and still open to `viewer`, whatever happened while it waited.
+async fn still(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: Uuid,
+    viewer: Uuid,
+    space: Uuid,
+) -> Result<Found, OpError> {
+    super::find(tx, id, viewer)
+        .await?
+        .filter(|found| found.space_id == space)
+        .ok_or(OpError::not_found("That document or folder"))
+}
+
 /// The folder `id` of the call's space, as the caller sees it.
 async fn folder(call: &mut OpCall<'_>, field: &'static str, id: Uuid) -> Result<Found, OpError> {
     let viewer = call.account_id();
@@ -369,6 +383,14 @@ impl Operation for DocFolderCreate {
         let tx = call.tx().await?;
         super::lock_tree(tx, space_id).await?;
         if let Some(parent) = parent
+            && still(tx, parent, by, space_id).await?.kind != DocKind::Folder
+        {
+            return Err(invalid(
+                "parentFolderId",
+                "That isn't a folder of this space you can see.",
+            ));
+        }
+        if let Some(parent) = parent
             && super::folders_above(tx, parent).await?.len() >= MAX_FOLDER_DEPTH
         {
             return Err(invalid(
@@ -490,9 +512,7 @@ impl Operation for DocFolderUpdate {
         super::lock_tree(tx, current.space_id).await?;
         // Read again now that the tree is this call's: where the folder
         // sits and who it is kept to may have changed while this waited.
-        let current = super::find(tx, id, viewer)
-            .await?
-            .ok_or(OpError::not_found("That document or folder"))?;
+        let current = still(tx, id, viewer, current.space_id).await?;
         if input.remove {
             let holds_something = super::entries(
                 tx,
@@ -617,11 +637,9 @@ impl Operation for DocMove {
         super::lock_tree(tx, moving.space_id).await?;
         // Looked at again now that the tree is this call's: what was kept
         // from the caller while this waited isn't moved back into the open.
-        if super::find(tx, id, by).await?.is_none() {
-            return Err(OpError::not_found("That document or folder"));
-        }
+        still(tx, id, by, moving.space_id).await?;
         if let Some(to) = to {
-            if super::find(tx, to, by).await?.is_none() {
+            if still(tx, to, by, moving.space_id).await?.kind != DocKind::Folder {
                 return Err(invalid(
                     "folderId",
                     "That isn't a folder of this space you can see.",
@@ -919,9 +937,7 @@ impl Operation for DocAccessSet {
         super::lock_tree(tx, thing.space_id).await?;
         // Looked at again now that the tree is this call's: someone left off
         // the list while this waited doesn't write it back.
-        if super::find(tx, thing.id, by).await?.is_none() {
-            return Err(OpError::not_found("That document or folder"));
-        }
+        still(tx, thing.id, by, thing.space_id).await?;
         if input.restricted && holds_guide(tx, thing.id).await? {
             return Err(invalid("restricted", GUIDE_STAYS_OPEN));
         }

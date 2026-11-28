@@ -307,6 +307,10 @@ pub async fn open_to(pool: &sqlx::PgPool, thing: Uuid, viewer: Uuid) -> Result<b
 /// One writer at a time changes a space's tree, so two moves can't close a
 /// loop between them.
 pub async fn lock_tree(tx: &mut Transaction<'_, Postgres>, space: Uuid) -> Result<(), AppError> {
+    // Pages inside pages are part of this tree, and a page moved to another
+    // space leaves it: the page tree's own lock first, so neither changes
+    // under a Docs write.
+    crate::memory::lock_page_trees(tx, &[space]).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('doc-tree:' || $1::text, 0))")
         .bind(space)
         .execute(&mut **tx)
