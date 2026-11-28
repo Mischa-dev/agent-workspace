@@ -293,6 +293,17 @@ pub async fn find(
     ))
 }
 
+/// Whether the Docs rule leaves `thing` open to `viewer`: for code that reads
+/// for an account outside that account's own scope, where the row rules
+/// don't apply. It only ever takes away; membership is checked elsewhere.
+pub async fn open_to(pool: &sqlx::PgPool, thing: Uuid, viewer: Uuid) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar("SELECT doc_open_to($1, $2)")
+        .bind(thing)
+        .bind(viewer)
+        .fetch_one(crate::db::scoped(pool))
+        .await?)
+}
+
 /// One writer at a time changes a space's tree, so two moves can't close a
 /// loop between them.
 pub async fn lock_tree(tx: &mut Transaction<'_, Postgres>, space: Uuid) -> Result<(), AppError> {

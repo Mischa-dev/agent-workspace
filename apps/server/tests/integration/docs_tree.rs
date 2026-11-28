@@ -4,6 +4,8 @@
 //! doesn't exist for anyone else in the space, a person or an agent alike:
 //! not by id, not in its kind's list, not in the tree, not in search.
 
+use agent_workspace_server::realtime::documents::{DocumentKind, DocumentRef, can_view};
+use axum::http::StatusCode;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -48,6 +50,47 @@ fn id_at(answer: &Value, pointer: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or_else(|| panic!("no {pointer} in {answer}"))
         .to_owned()
+}
+
+/// What a public link answers someone who isn't signed in.
+async fn link_opens(world: &Workspace, path: &str) -> StatusCode {
+    let request = axum::http::Request::builder()
+        .method("GET")
+        .uri(path)
+        .header(axum::http::header::HOST, "127.0.0.1")
+        .body(axum::body::Body::empty())
+        .expect("request");
+    send(&world.app, request).await.0
+}
+
+/// Whether a live connection lets `who` watch the page, the sheet and the
+/// whiteboard. A socket is served for no account in particular, as here.
+async fn watches(world: &Workspace, who: &str, docs: &Docs) -> bool {
+    let account = world.people[who].actor;
+    let mut seen = Vec::new();
+    for (kind, id) in [
+        (DocumentKind::Page, &docs.page),
+        (DocumentKind::Sheet, &docs.sheet),
+        (DocumentKind::Whiteboard, &docs.board),
+    ] {
+        let document = DocumentRef {
+            kind,
+            id: id.parse().expect("id"),
+        };
+        seen.push(
+            agent_workspace_server::tenancy::system(
+                "realtime.connections",
+                can_view(world.pool(), account, document),
+            )
+            .await
+            .expect("can view"),
+        );
+    }
+    assert!(
+        seen.iter().all(|one| *one == seen[0]),
+        "{who} watches some and not others: {seen:?}"
+    );
+    seen[0]
 }
 
 /// One document of each kind, made by the owner.
@@ -448,6 +491,20 @@ async fn a_restricted_folder_hides_what_it_holds_from_everyone_not_named() {
         check(&world, who, &work, &docs, true).await;
     }
 
+    // A link to the page, made while it was open, reads it without signing in.
+    let link = op(
+        &world,
+        "owner",
+        "thing_link_create",
+        json!({"kind": "page", "id": docs.page, "public": true}),
+    )
+    .await;
+    let link = format!("/api/v1/public/pages/{}", id_at(&link, "/token"));
+    assert_eq!(link_opens(&world, &link).await, StatusCode::OK);
+    for who in ["lena", "mara"] {
+        assert!(watches(&world, who, &docs).await, "{who}");
+    }
+
     // Restricted to lena and the agent rook; the owner who did it stays on.
     let access = op(
         &world,
@@ -471,6 +528,11 @@ async fn a_restricted_folder_hides_what_it_holds_from_everyone_not_named() {
         assert_eq!(inside["restricted"], true, "{inside}");
         assert_eq!(inside["restrictedHere"], false, "{inside}");
     }
+    // The link is held by whoever has it, so it stops opening the page, and
+    // a live connection only watches for someone named.
+    assert_eq!(link_opens(&world, &link).await, StatusCode::NOT_FOUND);
+    assert!(watches(&world, "lena", &docs).await);
+    assert!(!watches(&world, "mara", &docs).await);
     // Everyone else in the space: nothing, anywhere, for a person and an
     // agent alike. What isn't restricted is as it was.
     for who in ["mara", "wren"] {
@@ -580,6 +642,8 @@ async fn a_restricted_folder_hides_what_it_holds_from_everyone_not_named() {
     for who in ["mara", "wren", "rook"] {
         check(&world, who, &work, &docs, true).await;
     }
+    assert_eq!(link_opens(&world, &link).await, StatusCode::OK);
+    assert!(watches(&world, "mara", &docs).await);
 }
 
 #[tokio::test]

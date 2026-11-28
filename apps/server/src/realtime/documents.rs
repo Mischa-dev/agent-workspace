@@ -46,6 +46,11 @@ pub async fn can_view(
     if document.kind == DocumentKind::Whiteboard {
         return crate::whiteboards::visible_to(pool, document.id, account).await;
     }
+    // A socket is served for no account in particular, so the row rules don't
+    // hide a document kept to chosen people: ask the Docs rule by name.
+    if !crate::docs::open_to(pool, document.id, account).await? {
+        return Ok(false);
+    }
     // A page shared with them on its own (K1.32) is watched like any other.
     if document.kind == DocumentKind::Page
         && crate::access::sharing::page_level(pool, account, document.id)

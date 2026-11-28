@@ -1827,9 +1827,13 @@ async fn shared_page_view(pool: &PgPool, page_id: Uuid) -> Result<SharedPageView
         "SELECT id, title, body, updated_at::text AS updated_at FROM project_pages \
          WHERE id = $1 AND archived_at IS NULL \
            AND memory_for_kind IS DISTINCT FROM 'conversation' \
-           AND module_part_on('page', id)",
+           AND module_part_on('page', id) \
+           AND doc_open_to(id, $2)",
     )
     .bind(page_id)
+    // A link is held by whoever has it, so it opens a page only while the
+    // page is open to everyone in its space: the account nobody is named as.
+    .bind(Uuid::nil())
     .fetch_optional(&mut *connection)
     .await?
     .ok_or(AppError::NotFound("link"))
