@@ -146,6 +146,7 @@ pub(crate) async fn send(
     words: Words,
     attachment_ids: Option<Vec<String>>,
     reply_to_message_id: Option<Uuid>,
+    note: Option<bool>,
 ) -> Result<SentMessage, OpError> {
     let principal = principal_of(ctx);
     let arguments = MessageSendArguments {
@@ -155,6 +156,7 @@ pub(crate) async fn send(
         attachment_ids,
         reply_to_message_id: reply_to_message_id.map(|id| id.to_string()),
         client_request_id: ctx.request_id.clone(),
+        note,
     };
     answer(
         talk::message_send(state, &principal, arguments).await,

@@ -11,6 +11,10 @@ set where the agent runs.
 - `skills/*/SKILL.md`: one skill each, with `name` and `description` front
   matter. Every tool a skill names in backticks must exist; the server's
   tests check it.
+- `bin/aw`: every operation as a shell command, for scripts and for
+  whatever an agent spawns (the use-the-command-line skill). One Python 3
+  file with no dependencies; it reads the operations from the server's
+  OpenAPI document, so it has nothing to regenerate.
 - `recipes/*.md`: how to connect one client. Front matter `id`, `title` and
   `order`; the body may use `{origin}`, `{mcp}` and `{token}`. Adding a
   client is adding a file here; the server lists them by themselves.

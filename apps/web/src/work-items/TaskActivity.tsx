@@ -27,6 +27,7 @@ import {
   Menu,
   MessageSkeleton,
   actorKind,
+  countLabel,
   describeLoadError,
   formatFullDate,
   formatRelative,
@@ -101,13 +102,26 @@ function eventSummary(summary: string) {
 // Runs of changes longer than this fold into "Show N more changes" between their first and last entries.
 const FOLD_AFTER = 4
 
-type Group = { kind: 'comment'; entry: WorkItemTimelineEntry } | { kind: 'events'; entries: WorkItemTimelineEntry[] }
+type Group =
+  | { kind: 'comment'; entry: WorkItemTimelineEntry }
+  | { kind: 'events'; entries: WorkItemTimelineEntry[] }
+  | { kind: 'notes'; entries: WorkItemTimelineEntry[] }
 
-function groupTimeline(entries: WorkItemTimelineEntry[]): Group[] {
+/**
+ * Comments stand alone, runs of changes fold when long, and a run of working
+ * notes folds to one line (AWD-220), other than your own and ones that name you.
+ */
+function groupTimeline(entries: WorkItemTimelineEntry[], viewerId: string | null): Group[] {
   const groups: Group[] = []
   for (const entry of entries) {
     const last = groups[groups.length - 1]
-    if (entry.comment) groups.push({ kind: 'comment', entry })
+    const posted = entry.comment
+    const quiet = Boolean(
+      posted?.note && !posted.removed && posted.author.id !== viewerId && !posted.mentionedActors.some((actor) => actor.id === viewerId),
+    )
+    if (quiet && last?.kind === 'notes') last.entries.push(entry)
+    else if (quiet) groups.push({ kind: 'notes', entries: [entry] })
+    else if (posted) groups.push({ kind: 'comment', entry })
     else if (last?.kind === 'events') last.entries.push(entry)
     else groups.push({ kind: 'events', entries: [entry] })
   }
@@ -269,9 +283,28 @@ export function TaskActivity({ item, projectArchived }: { item: WorkItem; projec
   }
 
   const rows: ReactNode[] = []
-  groupTimeline(entries).forEach((group) => {
+  // A link to a folded note opens its fold.
+  const linked = typeof window === 'undefined' ? '' : window.location.hash
+  groupTimeline(entries, viewerId).forEach((group) => {
     if (group.kind === 'comment') {
       rows.push(comment(group.entry))
+      return
+    }
+    if (group.kind === 'notes') {
+      const first = group.entries[0].sequence
+      if (unfolded.has(first) || group.entries.some((entry) => linked === `#comment-${entry.comment?.id}`)) {
+        rows.push(...group.entries.map(comment))
+        return
+      }
+      const names = [...new Set(group.entries.map((entry) => entry.comment?.author.displayName ?? ''))].filter(Boolean)
+      const who = names.length > 2 ? `${names[0]} and ${names.length - 1} others` : names.join(' and ')
+      rows.push(
+        <li className="aw-activity__fold" data-part="working-notes" key={`notes-${first}`}>
+          <Button icon="chevron-right" onClick={() => setUnfolded(new Set([...unfolded, first]))} size="sm" variant="ghost">
+            {countLabel(group.entries.length, 'working note')} from {who}
+          </Button>
+        </li>,
+      )
       return
     }
     const { entries } = group

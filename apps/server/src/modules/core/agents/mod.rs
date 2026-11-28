@@ -17,7 +17,7 @@ impl CoreModule for Module {
         module.operations(crate::external_agents::ops::register_ops);
         module.routes(crate::delivery::http::router);
         module.operations(crate::delivery::ops::register_ops);
-    module.operations(crate::schedules::ops::register_ops);
+        module.operations(crate::schedules::ops::register_ops);
         module.operations(crate::guards::ops::register_ops);
         module.routes(crate::agent_profiles::router);
         module.routes(crate::agent_sessions::router);

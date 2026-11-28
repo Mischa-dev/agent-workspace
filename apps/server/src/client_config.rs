@@ -161,7 +161,9 @@ pub async fn cors(State(origins): State<WebOrigins>, request: Request, next: Nex
         );
         headers.insert(
             ACCESS_CONTROL_ALLOW_HEADERS,
-            HeaderValue::from_static("accept, content-type, idempotency-key, x-csrf-token"),
+            HeaderValue::from_static(
+                "accept, content-type, idempotency-key, x-csrf-token, x-current-workspace",
+            ),
         );
         headers.insert(ACCESS_CONTROL_MAX_AGE, HeaderValue::from_static("600"));
         headers.append(VARY, HeaderValue::from_static("origin"));

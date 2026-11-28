@@ -1086,6 +1086,7 @@ mod tests {
             reply_to_author_name: None,
             reply_to_text: None,
             reply_to_removed: None,
+            comment_note: None,
             actor_id: Uuid::now_v7(),
             actor_kind: "external_agent".to_owned(),
             actor_display_name: "Kai".to_owned(),

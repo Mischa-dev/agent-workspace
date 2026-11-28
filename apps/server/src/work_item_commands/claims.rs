@@ -188,6 +188,90 @@ pub async fn claim(
     Ok(Claimed::Held { fresh })
 }
 
+/// Of `candidates`, the tasks `actor_id` may take from the queue now: not
+/// archived, held by nobody, assigned or delegated to nobody else, and
+/// carrying every label in `labels` (by name, any case).
+pub async fn takeable(
+    pool: &sqlx::PgPool,
+    project_id: Uuid,
+    actor_id: Uuid,
+    candidates: &[Uuid],
+    labels: &[String],
+) -> Result<Vec<Uuid>, AppError> {
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT item.id
+        FROM task_rows item
+        WHERE item.project_id = $1
+          AND item.id = ANY($2)
+          AND item.archived_at IS NULL
+          AND (item.assignee_actor_id IS NULL OR item.assignee_actor_id = $3
+               OR item.delegate_actor_id = $3)
+          AND (item.delegate_actor_id IS NULL OR item.delegate_actor_id = $3)
+          AND NOT EXISTS (
+              SELECT 1 FROM work_item_claims claim
+              WHERE claim.work_item_id = item.id AND claim.expires_at > now())
+          AND NOT EXISTS (
+              SELECT 1 FROM unnest($4::text[]) AS wanted(name)
+              WHERE NOT EXISTS (
+                  SELECT 1
+                  FROM work_item_labels tagged
+                  JOIN project_labels label
+                    ON label.project_id = tagged.project_id AND label.id = tagged.label_id
+                  WHERE tagged.project_id = item.project_id
+                    AND tagged.work_item_id = item.id
+                    AND lower(label.name) = lower(wanted.name)))
+        "#,
+    )
+    .bind(project_id)
+    .bind(candidates)
+    .bind(actor_id)
+    .bind(labels)
+    .fetch_all(crate::db::scoped(pool))
+    .await?)
+}
+
+/// Which of `candidates` were started and given back: the last holder left
+/// a handoff, or their claim ran out, and nobody holds the task now.
+pub async fn given_back(
+    pool: &sqlx::PgPool,
+    project_id: Uuid,
+    candidates: &[Uuid],
+) -> Result<Vec<Uuid>, AppError> {
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT item.id
+        FROM task_rows item
+        WHERE item.project_id = $1
+          AND item.id = ANY($2)
+          AND NOT EXISTS (
+              SELECT 1 FROM work_item_claims claim
+              WHERE claim.work_item_id = item.id AND claim.expires_at > now())
+          -- A handoff counts while it is the last word: a claim taken after
+          -- it (and let go without one) leaves the task where its holder did.
+          AND (EXISTS (SELECT 1 FROM work_item_handoffs handoff
+                       WHERE handoff.work_item_id = item.id
+                         AND NOT EXISTS (
+                             SELECT 1 FROM work_item_activity taken
+                             WHERE taken.work_item_id = item.id
+                               AND taken.payload @> '{"claim": true}'
+                               AND taken.created_at > handoff.created_at))
+               OR EXISTS (SELECT 1 FROM work_item_claims claim
+                          WHERE claim.work_item_id = item.id))
+        "#,
+    )
+    .bind(project_id)
+    .bind(candidates)
+    .fetch_all(crate::db::scoped(pool))
+    .await?)
+}
+
 /// Who may end a claim.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Releaser {

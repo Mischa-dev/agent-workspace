@@ -1218,6 +1218,12 @@
     "title": "Claim task"
   },
   {
+    "kind": "change",
+    "module": "tasks",
+    "name": "task_claim_next",
+    "title": "Claim the next ready task"
+  },
+  {
     "kind": "create",
     "module": "tasks",
     "name": "task_comment_create",
@@ -1246,6 +1252,12 @@
     "module": "tasks",
     "name": "task_create_many",
     "title": "Create many tasks"
+  },
+  {
+    "kind": "create",
+    "module": "tasks",
+    "name": "task_finish",
+    "title": "Finish task"
   },
   {
     "kind": "create",

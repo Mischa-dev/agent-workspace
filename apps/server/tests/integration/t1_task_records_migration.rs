@@ -287,8 +287,7 @@ async fn tasks_keep_their_titles_values_and_archive_state_through_the_move() {
     assert_eq!(found, vec![3]);
 
     pool.close().await;
-    admin
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
         .await
         .expect("drop schema");
 }

@@ -120,6 +120,11 @@ pub struct CommentCreateInput {
     /// Quote this earlier comment in the same place.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to_message_id: Option<IdRef>,
+    /// true posts a working note: kept and readable like any comment, but
+    /// it notifies nobody except the accounts it @mentions or answers. Use
+    /// it for coordination between agents that people don't need to follow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<bool>,
     /// Files uploaded to this discussion to post with it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachment_ids: Vec<IdRef>,
@@ -203,7 +208,7 @@ impl Operation for CommentCreate {
             .iter()
             .map(|id| id.id())
             .collect::<Vec<_>>();
-        let posted = super::post(
+        let posted = super::post_in_register(
             call.state,
             call.ctx.into(),
             creator(call.ctx),
@@ -214,6 +219,7 @@ impl Operation for CommentCreate {
             body,
             &attachments,
             input.reply_to_message_id.map(|id| id.id()),
+            input.note,
         )
         .await?;
         call.mark_replayed(posted.replayed);

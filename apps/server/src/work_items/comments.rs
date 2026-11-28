@@ -73,6 +73,7 @@ pub(crate) async fn post(
     content: serde_json::Value,
     attachments: &[Uuid],
     reply_to: Option<Uuid>,
+    note: Option<bool>,
     key: IdempotencyKey,
     audit: (&crate::work_item_commands::CommandActor, &'static str),
 ) -> Result<PostedTaskComment, AppError> {
@@ -80,7 +81,7 @@ pub(crate) async fn post(
     // every other poster (a browser session, a connected app's grant) gets
     // the task's audit row here.
     let audited_by_pipeline = actor.mcp_credential.is_some();
-    let posted = crate::discussion::post(
+    let posted = crate::discussion::post_in_register(
         state,
         actor,
         creator,
@@ -91,6 +92,7 @@ pub(crate) async fn post(
         CommentBody::Content(content),
         attachments,
         reply_to,
+        note,
     )
     .await
     .map_err(|error| match error {

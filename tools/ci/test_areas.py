@@ -30,7 +30,7 @@ class AreaValidationTests(unittest.TestCase):
         # Fail immediately if validation reaches scheduling or repository work.
         for name in ("nice", "git", "ssh", "rsync"):
             self.stub(self.bin / name, status=97)
-        for name in ("cargo", "rustup", "node", "pnpm", "python3", "psql", "createdb", "dropdb"):
+        for name in ("cargo", "rustup", "rustfmt", "node", "pnpm", "python3", "psql", "createdb", "dropdb"):
             self.stub(self.bin / name)
         self.stub(self.root / "tools" / "verify-self-hosted-guide.sh")
         self.stub(self.root / "tools" / "ci" / "test_admission.sh")
@@ -91,6 +91,7 @@ class AreaValidationTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("All checks passed", result.stdout)
                 self.assertEqual("cargo fmt --check" in calls, rust)
+                self.assertEqual(any(c.startswith("rustfmt --check") for c in calls), rust)
                 self.assertEqual(any(c.split() == ["test_admission.sh"] for c in calls), rust)
                 self.assertEqual(any(c.split() == ["test_pinned_node.sh"] for c in calls), rust)
                 self.assertEqual("cargo nextest run --workspace --profile ci" in calls, rust)
@@ -130,6 +131,7 @@ class AreaValidationTests(unittest.TestCase):
             parts[p] for p in ("lint", "rust-build", "rust-tests", "web", "e2e")
         )
         self.assertIn("cargo fmt --check", lint)
+        self.assertTrue(any(c.startswith("rustfmt --check") for c in lint))
         self.assertIn("cargo clippy --workspace --all-targets --all-features -- -D warnings", lint)
         self.assertIn("cargo deny check", lint)
         self.assertIn(

@@ -239,8 +239,7 @@ async fn comments_keep_their_words_authors_versions_and_threads_as_messages() {
     assert_eq!(left, 0);
 
     pool.close().await;
-    admin
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
         .await
         .expect("drop schema");
 }

@@ -72,6 +72,10 @@ pub struct ChannelView {
     pub description: Option<String>,
     pub private: bool,
     pub auto_join: bool,
+    /// What's said here is a working note unless its sender says otherwise:
+    /// kept and readable like any message, but it makes nothing unread and
+    /// notifies only who it addresses.
+    pub working_notes: bool,
     pub archived: bool,
     pub joined: bool,
     pub member_count: i64,
@@ -92,6 +96,7 @@ struct ChannelRow {
     description: Option<String>,
     private: bool,
     auto_join: bool,
+    working_notes: bool,
     archived: bool,
     joined: bool,
     manager: bool,
@@ -107,6 +112,7 @@ async fn channel_view(call: &mut OpCall<'_>, channel_id: Uuid) -> Result<Channel
         r#"
         SELECT channel.id, channel.project_id, channel.name, channel.topic, channel.description,
                channel.visibility = 'members' AS private, channel.auto_join,
+               channel.default_register = 'note' AS working_notes,
                channel.archived_at IS NOT NULL AS archived,
                EXISTS (SELECT 1 FROM conversation_members member
                        WHERE member.conversation_id = channel.id AND member.actor_id = $2)
@@ -142,6 +148,7 @@ async fn channel_view(call: &mut OpCall<'_>, channel_id: Uuid) -> Result<Channel
         description: row.description,
         private: row.private,
         auto_join: row.auto_join,
+        working_notes: row.working_notes,
         archived: row.archived,
         joined: row.joined,
         member_count: row.member_count,
@@ -474,6 +481,12 @@ pub struct ChannelUpdateInput {
     /// someone who manages the channel or moderates the project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_join: Option<bool>,
+    /// true makes this a working channel: what's said here (and in its
+    /// threads) is a working note unless the sender passes note: false.
+    /// Notes are kept and readable like any message, but make nothing
+    /// unread and notify only who they address. false turns it back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_notes: Option<bool>,
 }
 
 impl Targeted for ChannelUpdateInput {
@@ -497,8 +510,9 @@ impl Operation for ChannelUpdate {
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
     const TITLE: &'static str = "Change channel";
     const DESCRIPTION: &'static str = "Set a channel's topic (one line on what it's on now) or \
-        description, or, for someone who manages it or moderates the project, whether everyone \
-        joins it (autoJoin). Rename or archive a channel with conversation_update.";
+        description, whether what's said there is working notes by default (workingNotes), \
+        or, for someone who manages it or moderates the project, whether everyone joins it \
+        (autoJoin). Rename or archive a channel with conversation_update.";
     const EMITS: &'static [&'static str] = &["conversation.updated"];
 
     type Input = ChannelUpdateInput;
@@ -524,10 +538,14 @@ impl Operation for ChannelUpdate {
                 "A description holds at most 2,000 characters.",
             ));
         }
-        if topic.is_none() && description.is_none() && input.auto_join.is_none() {
+        if topic.is_none()
+            && description.is_none()
+            && input.auto_join.is_none()
+            && input.working_notes.is_none()
+        {
             return Err(invalid(
                 "topic",
-                "Give a topic, a description or autoJoin to change.",
+                "Give a topic, a description, workingNotes or autoJoin to change.",
             ));
         }
         let caller = call.ctx.caller.account_id;
@@ -624,6 +642,14 @@ impl Operation for ChannelUpdate {
             sqlx::query("UPDATE conversations SET description = $2 WHERE id = $1")
                 .bind(channel_id)
                 .bind(description)
+                .execute(&mut **tx)
+                .await
+                .map_err(AppError::from)?;
+        }
+        if let Some(working_notes) = input.working_notes {
+            sqlx::query("UPDATE conversations SET default_register = $2 WHERE id = $1")
+                .bind(channel_id)
+                .bind(if working_notes { "note" } else { "message" })
                 .execute(&mut **tx)
                 .await
                 .map_err(AppError::from)?;

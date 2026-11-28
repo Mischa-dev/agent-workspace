@@ -60,6 +60,11 @@ export type ConversationMessage = {
   saved?: SavedMark | null
   /** What it was made into (C2.20): kinds and ids, read live with your access. */
   madeInto?: MadeIntoThing[]
+  /**
+   * A working note (AWD-220): kept and readable like any message, but it made
+   * nothing unread and told only who it addresses. Shown folded.
+   */
+  note?: boolean
 }
 
 export type MadeIntoThing = { kind: string; id: string }
@@ -189,6 +194,8 @@ export type ConversationTimelinePage = {
     version: number
     /** A private channel, or a thread in one: only its members see it (C2.6). */
     private?: boolean
+    /** A working channel, or a thread in one: what's said here is a working note by default. */
+    workingNotes?: boolean
     /** Threads: where it stands, such as Open or Decided. */
     threadStatus: string | null
     threadOutcome: string | null

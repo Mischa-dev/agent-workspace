@@ -63,6 +63,8 @@ pub const VERBS: &[(OpKind, &[&str])] = &[
             "move",
             "reorder",
             "claim",
+            // The best ready one of a queue, claimed in the same step (AWD-220).
+            "claim_next",
             "release",
             "link",
             "unlink",

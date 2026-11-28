@@ -957,7 +957,9 @@ pub const DECLARATIONS: &[ExportDecl] = &[
                     ("reply_to_message_id", "messages"),
                 ],
                 text_references: &[],
-                exclude: &[],
+                // A position in the database server that wrote it; the
+                // server that imports it gives its own.
+                exclude: &["written_in"],
             },
         ],
         not_exported: &[

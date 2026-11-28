@@ -1,0 +1,378 @@
+#!/usr/bin/env python3
+"""aw: Agent Workspace from a shell.
+
+Every operation the workspace has is a subcommand, read from the server's
+own description of its API, so this file never falls behind the server.
+It needs only Python 3 and a token in AGENT_WORKSPACE_TOKEN.
+
+    aw ops [word ...]         list operations (filtered by words)
+    aw help <operation>       what one does and the arguments it takes
+    aw <operation> [--some-argument value ...] [--json '{...}']
+    aw wait [--kind task.* ...] [--seconds 600]
+
+Arguments are the operation's own, written --like-this for likeThis. A
+value of - reads standard input and @path reads a file, so long text never
+needs quoting. --json merges a whole JSON object (- for standard input).
+The result is printed as JSON; --raw prints the whole answer with its
+outcome. Exit status: 0 done, 1 refused by the server, 2 used wrongly,
+3 nothing arrived (wait) or the server couldn't be reached.
+"""
+
+import fnmatch
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+import uuid
+
+SERVER = os.environ.get("AGENT_WORKSPACE_URL") or "{origin}"
+BASE = SERVER.rstrip("/") + "/api/public/v1"
+AGENT = "agent-workspace-cli/{version}"
+
+
+def fail(status, message):
+    sys.stderr.write(message.rstrip() + "\n")
+    sys.exit(status)
+
+
+def token():
+    value = os.environ.get("AGENT_WORKSPACE_TOKEN", "").strip()
+    if not value:
+        fail(2, "Set AGENT_WORKSPACE_TOKEN to your token.")
+    return value
+
+
+def cache_path():
+    root = os.environ.get("XDG_CACHE_HOME") or os.path.join(
+        os.path.expanduser("~"), ".cache"
+    )
+    name = "".join(c if c.isalnum() else "_" for c in BASE)
+    return os.path.join(root, "agent-workspace", name + ".json")
+
+
+def document(fresh=False):
+    """The server's API description, kept for an hour."""
+    path = cache_path()
+    try:
+        if not fresh and time.time() - os.path.getmtime(path) < 3600:
+            with open(path, encoding="utf-8") as kept:
+                return json.load(kept)
+    except (OSError, ValueError):
+        pass
+    request = urllib.request.Request(
+        BASE + "/openapi.json", headers={"User-Agent": AGENT}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as answer:
+            text = answer.read().decode("utf-8")
+        found = json.loads(text)
+    except (OSError, ValueError) as error:
+        fail(3, "Couldn't read the operations from " + BASE + ": " + str(error))
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path + ".new", "w", encoding="utf-8") as kept:
+            kept.write(text)
+        os.replace(path + ".new", path)
+    except OSError:
+        pass
+    return found
+
+
+def resolve(schema, doc, depth=0):
+    """A schema with its top reference followed."""
+    while isinstance(schema, dict) and "$ref" in schema and depth < 8:
+        node = doc
+        for part in schema["$ref"].lstrip("#/").split("/"):
+            node = node.get(part, {})
+        schema, depth = node, depth + 1
+    return schema if isinstance(schema, dict) else {}
+
+
+def operation(doc, name):
+    found = doc.get("paths", {}).get("/" + name, {}).get("post")
+    if not found and not doc.get("fresh"):
+        # The server may have gained it since the description was kept.
+        doc = dict(document(fresh=True), fresh=True)
+        return operation(doc, name)
+    if not found:
+        near = [
+            path[1:]
+            for path in doc.get("paths", {})
+            if name.replace("-", "_") in path
+        ][:8]
+        hint = (" Did you mean: " + ", ".join(near) + "?") if near else ""
+        fail(2, "No operation called " + name + "." + hint + " Try: aw ops")
+    body = found.get("requestBody", {}).get("content", {})
+    return found, resolve(body.get("application/json", {}).get("schema", {}), doc)
+
+
+def kinds(schema, doc):
+    schema = resolve(schema, doc)
+    found = schema.get("type")
+    found = found if isinstance(found, list) else [found]
+    for choice in schema.get("anyOf", []) + schema.get("oneOf", []):
+        found += kinds(choice, doc)
+    return [kind for kind in found if kind and kind != "null"]
+
+
+def flag(name):
+    return "--" + "".join("-" + c.lower() if c.isupper() else c for c in name)
+
+
+def camel(text):
+    head, *rest = text.split("-")
+    return head + "".join(part[:1].upper() + part[1:] for part in rest)
+
+
+def read_value(text):
+    if text == "-":
+        return sys.stdin.read()
+    if text.startswith("@"):
+        try:
+            with open(text[1:], encoding="utf-8") as source:
+                return source.read()
+        except OSError as error:
+            fail(2, str(error))
+    return text
+
+
+def items_of(schema, doc):
+    """What a list argument holds."""
+    schema = resolve(schema, doc)
+    if "items" in schema:
+        return schema["items"]
+    for choice in schema.get("anyOf", []) + schema.get("oneOf", []):
+        found = items_of(choice, doc)
+        if found:
+            return found
+    return {}
+
+
+def typed(text, schema, doc):
+    """A value already read from the command line, as the argument's type."""
+    wanted = kinds(schema, doc)
+    if not wanted or wanted == ["string"]:
+        return text
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return text
+    if isinstance(value, str) or "string" not in wanted:
+        return value
+    # A string argument that happens to look like a number stays a string.
+    simple = isinstance(value, (int, float, bool)) or value is None
+    return text if simple and not set(wanted) & {"integer", "number", "boolean"} else value
+
+
+def arguments(words, schema, doc):
+    properties = schema.get("properties", {})
+    given, raw, index = {}, False, 0
+    while index < len(words):
+        word = words[index]
+        index += 1
+        if not word.startswith("--"):
+            fail(2, "Arguments are written --name value; got " + word)
+        name, has_value, value = word[2:].partition("=")
+        if name == "raw":
+            raw = True
+            continue
+        if not has_value and index < len(words) and not (
+            words[index].startswith("--") and len(words[index]) > 2
+        ):
+            value, has_value = words[index], True
+            index += 1
+        if name == "json":
+            try:
+                merged = json.loads(read_value(value))
+            except ValueError as error:
+                fail(2, "--json isn't JSON: " + str(error))
+            if not isinstance(merged, dict):
+                fail(2, "--json takes an object.")
+            given.update(merged)
+            continue
+        key = camel(name)
+        if properties and key not in properties:
+            fail(
+                2,
+                "No argument "
+                + flag(key)
+                + ". It takes: "
+                + ", ".join(flag(known) for known in sorted(properties)),
+            )
+        part = properties.get(key, {})
+        if has_value and "array" in kinds(part, doc):
+            # A whole JSON list, or one item of it (repeat the flag for
+            # more), read as the list's item type: a label named 2026 stays
+            # text.
+            text = read_value(value)
+            try:
+                whole = json.loads(text)
+            except ValueError:
+                whole = text
+            if isinstance(whole, list):
+                given[key] = whole
+                continue
+            given.setdefault(key, [])
+            if isinstance(given[key], list):
+                items = items_of(part, doc)
+                # An item of no one type (an object, say) is taken as JSON.
+                given[key].append(typed(text, items, doc) if kinds(items, doc) else whole)
+                continue
+        given[key] = True if not has_value else typed(read_value(value), part, doc)
+    return given, raw
+
+
+def call(name, body, wait=60):
+    """One call: the HTTP status and the server's JSON answer."""
+    request = urllib.request.Request(
+        BASE + "/" + name,
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer " + token(),
+            "Content-Type": "application/json",
+            "User-Agent": AGENT,
+        },
+        method="POST",
+    )
+    last = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=wait) as answer:
+                return answer.status, json.loads(answer.read().decode("utf-8") or "{}")
+        except urllib.error.HTTPError as error:
+            text = error.read().decode("utf-8", "replace")
+            try:
+                found = json.loads(text)
+            except ValueError:
+                found = {"outcome": "error", "message": text[:500]}
+            # Busy or briefly away: the same call again, which a request id
+            # makes safe. Anything else is the answer.
+            if error.code in (429, 503) and attempt < 2 and "clientRequestId" in body:
+                time.sleep(2 * (attempt + 1))
+                continue
+            return error.code, found
+        except OSError as error:
+            last = error
+            # Without a request id the server may already have run it.
+            if not body.get("clientRequestId") or attempt == 2:
+                break
+            time.sleep(1 + attempt)
+    fail(3, "Couldn't reach " + BASE + ": " + str(last))
+
+
+def show(value):
+    json.dump(value, sys.stdout, indent=2, ensure_ascii=False)
+    sys.stdout.write("\n")
+
+
+def list_operations(words):
+    doc = document()
+    for path, entry in sorted(doc.get("paths", {}).items()):
+        post = entry.get("post", {})
+        text = post.get("description") or post.get("summary") or ""
+        line = path[1:] + "  " + text.split(". ")[0].strip().rstrip(".")
+        if all(word.lower() in line.lower() for word in words):
+            sys.stdout.write(line[:200] + "\n")
+
+
+def describe(name):
+    doc = document()
+    post, schema = operation(doc, name)
+    sys.stdout.write(name + "\n\n" + (post.get("description") or "") + "\n\n")
+    required = set(schema.get("required", []))
+    for key, part in sorted(schema.get("properties", {}).items()):
+        part = resolve(part, doc)
+        kind = "/".join(kinds(part, doc)) or "any"
+        need = " (required)" if key in required else ""
+        text = " ".join((part.get("description") or "").split())
+        sys.stdout.write("  " + flag(key) + "  " + kind + need + "\n")
+        if text:
+            sys.stdout.write("      " + text + "\n")
+
+
+def wait_for(words):
+    """Block until an event of a wanted kind arrives, then print what came."""
+    patterns, seconds, cursor, index = [], 600, None, 0
+    while index < len(words):
+        word, value = words[index], words[index + 1 : index + 2]
+        if word in ("--kind", "--seconds", "--cursor") and not value:
+            fail(2, word + " needs a value.")
+        if word == "--kind":
+            patterns.append(value[0])
+        elif word == "--seconds":
+            seconds = int(value[0])
+        elif word == "--cursor":
+            cursor = value[0]
+        else:
+            fail(2, "aw wait [--kind task.* ...] [--seconds 600] [--cursor c]")
+        index += 2
+    until = time.time() + seconds
+    while True:
+        left = until - time.time()
+        body = {"waitSeconds": int(max(0, min(30, left)))}
+        if cursor:
+            body["cursor"] = cursor
+        status, answer = call("event_list", body, wait=75)
+        page = answer.get("value", answer)
+        if status != 200 or "events" not in page:
+            show(answer)
+            sys.exit(1)
+        cursor = page.get("nextCursor", cursor)
+        matched = [
+            event
+            for event in page["events"]
+            if not patterns
+            or any(
+                fnmatch.fnmatch(str(event.get("type") or event.get("kind") or ""), pattern)
+                for pattern in patterns
+            )
+        ]
+        if matched:
+            show({"events": matched, "nextCursor": cursor})
+            return
+        if left <= 0 and not page.get("hasMore"):
+            show({"events": [], "nextCursor": cursor})
+            sys.exit(3)
+
+
+def main():
+    words = sys.argv[1:]
+    if not words or words[0] in ("-h", "--help"):
+        sys.stdout.write(__doc__)
+        return
+    name, rest = words[0], words[1:]
+    if name == "ops":
+        return list_operations(rest)
+    if name == "help":
+        if not rest:
+            sys.stdout.write(__doc__)
+            return
+        return describe(rest[0].replace("-", "_"))
+    if name == "wait":
+        return wait_for(rest)
+    name = name.replace("-", "_")
+    doc = document()
+    _, schema = operation(doc, name)
+    body, raw = arguments(rest, schema, doc)
+    if "clientRequestId" in schema.get("properties", {}):
+        body.setdefault("clientRequestId", str(uuid.uuid4()))
+    status, answer = call(name, body, wait=120)
+    done = 200 <= status < 300
+    if raw or not done:
+        target = sys.stdout if done else sys.stderr
+        json.dump(answer, target, indent=2, ensure_ascii=False)
+        target.write("\n")
+    else:
+        show(answer.get("value", answer))
+    sys.exit(0 if done else 1)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except BrokenPipeError:
+        sys.exit(0)
+    except KeyboardInterrupt:
+        sys.exit(130)

@@ -597,6 +597,9 @@ struct WorkItemCommentView {
     /// The comment this one replies to. Stored replays predate replies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reply_to: Option<CommentReplyView>,
+    /// A working note (AWD-220): kept, and told only to whom it addresses.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    note: bool,
 }
 
 fn first_comment_revision() -> i32 {
@@ -645,6 +648,8 @@ pub(crate) struct WorkItemTimelineRow {
     pub(crate) reply_to_author_name: Option<String>,
     pub(crate) reply_to_text: Option<String>,
     pub(crate) reply_to_removed: Option<bool>,
+    #[sqlx(default)]
+    pub(crate) comment_note: Option<bool>,
     pub(crate) actor_id: Uuid,
     pub(crate) actor_kind: String,
     pub(crate) actor_display_name: String,
@@ -1512,6 +1517,7 @@ const TIMELINE_SELECT: &str = r#"
                CASE WHEN quoted.removed_at IS NULL THEN left(quoted.plain_text, 300) END
                    AS reply_to_text,
                quoted.removed_at IS NOT NULL AS reply_to_removed,
+               comment.register = 'note' AS comment_note,
                actor.id AS actor_id, actor.kind AS actor_kind,
                membership.display_name AS actor_display_name,
                membership.handle AS actor_handle,
@@ -1686,6 +1692,7 @@ async fn timeline_entry_view(
                         text: row.reply_to_text,
                         removed: row.reply_to_removed.unwrap_or(false),
                     }),
+                    note: row.comment_note.unwrap_or(false),
                 }),
             })
         }

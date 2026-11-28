@@ -311,6 +311,7 @@ pub fn operations(registry: &Registry) -> Result<String, String> {
 pub fn client() -> String {
     format!(
         "{HEADER}
+import {{ CURRENT_WORKSPACE, currentWorkspaceSlug }} from '../../app/href'
 import {{ requestJson }} from '../client'
 import {{ ApiError }} from '../errors'
 import type {{ Envelope, OpName, Operations }} from './operations'
@@ -334,10 +335,14 @@ export async function callOp<N extends OpName>(
   const base = options.workspaceId
     ? `/api/v2/w/${{encodeURIComponent(options.workspaceId)}}/ops/${{name}}`
     : `/api/v2/ops/${{name}}`
+  // The workspace on screen: where a call that names none acts, when its
+  // target doesn't say and the person reaches several.
+  const onScreen = currentWorkspaceSlug()
   const envelope = await requestJson<Envelope<Operations[N]['output']>>(
     options.preview ? `${{base}}?preview=true` : base,
     {{
       method: 'POST',
+      headers: onScreen === CURRENT_WORKSPACE ? undefined : {{ 'x-current-workspace': onScreen }},
       json: input,
       idempotencyKey: options.requestId,
       signal: options.signal,
