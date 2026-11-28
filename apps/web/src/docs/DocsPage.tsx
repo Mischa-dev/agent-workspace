@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
 import type { DocEntry } from '../api/generated/operations'
-import { opQuery, useOp } from '../api/ops'
+import { opQuery, ranOrThrow, useOp } from '../api/ops'
 import { spaceHref } from '../app/href'
 import { useProjectExperience } from '../experience/layout'
 import { ProjectPageError, ProjectPageLoading } from '../projects/ProjectPageStates'
@@ -240,7 +240,17 @@ function Docs({ projectId }: { projectId: string }) {
             setRemoveError(null)
             remove.mutate(
               { folderId: open.entry.id, remove: true },
-              { onSuccess: () => setOpen(null), onError: (error) => setRemoveError(describeError(error).message) },
+              {
+                onSuccess: (value) => {
+                  try {
+                    ranOrThrow(value, 'Removing it')
+                    setOpen(null)
+                  } catch (error) {
+                    setRemoveError(describeError(error).message)
+                  }
+                },
+                onError: (error) => setRemoveError(describeError(error).message),
+              },
             )
           }}
           open

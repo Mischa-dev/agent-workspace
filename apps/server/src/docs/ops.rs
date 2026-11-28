@@ -480,6 +480,17 @@ impl Operation for DocFolderUpdate {
                     "The folder still holds something. Move what is in it somewhere else first.",
                 ));
             }
+            // What the caller doesn't see in it (kept to other people, or
+            // archived) goes up to where the folder was, never left filed
+            // under a folder that is gone. What restricts each stays on it.
+            sqlx::query(
+                "UPDATE doc_places SET parent_id = $2, updated_at = now() WHERE parent_id = $1",
+            )
+            .bind(id)
+            .bind(current.parent_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(AppError::from)?;
         }
         sqlx::query(
             "UPDATE doc_folders SET title = $2, updated_by_account_id = $3, updated_at = now(), \
@@ -833,6 +844,26 @@ impl Operation for DocAccessSet {
         }
         let tx = call.tx().await?;
         super::lock_tree(tx, thing.space_id).await?;
+        // Looked at again now that the tree is this call's: someone left off
+        // the list while this waited doesn't write it back.
+        if super::find(tx, thing.id, by).await?.is_none() {
+            return Err(OpError::not_found("That document or folder"));
+        }
+        if input.restricted && thing.kind == DocKind::Page {
+            let guide =
+                sqlx::query_scalar::<_, bool>("SELECT is_guide FROM project_pages WHERE id = $1")
+                    .bind(thing.id)
+                    .fetch_optional(&mut **tx)
+                    .await
+                    .map_err(AppError::from)?;
+            if guide == Some(true) {
+                return Err(invalid(
+                    "restricted",
+                    "This page is the guide, which everyone here reads. Make another page the \
+                     guide first.",
+                ));
+            }
+        }
         if input.restricted {
             let mut people = vec![by];
             for person in &input.people {

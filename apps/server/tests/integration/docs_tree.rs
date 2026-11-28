@@ -798,6 +798,104 @@ async fn one_restricted_document_and_the_pages_inside_a_page() {
     )
     .await);
     assert!(!watching("lena").await);
+    // Nor does a page she can't see hide a loop: a page inside the sealed
+    // one, with her named on it, is still below Plans.
+    let below = id_at(
+        &op(
+            &world,
+            "owner",
+            "page_create",
+            json!({"projectId": work, "title": "Plan notes", "body": "Notes.", "parentPageId": sealed}),
+        )
+        .await,
+        "/id",
+    );
+    ok(&op(
+        &world,
+        "owner",
+        "doc_access_set",
+        json!({"id": below, "restricted": true, "people": [lena]}),
+    )
+    .await);
+    assert!(opens(&world, "lena", &work, "page", &below).await);
+    let looped = op(
+        &world,
+        "lena",
+        "page_update",
+        json!({"pageId": plans, "parentPageId": below}),
+    )
+    .await;
+    assert_eq!(looped["outcome"], "invalid_request", "{looped}");
+    assert!(looped.to_string().contains("inside itself"), "{looped}");
+
+    // A folder that looks empty to her, but holds a sheet kept from her,
+    // goes; the sheet comes up to the top rather than staying filed under it.
+    let drawer = id_at(
+        &op(
+            &world,
+            "owner",
+            "doc_folder_create",
+            json!({"spaceId": work, "title": "Drawer"}),
+        )
+        .await,
+        "/id",
+    );
+    let ledger = id_at(
+        &op(
+            &world,
+            "owner",
+            "sheet_create",
+            json!({"projectId": work, "name": "Ledger"}),
+        )
+        .await,
+        "/id",
+    );
+    ok(&op(
+        &world,
+        "owner",
+        "doc_move",
+        json!({"id": ledger, "folderId": drawer}),
+    )
+    .await);
+    ok(&op(
+        &world,
+        "owner",
+        "doc_access_set",
+        json!({"id": ledger, "restricted": true, "people": []}),
+    )
+    .await);
+    ok(&op(
+        &world,
+        "lena",
+        "doc_folder_update",
+        json!({"folderId": drawer, "remove": true}),
+    )
+    .await);
+    let entries = tree(&world, "owner", &work).await;
+    let kept = entry(&entries, &ledger).expect("ledger");
+    assert!(kept["parentId"].is_null(), "{kept}");
+    assert_eq!(kept["restrictedHere"], true, "{kept}");
+    assert!(!opens(&world, "lena", &work, "sheet", &ledger).await);
+
+    // The guide is everyone's: it isn't kept to chosen people.
+    let guide = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM project_pages WHERE project_id = $1::uuid AND is_guide",
+    )
+    .bind(&work)
+    .fetch_optional(world.pool())
+    .await
+    .expect("guide");
+    if let Some(guide) = guide {
+        let kept = op(
+            &world,
+            "owner",
+            "doc_access_set",
+            json!({"id": guide, "restricted": true, "people": []}),
+        )
+        .await;
+        assert_eq!(kept["outcome"], "invalid_request", "{kept}");
+    }
+
     let moving = json!({"pageId": plans, "toSpaceId": home, "expectedVersion": 1});
     let refused = op(&world, "lena", "page_move", moving.clone()).await;
     assert_eq!(refused["outcome"], "invalid_request", "{refused}");

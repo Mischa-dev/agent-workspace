@@ -85,11 +85,11 @@ export function NewDocDialog({
     setBusy(true)
     try {
       if (kind === 'folder') {
-        const created = await callOp('doc_folder_create', { spaceId: projectId, title, ...(folder ? { parentFolderId: folder } : {}) }, { requestId: requestId.current })
+        const created = ranOrThrow(await callOp('doc_folder_create', { spaceId: projectId, title, ...(folder ? { parentFolderId: folder } : {}) }, { requestId: requestId.current }), 'Making it')
         made.current = created.id
       } else {
         made.current ??= await make(kind, projectId, title, requestId.current)
-        if (folder) await callOp('doc_move', { id: made.current, folderId: folder })
+        if (folder) ranOrThrow(await callOp('doc_move', { id: made.current, folderId: folder }), 'Putting it in the folder')
       }
       await invalidateOps(queryClient, ['doc_list'])
       onMade({ id: made.current, kind, folderId: folder || null })
@@ -141,7 +141,7 @@ export function RenameFolderDialog({ folder, onClose }: { folder: DocEntry; onCl
     if (!title.trim()) return setProblem('Give the folder a name.')
     setProblem(null)
     try {
-      await rename.mutateAsync({ folderId: folder.id, title: title.trim() })
+      ranOrThrow(await rename.mutateAsync({ folderId: folder.id, title: title.trim() }), 'Renaming it')
       onClose()
     } catch (error) {
       setProblem(describeError(error).message)
@@ -183,7 +183,7 @@ export function MoveDocDialog({ entries, entry, onClose }: { entries: readonly D
   const submit = async () => {
     setProblem(null)
     try {
-      await move.mutateAsync({ id: entry.id, folderId: folder || null })
+      ranOrThrow(await move.mutateAsync({ id: entry.id, folderId: folder || null }), 'Moving it')
       showToast({ tone: 'success', title: folder ? `Moved to ${choices.find((choice) => choice.id === folder)?.label ?? 'the folder'}` : 'Moved to the top of Docs' })
       onClose()
     } catch (error) {
@@ -257,7 +257,7 @@ export function DocAccessDialog({ entry, noun, onClose, projectId }: { entry: Do
     setProblem(null)
     try {
       const restricted = shownAudience === 'chosen'
-      await save.mutateAsync({ id: entry.id, restricted, people: restricted ? [...chosen] : [] })
+      ranOrThrow(await save.mutateAsync({ id: entry.id, restricted, people: restricted ? [...chosen] : [] }), 'Changing who can see it')
       showToast({ tone: 'success', title: restricted ? `Only the people you chose can see “${entry.title}”` : `“${entry.title}” is open again` })
       onClose()
     } catch (error) {
