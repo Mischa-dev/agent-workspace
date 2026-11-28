@@ -87,6 +87,16 @@ BEGIN
                updated_at = now()
          WHERE thing_id = NEW.id;
     END IF;
+    -- Where the page sits decides who it is open to, so a live connection
+    -- checks again what its account may watch, as after doc_move. Only
+    -- where the space keeps something to chosen people.
+    IF TG_OP = 'UPDATE' AND EXISTS (
+        SELECT 1 FROM doc_places WHERE restricted AND space_id = NEW.project_id
+    ) THEN
+        PERFORM stage_access_changed(NEW.workspace_id, NEW.project_id, membership.actor_id)
+        FROM project_memberships membership
+        WHERE membership.project_id = NEW.project_id AND membership.enabled;
+    END IF;
     RETURN NULL;
 END $$;
 

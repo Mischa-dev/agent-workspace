@@ -173,6 +173,32 @@ impl Operation for PageMove {
         .fetch_all(&mut **tx)
         .await
         .map_err(AppError::from)?;
+        // A page inside that is kept from the mover would be carried along
+        // unseen, with its comments and files left behind: it stays put.
+        let unseen = sqlx::query_scalar::<_, bool>(
+            r#"
+            WITH RECURSIVE down(id, depth) AS (
+                SELECT $1::uuid, 0
+                UNION ALL
+                SELECT place.thing_id, down.depth + 1
+                FROM doc_places place JOIN down ON place.parent_id = down.id
+                WHERE down.depth < 50
+            )
+            SELECT EXISTS (SELECT 1 FROM down WHERE id <> ALL($2))
+            "#,
+        )
+        .bind(page_id)
+        .bind(&moving)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(AppError::from)?;
+        if unseen {
+            return Err(OpError::invalid(
+                "pageId",
+                "A page inside this one is kept to chosen people, and you aren't one of them. \
+                 Someone who can see every page inside it can move it.",
+            ));
+        }
         let clash = sqlx::query_scalar::<_, String>(
             "SELECT moving.title FROM project_pages moving \
              JOIN project_pages there ON there.project_id = $2 \

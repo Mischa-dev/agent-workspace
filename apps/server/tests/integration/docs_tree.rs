@@ -650,6 +650,7 @@ async fn a_restricted_folder_hides_what_it_holds_from_everyone_not_named() {
 async fn one_restricted_document_and_the_pages_inside_a_page() {
     let Some(world) = WorldBuilder::default()
         .project("WORK")
+        .project("HOME")
         .person("lena", "member")
         .person("mara", "member")
         .build("awd223_single")
@@ -747,4 +748,58 @@ async fn one_restricted_document_and_the_pages_inside_a_page() {
     )
     .await;
     assert_eq!(pried["outcome"], "not_found", "{pried}");
+
+    // A page with a page inside that the mover can't see doesn't go to
+    // another space in their hands: it would be carried along unseen.
+    let home = world.project("HOME").to_owned();
+    let plans = id_at(
+        &op(
+            &world,
+            "owner",
+            "page_create",
+            json!({"projectId": work, "title": "Plans", "body": "Open."}),
+        )
+        .await,
+        "/id",
+    );
+    let sealed = id_at(
+        &op(
+            &world,
+            "owner",
+            "page_create",
+            json!({"projectId": work, "title": "Sealed plan", "body": "Closed.", "parentPageId": plans}),
+        )
+        .await,
+        "/id",
+    );
+    // lena watches the page inside until it is kept from her.
+    let watching = |who: &'static str| {
+        let document = DocumentRef {
+            kind: DocumentKind::Page,
+            id: sealed.parse().expect("id"),
+        };
+        let account = world.people[who].actor;
+        let pool = world.pool().clone();
+        async move {
+            agent_workspace_server::tenancy::system(
+                "realtime.connections",
+                can_view(&pool, account, document),
+            )
+            .await
+            .expect("can view")
+        }
+    };
+    assert!(watching("lena").await);
+    ok(&op(
+        &world,
+        "owner",
+        "doc_access_set",
+        json!({"id": sealed, "restricted": true, "people": []}),
+    )
+    .await);
+    assert!(!watching("lena").await);
+    let moving = json!({"pageId": plans, "toSpaceId": home, "expectedVersion": 1});
+    let refused = op(&world, "lena", "page_move", moving.clone()).await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
+    ok(&op(&world, "owner", "page_move", moving).await);
 }
