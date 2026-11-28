@@ -115,9 +115,12 @@ test('a collection edited in place, filtered into its view, and a record with it
   await page.setViewportSize({ width: 1440, height: 900 })
   const { projectId, collectionId } = await seed(context, page)
 
-  // The sidebar leads to the list, and the list to the collection.
+  // The sidebar's Docs leads to the list of collections, and the list to the collection.
   await page.goto(`/projects/${projectId}`)
-  await page.getByRole('link', { name: 'Collections' }).first().click()
+  await page.getByRole('link', { name: 'Docs', exact: true }).first().click()
+  await expect(page.getByRole('link', { name: NAME })).toBeVisible()
+  await page.getByRole('button', { name: 'By kind' }).click()
+  await page.getByRole('menuitem', { name: 'Collections' }).click()
   await expect(page.getByRole('heading', { name: 'Collections' })).toBeVisible()
   await page.getByRole('link', { name: NAME }).click()
   await expect(page).toHaveURL(new RegExp(`/collections/${collectionId}`))

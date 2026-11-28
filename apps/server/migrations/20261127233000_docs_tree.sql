@@ -152,32 +152,80 @@ $$;
 
 -- 4. Row rules ---------------------------------------------------------------
 
--- Whether the row of the document `target` exists for the account the work
--- is for. The first two branches cost one lookup a statement, so a space
--- with nothing restricted pays nothing a row.
-CREATE FUNCTION doc_row_open(target UUID) RETURNS BOOLEAN
-LANGUAGE sql STABLE AS $$
-    SELECT doc_viewer() IS NULL
-        OR NOT EXISTS (SELECT 1 FROM doc_places WHERE restricted)
-        OR doc_open_to(target, doc_viewer())
-$$;
+-- Everything in the tree that is hidden from `viewer`: the same rule as
+-- `doc_open_to`, worked out for the whole tree at once, from the top down.
+-- A row rule asks it once a statement and then looks each row up in the
+-- answer, so a list of ten thousand rows costs one walk, not ten thousand.
+-- Its tables are named with this schema, since pg_dump reads the guarded
+-- tables with an empty search_path.
+DO $migration$
+BEGIN
+    EXECUTE format($function$
+        CREATE FUNCTION doc_hidden(viewer UUID) RETURNS SETOF UUID
+        LANGUAGE sql STABLE AS $$
+            WITH RECURSIVE named AS (
+                SELECT DISTINCT granted.thing_id
+                FROM %1$I.thing_grants granted
+                WHERE granted.grantee_account_id = viewer
+                  AND granted.revoked_at IS NULL
+                  AND (granted.expires_at IS NULL OR granted.expires_at > now())
+            ),
+            walk(thing_id, open, depth) AS (
+                SELECT place.thing_id, NOT place.restricted OR named.thing_id IS NOT NULL, 1
+                FROM %1$I.doc_places place
+                LEFT JOIN named ON named.thing_id = place.thing_id
+                WHERE place.parent_id IS NULL
+                   OR NOT EXISTS (
+                       SELECT 1 FROM %1$I.doc_places above WHERE above.thing_id = place.parent_id)
+                UNION ALL
+                SELECT place.thing_id,
+                       CASE WHEN place.restricted THEN named.thing_id IS NOT NULL
+                            ELSE named.thing_id IS NOT NULL OR walk.open END,
+                       walk.depth + 1
+                FROM walk
+                JOIN %1$I.doc_places place ON place.parent_id = walk.thing_id
+                LEFT JOIN named ON named.thing_id = place.thing_id
+                WHERE walk.depth < 64
+            )
+            -- Whatever the walk didn't reach and find open is hidden, so a
+            -- loop or a tree deeper than the app makes stays closed.
+            SELECT place.thing_id
+            FROM %1$I.doc_places place
+            WHERE NOT EXISTS (
+                SELECT 1 FROM walk WHERE walk.thing_id = place.thing_id AND walk.open)
+        $$
+    $function$, current_schema());
+END
+$migration$;
 
-CREATE POLICY doc_restricted ON doc_folders AS RESTRICTIVE FOR SELECT
-    USING (doc_row_open(id));
-CREATE POLICY doc_restricted ON project_pages AS RESTRICTIVE FOR SELECT
-    USING (doc_row_open(id));
-CREATE POLICY doc_restricted ON sheets AS RESTRICTIVE FOR SELECT
-    USING (doc_row_open(id));
-CREATE POLICY doc_restricted ON whiteboards AS RESTRICTIVE FOR SELECT
-    USING (doc_row_open(id));
-CREATE POLICY doc_restricted ON collections AS RESTRICTIVE FOR SELECT
-    USING (doc_row_open(id));
-CREATE POLICY doc_restricted ON dashboards AS RESTRICTIVE FOR SELECT
-    USING (doc_row_open(id));
+-- A row exists for the account the work is for unless the tree hides it.
+-- The first arm is one lookup a statement (work for nobody, or a workspace
+-- with nothing restricted, pays nothing a row); the second is one walk a
+-- statement and a hash lookup a row.
+CREATE POLICY doc_restricted ON doc_folders AS RESTRICTIVE FOR SELECT USING (
+    (SELECT doc_viewer() IS NULL OR NOT EXISTS (SELECT 1 FROM doc_places WHERE restricted))
+    OR id NOT IN (SELECT doc_hidden((SELECT doc_viewer()))));
+CREATE POLICY doc_restricted ON project_pages AS RESTRICTIVE FOR SELECT USING (
+    (SELECT doc_viewer() IS NULL OR NOT EXISTS (SELECT 1 FROM doc_places WHERE restricted))
+    OR id NOT IN (SELECT doc_hidden((SELECT doc_viewer()))));
+CREATE POLICY doc_restricted ON sheets AS RESTRICTIVE FOR SELECT USING (
+    (SELECT doc_viewer() IS NULL OR NOT EXISTS (SELECT 1 FROM doc_places WHERE restricted))
+    OR id NOT IN (SELECT doc_hidden((SELECT doc_viewer()))));
+CREATE POLICY doc_restricted ON whiteboards AS RESTRICTIVE FOR SELECT USING (
+    (SELECT doc_viewer() IS NULL OR NOT EXISTS (SELECT 1 FROM doc_places WHERE restricted))
+    OR id NOT IN (SELECT doc_hidden((SELECT doc_viewer()))));
+CREATE POLICY doc_restricted ON collections AS RESTRICTIVE FOR SELECT USING (
+    (SELECT doc_viewer() IS NULL OR NOT EXISTS (SELECT 1 FROM doc_places WHERE restricted))
+    OR id NOT IN (SELECT doc_hidden((SELECT doc_viewer()))));
+CREATE POLICY doc_restricted ON dashboards AS RESTRICTIVE FOR SELECT USING (
+    (SELECT doc_viewer() IS NULL OR NOT EXISTS (SELECT 1 FROM doc_places WHERE restricted))
+    OR id NOT IN (SELECT doc_hidden((SELECT doc_viewer()))));
 -- A record follows its collection; a page's own record (the Pages
 -- collection keeps one for each page, under the page's id) follows the page.
-CREATE POLICY doc_restricted ON collection_records AS RESTRICTIVE FOR SELECT
-    USING (doc_row_open(collection_id) AND doc_row_open(id));
+CREATE POLICY doc_restricted ON collection_records AS RESTRICTIVE FOR SELECT USING (
+    (SELECT doc_viewer() IS NULL OR NOT EXISTS (SELECT 1 FROM doc_places WHERE restricted))
+    OR (collection_id NOT IN (SELECT doc_hidden((SELECT doc_viewer())))
+        AND id NOT IN (SELECT doc_hidden((SELECT doc_viewer())))));
 
 -- 5. The same rule where a viewer is named -------------------------------------
 
