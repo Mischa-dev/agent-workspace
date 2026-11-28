@@ -12,6 +12,15 @@ use crate::{
     seed::{runtime_path_text, seed_mirror_path},
 };
 
+const M3_EXECUTION: i64 = 9;
+const M3_CANONICAL_MIRRORS: i64 = 11;
+
+/// The migrations whose checks pass only on rows the server has repaired
+/// first, when it starts ([`prepare_m3_upgrade`],
+/// [`prepare_m3_repository_upgrade`]): on the rows as they are before that,
+/// they stop.
+pub const PREPARED_FOR_AT_START: [i64; 2] = [M3_EXECUTION, M3_CANONICAL_MIRRORS];
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct M3UpgradePreflight {
@@ -52,7 +61,7 @@ async fn prepare_m3_repository_upgrade_here(
     pool: &PgPool,
     config: &AppConfig,
 ) -> Result<M3RepositoryUpgradePreflight, AppError> {
-    if !migration_pending(pool, 8, 11).await? {
+    if !migration_pending(pool, 8, M3_CANONICAL_MIRRORS).await? {
         return Ok(M3RepositoryUpgradePreflight::default());
     }
     let repositories = sqlx::query_as::<_, RepositoryMirrorUpgrade>(
@@ -295,28 +304,7 @@ async fn prepare_m3_upgrade_here(
 }
 
 async fn m3_preflight_required(pool: &PgPool) -> Result<bool, AppError> {
-    let migrations_table_exists =
-        sqlx::query_scalar::<_, bool>("SELECT to_regclass('_sqlx_migrations') IS NOT NULL")
-            .fetch_one(crate::db::scoped(pool))
-            .await?;
-    if !migrations_table_exists {
-        return Ok(false);
-    }
-    sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-                   SELECT 1 FROM _sqlx_migrations
-                    WHERE version = 8 AND success
-               )
-           AND NOT EXISTS (
-                   SELECT 1 FROM _sqlx_migrations
-                    WHERE version = 9 AND success
-               )
-        "#,
-    )
-    .fetch_one(crate::db::scoped(pool))
-    .await
-    .map_err(AppError::from)
+    migration_pending(pool, 8, M3_EXECUTION).await
 }
 
 async fn migration_pending(

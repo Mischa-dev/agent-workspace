@@ -70,7 +70,12 @@ the live rows refuse (a constraint they break, a trigger that stops an
 update) is named with the database's reason while the old release is still
 serving. While the rehearsal runs, requests that touch a table a migration
 changes wait, as they would during the migration itself; it gives up, with a
-warning, on a table that stays busy for five seconds. To deploy without it,
+warning, on a table that stays busy for five seconds. It holds every lock
+until the rollback, so with very many migrations to run it stops, with a
+warning that says how many it tried, before it holds half the locks
+PostgreSQL has (`max_locks_per_transaction` × `max_connections`). Its
+transaction can't be committed, so nothing it applies is kept. To deploy
+without it,
 set `AGENT_WORKSPACE_PREFLIGHT_NO_REHEARSAL=1` for the script (`preflight
 --no-rehearsal` by hand).
 

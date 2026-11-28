@@ -312,6 +312,27 @@ pub enum Rehearsal {
     NotTried(String),
 }
 
+/// What the database says when the rehearsal's transaction is committed.
+const NEVER_KEPT: &str = "a rehearsal is never kept";
+
+/// Makes the transaction it runs in impossible to commit. A cursor declared
+/// to outlive its transaction is run to its end by the commit, and this
+/// one's query fails, so the commit does and everything is rolled back.
+/// Whatever a migration says, nothing a rehearsal applied is kept.
+const NEVER_COMMITS: &str = "DECLARE a_rehearsal_is_never_kept CURSOR WITH HOLD FOR \
+     SELECT ('a rehearsal is never kept' || repeat('', step))::int \
+       FROM generate_series(1, 1) AS step";
+
+/// Half the server's lock table. Everything a rehearsed migration touches
+/// stays locked until the rollback, where the migrator lets go after each
+/// one, and the table is shared: when it is full, the requests the running
+/// server is answering fail with "out of shared memory".
+const LOCKS_TO_SPARE: &str = "SELECT current_setting('max_locks_per_transaction')::bigint \
+            * (current_setting('max_connections')::bigint \
+               + current_setting('max_prepared_transactions')::bigint) / 2";
+
+const LOCKS_HELD: &str = "SELECT count(*) FROM pg_locks WHERE pid = pg_backend_pid()";
+
 /// Applies `pending`, in order, to the database's own data in one transaction
 /// that is rolled back whatever happens: what the server would do at its next
 /// start, without keeping any of it.
@@ -319,7 +340,6 @@ pub enum Rehearsal {
 /// While it runs, the server that is serving waits on the tables a migration
 /// changes, as it would on any schema change.
 pub async fn rehearse(pool: &PgPool, pending: &[Migration]) -> Result<Rehearsal, sqlx::Error> {
-    let name = |migration: &Migration| format!("{} {}", migration.version, migration.description);
     if let Some(own) = pending
         .iter()
         .find(|migration| migration.no_tx || ends_its_transaction(&migration.sql))
@@ -329,6 +349,34 @@ pub async fn rehearse(pool: &PgPool, pending: &[Migration]) -> Result<Rehearsal,
             name(own)
         )));
     }
+    if let Some(prepared) = pending.iter().find(|migration| {
+        crate::migration_preflight::PREPARED_FOR_AT_START.contains(&migration.version)
+    }) {
+        return Ok(Rehearsal::NotTried(format!(
+            "{} needs rows the server repairs when it starts, before it migrates",
+            name(prepared)
+        )));
+    }
+    let most_locks = sqlx::query_scalar::<_, i64>(LOCKS_TO_SPARE)
+        .fetch_one(pool)
+        .await?;
+    apply_and_roll_back(pool, pending, most_locks).await
+}
+
+fn name(migration: &Migration) -> String {
+    format!("{} {}", migration.version, migration.description)
+}
+
+/// The rehearsal itself, for migrations [`rehearse`] has looked over, holding
+/// at most `most_locks` at once. Public so a test can show that a commit the
+/// look missed still keeps nothing, and that it stops short of the locks the
+/// server needs.
+#[doc(hidden)]
+pub async fn apply_and_roll_back(
+    pool: &PgPool,
+    pending: &[Migration],
+    most_locks: i64,
+) -> Result<Rehearsal, sqlx::Error> {
     let mut transaction = crate::db::scoped_tx(pool).await?;
     // As the migrator runs them: in no tenancy scope, with row rules observing.
     sqlx::query(
@@ -338,20 +386,37 @@ pub async fn rehearse(pool: &PgPool, pending: &[Migration]) -> Result<Rehearsal,
     .bind(REHEARSAL_LOCK_WAIT)
     .execute(&mut *transaction)
     .await?;
+    sqlx::raw_sql(NEVER_COMMITS)
+        .execute(&mut *transaction)
+        .await?;
     let mut outcome = Rehearsal::Applies(pending.len());
-    for migration in pending {
-        let applied = match sqlx::raw_sql(&migration.sql)
-            .execute(&mut *transaction)
-            .await
-        {
-            Ok(_) => {
-                sqlx::raw_sql(SETTLE_CONSTRAINTS)
-                    .execute(&mut *transaction)
-                    .await
+    for (tried, migration) in pending.iter().enumerate() {
+        let applied = async {
+            sqlx::raw_sql(&migration.sql)
+                .execute(&mut *transaction)
+                .await?;
+            sqlx::raw_sql(SETTLE_CONSTRAINTS)
+                .execute(&mut *transaction)
+                .await?;
+            sqlx::query_scalar::<_, i64>(LOCKS_HELD)
+                .fetch_one(&mut *transaction)
+                .await
+        }
+        .await;
+        let error = match applied {
+            Ok(held) if held > most_locks && tried + 1 < pending.len() => {
+                outcome = Rehearsal::NotTried(format!(
+                    "the first {} apply; the {} after them weren't tried, since one transaction \
+                     holding them all would take more of the server's locks than it can spare \
+                     ({held} held, {most_locks} to spare)",
+                    tried + 1,
+                    pending.len() - tried - 1
+                ));
+                break;
             }
-            Err(error) => Err(error),
+            Ok(_) => continue,
+            Err(error) => error,
         };
-        let Err(error) = applied else { continue };
         let sqlx::Error::Database(refusal) = &error else {
             return Err(error);
         };
@@ -371,6 +436,10 @@ pub async fn rehearse(pool: &PgPool, pending: &[Migration]) -> Result<Rehearsal,
                     refusal.message()
                 ))
             }
+            _ if refusal.message().contains(NEVER_KEPT) => Rehearsal::NotTried(format!(
+                "{} commits its own transaction, so it can't be rolled back",
+                name(migration)
+            )),
             // The message only: the detail names the rows' values.
             _ => Rehearsal::Stops {
                 migration: name(migration),
@@ -383,20 +452,104 @@ pub async fn rehearse(pool: &PgPool, pending: &[Migration]) -> Result<Rehearsal,
     Ok(outcome)
 }
 
-/// Whether a migration's SQL ends the transaction it runs in, which would
-/// keep what a rehearsal had applied so far.
+/// Whether a migration's SQL ends the transaction it runs in. A commit would
+/// fail ([`NEVER_COMMITS`]); a rollback would let the statements after it run
+/// outside any transaction and be kept.
 fn ends_its_transaction(sql: &str) -> bool {
-    sql.lines().any(|line| {
-        let mut words = line
-            .split(|c: char| c.is_whitespace() || c == ';')
-            .filter(|word| !word.is_empty())
-            .map(str::to_ascii_uppercase);
+    statements(sql).split(';').any(|statement| {
+        let mut words = statement.split_whitespace().map(str::to_ascii_uppercase);
         match words.next().as_deref() {
-            Some("COMMIT" | "ABORT") => true,
+            Some("COMMIT" | "END" | "ABORT") => true,
             Some("ROLLBACK") => words.next().as_deref() != Some("TO"),
+            Some("PREPARE") => words.next().as_deref() == Some("TRANSACTION"),
             _ => false,
         }
     })
+}
+
+/// `sql` with its comments, quoted text and function bodies blanked, so a
+/// `;` left in it ends a statement.
+fn statements(sql: &str) -> String {
+    let word = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    let mut bare = String::with_capacity(sql.len());
+    let mut rest = sql;
+    while let Some(next) = rest.chars().next() {
+        let skipped = if rest.starts_with("--") {
+            rest.find('\n').unwrap_or(rest.len())
+        } else if rest.starts_with("/*") {
+            block_comment(rest)
+        } else if next == '\'' || next == '"' {
+            // E'...' is the one kind of text where a backslash escapes a quote.
+            let mut before = bare.chars().rev();
+            let escapes = next == '\''
+                && matches!(before.next(), Some('E' | 'e'))
+                && !before.next().is_some_and(word);
+            quoted(rest, next, escapes)
+        } else if let Some(tag) = dollar_tag(rest).filter(|_| !bare.ends_with(word)) {
+            let body = &rest[tag.len()..];
+            tag.len() + body.find(tag).map_or(body.len(), |end| end + tag.len())
+        } else {
+            0
+        };
+        if skipped == 0 {
+            bare.push(next);
+            rest = &rest[next.len_utf8()..];
+        } else {
+            bare.push(' ');
+            rest = &rest[skipped..];
+        }
+    }
+    bare
+}
+
+/// The length of the `/* ... */` comment `text` starts with; they nest.
+fn block_comment(text: &str) -> usize {
+    let mut depth = 0;
+    let mut at = 0;
+    while at < text.len() {
+        if text[at..].starts_with("/*") {
+            depth += 1;
+            at += 2;
+        } else if text[at..].starts_with("*/") {
+            depth -= 1;
+            at += 2;
+            if depth == 0 {
+                return at;
+            }
+        } else {
+            at += text[at..].chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    text.len()
+}
+
+/// The length of the quoted text `text` starts with; a doubled quote is part
+/// of it.
+fn quoted(text: &str, quote: char, backslash_escapes: bool) -> usize {
+    let mut chars = text.char_indices().skip(1).peekable();
+    while let Some((at, c)) = chars.next() {
+        if backslash_escapes && c == '\\' {
+            chars.next();
+        } else if c == quote {
+            if chars.peek().is_some_and(|(_, next)| *next == quote) {
+                chars.next();
+            } else {
+                return at + c.len_utf8();
+            }
+        }
+    }
+    text.len()
+}
+
+/// The `$tag$` that `text` starts with, if it opens a dollar-quoted body
+/// (`$1` is a parameter, not a tag).
+fn dollar_tag(text: &str) -> Option<&str> {
+    let inside = text.strip_prefix('$')?;
+    let end = inside.find('$')?;
+    let tag = &inside[..end];
+    let named = tag.chars().all(|c| c.is_alphanumeric() || c == '_')
+        && !tag.starts_with(|c: char| c.is_ascii_digit());
+    named.then(|| &text[..end + 2])
 }
 
 /// The report the release script acts on: [`run`], and then, unless that
@@ -486,13 +639,41 @@ mod tests {
 
     #[test]
     fn a_migration_that_ends_its_transaction_is_not_rehearsed() {
-        assert!(ends_its_transaction("CREATE TABLE a (id int);\nCOMMIT;\n"));
-        assert!(ends_its_transaction("  rollback ;"));
-        assert!(ends_its_transaction("ABORT;"));
-        assert!(!ends_its_transaction(
+        for ends in [
+            "CREATE TABLE a (id int);\nCOMMIT;\n",
+            "CREATE TABLE a (id int); COMMIT;",
+            "CREATE TABLE a (id int); /* done */ end;",
+            "  rollback ;",
+            "ABORT;",
+            "SELECT 'it''s'; COMMIT;",
+            "SELECT E'it\\'s'; COMMIT;",
+            "DO $$ BEGIN NULL; END $$; COMMIT",
+            "PREPARE TRANSACTION 'later';",
+        ] {
+            assert!(ends_its_transaction(ends), "{ends}");
+        }
+        for stays in [
             "SAVEPOINT a;\nROLLBACK TO a;\n-- COMMIT;\nCREATE TABLE b (\n    commit_sha TEXT,\n    \
-             committed_at TIMESTAMPTZ\n);"
-        ));
+             committed_at TIMESTAMPTZ\n);",
+            "DO $$ BEGIN\n    IF true THEN NULL; END IF;\nEND $$;",
+            "CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $body$\nBEGIN\n    NULL;\nEND;\n\
+             $body$;",
+            "SELECT '; COMMIT;', \"end;\" FROM t; /* ; COMMIT; /* nested */ ; ABORT; */",
+            "SELECT 'C:\\'; SELECT 'COMMIT';",
+            "PREPARE find AS SELECT $1::int; CREATE TABLE price$ (id int);",
+        ] {
+            assert!(!ends_its_transaction(stays), "{stays}");
+        }
+    }
+
+    #[test]
+    fn no_migration_here_is_taken_for_one_that_ends_its_transaction() {
+        let mistaken: Vec<String> = migrator()
+            .iter()
+            .filter(|migration| !migration.no_tx && ends_its_transaction(&migration.sql))
+            .map(name)
+            .collect();
+        assert_eq!(mistaken, Vec::<String>::new());
     }
 
     #[test]

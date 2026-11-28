@@ -63,5 +63,10 @@ last `CREATE OR REPLACE`. It isn't checked in, so run it again after a merge.
   on the one the data refuses. When it names yours, repair the rows in a new
   migration that sorts before it. List a new migration under the pull
   request's deploy notes.
-- Don't `COMMIT` inside a migration or mark one to run outside a transaction:
-  the rehearsal can't roll such a migration back, so it tries none of them.
+- Don't `COMMIT` (or `END`, `ROLLBACK`) inside a migration or mark one to run
+  outside a transaction: the rehearsal can't roll such a migration back, so
+  it tries none of them.
+- A test that makes a schema of its own drops it with
+  `agent_workspace_server::test_support::drop_schema`, never `DROP SCHEMA ...
+  CASCADE`: that locks everything in the schema at once and the tests beside
+  it fail with "out of shared memory" (a guard test refuses it).

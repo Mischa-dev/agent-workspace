@@ -8,7 +8,7 @@
 use std::borrow::Cow;
 
 use agent_workspace_server::{
-    preflight::{Rehearsal, rehearse},
+    preflight::{Rehearsal, apply_and_roll_back, rehearse},
     tenancy,
 };
 use sqlx::{
@@ -27,6 +27,11 @@ const STOPPED: i64 = 20261117050000;
 /// ...and the one written afterwards, sorting before it, that repairs the
 /// rows it stopped on.
 const REPAIR: i64 = 20261117045900;
+/// The migrations of that day end before this. The rehearsal is given those,
+/// not every migration since: each one added would be one more this test
+/// holds locks for, and one that can't share a transaction with those before
+/// it (a new enum value it then uses) is a warning at a deploy, not a mistake.
+const NEXT_DAY: i64 = 20261118000000;
 
 /// An empty schema of its own, and the pool that made it.
 async fn schema(name: &str) -> Option<(PgPool, PgPool, String)> {
@@ -50,8 +55,7 @@ async fn schema(name: &str) -> Option<(PgPool, PgPool, String)> {
 
 async fn finish(admin: PgPool, pool: PgPool, schema: String) {
     pool.close().await;
-    admin
-        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+    agent_workspace_server::test_support::drop_schema(&admin, &schema)
         .await
         .expect("drop schema");
 }
@@ -151,7 +155,7 @@ async fn the_rows_that_stopped_an_upgrade_stop_its_rehearsal_and_nothing_is_kept
     // As the release was first built: without the repair.
     let unrepaired: Vec<Migration> = MIGRATOR
         .iter()
-        .filter(|migration| migration.version >= STOPPED)
+        .filter(|migration| (STOPPED..NEXT_DAY).contains(&migration.version))
         .cloned()
         .collect();
     let Rehearsal::Stops {
@@ -168,10 +172,10 @@ async fn the_rows_that_stopped_an_upgrade_stop_its_rehearsal_and_nothing_is_kept
     );
     assert_eq!(state().await, found, "a stopped rehearsal kept something");
 
-    // With the repair, every migration since applies, and still none is kept.
+    // With the repair, they all apply, and still none is kept.
     let repaired: Vec<Migration> = MIGRATOR
         .iter()
-        .filter(|migration| migration.version >= REPAIR)
+        .filter(|migration| (REPAIR..NEXT_DAY).contains(&migration.version))
         .cloned()
         .collect();
     assert_eq!(
@@ -256,10 +260,70 @@ async fn what_a_commit_would_refuse_stops_the_rehearsal() {
     assert!(reason.contains("waits_for_commit"), "{reason}");
 
     // One that ends its transaction would keep what came before it, so
-    // nothing is tried.
-    let commits = [tables, migration(2, "COMMIT;")];
+    // nothing is tried, however the statement is laid out.
+    for ending in [
+        "COMMIT;",
+        "CREATE TABLE kept_by_mistake (id int); COMMIT;",
+        "CREATE TABLE kept_by_mistake (id int); END;",
+        "ROLLBACK; CREATE TABLE kept_by_mistake (id int);",
+    ] {
+        let ends = [tables.clone(), migration(2, ending)];
+        assert!(
+            matches!(rehearsed(&pool, &ends).await, Rehearsal::NotTried(_)),
+            "{ending}"
+        );
+    }
+
+    // And a commit that look ever misses fails: the rehearsal's transaction
+    // can't be committed, so what came before it goes too.
+    let missed = [
+        tables.clone(),
+        migration(
+            2,
+            "CREATE TABLE kept_by_mistake (id int); COMMIT; CREATE TABLE kept_after_it (id int);",
+        ),
+    ];
+    let outcome = tenancy::system(
+        "server.operator",
+        apply_and_roll_back(&pool, &missed, i64::MAX),
+    )
+    .await
+    .expect("rehearse");
+    assert!(matches!(outcome, Rehearsal::NotTried(_)), "{outcome:?}");
+
+    // Everything a rehearsed migration touches stays locked until the
+    // rollback, and the running server shares the lock table: the rehearsal
+    // stops, saying how far it got, before it holds more than it was given.
+    let many = [
+        tables.clone(),
+        migration(2, "CREATE TABLE one_more (id int PRIMARY KEY);"),
+        migration(3, "CREATE TABLE never_reached (id int PRIMARY KEY);"),
+    ];
+    let outcome = tenancy::system("server.operator", apply_and_roll_back(&pool, &many, 3))
+        .await
+        .expect("rehearse");
+    let Rehearsal::NotTried(why) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert!(
+        why.starts_with("the first 1 apply; the 2 after them"),
+        "{why}"
+    );
+
+    // Checking every constraint at once, as a migration here does, is not a
+    // commit.
+    let settles = [
+        tables.clone(),
+        migration(2, "SET CONSTRAINTS ALL IMMEDIATE;"),
+    ];
+    assert_eq!(rehearsed(&pool, &settles).await, Rehearsal::Applies(2));
+
+    // A database old enough that the server repairs its rows at its start,
+    // before migrating (the M3 upgrade), would be refused for rows the
+    // start would have repaired: it is not tried.
+    let before_the_repairs = [tables, migration(11, "SELECT 1;")];
     assert!(matches!(
-        rehearsed(&pool, &commits).await,
+        rehearsed(&pool, &before_the_repairs).await,
         Rehearsal::NotTried(_)
     ));
 
