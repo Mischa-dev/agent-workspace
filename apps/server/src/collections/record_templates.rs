@@ -1204,6 +1204,7 @@ async fn make_occurrence(context: &JobContext) -> Result<(), JobError> {
         },
         trace_id: None,
         workspace: Some(row.workspace_id),
+        on_screen: None,
         request_id: Some(occurrence_key(row.id, payload.occurrence)),
         unkeyed: crate::ops::Unkeyed::Refuse("clientRequestId"),
         preview: false,

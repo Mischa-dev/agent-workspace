@@ -181,6 +181,7 @@ fn request(caller: Caller, request_id: Option<&str>) -> DispatchRequest {
         edge: mcp_edge(),
         trace_id: Some("trace-1".to_owned()),
         workspace: None,
+        on_screen: None,
         request_id: request_id.map(str::to_owned),
         unkeyed: Unkeyed::RunOnce,
         preview: false,

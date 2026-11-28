@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { setCurrentWorkspaceSlug } from '../../app/href'
 import { ApiError } from '../errors'
 import { callOp } from './client'
 
@@ -20,6 +21,7 @@ function answer(status: number, body: unknown) {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  setCurrentWorkspaceSlug(null)
 })
 
 describe('callOp', () => {
@@ -44,6 +46,22 @@ describe('callOp', () => {
     await call('later_list', {}, { preview: true })
 
     expect(fetchMock.mock.calls[0][0]).toBe('/api/v2/ops/later_list?preview=true')
+  })
+
+  // A page that names no workspace, for a person in two, was asked which and
+  // failed to load (#362): every call says which one is on screen.
+  it('says which workspace is on screen', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => answer(200, { outcome: 'ok', value: null }))
+    vi.stubGlobal('fetch', fetchMock)
+    const onScreen = (nth: number) => new Headers(fetchMock.mock.calls[nth][1].headers).get('x-current-workspace')
+
+    await call('agent_usage_list', {})
+    expect(onScreen(0)).toBeNull()
+
+    setCurrentWorkspaceSlug('acme')
+    await call('agent_usage_list', {})
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/v2/ops/agent_usage_list')
+    expect(onScreen(1)).toBe('acme')
   })
 
   it('throws a conflict envelope as an ApiError with its details', async () => {
