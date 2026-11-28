@@ -358,7 +358,7 @@ pub async fn rehearse(pool: &PgPool, pending: &[Migration]) -> Result<Rehearsal,
         )));
     }
     let most_locks = sqlx::query_scalar::<_, i64>(LOCKS_TO_SPARE)
-        .fetch_one(pool)
+        .fetch_one(crate::db::scoped(pool))
         .await?;
     apply_and_roll_back(pool, pending, most_locks).await
 }
