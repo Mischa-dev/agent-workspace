@@ -66,7 +66,10 @@ BEGIN
     PERFORM set_config('aw.message_rebase', 'on', true);
     UPDATE messages
     SET written_in = 0
-    WHERE written_in >= txid_snapshot_xmax(txid_current_snapshot());
+    -- Removed messages are never read by position, and leaving them out
+    -- lets the position index answer this without reading the table.
+    WHERE removed_at IS NULL
+      AND written_in >= txid_snapshot_xmax(txid_current_snapshot());
     GET DIAGNOSTICS moved = ROW_COUNT;
     PERFORM set_config('aw.message_rebase', 'off', true);
     RETURN moved;
