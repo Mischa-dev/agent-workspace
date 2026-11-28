@@ -488,6 +488,11 @@ impl Operation for DocFolderUpdate {
         };
         let tx = call.tx().await?;
         super::lock_tree(tx, current.space_id).await?;
+        // Read again now that the tree is this call's: where the folder
+        // sits and who it is kept to may have changed while this waited.
+        let current = super::find(tx, id, viewer)
+            .await?
+            .ok_or(OpError::not_found("That document or folder"))?;
         if input.remove {
             let holds_something = super::entries(
                 tx,
