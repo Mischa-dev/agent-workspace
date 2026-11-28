@@ -139,6 +139,33 @@ async fn found(call: &mut OpCall<'_>, id: Uuid) -> Result<Found, OpError> {
         .ok_or(OpError::not_found("That document or folder"))
 }
 
+const GUIDE_STAYS_OPEN: &str = "The guide is in there, and everyone here reads it. Make another \
+    page the guide, or move it out, first.";
+
+/// Whether `id` is the space's guide or holds it, however deep.
+async fn holds_guide(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: Uuid,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar(
+        r#"
+        WITH RECURSIVE down(id, depth) AS (
+            SELECT $1::uuid, 0
+            UNION ALL
+            SELECT place.thing_id, down.depth + 1
+            FROM doc_places place JOIN down ON place.parent_id = down.id
+            WHERE down.depth < 64
+        )
+        SELECT EXISTS (
+            SELECT 1 FROM project_pages page JOIN down ON down.id = page.id
+            WHERE page.is_guide AND page.archived_at IS NULL)
+        "#,
+    )
+    .bind(id)
+    .fetch_one(&mut **tx)
+    .await?)
+}
+
 /// The folder `id` of the call's space, as the caller sees it.
 async fn folder(call: &mut OpCall<'_>, field: &'static str, id: Uuid) -> Result<Found, OpError> {
     let viewer = call.account_id();
@@ -580,8 +607,31 @@ impl Operation for DocMove {
             Some(to) => Some(folder(call, "folderId", to.id()).await?.id),
             None => None,
         };
+        let by = call.account_id();
         let tx = call.tx().await?;
         super::lock_tree(tx, moving.space_id).await?;
+        // Looked at again now that the tree is this call's: what was kept
+        // from the caller while this waited isn't moved back into the open.
+        if super::find(tx, id, by).await?.is_none() {
+            return Err(OpError::not_found("That document or folder"));
+        }
+        if let Some(to) = to {
+            if super::find(tx, to, by).await?.is_none() {
+                return Err(invalid(
+                    "folderId",
+                    "That isn't a folder of this space you can see.",
+                ));
+            }
+            let open = sqlx::query_scalar::<_, bool>("SELECT doc_open_to($1, $2)")
+                .bind(to)
+                .bind(Uuid::nil())
+                .fetch_one(&mut **tx)
+                .await
+                .map_err(AppError::from)?;
+            if !open && holds_guide(tx, id).await? {
+                return Err(invalid("folderId", GUIDE_STAYS_OPEN));
+            }
+        }
         if moving.kind == DocKind::Page {
             let inside_page = sqlx::query_scalar::<_, bool>(
                 "SELECT parent_page_id IS NOT NULL FROM project_pages WHERE id = $1",
@@ -867,20 +917,8 @@ impl Operation for DocAccessSet {
         if super::find(tx, thing.id, by).await?.is_none() {
             return Err(OpError::not_found("That document or folder"));
         }
-        if input.restricted && thing.kind == DocKind::Page {
-            let guide =
-                sqlx::query_scalar::<_, bool>("SELECT is_guide FROM project_pages WHERE id = $1")
-                    .bind(thing.id)
-                    .fetch_optional(&mut **tx)
-                    .await
-                    .map_err(AppError::from)?;
-            if guide == Some(true) {
-                return Err(invalid(
-                    "restricted",
-                    "This page is the guide, which everyone here reads. Make another page the \
-                     guide first.",
-                ));
-            }
+        if input.restricted && holds_guide(tx, thing.id).await? {
+            return Err(invalid("restricted", GUIDE_STAYS_OPEN));
         }
         if input.restricted {
             let mut people = vec![by];

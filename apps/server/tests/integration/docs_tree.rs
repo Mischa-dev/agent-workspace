@@ -896,6 +896,49 @@ async fn one_restricted_document_and_the_pages_inside_a_page() {
     )
     .await;
     assert_eq!(kept["outcome"], "invalid_request", "{kept}");
+    // Nor by way of a folder: not restricted with the guide in it, and the
+    // guide doesn't go into one that is.
+    let shelf = id_at(
+        &op(
+            &world,
+            "owner",
+            "doc_folder_create",
+            json!({"spaceId": work, "title": "Shelf"}),
+        )
+        .await,
+        "/id",
+    );
+    ok(&op(
+        &world,
+        "owner",
+        "doc_move",
+        json!({"id": guide, "folderId": shelf}),
+    )
+    .await);
+    let kept = op(
+        &world,
+        "owner",
+        "doc_access_set",
+        json!({"id": shelf, "restricted": true, "people": []}),
+    )
+    .await;
+    assert_eq!(kept["outcome"], "invalid_request", "{kept}");
+    ok(&op(&world, "owner", "doc_move", json!({"id": guide})).await);
+    ok(&op(
+        &world,
+        "owner",
+        "doc_access_set",
+        json!({"id": shelf, "restricted": true, "people": []}),
+    )
+    .await);
+    let kept = op(
+        &world,
+        "owner",
+        "doc_move",
+        json!({"id": guide, "folderId": shelf}),
+    )
+    .await;
+    assert_eq!(kept["outcome"], "invalid_request", "{kept}");
 
     // A folder kept to chosen people isn't removed over something it still
     // covers that the list doesn't show (here, a sheet kept to the owner).
