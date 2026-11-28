@@ -54,7 +54,9 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<ProjectStatusSet>()
         .add::<ProjectUpdatePost>()
         .add::<claims::TaskClaim>()
-        .add::<claims::TaskRelease>();
+        .add::<claims::TaskRelease>()
+        .add::<claims::TaskClaimNext>()
+        .add::<claims::TaskFinish>();
     planning::register_ops(registry);
     reads::register_ops(registry);
 }
@@ -759,6 +761,11 @@ pub struct TaskCommentCreateInput {
     /// shows quoted above yours, and its author is told.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to_comment_id: Option<String>,
+    /// true posts a working note: kept and readable like any comment, but
+    /// it notifies nobody except the accounts it @mentions or answers. Use
+    /// it for coordination between agents that people don't need to follow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<bool>,
 }
 
 impl Targeted for TaskCommentCreateInput {
@@ -797,6 +804,7 @@ impl Operation for TaskCommentCreate {
             },
             input.attachment_ids,
             input.reply_to_comment_id,
+            input.note,
         )
         .await?;
         settled(call, &written);

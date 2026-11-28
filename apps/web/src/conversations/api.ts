@@ -134,6 +134,7 @@ export function normalizeMessage(value: unknown): ConversationMessage | null {
           typeof made.kind === 'string' && typeof made.id === 'string' ? [{ kind: made.kind, id: made.id }] : [],
         )
       : [],
+    note: message.note === true,
   }
 }
 
@@ -274,6 +275,7 @@ export function normalizeTimelinePage(value: unknown): ConversationTimelinePage 
       parentKind: ['channel', 'dm', 'group'].includes(String(conversation.parentKind))
         ? (conversation.parentKind as ConversationKind)
         : null,
+      workingNotes: conversation.workingNotes === true,
     },
     linkedWorkItems: Array.isArray(root.linkedWorkItems)
       ? root.linkedWorkItems

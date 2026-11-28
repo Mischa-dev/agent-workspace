@@ -32,6 +32,7 @@ pub fn register_ops(registry: &mut Registry) {
         .add::<MessageDelete>()
         .add::<MessagePreviewHide>()
         .add::<MessageHistory>()
+        .add::<super::catch_up::MessageList>()
         .add::<MessageReact>()
         .add::<ConversationMarkRead>()
         .add::<ConversationMemberList>()
@@ -72,6 +73,13 @@ pub struct MessageSendInput {
     /// above yours, with a jump back to it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to_message_id: Option<MessageRef>,
+    /// true sends it as a working note: kept and readable like any message,
+    /// but it makes nothing unread and tells only the accounts it mentions
+    /// or answers. Use it for coordination nobody else needs to stop for
+    /// (who takes which files, progress, findings). false sends an ordinary
+    /// message. Left out, the conversation's own default applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<bool>,
 }
 
 impl Targeted for MessageSendInput {
@@ -89,7 +97,9 @@ impl Operation for MessageSend {
     const TITLE: &'static str = "Send message";
     const DESCRIPTION: &'static str = "Send a message to a channel, thread, DM or group. Write \
         plain text; @handles of people in the space become mentions and notify them. To answer \
-        one message there, pass replyToMessageId: it shows quoted above yours.";
+        one message there, pass replyToMessageId: it shows quoted above yours. With note: true \
+        it is a working note: on the record for anyone who can read the conversation, but it \
+        interrupts nobody except the accounts it mentions or answers.";
     const EMITS: &'static [&'static str] = &["message.created"];
 
     type Input = MessageSendInput;
@@ -109,6 +119,7 @@ impl Operation for MessageSend {
                 .attachment_ids
                 .map(|ids| ids.into_iter().map(|id| id.id().to_string()).collect()),
             input.reply_to_message_id.map(MessageRef::id),
+            input.note,
         )
         .await?;
         if keyed {

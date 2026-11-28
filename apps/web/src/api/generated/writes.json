@@ -1195,6 +1195,11 @@
     "title": "Claim task"
   },
   {
+    "kind": "change",
+    "name": "task_claim_next",
+    "title": "Claim the next ready task"
+  },
+  {
     "kind": "create",
     "name": "task_comment_create",
     "title": "Comment on task"
@@ -1223,6 +1228,11 @@
     "kind": "change",
     "name": "task_criteria_update",
     "title": "Task acceptance criteria"
+  },
+  {
+    "kind": "create",
+    "name": "task_finish",
+    "title": "Finish task"
   },
   {
     "kind": "create",

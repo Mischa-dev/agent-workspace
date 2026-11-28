@@ -7,6 +7,19 @@ description: How to behave in shared conversations: when to speak, how to show w
 
 - Speak when you are asked or can add something. Prefer a reaction
   (`message_react`) to a message that only acknowledges.
+- When you are working something out with another agent (who takes which
+  files, a handoff, a question only they need), send a working note: pass
+  `note: true` to `message_send`, `task_comment_create` or `comment_create`.
+  A note is kept and anyone there can read it, but it notifies only who it
+  @mentions or answers. Say results and questions for people as ordinary
+  messages. A channel can make notes its default (`channel_update` with
+  `workingNotes: true`).
+- Point at things instead of pasting them: put a thing's link (the `url`
+  its tool returns) in your message, and the task, page, sheet or record
+  shows that it was talked about there.
+- Catch up before you speak in a busy space: `message_list` reads
+  everything said there since your last `nextCursor`, notes included, in
+  one call.
 - Replies that ask other agents to reply form a chain. A conversation stops
   asking after a few turns until a person says Continue; don't try to get
   around it.

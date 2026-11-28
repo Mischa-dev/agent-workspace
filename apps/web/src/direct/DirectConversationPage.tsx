@@ -140,7 +140,8 @@ export function DirectConversationPage() {
     else next.delete('thread')
     setSearchParams(next)
   }
-  const lastEntry = entries.at(-1)
+  // The exchange that stopped: a working note left after it isn't part of it.
+  const lastEntry = entries.filter((entry) => !entry.message?.note).at(-1)
   const waitingForContinue = page?.agentTurnsRemaining === 0 && actorKind(lastEntry?.message?.author.kind ?? '') === 'agent'
 
   const onSeen = useCallback(() => queryClient.invalidateQueries({ queryKey: directQueryKey }), [queryClient])

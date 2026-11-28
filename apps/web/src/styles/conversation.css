@@ -584,6 +584,86 @@ a.aw-workref:hover {
   margin-top: var(--space-1-5);
 }
 
+/* Working notes (AWD-220): a run of notes folded to one line */
+.aw-notes__toggle {
+  display: grid;
+  grid-template-columns: var(--size-avatar) minmax(0, 1fr);
+  column-gap: var(--space-3);
+  align-items: center;
+  width: 100%;
+  min-height: 26px;
+  padding: 3px var(--space-4);
+  border: 0;
+  background: none;
+  font: var(--t-small);
+  line-height: 20px;
+  color: var(--content-fg-muted);
+  text-align: left;
+  cursor: pointer;
+}
+
+.aw-notes__toggle:hover {
+  background: var(--content-hover);
+}
+
+.aw-notes__icon {
+  justify-self: center;
+  display: grid;
+  place-items: center;
+}
+
+.aw-notes__line {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.aw-notes__count {
+  flex: none;
+  font-weight: var(--weight-semibold);
+  color: var(--content-fg);
+}
+
+.aw-notes__meta {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The preview takes only what's left once the count, who and when fit. */
+.aw-notes__preview {
+  flex: 1 1 0;
+  min-width: 0;
+  margin-left: var(--space-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (pointer: coarse) {
+  .aw-notes__toggle {
+    min-height: 44px;
+  }
+}
+
+/* Open: the notes as written, set off by a rule down the gutter. */
+.aw-notes__list {
+  margin-left: calc(var(--space-4) + var(--size-avatar) / 2);
+  border-left: 1px solid var(--content-border);
+}
+
+.aw-notes__list .aw-msg {
+  padding-left: calc(var(--size-avatar) / 2 + var(--space-3) - 1px);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.aw-notes__list .aw-msg__gutter {
+  display: none;
+}
+
 /* Agents */
 .aw-replies {
   display: grid;
@@ -1229,6 +1309,20 @@ h2.aw-card__title {
   .aw-event {
     padding-left: var(--space-3);
     padding-right: var(--space-3);
+  }
+
+  .aw-notes__toggle {
+    padding-left: var(--space-3);
+    padding-right: var(--space-3);
+  }
+
+  .aw-notes__list {
+    margin-left: calc(var(--space-3) + var(--size-avatar) / 2);
+  }
+
+  /* On a narrow screen the count, who and when are the line. */
+  .aw-notes__preview {
+    display: none;
   }
 
   .aw-timeline__card {

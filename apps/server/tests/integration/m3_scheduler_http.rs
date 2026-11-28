@@ -1535,7 +1535,8 @@ pub(super) async fn response_json(
 ) -> (StatusCode, String, Value) {
     let status = response.status();
     let text = String::from_utf8(
-        to_bytes(response.into_body(), 1024 * 1024)
+        // Room for the public API's description, which lists every operation.
+        to_bytes(response.into_body(), 16 * 1024 * 1024)
             .await
             .expect("read scheduler response")
             .to_vec(),

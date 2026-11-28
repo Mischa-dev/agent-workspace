@@ -150,6 +150,17 @@ async fn main() -> anyhow::Result<()> {
                 "provisioned default Work Item workflows"
             );
         }
+        // A restored database carries message positions from the server it
+        // was dumped from (AWD-220).
+        let rebased_messages = agent_workspace_server::tenancy::system(
+            "server.operator",
+            agent_workspace_server::conversations::catch_up::rebase_positions(&pool),
+        )
+        .await
+        .context("rebase restored message positions")?;
+        if rebased_messages > 0 {
+            tracing::info!(rebased_messages, "rebased restored message positions");
+        }
         Ok::<_, anyhow::Error>(())
     };
     // Serving, only `work` migrates: an `api` or `live` instance starts cold

@@ -128,6 +128,10 @@ pub(super) struct MessageSendArguments {
     pub reply_to_message_id: Option<String>,
     /// A stable ID for this message, so retrying never sends it twice.
     pub client_request_id: Option<String>,
+    /// Send it as a working note (true) or an ordinary message (false).
+    /// Left out, the conversation's default applies.
+    #[serde(default)]
+    pub note: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -331,6 +335,10 @@ pub(super) struct MessageItem {
     /// see it now: only its ID when you can't.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forwarded: Option<ReplyQuote>,
+    /// A working note: said for the record and for whoever it addresses,
+    /// not to get everyone's attention. Answer one only if it addresses you.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub note: bool,
 }
 
 /// The message a reply answers (AWD-70).
@@ -376,6 +384,8 @@ struct MessageRow {
     remover_handle: Option<String>,
     reply_to_message_id: Option<Uuid>,
     forwarded_message_id: Option<Uuid>,
+    #[sqlx(default)]
+    note: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
@@ -1070,6 +1080,7 @@ pub(super) async fn message_items(
                message.removed_at IS NOT NULL AS removed,
                remover.display_name AS remover_name, remover.handle AS remover_handle,
                message.reply_to_message_id, message.forwarded_message_id,
+               message.register = 'note' AS note,
                (SELECT jsonb_agg(jsonb_build_object(
                         'id', thread.id, 'name', thread.name, 'status', thread.thread_status)
                         ORDER BY thread.created_at)
@@ -1259,6 +1270,7 @@ fn message_item(row: MessageRow) -> MessageItem {
         attachments: Vec::new(),
         reply_to: None,
         forwarded: None,
+        note: row.note.unwrap_or(false),
     }
 }
 
@@ -1651,6 +1663,7 @@ pub(super) async fn message_send(
         &attachments,
         arguments.client_request_id,
         reply_to_message_id,
+        arguments.note,
     )
     .await
 }
@@ -1833,6 +1846,7 @@ pub(super) fn message_actor(principal: &McpPrincipal) -> Result<MessageCommandAc
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn send(
     state: &AppState,
     principal: &McpPrincipal,
@@ -1841,6 +1855,7 @@ async fn send(
     attachments: &[Uuid],
     client_request_id: Option<String>,
     reply_to_message_id: Option<Uuid>,
+    note: Option<bool>,
 ) -> ToolResult<SentMessage> {
     let client_keyed = client_request_id.is_some();
     let key = client_request_id.unwrap_or_else(|| Uuid::now_v7().to_string());
@@ -1866,6 +1881,7 @@ async fn send(
         crate::conversations::AppendExtras {
             reply_to_message_id,
             client_keyed,
+            note,
             ..crate::conversations::AppendExtras::default()
         },
     )
@@ -2022,7 +2038,18 @@ pub(super) async fn conversation_start(
             Some(text) => {
                 let content =
                     content_from_text(state, space_id, Some(conversation_id), text).await?;
-                match send(state, principal, conversation_id, content, &[], None, None).await {
+                match send(
+                    state,
+                    principal,
+                    conversation_id,
+                    content,
+                    &[],
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                {
                     ToolResult::Ok { value } => Some(value),
                     failed => return Ok(retype(failed)),
                 }
@@ -2377,7 +2404,18 @@ async fn post_optional(
     let content =
         content_from_text(state, principal.project_id, Some(conversation_id), text).await?;
     Ok(
-        match send(state, principal, conversation_id, content, &[], key, None).await {
+        match send(
+            state,
+            principal,
+            conversation_id,
+            content,
+            &[],
+            key,
+            None,
+            None,
+        )
+        .await
+        {
             ToolResult::Ok { value } => Some(value),
             _ => None,
         },

@@ -103,6 +103,9 @@ pub struct PostUpdateArguments {
     /// Structured content instead of text, as the web composer writes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<MessageContent>,
+    /// true posts a working note: it notifies only who it addresses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<bool>,
 }
 
 // The argument structs below are also each write's idempotency request hash
@@ -1456,6 +1459,7 @@ async fn post_update_inner(
         content,
         &attachments,
         reply_to,
+        arguments.note,
         key.clone(),
         (
             &mcp_actor(principal, key.as_str().to_owned()),

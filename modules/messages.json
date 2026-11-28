@@ -25,6 +25,7 @@
     "message_delete": "change",
     "message_preview_hide": "change",
     "message_history": "query",
+    "message_list": "query",
     "message_react": "change",
     "message_schedule": "create",
     "message_draft_set": "change",

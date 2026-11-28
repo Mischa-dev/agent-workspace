@@ -143,6 +143,8 @@ pub async fn unread_summary(
                   AND entry.sequence > COALESCE(read_state.highest_seen_sequence, 0)
                   AND entry.sequence <= conversation.last_message_sequence
                   AND message.removed_at IS NULL
+                  -- AWD-220: a working note is never unread.
+                  AND message.register = 'message'
                   AND message.author_actor_id <> $1
                 LIMIT $5
             ) newer
