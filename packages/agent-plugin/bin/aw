@@ -52,11 +52,11 @@ def cache_path():
     return os.path.join(root, "agent-workspace", name + ".json")
 
 
-def document():
+def document(fresh=False):
     """The server's API description, kept for an hour."""
     path = cache_path()
     try:
-        if time.time() - os.path.getmtime(path) < 3600:
+        if not fresh and time.time() - os.path.getmtime(path) < 3600:
             with open(path, encoding="utf-8") as kept:
                 return json.load(kept)
     except (OSError, ValueError):
@@ -92,6 +92,10 @@ def resolve(schema, doc, depth=0):
 
 def operation(doc, name):
     found = doc.get("paths", {}).get("/" + name, {}).get("post")
+    if not found and not doc.get("fresh"):
+        # The server may have gained it since the description was kept.
+        doc = dict(document(fresh=True), fresh=True)
+        return operation(doc, name)
     if not found:
         near = [
             path[1:]
@@ -134,9 +138,20 @@ def read_value(text):
     return text
 
 
+def items_of(schema, doc):
+    """What a list argument holds."""
+    schema = resolve(schema, doc)
+    if "items" in schema:
+        return schema["items"]
+    for choice in schema.get("anyOf", []) + schema.get("oneOf", []):
+        found = items_of(choice, doc)
+        if found:
+            return found
+    return {}
+
+
 def typed(text, schema, doc):
-    """A value given on the command line, as the argument's type."""
-    text = read_value(text)
+    """A value already read from the command line, as the argument's type."""
     wanted = kinds(schema, doc)
     if not wanted or wanted == ["string"]:
         return text
@@ -187,13 +202,23 @@ def arguments(words, schema, doc):
                 + ", ".join(flag(known) for known in sorted(properties)),
             )
         part = properties.get(key, {})
-        item = True if not has_value else typed(value, part, doc)
-        if "array" in kinds(part, doc) and not isinstance(item, list):
+        if has_value and "array" in kinds(part, doc):
+            # A whole JSON list, or one item of it (repeat the flag for
+            # more), read as the list's item type: a label named 2026 stays
+            # text.
+            text = read_value(value)
+            try:
+                whole = json.loads(text)
+            except ValueError:
+                whole = None
+            if isinstance(whole, list):
+                given[key] = whole
+                continue
             given.setdefault(key, [])
             if isinstance(given[key], list):
-                given[key].append(item)
+                given[key].append(typed(text, items_of(part, doc), doc))
                 continue
-        given[key] = item
+        given[key] = True if not has_value else typed(read_value(value), part, doc)
     return given, raw
 
 
@@ -228,7 +253,8 @@ def call(name, body, wait=60):
             return error.code, found
         except OSError as error:
             last = error
-            if "clientRequestId" not in body and attempt:
+            # Without a request id the server may already have run it.
+            if not body.get("clientRequestId") or attempt == 2:
                 break
             time.sleep(1 + attempt)
     fail(3, "Couldn't reach " + BASE + ": " + str(last))

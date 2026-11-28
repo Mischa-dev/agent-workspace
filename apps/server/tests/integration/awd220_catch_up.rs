@@ -120,10 +120,16 @@ async fn one_read_catches_up_on_a_space_and_shows_only_what_the_reader_can_see()
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{sent}");
-    // A message waits two seconds before a read shows it.
-    tokio::time::sleep(std::time::Duration::from_millis(2300)).await;
-
-    let all = call(app, codex, "message_list", json!({"spaceId": project})).await;
+    // A message shows once every write that began before it has finished
+    // (other tests' writes too: the server's transactions share one count).
+    let mut all = json!({});
+    for _ in 0..200 {
+        all = call(app, codex, "message_list", json!({"spaceId": project})).await;
+        if texts(&all).len() == 3 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
     assert_eq!(
         texts(&all),
         [
@@ -181,6 +187,48 @@ async fn one_read_catches_up_on_a_space_and_shows_only_what_the_reader_can_see()
     assert_eq!(texts(&end), Vec::<String>::new());
     assert_eq!(end["nextCursor"], json!(cursor));
 
+    // A send that began before a write still running can't be passed: the
+    // read holds back what was written after that write began, and shows
+    // it once the write has finished.
+    let mut slow = world.pool().begin().await.expect("a transaction");
+    sqlx::query("SELECT txid_current()")
+        .execute(&mut *slow)
+        .await
+        .expect("a transaction id");
+    call(
+        app,
+        codex,
+        "message_send",
+        json!({"conversationId": build, "text": "fourth, behind a slow write"}),
+    )
+    .await;
+    let held = call(
+        app,
+        codex,
+        "message_list",
+        json!({"spaceId": project, "cursor": cursor}),
+    )
+    .await;
+    assert_eq!(texts(&held), Vec::<String>::new(), "{held}");
+    slow.commit().await.expect("commit");
+    let mut shown = Vec::new();
+    for _ in 0..200 {
+        shown = texts(
+            &call(
+                app,
+                codex,
+                "message_list",
+                json!({"spaceId": project, "cursor": held["nextCursor"]}),
+            )
+            .await,
+        );
+        if !shown.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(shown, ["fourth, behind a slow write"]);
+
     // Narrowed to one thing's discussion, and without notes.
     let on_task = call(
         app,
@@ -197,7 +245,10 @@ async fn one_read_catches_up_on_a_space_and_shows_only_what_the_reader_can_see()
         json!({"spaceId": project, "conversationId": build, "notes": false}),
     )
     .await;
-    assert_eq!(texts(&loud), ["first, in the channel"]);
+    assert_eq!(
+        texts(&loud),
+        ["first, in the channel", "fourth, behind a slow write"]
+    );
 }
 
 #[tokio::test]

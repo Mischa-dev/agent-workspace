@@ -524,8 +524,10 @@ pub(crate) async fn walk_to(
     })
 }
 
-/// The space's tasks that can start now, best first, as `task_ready_list`
-/// ranks them for this caller (AWD-220, `task_claim_next`). `strict` keeps
+/// The space's tasks a worker can take now, best first (AWD-220,
+/// `task_claim_next`): first those someone started and gave back (a
+/// handoff, or a claim that ran out) and nobody holds, then those that can
+/// start, as `task_ready_list` ranks them for this caller. `strict` keeps
 /// only those that also pass the checks for unattended work.
 pub(crate) async fn ready_candidates(
     state: &AppState,
@@ -535,24 +537,53 @@ pub(crate) async fn ready_candidates(
 ) -> Result<Vec<crate::ai::ready::RankedTask>, OpError> {
     use crate::ai::ready::{RankFilter, RankScope, rank};
     let principal = principal_in(ctx, Some(space));
-    let ranking = rank(
-        &state.pool,
-        super::planning::reader(state, &principal),
-        space,
-        &RankFilter {
-            scope: if strict {
-                RankScope::Agents
-            } else {
-                RankScope::Ready
+    // Every page: the first tasks may all be held or someone else's, and
+    // one further down is still the next to take.
+    let (mut open, mut offset) = (Vec::new(), Some(0));
+    while let Some(from) = offset.filter(|from| *from < MOST_CANDIDATES) {
+        let ranking = rank(
+            &state.pool,
+            super::planning::reader(state, &principal),
+            space,
+            &RankFilter {
+                scope: RankScope::All,
+                milestone_id: None,
+                limit: 200,
+                offset: from,
             },
-            milestone_id: None,
-            limit: 200,
-            offset: 0,
-        },
-    )
-    .await?;
-    Ok(ranking.tasks)
+        )
+        .await?;
+        offset = ranking.next_offset;
+        open.extend(ranking.tasks.into_iter().filter(|task| {
+            if strict {
+                task.readiness.ready_for_agents
+            } else {
+                task.readiness.ready
+            }
+        }));
+    }
+    let started = open
+        .iter()
+        .filter(|task| task.status_category == "started" && !task.claimed)
+        .map(|task| task.id)
+        .collect::<Vec<_>>();
+    let given_back = crate::work_item_commands::claims::given_back(&state.pool, space, &started)
+        .await
+        .map_err(|error| OpError::logged("task_claim_next", &error))?;
+    let (mut returned, mut fresh) = (Vec::new(), Vec::new());
+    for task in open {
+        if given_back.contains(&task.id) {
+            returned.push(task);
+        } else if matches!(task.status_category.as_str(), "backlog" | "unstarted") {
+            fresh.push(task);
+        }
+    }
+    returned.extend(fresh);
+    Ok(returned)
 }
+
+/// How far down a space's open tasks `task_claim_next` looks.
+const MOST_CANDIDATES: usize = 5_000;
 
 pub(crate) async fn comment_edit(
     state: &AppState,

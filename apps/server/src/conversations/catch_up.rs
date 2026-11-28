@@ -127,6 +127,7 @@ struct Row {
     id: Uuid,
     conversation_id: Uuid,
     created_at: DateTime<Utc>,
+    written_in: i64,
     author: Option<String>,
     author_handle: Option<String>,
     text: String,
@@ -141,13 +142,25 @@ struct Row {
     has_next: bool,
 }
 
-fn decode_cursor(cursor: &str) -> Option<(DateTime<Utc>, Uuid)> {
-    let (time, id) = cursor.split_once('_')?;
+/// Where a read stopped: the transaction that wrote its last message, then
+/// that message's time and id.
+type Position = (i64, DateTime<Utc>, Uuid);
+
+fn decode_cursor(cursor: &str) -> Option<Position> {
+    let mut parts = cursor.splitn(3, '_');
     Some((
-        DateTime::from_timestamp_micros(time.parse().ok()?)?,
-        id.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        DateTime::from_timestamp_micros(parts.next()?.parse().ok()?)?,
+        parts.next()?.parse().ok()?,
     ))
 }
+
+fn position_cursor((written_in, time, id): Position) -> String {
+    format!("{written_in}_{}_{id}", time.timestamp_micros())
+}
+
+/// Later than any message: the end of year 9999.
+const LAST_MICROS: i64 = 253_402_300_799_000_000;
 
 impl Operation for MessageList {
     const NAME: &'static str = "message_list";
@@ -161,7 +174,8 @@ impl Operation for MessageList {
         other things; working notes too), oldest first, with its text, who wrote it and where. \
         conversationId or thingId narrows it to one channel or one thing's discussion. Pages \
         are sized in characters of text (maxCharacters), not in messages; pass nextCursor back \
-        as cursor to read on. A message sent in the last two seconds waits for the next read. \
+        as cursor to read on: a message shows once every write that began before it has \
+        finished, so reading on never misses one. \
         DMs and groups aren't in a space: read those with conversation_read.";
 
     type Input = MessageListInput;
@@ -170,30 +184,44 @@ impl Operation for MessageList {
     async fn run(call: &mut OpCall<'_>, input: MessageListInput) -> Result<MessagePage, OpError> {
         let space = call.ctx.space_id.ok_or(OpError::Unavailable)?;
         let caller = call.ctx.caller.account_id;
-        let after = match (&input.cursor, &input.since) {
-            (Some(cursor), _) => Some(decode_cursor(cursor).ok_or(OpError::invalid(
+        let after = match &input.cursor {
+            Some(cursor) => Some(decode_cursor(cursor).ok_or(OpError::invalid(
                 "cursor",
                 "Pass the nextCursor of your last read, or none.",
             ))?),
-            (None, Some(since)) => Some((
+            None => None,
+        };
+        let since = match &input.since {
+            Some(since) if after.is_none() => Some(
                 DateTime::parse_from_rfc3339(since.trim())
                     .map_err(|_| {
                         OpError::invalid("since", "Pass a time such as 2026-11-27T20:00:00Z.")
                     })?
                     .with_timezone(&Utc),
-                Uuid::max(),
-            )),
-            (None, None) => None,
+            ),
+            _ => None,
         };
         let budget = input
             .max_characters
             .map_or(DEFAULT_CHARACTERS, i64::from)
             .clamp(1, MAX_CHARACTERS);
         let tx = call.tx().await?;
+        // By the reader's role, and by the limit of an app acting for them.
+        let sees_tasks = super::sees_tasks_in(&mut **tx, caller, space).await?;
+        // The oldest transaction still running. Every one below it has
+        // finished, so no message can still be committed behind a cursor
+        // taken from below it (`created_at` is when a send began, and a
+        // send that waited commits behind newer ones).
+        let settled =
+            sqlx::query_scalar::<_, i64>("SELECT txid_snapshot_xmin(txid_current_snapshot())")
+                .fetch_one(&mut **tx)
+                .await
+                .map_err(crate::error::AppError::from)?;
         let rows = sqlx::query_as::<_, Row>(
             r#"
             SELECT * FROM (
                 SELECT message.id, message.conversation_id, message.created_at,
+                       message.written_in,
                        author.display_name AS author, author.handle AS author_handle,
                        message.plain_text AS text, message.register = 'note' AS note,
                        message.reply_to_message_id, message.edited_at IS NOT NULL AS edited,
@@ -215,41 +243,61 @@ impl Operation for MessageList {
                   AND conversation_visible_to(conversation.id, $2)
                   AND message.removed_at IS NULL
                   AND conversation.archived_at IS NULL
-                  AND message.created_at < now() - interval '2 seconds'
-                  AND ($3::timestamptz IS NULL
-                       OR (message.created_at, message.id) > ($3::timestamptz, $4::uuid))
+                  AND parent.archived_at IS NULL
+                  -- A task's discussion only for a reader who sees tasks here.
+                  AND ($10 OR (COALESCE(parent.subject_kind, conversation.subject_kind) = 'task'
+                               OR (COALESCE(parent.subject_kind, conversation.subject_kind) = 'record'
+                                   AND EXISTS (
+                                       SELECT 1 FROM work_items item
+                                       WHERE item.id = COALESCE(parent.subject_id,
+                                                                conversation.subject_id))))
+                              IS NOT TRUE)
+                  AND message.written_in < $11
+                  AND ($12::bigint IS NULL
+                       OR (message.written_in, message.created_at, message.id)
+                          > ($12::bigint, $3::timestamptz, $4::uuid))
+                  AND ($13::timestamptz IS NULL OR message.created_at > $13)
                   AND ($5::uuid IS NULL
                        OR conversation.id = $5 OR conversation.parent_channel_id = $5)
                   AND ($6::uuid IS NULL
                        OR COALESCE(parent.subject_id, conversation.subject_id) = $6)
                   AND ($7 OR message.register <> 'note')
-                WINDOW ordered AS (ORDER BY message.created_at, message.id),
-                       earlier AS (ORDER BY message.created_at, message.id
+                WINDOW ordered AS (ORDER BY message.written_in, message.created_at, message.id),
+                       earlier AS (ORDER BY message.written_in, message.created_at, message.id
                                    ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
-                ORDER BY message.created_at, message.id
+                ORDER BY message.written_in, message.created_at, message.id
                 LIMIT $9 + 1
             ) page
             WHERE page.before < $8 AND page.position <= $9
-            ORDER BY page.created_at, page.id
+            ORDER BY page.written_in, page.created_at, page.id
             "#,
         )
         .bind(space)
         .bind(caller)
-        .bind(after.map(|(time, _)| time))
-        .bind(after.map(|(_, id)| id))
+        .bind(after.map(|(_, time, _)| time))
+        .bind(after.map(|(_, _, id)| id))
         .bind(input.conversation_id.map(IdRef::id))
         .bind(input.thing_id.map(IdRef::id))
         .bind(input.notes != Some(false))
         .bind(budget)
         .bind(MAX_MESSAGES)
+        .bind(sees_tasks)
+        .bind(settled)
+        .bind(after.map(|(written_in, _, _)| written_in))
+        .bind(since)
         .fetch_all(&mut **tx)
         .await
         .map_err(crate::error::AppError::from)?;
-        let next_cursor = match (rows.last(), after) {
-            (Some(last), _) => format!("{}_{}", last.created_at.timestamp_micros(), last.id),
-            (None, Some((time, id))) => format!("{}_{}", time.timestamp_micros(), id),
-            (None, None) => format!("0_{}", Uuid::nil()),
-        };
+        let next_cursor = position_cursor(match (rows.last(), after) {
+            (Some(last), _) => (last.written_in, last.created_at, last.id),
+            (None, Some(after)) => after,
+            // Nothing yet: everything settled so far has been read.
+            (None, None) => (
+                settled - 1,
+                DateTime::from_timestamp_micros(LAST_MICROS).unwrap_or_default(),
+                Uuid::max(),
+            ),
+        });
         let more = rows.last().is_some_and(|last| last.has_next);
         let mut conversations = Vec::<ListedConversation>::new();
         let mut messages = Vec::with_capacity(rows.len());

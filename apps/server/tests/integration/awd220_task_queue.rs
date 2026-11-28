@@ -86,6 +86,51 @@ async fn workers_share_a_queue_without_taking_the_same_task_or_someone_elses() {
     assert_eq!(first["claim"]["note"], "On it");
     let second = call(app, rook, "task_claim_next", json!({"spaceId": project})).await;
     assert_eq!(second["task"]["taskId"], plain.as_str(), "{second}");
+    // Two workers on one account, asking at once: one task, one of them.
+    let lone = new_task(app, owner, &project, json!({"title": "Bump the parser"})).await;
+    let (one, other) = tokio::join!(
+        call(app, rook, "task_claim_next", json!({"spaceId": project})),
+        call(app, rook, "task_claim_next", json!({"spaceId": project})),
+    );
+    let got = [&one, &other]
+        .iter()
+        .filter(|answer| answer["task"]["taskId"] == lone.as_str())
+        .count();
+    assert_eq!(got, 1, "handed out once: {one} {other}");
+    // Two workers on two accounts, asking at once.
+    let raced = new_task(app, owner, &project, json!({"title": "Sort the fixtures"})).await;
+    let (one, other) = tokio::join!(
+        call(app, codex, "task_claim_next", json!({"spaceId": project})),
+        call(app, rook, "task_claim_next", json!({"spaceId": project})),
+    );
+    let got = [&one, &other]
+        .iter()
+        .filter(|answer| answer["task"]["taskId"] == raced.as_str())
+        .count();
+    assert_eq!(got, 1, "handed out once: {one} {other}");
+    // Given back with a handoff, a started task is the next one out, with
+    // the note for whoever takes it.
+    let holder = if one["claimed"] == true { codex } else { rook };
+    call(
+        app,
+        holder,
+        "task_release",
+        json!({"taskId": raced, "handoff": "Fixtures sorted; the snapshot is left."}),
+    )
+    .await;
+    let again = call(app, rook, "task_claim_next", json!({"spaceId": project})).await;
+    assert_eq!(again["task"]["taskId"], raced.as_str(), "{again}");
+    assert_eq!(
+        again["claim"]["handoff"]["note"], "Fixtures sorted; the snapshot is left.",
+        "{again}"
+    );
+    call(
+        app,
+        rook,
+        "task_finish",
+        json!({"taskId": raced, "result": "Snapshot updated."}),
+    )
+    .await;
     let third = call(app, rook, "task_claim_next", json!({"spaceId": project})).await;
     assert_eq!(
         third["claimed"], false,

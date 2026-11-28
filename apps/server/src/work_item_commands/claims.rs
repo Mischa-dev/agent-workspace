@@ -234,6 +234,37 @@ pub async fn takeable(
     .await?)
 }
 
+/// Which of `candidates` were started and given back: the last holder left
+/// a handoff, or their claim ran out, and nobody holds the task now.
+pub async fn given_back(
+    pool: &sqlx::PgPool,
+    project_id: Uuid,
+    candidates: &[Uuid],
+) -> Result<Vec<Uuid>, AppError> {
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT item.id
+        FROM task_rows item
+        WHERE item.project_id = $1
+          AND item.id = ANY($2)
+          AND NOT EXISTS (
+              SELECT 1 FROM work_item_claims claim
+              WHERE claim.work_item_id = item.id AND claim.expires_at > now())
+          AND (EXISTS (SELECT 1 FROM work_item_handoffs handoff
+                       WHERE handoff.work_item_id = item.id)
+               OR EXISTS (SELECT 1 FROM work_item_claims claim
+                          WHERE claim.work_item_id = item.id))
+        "#,
+    )
+    .bind(project_id)
+    .bind(candidates)
+    .fetch_all(crate::db::scoped(pool))
+    .await?)
+}
+
 /// Who may end a claim.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Releaser {

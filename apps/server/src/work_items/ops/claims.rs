@@ -401,6 +401,12 @@ impl Operation for TaskClaimNext {
     const MODULE: &'static str = "tasks";
     const PERMISSION: Option<Perm> = Some(Perm::TasksEdit);
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    // Its commands keep their own transactions, so the dispatcher holds
+    // none across them (a pool of one would stall, and a wait would hold a
+    // connection).
+    const OWN_TRANSACTION: bool = true;
+    // It is aimed at a space and changes a task: guards on tasks see it.
+    const GUARD_KIND: Option<&'static str> = Some("task");
     const TITLE: &'static str = "Claim the next ready task";
     const DESCRIPTION: &'static str = "Take the best task that is ready in a space and claim it \
         in one step, so several workers can share a queue without picking the same one. It \
@@ -471,6 +477,32 @@ impl Operation for TaskClaimNext {
                 crate::domain::set_via_grant(&mut tx, via)
                     .await
                     .map_err(|error| OpError::logged("task_claim_next", &error))?;
+                // Taking turns on the space and then the task, in the order
+                // `claims::claim` locks them, so the look below and the
+                // claim are one step. A live claim of the caller's own
+                // counts as taken: two workers on one account must not be
+                // handed the same task (`task_claim` would renew it).
+                sqlx::query("SELECT 1 FROM projects WHERE id = $1 FOR NO KEY UPDATE")
+                    .bind(space)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(logged)?;
+                sqlx::query(
+                    "SELECT 1 FROM task_rows WHERE id = $1 AND project_id = $2 FOR NO KEY UPDATE",
+                )
+                .bind(task.id)
+                .bind(space)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(logged)?;
+                if claims::current(&mut tx, task.id)
+                    .await
+                    .map_err(|error| OpError::logged("task_claim_next", &error))?
+                    .is_some()
+                {
+                    lost.push(task.id);
+                    continue;
+                }
                 let claimed =
                     claims::claim(&mut tx, space, task.id, actor, note.as_deref(), minutes)
                         .await
@@ -596,6 +628,10 @@ impl Operation for TaskFinish {
     const MODULE: &'static str = "tasks";
     const PERMISSION: Option<Perm> = Some(Perm::TasksEdit);
     const IDEMPOTENCY: Idempotency = Idempotency::Dispatcher;
+    // Its commands keep their own transactions, so the dispatcher holds
+    // none across them (a pool of one would stall, and a wait would hold a
+    // connection).
+    const OWN_TRANSACTION: bool = true;
     const TITLE: &'static str = "Finish task";
     const DESCRIPTION: &'static str = "End your work on a task with its result, in one step: \
         the result is posted on the task (its watchers and whoever asked are told), the task \
