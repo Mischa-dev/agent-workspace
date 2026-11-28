@@ -152,7 +152,12 @@ const IN_DOCS: ReadonlySet<string> = new Set(['page.updated', 'sheet.updated', '
 export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelope) {
   if (IN_DOCS.has(event.type)) {
     // Once for a burst, such as someone typing in a page.
-    later(`docs:${event.projectId}`, PAGE_DETAILS_DELAY_MS, () => void queryClient.invalidateQueries({ predicate: (query) => isOpKey(query.queryKey, 'doc_list') }))
+    const spaceId = event.projectId
+    later(`docs:${spaceId}`, PAGE_DETAILS_DELAY_MS, () =>
+      void queryClient.invalidateQueries({
+        predicate: (query) => isOpKey(query.queryKey, 'doc_list') && (query.queryKey[3] as { spaceId?: string } | undefined)?.spaceId === spaceId,
+      }),
+    )
   }
   // A module's own events (M1.5): its handler, loaded with the first one.
   const registered = liveHandlerFor(event.type)

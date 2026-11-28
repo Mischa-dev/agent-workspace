@@ -878,23 +878,59 @@ async fn one_restricted_document_and_the_pages_inside_a_page() {
     assert!(!opens(&world, "lena", &work, "sheet", &ledger).await);
 
     // The guide is everyone's: it isn't kept to chosen people.
-    let guide = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM project_pages WHERE project_id = $1::uuid AND is_guide",
-    )
-    .bind(&work)
-    .fetch_optional(world.pool())
-    .await
-    .expect("guide");
-    if let Some(guide) = guide {
-        let kept = op(
+    let guide = id_at(
+        &op(
             &world,
             "owner",
-            "doc_access_set",
-            json!({"id": guide, "restricted": true, "people": []}),
+            "page_create",
+            json!({"projectId": work, "title": "How we work", "body": "Read me.", "isGuide": true}),
         )
-        .await;
-        assert_eq!(kept["outcome"], "invalid_request", "{kept}");
-    }
+        .await,
+        "/id",
+    );
+    let kept = op(
+        &world,
+        "owner",
+        "doc_access_set",
+        json!({"id": guide, "restricted": true, "people": []}),
+    )
+    .await;
+    assert_eq!(kept["outcome"], "invalid_request", "{kept}");
+
+    // A folder kept to chosen people isn't removed over something it still
+    // covers that the list doesn't show (here, a sheet kept to the owner).
+    let safe = id_at(
+        &op(
+            &world,
+            "owner",
+            "doc_folder_create",
+            json!({"spaceId": work, "title": "Safe"}),
+        )
+        .await,
+        "/id",
+    );
+    ok(&op(
+        &world,
+        "owner",
+        "doc_move",
+        json!({"id": ledger, "folderId": safe}),
+    )
+    .await);
+    ok(&op(
+        &world,
+        "owner",
+        "doc_access_set",
+        json!({"id": safe, "restricted": true, "people": [lena]}),
+    )
+    .await);
+    let refused = op(
+        &world,
+        "lena",
+        "doc_folder_update",
+        json!({"folderId": safe, "remove": true}),
+    )
+    .await;
+    assert_eq!(refused["outcome"], "invalid_request", "{refused}");
 
     let moving = json!({"pageId": plans, "toSpaceId": home, "expectedVersion": 1});
     let refused = op(&world, "lena", "page_move", moving.clone()).await;

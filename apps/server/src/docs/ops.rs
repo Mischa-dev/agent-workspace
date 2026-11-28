@@ -482,7 +482,25 @@ impl Operation for DocFolderUpdate {
             }
             // What the caller doesn't see in it (kept to other people, or
             // archived) goes up to where the folder was, never left filed
-            // under a folder that is gone. What restricts each stays on it.
+            // under a folder that is gone. What restricts each stays on it;
+            // what the folder itself kept to chosen people would be opened
+            // by that, so such a folder is opened on purpose first.
+            if current.restricted_here {
+                let covers = sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS (SELECT 1 FROM doc_places WHERE parent_id = $1)",
+                )
+                .bind(id)
+                .fetch_one(&mut **tx)
+                .await
+                .map_err(AppError::from)?;
+                if covers {
+                    return Err(invalid(
+                        "remove",
+                        "This folder is kept to chosen people and still covers something \
+                         archived or kept from you. Open it to everyone first, then remove it.",
+                    ));
+                }
+            }
             sqlx::query(
                 "UPDATE doc_places SET parent_id = $2, updated_at = now() WHERE parent_id = $1",
             )
