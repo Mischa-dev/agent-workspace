@@ -79114,7 +79114,7 @@
                     ]
                   },
                   "operations": {
-                    "description": "Operation names it watches, such as message_send; empty: every change.",
+                    "description": "Operation names it watches, such as message_send; empty: every change.\nA call that makes several changes at once (task_finish, a bulk\nupdate) is watched under each change it makes.",
                     "items": {
                       "type": "string"
                     },

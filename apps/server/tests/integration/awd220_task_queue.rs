@@ -297,3 +297,99 @@ async fn finishing_a_task_posts_its_result_moves_it_and_frees_it() {
     assert_eq!(blocked.as_deref(), Some("No registry token here."));
     assert_eq!((claims, comments), (0, 1));
 }
+
+/// A guard on changing tasks holds wherever a task is changed: the queue
+/// operations change a task inside one call, and a worker must not get
+/// past the guard by using them instead of `task_update`.
+#[tokio::test]
+async fn a_guard_on_task_changes_holds_inside_the_queue_operations() {
+    let Some(world) = WorldBuilder::default()
+        .project("QG")
+        .agent("rook", "member")
+        .build("awd220_queue_guard")
+        .await
+    else {
+        return;
+    };
+    let app = &world.app;
+    let project = world.project("QG").to_owned();
+    let owner = &world.owner.browser;
+    let rook = &world.agents["rook"];
+    let task = new_task(app, owner, &project, json!({"title": "Ship the importer"})).await;
+    let guard = |input: Value| async {
+        let (status, body) = super::support::app::send(
+            app,
+            owner.request(
+                "POST",
+                &format!("/api/v2/w/{}/ops/guard_set", world.organization),
+                Some(&Uuid::now_v7().to_string()),
+                input,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body["value"]["guard"]["id"].clone()
+    };
+    let claims = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM work_item_claims")
+            .fetch_one(world.pool())
+            .await
+            .expect("claims")
+    };
+
+    let stop = guard(json!({"name": "Statuses stay put", "action": "deny",
+                            "operations": ["task_update"]}))
+    .await;
+    let refused = tool(
+        app,
+        &rook.token,
+        &rook.session,
+        "task_claim_next",
+        json!({"spaceId": project}),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    assert!(
+        refused.to_string().contains("Statuses stay put"),
+        "{refused}"
+    );
+    assert_eq!(claims().await, 0);
+
+    // Claimed the plain way, which the guard doesn't name; finishing it
+    // would move it, so that is stopped and nothing is posted.
+    call(app, rook, "task_claim", json!({"taskId": task})).await;
+    let refused = tool(
+        app,
+        &rook.token,
+        &rook.session,
+        "task_finish",
+        json!({"taskId": task, "result": "Done."}),
+    )
+    .await;
+    assert_ne!(refused["outcome"], "ok", "{refused}");
+    assert!(
+        refused.to_string().contains("Statuses stay put"),
+        "{refused}"
+    );
+    let comments = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM messages comment \
+         JOIN conversations comments ON comments.id = comment.conversation_id \
+         WHERE comments.kind = 'comments' AND comments.subject_id = $1",
+    )
+    .bind(Uuid::parse_str(&task).expect("id"))
+    .fetch_one(world.pool())
+    .await
+    .expect("comments");
+    assert_eq!((claims().await, comments), (1, 0));
+
+    // With the guard gone, the same call goes through.
+    guard(json!({"guardId": stop, "remove": true})).await;
+    let finished = call(
+        app,
+        rook,
+        "task_finish",
+        json!({"taskId": task, "result": "Done."}),
+    )
+    .await;
+    assert_eq!(finished["outcome"], "done", "{finished}");
+}

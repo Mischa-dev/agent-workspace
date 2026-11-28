@@ -80,6 +80,8 @@ pub struct GuardWriteInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<GuardAction>,
     /// Operation names it watches, such as message_send; empty: every change.
+    /// A call that makes several changes at once (task_finish, a bulk
+    /// update) is watched under each change it makes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operations: Option<Vec<String>>,
     /// Kinds of thing it watches, such as task; empty: any.
