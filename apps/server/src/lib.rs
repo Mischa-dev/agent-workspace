@@ -37,6 +37,7 @@ pub mod delivery;
 pub mod direct;
 pub mod direct_rules;
 pub mod discussion;
+pub mod docs;
 pub mod domain;
 pub mod drafts;
 pub mod environments;

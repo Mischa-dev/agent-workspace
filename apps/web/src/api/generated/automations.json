@@ -313,6 +313,30 @@
   },
   {
     "kind": "change",
+    "module": "workspace",
+    "name": "doc_access_set",
+    "title": "Say who can see a document or folder"
+  },
+  {
+    "kind": "create",
+    "module": "workspace",
+    "name": "doc_folder_create",
+    "title": "Make a folder"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "doc_folder_update",
+    "title": "Rename or remove a folder"
+  },
+  {
+    "kind": "change",
+    "module": "workspace",
+    "name": "doc_move",
+    "title": "Move a document or folder"
+  },
+  {
+    "kind": "change",
     "module": "runs",
     "name": "environment_archive",
     "title": "Archive environment"

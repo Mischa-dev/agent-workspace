@@ -557,7 +557,25 @@ pub(crate) async fn check_parent(
     .bind(MAX_PAGE_DEPTH)
     .fetch_one(&mut **transaction)
     .await?;
-    if inside_itself {
+    // The same walk over where things sit, which sees every page: a page in
+    // between that is kept from the writer must not hide a loop from them.
+    let closes_a_loop = sqlx::query_scalar::<_, bool>(
+        r#"
+        WITH RECURSIVE up(id, depth) AS (
+            SELECT $1::uuid, 1
+            UNION ALL
+            SELECT place.parent_id, up.depth + 1
+            FROM doc_places place JOIN up ON place.thing_id = up.id
+            WHERE place.parent_id IS NOT NULL AND up.depth <= 64
+        )
+        SELECT COALESCE(bool_or(id = $2), false) FROM up
+        "#,
+    )
+    .bind(parent)
+    .bind(page_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if inside_itself || closes_a_loop {
         return Err(AppError::Refused {
             field: "parentPageId",
             message: "A page can't go inside itself or a page inside it.",
@@ -1827,9 +1845,13 @@ async fn shared_page_view(pool: &PgPool, page_id: Uuid) -> Result<SharedPageView
         "SELECT id, title, body, updated_at::text AS updated_at FROM project_pages \
          WHERE id = $1 AND archived_at IS NULL \
            AND memory_for_kind IS DISTINCT FROM 'conversation' \
-           AND module_part_on('page', id)",
+           AND module_part_on('page', id) \
+           AND doc_open_to(id, $2)",
     )
     .bind(page_id)
+    // A link is held by whoever has it, so it opens a page only while the
+    // page is open to everyone in its space: the account nobody is named as.
+    .bind(Uuid::nil())
     .fetch_optional(&mut *connection)
     .await?
     .ok_or(AppError::NotFound("link"))

@@ -235,7 +235,7 @@ pub(crate) async fn sheet_list(
             return Ok(ToolResult::module_off("sheet_list", "Sheets"));
         }
         let listed = sheets::list(
-            &state.pool,
+            crate::db::scoped(&state.pool),
             principal.project_id,
             arguments.include_archived.unwrap_or(false),
         )

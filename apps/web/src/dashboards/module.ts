@@ -4,7 +4,7 @@ export default {
   id: 'dashboards',
   shell: 'project',
   routes: [{ path: '/projects/:projectId/dashboards/*', space: 'project', page: () => import('./DashboardsArea') }],
-  sidebar: [{ id: 'dashboards', space: 'project', rank: 35, part: 'area.dashboards', icon: 'chart', label: 'Dashboards', path: '/dashboards' }],
+  sidebar: [{ id: 'dashboards', space: 'project', rank: 35, part: 'area.dashboards', unless: 'area.docs', icon: 'chart', label: 'Dashboards', path: '/dashboards' }],
   palette: [
     {
       id: 'p:dashboards',

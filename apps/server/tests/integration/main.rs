@@ -68,6 +68,7 @@ mod delivery;
 mod direct_conversations;
 mod discussion;
 mod dm_requests_and_blocks;
+mod docs_tree;
 mod domain_events;
 mod drafts;
 mod emoji;

@@ -146,7 +146,19 @@ export function isCommentSummary(key: readonly unknown[], thingId?: string) {
  * refreshes the lists. An event a module registers (a collection's or a
  * sheet's, M1.5) goes to that module's handler.
  */
+/** A document was made, renamed, archived or put inside another: the Docs tree lists it. */
+const IN_DOCS: ReadonlySet<string> = new Set(['page.updated', 'sheet.updated', 'whiteboard.updated', 'collection.updated', 'dashboard.updated'])
+
 export function documentChanged(queryClient: QueryClient, event: RealtimeEnvelope) {
+  if (IN_DOCS.has(event.type)) {
+    // Once for a burst, such as someone typing in a page.
+    const spaceId = event.projectId
+    later(`docs:${spaceId}`, PAGE_DETAILS_DELAY_MS, () =>
+      void queryClient.invalidateQueries({
+        predicate: (query) => isOpKey(query.queryKey, 'doc_list') && (query.queryKey[3] as { spaceId?: string } | undefined)?.spaceId === spaceId,
+      }),
+    )
+  }
   // A module's own events (M1.5): its handler, loaded with the first one.
   const registered = liveHandlerFor(event.type)
   if (registered) {

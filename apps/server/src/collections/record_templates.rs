@@ -70,7 +70,8 @@ const TEMPLATE_SELECT: &str = "SELECT template.id, template.collection_id, templ
         template.archived_at IS NOT NULL AS archived \
     FROM record_templates template";
 
-/// One of the space's templates, if its collection's module is on.
+/// One of the space's templates, if its collection's module is on and the
+/// caller can see that collection (a restricted one hides its templates).
 pub(crate) async fn template(
     connection: &mut PgConnection,
     space: Uuid,
@@ -79,7 +80,9 @@ pub(crate) async fn template(
 ) -> Result<Option<TemplateRow>, AppError> {
     let sql = format!(
         "{TEMPLATE_SELECT} WHERE template.space_id = $1 AND template.id = $2 \
-           AND module_part_on('collection', template.collection_id){}",
+           AND module_part_on('collection', template.collection_id) \
+           AND EXISTS (SELECT 1 FROM collections holder \
+                       WHERE holder.id = template.collection_id){}",
         if lock { " FOR UPDATE" } else { "" }
     );
     Ok(sqlx::query_as::<_, TemplateRow>(&sql)

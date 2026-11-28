@@ -142,7 +142,7 @@ describe('layout registry', () => {
   it('hides every row of a project’s sidebar whose part is hidden', async () => {
     const view = renderWith([], <ProjectSidebar mobileOpen={false} onNavigate={vi.fn()} project={project} />)
     await screen.findByText('Plans for the week')
-    expect(linkNames()).toEqual(expect.arrayContaining(['Overview', 'Tasks', 'Pages', 'Runs', 'General', 'Plans for the week, Seen', 'All threads']))
+    expect(linkNames()).toEqual(expect.arrayContaining(['Overview', 'Tasks', 'Docs', 'Runs', 'General', 'Plans for the week, Seen', 'All threads']))
     view.unmount()
 
     renderWith(PART_IDS, <ProjectSidebar mobileOpen={false} onNavigate={vi.fn()} project={project} />)

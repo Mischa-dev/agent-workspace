@@ -19,7 +19,8 @@ export default {
     },
   ],
   sidebar: [
-    { id: 'pages', space: 'project', rank: 20, part: 'area.pages', icon: 'list', label: { noun: 'page' }, path: '/pages', section: 'pages' },
+    { id: 'pages', space: 'project', rank: 20, part: 'area.pages', unless: 'area.docs', icon: 'list', label: { noun: 'page' }, path: '/pages', section: 'pages' },
+    // Where a layout shows Docs, that one row holds pages with every other kind of document.
     // Pages also holds Decisions: where a layout shows Decisions alone, the row opens them.
     { id: 'decisions', space: 'project', rank: 20, part: 'area.decisions', unless: 'area.pages', icon: 'list', label: 'Decisions', path: '/decisions', section: 'pages' },
     { id: 'pages', space: 'home', rank: 50, part: 'area.pages', icon: 'list', label: 'Pages', path: '/pages' },

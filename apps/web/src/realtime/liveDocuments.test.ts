@@ -66,7 +66,8 @@ describe('live documents from the realtime socket', () => {
     expect(board).not.toHaveBeenCalled()
     expect(invalidate).not.toHaveBeenCalled()
     vi.advanceTimersByTime(3_000)
-    expect(invalidate).toHaveBeenCalledTimes(1)
+    // Once for the page's details, once for the Docs tree that lists it.
+    expect(invalidate).toHaveBeenCalledTimes(2)
     stop()
     stopBoard()
     documentChanged(queryClient, envelope('page.updated', { pageId: PAGE, version: 4 }))

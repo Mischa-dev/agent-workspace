@@ -137,7 +137,23 @@ const KINDS: &[(&str, &str)] = &[
         "collection",
         "SELECT project.organization_id, project.id FROM collections collection \
          JOIN projects project ON project.id = collection.project_id \
-         WHERE collection.id = $1 AND $2::uuid IS NOT NULL",
+         WHERE collection.id = $1 AND $2::uuid IS NOT NULL AND doc_open_to(collection.id, $2)",
+    ),
+    // AWD-223: a folder or document of a space's Docs tree, whatever its
+    // kind, unless a restriction hides it from the caller.
+    (
+        "doc",
+        "SELECT doc.workspace_id, doc.space_id FROM ( \
+             SELECT id, workspace_id, space_id FROM doc_folders WHERE archived_at IS NULL \
+             UNION ALL SELECT id, workspace_id, project_id FROM project_pages \
+               WHERE memory_for_kind IS DISTINCT FROM 'conversation' \
+             UNION ALL SELECT id, workspace_id, project_id FROM sheets \
+             UNION ALL SELECT id, organization_id, project_id FROM whiteboards \
+               WHERE deleted_at IS NULL \
+             UNION ALL SELECT id, workspace_id, project_id FROM collections \
+             UNION ALL SELECT id, workspace_id, space_id FROM dashboards \
+               WHERE owner_actor_id IS NULL OR owner_actor_id = $2) doc \
+         WHERE doc.id = $1 AND $2::uuid IS NOT NULL AND doc_open_to(doc.id, $2)",
     ),
     // A view: shared, or the caller's own (another's personal view is
     // not found).
@@ -145,14 +161,16 @@ const KINDS: &[(&str, &str)] = &[
         "view",
         "SELECT project.organization_id, project.id FROM collection_views view \
          JOIN projects project ON project.id = view.project_id \
-         WHERE view.id = $1 AND (view.owner_actor_id IS NULL OR view.owner_actor_id = $2)",
+         WHERE view.id = $1 AND (view.owner_actor_id IS NULL OR view.owner_actor_id = $2) \
+           AND doc_open_to(view.collection_id, $2)",
     ),
     // A dashboard: shared, or the caller's own (anyone else's is not found).
     (
         "dashboard",
         "SELECT dashboard.workspace_id, dashboard.space_id FROM dashboards dashboard \
          WHERE dashboard.id = $1 \
-           AND (dashboard.owner_actor_id IS NULL OR dashboard.owner_actor_id = $2)",
+           AND (dashboard.owner_actor_id IS NULL OR dashboard.owner_actor_id = $2) \
+           AND doc_open_to(dashboard.id, $2)",
     ),
     // Outside data (T1.34): a connection, and a saved query. Who sees which
     // is the operation's to say (data.connect, or a shared query).
@@ -177,6 +195,9 @@ const KINDS: &[(&str, &str)] = &[
         "thing",
         "SELECT thing.workspace_id, thing.space_id FROM things thing \
          WHERE thing.id = $1 AND thing.deleted_at IS NULL AND $2::uuid IS NOT NULL \
+           AND doc_open_to(thing.id, $2) \
+           AND (thing.kind <> 'record' OR thing.parent_id IS NULL \
+                OR doc_open_to(thing.parent_id, $2)) \
            AND (thing.kind NOT IN ('channel', 'thread', 'conversation') \
                 OR conversation_visible_to(thing.id, $2)) \
            AND (thing.kind <> 'message' OR EXISTS ( \
@@ -275,7 +296,8 @@ const KINDS: &[(&str, &str)] = &[
     (
         "record_template",
         "SELECT template.workspace_id, template.space_id FROM record_templates template \
-         WHERE template.id = $1 AND $2::uuid IS NOT NULL",
+         WHERE template.id = $1 AND $2::uuid IS NOT NULL \
+           AND doc_open_to(template.collection_id, $2)",
     ),
     (
         "recurring_record",

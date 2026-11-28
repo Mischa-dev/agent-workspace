@@ -16,6 +16,7 @@ export const PART_IDS = [
   'area.collections',
   'area.dashboards',
   'area.sheets',
+  'area.docs',
   'area.runs',
   'area.agents',
   'area.automations',

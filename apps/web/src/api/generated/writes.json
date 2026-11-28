@@ -376,6 +376,26 @@
   },
   {
     "kind": "change",
+    "name": "doc_access_set",
+    "title": "Say who can see a document or folder"
+  },
+  {
+    "kind": "create",
+    "name": "doc_folder_create",
+    "title": "Make a folder"
+  },
+  {
+    "kind": "change",
+    "name": "doc_folder_update",
+    "title": "Rename or remove a folder"
+  },
+  {
+    "kind": "change",
+    "name": "doc_move",
+    "title": "Move a document or folder"
+  },
+  {
+    "kind": "change",
     "name": "environment_archive",
     "title": "Archive environment"
   },

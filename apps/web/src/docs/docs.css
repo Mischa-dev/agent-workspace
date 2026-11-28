@@ -1,0 +1,70 @@
+/* Docs: one tree of a project's documents. Rows are the shared list rows,
+   stepped in by how deep they sit. */
+.aw-docs__row {
+  gap: var(--space-2);
+  min-height: 52px;
+  padding-left: calc(var(--space-2) + var(--doc-depth, 0) * var(--space-5));
+}
+
+.aw-docs__twist {
+  display: grid;
+  flex: none;
+  width: 28px;
+  place-items: center;
+}
+
+.aw-docs__kind {
+  min-width: 24px;
+  color: var(--content-fg-muted);
+}
+
+/* A folder's name opens it: a quiet button, set flush with the titles around it. */
+.aw-docs__folder {
+  height: auto;
+  margin-left: calc(var(--space-2-5) * -1);
+  padding-block: var(--space-half);
+  font: inherit;
+  color: inherit;
+}
+
+.aw-docs__lock {
+  display: inline-flex;
+  color: var(--content-fg-muted);
+}
+
+.aw-docs__access {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.aw-docs__note {
+  margin: 0;
+  font: var(--t-small);
+  color: var(--content-fg-muted);
+}
+
+.aw-docs__people {
+  display: grid;
+  gap: var(--space-2);
+  max-height: 320px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  font: var(--t-body);
+  color: var(--content-fg);
+}
+
+@media (max-width: 640px) {
+  .aw-docs__rows .aw-docs__row {
+    padding-left: calc(var(--space-1) + var(--doc-depth, 0) * var(--space-3));
+    padding-right: var(--space-2);
+    flex-wrap: nowrap;
+  }
+
+  /* One small menu per row: it stays beside the title instead of dropping under it. */
+  .aw-docs__rows .aw-docs__row .aw-row__actions {
+    width: auto;
+    padding-left: 0;
+  }
+}
