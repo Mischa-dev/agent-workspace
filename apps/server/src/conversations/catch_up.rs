@@ -1,5 +1,5 @@
 //! `message_list` (AWD-220): one read of everything said under a scope
-//! after a point, oldest first, with its text, in pages measured for a
+//! after a point, in the order written, with its text, in pages measured for a
 //! model's context instead of a screen. The other reads open one
 //! conversation a screenful at a time, and events carry only ids (rule
 //! 10), so catching up on a space used to cost a call per conversation.
@@ -112,7 +112,7 @@ pub struct ListedConversation {
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MessagePage {
-    /// Oldest first.
+    /// In the order they were written.
     pub messages: Vec<ListedMessage>,
     /// Each conversation the messages name, once.
     pub conversations: Vec<ListedConversation>,
@@ -146,17 +146,37 @@ struct Row {
 /// that message's time and id.
 type Position = (i64, DateTime<Utc>, Uuid);
 
-fn decode_cursor(cursor: &str) -> Option<Position> {
-    let mut parts = cursor.splitn(3, '_');
-    Some((
+/// A cursor: a position, and the `since` the read began with, which holds
+/// on every page (a later position isn't always a later time).
+fn decode_cursor(cursor: &str) -> Option<(Position, Option<DateTime<Utc>>)> {
+    let mut parts = cursor.splitn(4, '_');
+    let position = (
         parts.next()?.parse().ok()?,
         DateTime::from_timestamp_micros(parts.next()?.parse().ok()?)?,
         parts.next()?.parse().ok()?,
-    ))
+    );
+    let since = match parts.next() {
+        Some(since) => Some(DateTime::from_timestamp_micros(since.parse().ok()?)?),
+        None => None,
+    };
+    Some((position, since))
 }
 
-fn position_cursor((written_in, time, id): Position) -> String {
-    format!("{written_in}_{}_{id}", time.timestamp_micros())
+fn position_cursor((written_in, time, id): Position, since: Option<DateTime<Utc>>) -> String {
+    let since = since.map_or_else(String::new, |since| {
+        format!("_{}", since.timestamp_micros())
+    });
+    format!("{written_in}_{}_{id}{since}", time.timestamp_micros())
+}
+
+/// Puts messages that carry another database server's positions (a restored
+/// database) at the oldest position here, and says how many.
+pub async fn rebase_positions(pool: &sqlx::PgPool) -> Result<i64, crate::error::AppError> {
+    Ok(
+        sqlx::query_scalar::<_, i64>("SELECT message_positions_rebase()")
+            .fetch_one(crate::db::scoped(pool))
+            .await?,
+    )
 }
 
 /// Later than any message: the end of year 9999.
@@ -171,7 +191,7 @@ impl Operation for MessageList {
     const TITLE: &'static str = "List messages";
     const DESCRIPTION: &'static str = "Catch up on a space in one read: every message you can \
         see there after a point (channels, threads, and the discussions on tasks, pages and \
-        other things; working notes too), oldest first, with its text, who wrote it and where. \
+        other things; working notes too), in the order they were written, with its text, who wrote it and where. \
         conversationId or thingId narrows it to one channel or one thing's discussion. Pages \
         are sized in characters of text (maxCharacters), not in messages; pass nextCursor back \
         as cursor to read on: a message shows once every write that began before it has \
@@ -184,22 +204,24 @@ impl Operation for MessageList {
     async fn run(call: &mut OpCall<'_>, input: MessageListInput) -> Result<MessagePage, OpError> {
         let space = call.ctx.space_id.ok_or(OpError::Unavailable)?;
         let caller = call.ctx.caller.account_id;
-        let after = match &input.cursor {
+        let from_cursor = match &input.cursor {
             Some(cursor) => Some(decode_cursor(cursor).ok_or(OpError::invalid(
                 "cursor",
                 "Pass the nextCursor of your last read, or none.",
             ))?),
             None => None,
         };
-        let since = match &input.since {
-            Some(since) if after.is_none() => Some(
+        let after = from_cursor.map(|(position, _)| position);
+        let since = match (from_cursor, &input.since) {
+            (Some((_, since)), _) => since,
+            (None, Some(since)) => Some(
                 DateTime::parse_from_rfc3339(since.trim())
                     .map_err(|_| {
                         OpError::invalid("since", "Pass a time such as 2026-11-27T20:00:00Z.")
                     })?
                     .with_timezone(&Utc),
             ),
-            _ => None,
+            (None, None) => None,
         };
         let budget = input
             .max_characters
@@ -217,6 +239,15 @@ impl Operation for MessageList {
                 .fetch_one(&mut **tx)
                 .await
                 .map_err(crate::error::AppError::from)?;
+        // A cursor given here is always below that. One at or past it came
+        // from another database server (before a restore), where positions
+        // meant something else.
+        if after.is_some_and(|(written_in, _, _)| written_in >= settled) {
+            return Err(OpError::invalid(
+                "cursor",
+                "That cursor is from before this workspace was restored. Read again from since.",
+            ));
+        }
         let rows = sqlx::query_as::<_, Row>(
             r#"
             SELECT * FROM (
@@ -288,16 +319,19 @@ impl Operation for MessageList {
         .fetch_all(&mut **tx)
         .await
         .map_err(crate::error::AppError::from)?;
-        let next_cursor = position_cursor(match (rows.last(), after) {
-            (Some(last), _) => (last.written_in, last.created_at, last.id),
-            (None, Some(after)) => after,
-            // Nothing yet: everything settled so far has been read.
-            (None, None) => (
-                settled - 1,
-                DateTime::from_timestamp_micros(LAST_MICROS).unwrap_or_default(),
-                Uuid::max(),
-            ),
-        });
+        let next_cursor = position_cursor(
+            match (rows.last(), after) {
+                (Some(last), _) => (last.written_in, last.created_at, last.id),
+                (None, Some(after)) => after,
+                // Nothing yet: everything settled so far has been read.
+                (None, None) => (
+                    settled - 1,
+                    DateTime::from_timestamp_micros(LAST_MICROS).unwrap_or_default(),
+                    Uuid::max(),
+                ),
+            },
+            since,
+        );
         let more = rows.last().is_some_and(|last| last.has_next);
         let mut conversations = Vec::<ListedConversation>::new();
         let mut messages = Vec::with_capacity(rows.len());

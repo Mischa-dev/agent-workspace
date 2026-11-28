@@ -210,13 +210,15 @@ def arguments(words, schema, doc):
             try:
                 whole = json.loads(text)
             except ValueError:
-                whole = None
+                whole = text
             if isinstance(whole, list):
                 given[key] = whole
                 continue
             given.setdefault(key, [])
             if isinstance(given[key], list):
-                given[key].append(typed(text, items_of(part, doc), doc))
+                items = items_of(part, doc)
+                # An item of no one type (an object, say) is taken as JSON.
+                given[key].append(typed(text, items, doc) if kinds(items, doc) else whole)
                 continue
         given[key] = True if not has_value else typed(read_value(value), part, doc)
     return given, raw

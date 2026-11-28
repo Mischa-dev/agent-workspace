@@ -249,6 +249,67 @@ async fn one_read_catches_up_on_a_space_and_shows_only_what_the_reader_can_see()
         texts(&loud),
         ["first, in the channel", "fourth, behind a slow write"]
     );
+
+    // A restored database carries positions from the server it was dumped
+    // from. One this server hasn't reached is put at the oldest position,
+    // so the message still reads, and a cursor from there is refused.
+    let mut restore = world.pool().begin().await.expect("a transaction");
+    sqlx::query("SELECT set_config('aw.message_rebase', 'on', true)")
+        .execute(&mut *restore)
+        .await
+        .expect("as a restore loads rows");
+    sqlx::query(
+        "UPDATE messages SET written_in = 9000000000000000 WHERE plain_text = 'third, on the task'",
+    )
+    .execute(&mut *restore)
+    .await
+    .expect("a foreign position");
+    restore.commit().await.expect("commit");
+    let hidden = call(app, codex, "message_list", json!({"spaceId": project})).await;
+    assert!(!texts(&hidden).contains(&"third, on the task".to_owned()));
+    let moved = sqlx::query_scalar::<_, i64>("SELECT message_positions_rebase()")
+        .fetch_one(world.pool())
+        .await
+        .expect("rebase");
+    assert_eq!(moved, 1);
+    let restored = call(app, codex, "message_list", json!({"spaceId": project})).await;
+    assert_eq!(texts(&restored)[0], "third, on the task", "{restored}");
+    assert_eq!(texts(&restored).len(), 4);
+    let stale = tool(
+        app,
+        &codex.token,
+        &codex.session,
+        "message_list",
+        json!({"spaceId": project, "cursor": format!("9000000000000000_0_{}", Uuid::nil())}),
+    )
+    .await;
+    assert_ne!(stale["outcome"], "ok", "{stale}");
+
+    // The time a read began from holds on its later pages.
+    let later = call(
+        app,
+        codex,
+        "message_list",
+        json!({"spaceId": project, "since": "2999-01-01T00:00:00Z"}),
+    )
+    .await;
+    assert_eq!(texts(&later), Vec::<String>::new());
+    call(
+        app,
+        codex,
+        "message_send",
+        json!({"conversationId": build, "text": "fifth, before that time"}),
+    )
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    let still = call(
+        app,
+        codex,
+        "message_list",
+        json!({"spaceId": project, "cursor": later["nextCursor"]}),
+    )
+    .await;
+    assert_eq!(texts(&still), Vec::<String>::new(), "{still}");
 }
 
 #[tokio::test]

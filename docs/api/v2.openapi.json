@@ -95829,7 +95829,7 @@
     },
     "/api/v2/w/{workspace}/ops/message_list": {
       "post": {
-        "description": "Catch up on a space in one read: every message you can see there after a point (channels, threads, and the discussions on tasks, pages and other things; working notes too), oldest first, with its text, who wrote it and where. conversationId or thingId narrows it to one channel or one thing's discussion. Pages are sized in characters of text (maxCharacters), not in messages; pass nextCursor back as cursor to read on: a message shows once every write that began before it has finished, so reading on never misses one. DMs and groups aren't in a space: read those with conversation_read.",
+        "description": "Catch up on a space in one read: every message you can see there after a point (channels, threads, and the discussions on tasks, pages and other things; working notes too), in the order they were written, with its text, who wrote it and where. conversationId or thingId narrows it to one channel or one thing's discussion. Pages are sized in characters of text (maxCharacters), not in messages; pass nextCursor back as cursor to read on: a message shows once every write that began before it has finished, so reading on never misses one. DMs and groups aren't in a space: read those with conversation_read.",
         "operationId": "message_list",
         "parameters": [
           {
@@ -95949,7 +95949,7 @@
                               "type": "array"
                             },
                             "messages": {
-                              "description": "Oldest first.",
+                              "description": "In the order they were written.",
                               "items": {
                                 "$ref": "#/components/schemas/ListedMessage"
                               },
@@ -96113,7 +96113,7 @@
                               "type": "array"
                             },
                             "messages": {
-                              "description": "Oldest first.",
+                              "description": "In the order they were written.",
                               "items": {
                                 "$ref": "#/components/schemas/ListedMessage"
                               },

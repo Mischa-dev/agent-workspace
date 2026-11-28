@@ -253,8 +253,15 @@ pub async fn given_back(
           AND NOT EXISTS (
               SELECT 1 FROM work_item_claims claim
               WHERE claim.work_item_id = item.id AND claim.expires_at > now())
+          -- A handoff counts while it is the last word: a claim taken after
+          -- it (and let go without one) leaves the task where its holder did.
           AND (EXISTS (SELECT 1 FROM work_item_handoffs handoff
-                       WHERE handoff.work_item_id = item.id)
+                       WHERE handoff.work_item_id = item.id
+                         AND NOT EXISTS (
+                             SELECT 1 FROM work_item_activity taken
+                             WHERE taken.work_item_id = item.id
+                               AND taken.payload @> '{"claim": true}'
+                               AND taken.created_at > handoff.created_at))
                OR EXISTS (SELECT 1 FROM work_item_claims claim
                           WHERE claim.work_item_id = item.id))
         "#,
