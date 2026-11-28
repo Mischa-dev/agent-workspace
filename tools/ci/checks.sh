@@ -91,9 +91,6 @@ export CARGO_TERM_COLOR=always
 # Incremental caches only help repeat local edits; on CI hosts they grew to
 # 12 GB and filled the Red Hat disk.
 export CARGO_INCREMENTAL=0
-# Line tables keep file:line in backtraces and drop the rest of the debug info,
-# which costs the server's test build memory and most of the build cache.
-export CARGO_PROFILE_DEV_DEBUG=line-tables-only
 # Keep the build cache from filling a shared disk: start fresh past 16 GB.
 if [ -d "${CARGO_TARGET_DIR}" ] &&
   [ "$(du -s --block-size=1G "${CARGO_TARGET_DIR}" | cut -f1)" -gt 16 ]; then

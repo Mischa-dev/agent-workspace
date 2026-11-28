@@ -26,6 +26,13 @@ dbg_macro = "deny"
 todo = "deny"
 unwrap_used = "deny"
 
+# Line tables keep file:line in backtraces and drop the rest of the debug
+# info. With all of it, one build of the server crate needs more memory than
+# a 16 GB machine has (a cloud session's first build was killed); without, it
+# peaks near 12 GB, and the build cache is a fraction of the size.
+[profile.dev]
+debug = "line-tables-only"
+
 # Password hashing runs at production strength in tests too (a weaker
 # setting would test the wrong thing), and unoptimized it takes about three
 # seconds a hash. Optimizing just these two crates keeps test builds quick

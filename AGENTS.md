@@ -46,7 +46,10 @@ In a cloud session (a Claude Code cloud session or a Codex Cloud task),
 `AGENT_WORKSPACE_DATABASE_URL` for later commands, installs the Node in
 `.node-version` and the pinned pnpm, installs the web dependencies and warms
 the cargo build. Use it as the Codex Cloud environment's setup script. Run it
-again if integration tests skip or can't reach the database. Where Node can't
+again if integration tests skip or can't reach the database. A cloud session
+has the memory for one build of the server crate at a time, so run cargo
+commands one after another, and after changing the server run its tests as
+`--lib` or `--test integration`, not both in one command. Where Node can't
 be downloaded the image's Node 22 is used, so keep the web checks passing on
 it (stub `fetch` and `WebSocket` in tests instead of letting jsdom connect).
 
