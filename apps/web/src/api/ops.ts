@@ -9,6 +9,7 @@
 import { useMutation, type QueryClient, type QueryKey, useQueryClient } from '@tanstack/react-query'
 import { useRef } from 'react'
 
+import { currentWorkspaceSlug } from '../app/href'
 import { toastError } from '../app/toastError'
 import { things, type Thing, type ThingRef } from '../data/things'
 import { isApiError } from './errors'
@@ -59,12 +60,14 @@ export async function callOp<N extends OpName>(
 ): Promise<OpOutput<N>> {
   const { expectedVersion, retries = 1, ...call } = options
   const requestId = call.requestId ?? newRequestId()
+  // Read once: a retry goes where the first try went, whatever is on screen by then.
+  const onScreen = call.onScreen ?? currentWorkspaceSlug()
   const body = (
     expectedVersion === undefined ? input : { ...(input as object), expectedVersion }
   ) as OpInput<N>
   for (let attempt = 0; ; attempt += 1) {
     try {
-      return await callGenerated(name, body, { ...call, requestId })
+      return await callGenerated(name, body, { ...call, requestId, onScreen })
     } catch (error) {
       if (attempt >= retries || !retryable(error) || call.signal?.aborted) throw error
     }

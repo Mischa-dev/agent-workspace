@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { setCurrentWorkspaceSlug } from '../app/href'
 import { describeError } from '../ui/errorText'
 import { ApiError } from './errors'
 import type { OpErrorOutcome } from './generated/operations'
@@ -15,6 +16,7 @@ function answer(status: number, body: unknown) {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  setCurrentWorkspaceSlug(null)
 })
 
 describe('newRequestId', () => {
@@ -41,6 +43,25 @@ describe('callOp', () => {
     const keys = fetchMock.mock.calls.map(([, init]) => new Headers(init.headers).get('idempotency-key'))
     expect(keys[0]).toMatch(/^[0-9a-f-]{36}$/)
     expect(keys[1]).toBe(keys[0])
+  })
+
+  // One request id is one write: its retry goes where the first try went,
+  // even when the person has switched workspace in between.
+  it('retries in the workspace that was on screen at the first try', async () => {
+    setCurrentWorkspaceSlug('acme')
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        setCurrentWorkspaceSlug('other')
+        return answer(503, { outcome: 'temporarily_unavailable', message: 'Busy', retryCategory: 'retry' })
+      })
+      .mockResolvedValueOnce(answer(200, { outcome: 'ok', value: { id: 'd-1' }, replayed: false }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await call('decision_record', { title: 'Ship it' })
+
+    const onScreen = fetchMock.mock.calls.map(([, init]) => new Headers(init.headers).get('x-current-workspace'))
+    expect(onScreen).toEqual(['acme', 'acme'])
   })
 
   it('sends the expected version in the input', async () => {

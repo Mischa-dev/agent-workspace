@@ -620,6 +620,49 @@ async fn every_edge_runs_the_same_operation() {
     );
     let (status, found) = send(app, elsewhere).await;
     assert!(status.is_success(), "{status}: {found}");
+    // A credential's own workspace comes before the one on screen: an app's
+    // call that names none acts where the app was connected, whatever the
+    // header says, and one that names the other workspace acts there. (The
+    // receipt of a call on someone's own things is scoped to the workspace
+    // the call acted in.)
+    let acted_in = |key: &'static str| {
+        sqlx::query_scalar::<_, String>("SELECT scope FROM idempotency_keys WHERE key = $1")
+            .bind(key)
+            .fetch_one(&setup.pool)
+    };
+    let mut hinted = bearer(
+        &token,
+        "POST",
+        "/api/v2/ops/later_save",
+        Some("api-home"),
+        &json!({ "text": "Call the printer" }),
+    );
+    hinted.headers_mut().insert(
+        "x-current-workspace",
+        other_slug.parse().expect("a header value"),
+    );
+    let (status, saved) = send(app, hinted).await;
+    assert!(status.is_success(), "{status}: {saved}");
+    assert_eq!(
+        acted_in("api-home").await.expect("its receipt"),
+        format!("op.later_save.{}", workspace.simple())
+    );
+    let (status, saved) = send(
+        app,
+        bearer(
+            &token,
+            "POST",
+            &format!("/api/v2/w/{other_slug}/ops/later_save"),
+            Some("api-there"),
+            &json!({ "text": "Call the binder" }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {saved}");
+    assert_eq!(
+        acted_in("api-there").await.expect("its receipt"),
+        format!("op.later_save.{}", other.simple())
+    );
     // Through the other workspace's path, neither an operation (a write)
     // nor a hand-written tool (a read) reaches this workspace's space;
     // through its own path it does.

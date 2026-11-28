@@ -74,26 +74,94 @@ fn needs_version(schema: &Value) -> bool {
 /// Whether any field, at any depth, holds a secret: a token, a password, a
 /// secret or private key, or an API key.
 fn takes_secret(schema: &Value) -> bool {
-    // A token is the field's last word (`token`, `accessToken`), so token
-    // counts and design tokens (`tokens`, `inputTokens`) aren't secrets.
-    const SECRET: [&str; 5] = ["secret", "password", "passphrase", "privatekey", "apikey"];
     match schema {
         Value::Object(fields) => fields.iter().any(|(key, value)| {
-            let named = if key == "properties" {
-                value.as_object().is_some_and(|properties| {
-                    properties.keys().any(|name| {
-                        let name = name.to_ascii_lowercase().replace('_', "");
-                        name.ends_with("token") || SECRET.iter().any(|secret| name.contains(secret))
-                    })
-                })
-            } else {
-                false
-            };
+            let named = key == "properties"
+                && value
+                    .as_object()
+                    .is_some_and(|properties| properties.keys().any(|name| names_a_secret(name)));
             named || takes_secret(value)
         }),
         Value::Array(items) => items.iter().any(takes_secret),
         _ => false,
     }
+}
+
+/// Whether a field's name says it holds a secret.
+pub(super) fn names_a_secret(field: &str) -> bool {
+    // A token is the field's last word (`token`, `accessToken`), so token
+    // counts and design tokens (`tokens`, `inputTokens`) aren't secrets.
+    const SECRET: [&str; 5] = ["secret", "password", "passphrase", "privatekey", "apikey"];
+    let name = field.to_ascii_lowercase().replace('_', "");
+    name.ends_with("token") || SECRET.iter().any(|secret| name.contains(secret))
+}
+
+/// The fields of an answer that read as a secret in text: the answer's own
+/// (which `SHOWN_ONCE` can keep out of a stored answer) and those further in
+/// (which it can't reach). An answer that is one of several shapes has each
+/// shape's fields as its own.
+pub(super) fn secrets_in_answer(schema: &Value) -> (Vec<String>, Vec<String>) {
+    struct Found<'a> {
+        root: &'a Value,
+        own: Vec<String>,
+        inside: Vec<String>,
+        seen: Vec<(*const Value, bool)>,
+    }
+    impl<'a> Found<'a> {
+        fn resolved(&self, schema: &'a Value) -> &'a Value {
+            schema
+                .get("$ref")
+                .and_then(Value::as_str)
+                .and_then(|path| path.strip_prefix('#'))
+                .and_then(|pointer| self.root.pointer(pointer))
+                .unwrap_or(schema)
+        }
+        fn text(&self, field: &'a Value) -> bool {
+            match self.resolved(field).get("type") {
+                Some(Value::String(kind)) => kind == "string",
+                Some(Value::Array(kinds)) => kinds.iter().any(|kind| kind == "string"),
+                _ => false,
+            }
+        }
+        fn look(&mut self, schema: &'a Value, own: bool) {
+            let schema = self.resolved(schema);
+            if self.seen.contains(&(std::ptr::from_ref(schema), own)) {
+                return;
+            }
+            self.seen.push((std::ptr::from_ref(schema), own));
+            let fields = schema.get("properties").and_then(Value::as_object);
+            for (name, field) in fields.into_iter().flatten() {
+                if names_a_secret(name) && self.text(field) {
+                    let list = if own { &mut self.own } else { &mut self.inside };
+                    list.push(name.clone());
+                }
+                self.look(field, false);
+            }
+            for shapes in ["oneOf", "anyOf", "allOf"] {
+                let shapes = schema.get(shapes).and_then(Value::as_array);
+                for shape in shapes.into_iter().flatten() {
+                    self.look(shape, own);
+                }
+            }
+            for each in ["items", "additionalProperties"] {
+                if let Some(each) = schema.get(each) {
+                    self.look(each, false);
+                }
+            }
+            let listed = schema.get("prefixItems").and_then(Value::as_array);
+            for item in listed.into_iter().flatten() {
+                self.look(item, false);
+            }
+        }
+    }
+    let mut found = Found {
+        root: schema,
+        own: Vec::new(),
+        inside: Vec::new(),
+        seen: Vec::new(),
+    };
+    found.look(schema, true);
+    (found.own, found.inside)
 }
 
 type Call = for<'a> fn(&'a AppState, DispatchRequest, Value) -> BoxFuture<'a, Answer>;

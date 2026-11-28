@@ -458,19 +458,20 @@ async fn admit<O: Operation>(
             [] => {}
             _ if O::SPANS_WORKSPACES && !writes => spans = true,
             several => {
-                let here = match on_screen {
-                    Some(named) => target::workspace_named(&mut connection, named)
+                // A credential's own workspace first: the hint only settles
+                // what would otherwise be asked.
+                let home = home_workspace::<O>(&mut connection, caller, several).await?;
+                let here = match (home, on_screen) {
+                    (Some(home), _) => Some(home),
+                    (None, Some(named)) => target::workspace_named(&mut connection, named)
                         .await
                         .ok()
                         .filter(|here| several.contains(here)),
-                    None => None,
+                    (None, None) => None,
                 };
                 match here {
                     Some(here) => *workspace = Some(here),
-                    None => match home_workspace::<O>(&mut connection, caller, several).await? {
-                        Some(home) => *workspace = Some(home),
-                        None => return Err(name_the_workspace(&mut connection, several).await),
-                    },
+                    None => return Err(name_the_workspace(&mut connection, several).await),
                 }
             }
         }
@@ -979,18 +980,14 @@ async fn pipeline<O: Operation>(
             audit_row(tx, &ctx, kind, id, metadata).await?;
         }
         if let Some(reservation) = reservation.as_ref() {
-            // A secret shown once is never kept for a replay (it would sit
-            // in plain text beside the request id).
-            let mut stored = answer.body.clone();
-            if let Some(value) = stored
-                .get_mut("value")
-                .and_then(|value| value.as_object_mut())
-            {
-                for field in O::SHOWN_ONCE {
-                    if value.contains_key(*field) {
-                        value.insert((*field).to_owned(), serde_json::Value::Null);
-                    }
-                }
+            let (stored, unlisted) = kept_for_a_retry(&answer.body, O::SHOWN_ONCE);
+            for field in unlisted {
+                tracing::error!(
+                    operation = O::NAME,
+                    field,
+                    "an answer held a field that reads as a secret and SHOWN_ONCE doesn't list; \
+                     it was kept out of the stored answer"
+                );
             }
             idempotency::complete(tx, reservation, answer.status, &stored).await?;
         }
@@ -1007,6 +1004,37 @@ async fn pipeline<O: Operation>(
         work(state.clone()).await;
     }
     Ok(answer)
+}
+
+/// An answer as it is kept for a retry to replay: without the secrets it
+/// shows once (they would sit in plain text beside the request id). Those
+/// are the fields `shown_once` lists and, whether listed or not, any text
+/// among the answer's own fields whose name reads as a secret; the second
+/// list is the ones nobody listed. Names further in are left alone: they
+/// can be a person's own (a record's fields, a thing's), which a retry
+/// must hear again as the first try did.
+fn kept_for_a_retry(
+    body: &serde_json::Value,
+    shown_once: &[&str],
+) -> (serde_json::Value, Vec<String>) {
+    let mut stored = body.clone();
+    let mut unlisted = Vec::new();
+    if let Some(own) = stored
+        .get_mut("value")
+        .and_then(|value| value.as_object_mut())
+    {
+        for (name, field) in own.iter_mut() {
+            let listed = shown_once.contains(&name.as_str());
+            let named = field.is_string() && super::registry::names_a_secret(name);
+            if listed || named {
+                *field = serde_json::Value::Null;
+            }
+            if named && !listed {
+                unlisted.push(name.clone());
+            }
+        }
+    }
+    (stored, unlisted)
 }
 
 /// The changes a paused account still makes (A2.10): its status, lifting a
@@ -1486,6 +1514,43 @@ pub(crate) async fn audit_row_as(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The mistake a1e5e72b fixed, whoever makes it next: a secret among
+    /// an answer's fields is kept out of what a retry replays, listed or
+    /// not, and a person's own field names further in are replayed whole.
+    #[test]
+    fn a_secret_is_never_kept_for_a_retry() {
+        let body = serde_json::json!({
+            "ok": true,
+            "value": {
+                "id": "c1",
+                "webhookSecret": "whsec_1",
+                "joinUrl": "https://example.test/join/abc",
+                "hasSecret": true,
+                "inputTokens": 12,
+                "fields": { "apiKeyStatus": "rotation due", "Password hint": "the usual" },
+            }
+        });
+        let (stored, unlisted) = kept_for_a_retry(&body, &["joinUrl"]);
+        assert_eq!(
+            stored,
+            serde_json::json!({
+                "ok": true,
+                "value": {
+                    "id": "c1",
+                    "webhookSecret": null,
+                    "joinUrl": null,
+                    "hasSecret": true,
+                    "inputTokens": 12,
+                    "fields": { "apiKeyStatus": "rotation due", "Password hint": "the usual" },
+                }
+            })
+        );
+        assert_eq!(unlisted, ["webhookSecret"]);
+        let (listed, unlisted) = kept_for_a_retry(&body, &["joinUrl", "webhookSecret"]);
+        assert_eq!(listed, stored);
+        assert!(unlisted.is_empty(), "{unlisted:?}");
+    }
 
     #[test]
     fn a_decode_error_names_its_field() {
