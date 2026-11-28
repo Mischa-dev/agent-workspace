@@ -199,17 +199,21 @@ log "installing web dependencies"
 pnpm install --frozen-lockfile --reporter=silent
 
 # Warm the cargo build so the first check or test doesn't compile everything.
-# The server's library and its tests are built one after the other: side by
-# side they need more than a 16 GB machine has, and one is killed.
+# The server's library, its unit tests and its integration tests are built
+# one after the other: the library alone peaks near 12 GB, so two of them
+# side by side don't fit a 16 GB machine and one is killed. Each command
+# selects the whole workspace, so they agree on features and the next one
+# finds the last one's work.
 warm_build() {
   cargo build --workspace --locked --quiet &&
+    cargo test --workspace --lib --no-run --locked --quiet &&
     cargo test --workspace --no-run --locked --quiet
 }
 rustup toolchain install >/dev/null 2>&1 || true
 cargo fetch --locked --quiet
 case "${warm}" in
   wait)
-    log "warming the cargo build (the library, then the tests)"
+    log "warming the cargo build (the library, its unit tests, then the rest)"
     warm_build
     ;;
   background)
