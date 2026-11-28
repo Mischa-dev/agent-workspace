@@ -1009,41 +1009,30 @@ async fn pipeline<O: Operation>(
 /// An answer as it is kept for a retry to replay: without the secrets it
 /// shows once (they would sit in plain text beside the request id). Those
 /// are the fields `shown_once` lists and, whether listed or not, any text
-/// at any depth whose field name reads as a secret; the second list is the
-/// ones nobody listed.
+/// among the answer's own fields whose name reads as a secret; the second
+/// list is the ones nobody listed. Names further in are left alone: they
+/// can be a person's own (a record's fields, a thing's), which a retry
+/// must hear again as the first try did.
 fn kept_for_a_retry(
     body: &serde_json::Value,
     shown_once: &[&str],
 ) -> (serde_json::Value, Vec<String>) {
-    fn blank(value: &mut serde_json::Value, unlisted: &mut Vec<String>) {
-        match value {
-            serde_json::Value::Object(fields) => {
-                for (name, field) in fields {
-                    if field.is_string() && super::registry::names_a_secret(name) {
-                        *field = serde_json::Value::Null;
-                        unlisted.push(name.clone());
-                    } else {
-                        blank(field, unlisted);
-                    }
-                }
-            }
-            serde_json::Value::Array(items) => {
-                items.iter_mut().for_each(|item| blank(item, unlisted));
-            }
-            _ => {}
-        }
-    }
     let mut stored = body.clone();
     let mut unlisted = Vec::new();
-    if let Some(value) = stored.get_mut("value") {
-        if let Some(own) = value.as_object_mut() {
-            for field in shown_once {
-                if own.contains_key(*field) {
-                    own.insert((*field).to_owned(), serde_json::Value::Null);
-                }
+    if let Some(own) = stored
+        .get_mut("value")
+        .and_then(|value| value.as_object_mut())
+    {
+        for (name, field) in own.iter_mut() {
+            let listed = shown_once.contains(&name.as_str());
+            let named = field.is_string() && super::registry::names_a_secret(name);
+            if listed || named {
+                *field = serde_json::Value::Null;
+            }
+            if named && !listed {
+                unlisted.push(name.clone());
             }
         }
-        blank(value, &mut unlisted);
     }
     (stored, unlisted)
 }
@@ -1526,8 +1515,9 @@ pub(crate) async fn audit_row_as(
 mod tests {
     use super::*;
 
-    /// The mistake a1e5e72b fixed, whoever makes it next: a secret in an
-    /// answer is kept out of what a retry replays, listed or not.
+    /// The mistake a1e5e72b fixed, whoever makes it next: a secret among
+    /// an answer's fields is kept out of what a retry replays, listed or
+    /// not, and a person's own field names further in are replayed whole.
     #[test]
     fn a_secret_is_never_kept_for_a_retry() {
         let body = serde_json::json!({
@@ -1538,11 +1528,10 @@ mod tests {
                 "joinUrl": "https://example.test/join/abc",
                 "hasSecret": true,
                 "inputTokens": 12,
-                "deliveries": [{ "id": "d1", "signingSecret": "s1" }],
+                "fields": { "apiKeyStatus": "rotation due", "Password hint": "the usual" },
             }
         });
-        let (stored, mut unlisted) = kept_for_a_retry(&body, &["joinUrl"]);
-        unlisted.sort();
+        let (stored, unlisted) = kept_for_a_retry(&body, &["joinUrl"]);
         assert_eq!(
             stored,
             serde_json::json!({
@@ -1553,13 +1542,14 @@ mod tests {
                     "joinUrl": null,
                     "hasSecret": true,
                     "inputTokens": 12,
-                    "deliveries": [{ "id": "d1", "signingSecret": null }],
+                    "fields": { "apiKeyStatus": "rotation due", "Password hint": "the usual" },
                 }
             })
         );
-        assert_eq!(unlisted, ["signingSecret", "webhookSecret"]);
-        let (_, unlisted) = kept_for_a_retry(&body, &["joinUrl", "webhookSecret"]);
-        assert_eq!(unlisted, ["signingSecret"]);
+        assert_eq!(unlisted, ["webhookSecret"]);
+        let (listed, unlisted) = kept_for_a_retry(&body, &["joinUrl", "webhookSecret"]);
+        assert_eq!(listed, stored);
+        assert!(unlisted.is_empty(), "{unlisted:?}");
     }
 
     #[test]

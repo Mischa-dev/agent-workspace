@@ -252,7 +252,7 @@ pub fn check(meta: &OpMeta) -> Result<(), Vec<String>> {
         }
     }
     // An answer without a declared shape (a wrapped tool's) can't be
-    // checked here; the dispatcher keeps secrets out of it by name.
+    // checked here; the dispatcher keeps its own secret-named fields out.
     let own = output.get("properties");
     for field in meta.shown_once {
         if own.is_some_and(|own| own.get(*field).is_none()) {
@@ -411,6 +411,43 @@ mod tests {
             "{problems:?}"
         );
         assert_eq!(problems.len(), 3, "{problems:?}");
+    }
+
+    /// An answer that is one of several shapes serializes each shape's
+    /// fields at its top, where `SHOWN_ONCE` reaches them.
+    #[test]
+    fn a_secret_in_one_shape_of_an_answer_is_its_own() {
+        let answer = serde_json::json!({
+            "oneOf": [
+                { "$ref": "#/$defs/Made" },
+                { "type": "object", "properties": { "id": { "type": "string" } } }
+            ],
+            "$defs": {
+                "Made": {
+                    "type": "object",
+                    "properties": {
+                        "webhookSecret": { "type": ["string", "null"] },
+                        "fields": { "type": "object", "additionalProperties": true },
+                        "deliveries": { "type": "array", "items": { "$ref": "#/$defs/Delivery" } }
+                    }
+                },
+                "Delivery": {
+                    "type": "object",
+                    "properties": { "signingSecret": { "type": "string" } }
+                },
+                "NotInTheAnswer": {
+                    "type": "object",
+                    "properties": { "token": { "type": "string" } }
+                }
+            }
+        });
+        assert_eq!(
+            secrets_in_answer(&answer),
+            (
+                vec!["webhookSecret".to_owned()],
+                vec!["signingSecret".to_owned()]
+            )
+        );
     }
 
     #[test]

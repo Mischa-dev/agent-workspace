@@ -98,50 +98,70 @@ pub(super) fn names_a_secret(field: &str) -> bool {
 
 /// The fields of an answer that read as a secret in text: the answer's own
 /// (which `SHOWN_ONCE` can keep out of a stored answer) and those further in
-/// (which it can't reach).
+/// (which it can't reach). An answer that is one of several shapes has each
+/// shape's fields as its own.
 pub(super) fn secrets_in_answer(schema: &Value) -> (Vec<String>, Vec<String>) {
-    fn text(field: &Value) -> bool {
-        match field.get("type") {
-            Some(Value::String(kind)) => kind == "string",
-            Some(Value::Array(kinds)) => kinds.iter().any(|kind| kind == "string"),
-            _ => false,
+    struct Found<'a> {
+        root: &'a Value,
+        own: Vec<String>,
+        inside: Vec<String>,
+        seen: Vec<(*const Value, bool)>,
+    }
+    impl<'a> Found<'a> {
+        fn resolved(&self, schema: &'a Value) -> &'a Value {
+            schema
+                .get("$ref")
+                .and_then(Value::as_str)
+                .and_then(|path| path.strip_prefix('#'))
+                .and_then(|pointer| self.root.pointer(pointer))
+                .unwrap_or(schema)
         }
-    }
-    fn secrets(properties: &Value) -> Vec<String> {
-        properties
-            .as_object()
-            .into_iter()
-            .flatten()
-            .filter(|(name, field)| names_a_secret(name) && text(field))
-            .map(|(name, _)| name.clone())
-            .collect()
-    }
-    fn further_in(schema: &Value, found: &mut Vec<String>) {
-        match schema {
-            Value::Object(fields) => {
-                for (key, value) in fields {
-                    if key == "properties" {
-                        found.extend(secrets(value));
-                    }
-                    further_in(value, found);
+        fn text(&self, field: &'a Value) -> bool {
+            match self.resolved(field).get("type") {
+                Some(Value::String(kind)) => kind == "string",
+                Some(Value::Array(kinds)) => kinds.iter().any(|kind| kind == "string"),
+                _ => false,
+            }
+        }
+        fn look(&mut self, schema: &'a Value, own: bool) {
+            let schema = self.resolved(schema);
+            if self.seen.contains(&(std::ptr::from_ref(schema), own)) {
+                return;
+            }
+            self.seen.push((std::ptr::from_ref(schema), own));
+            let fields = schema.get("properties").and_then(Value::as_object);
+            for (name, field) in fields.into_iter().flatten() {
+                if names_a_secret(name) && self.text(field) {
+                    let list = if own { &mut self.own } else { &mut self.inside };
+                    list.push(name.clone());
+                }
+                self.look(field, false);
+            }
+            for shapes in ["oneOf", "anyOf", "allOf"] {
+                let shapes = schema.get(shapes).and_then(Value::as_array);
+                for shape in shapes.into_iter().flatten() {
+                    self.look(shape, own);
                 }
             }
-            Value::Array(items) => items.iter().for_each(|item| further_in(item, found)),
-            _ => {}
-        }
-    }
-    let own = schema.get("properties").map(secrets).unwrap_or_default();
-    let mut inside = Vec::new();
-    for (key, value) in schema.as_object().into_iter().flatten() {
-        if key == "properties" {
-            for field in value.as_object().into_iter().flat_map(|own| own.values()) {
-                further_in(field, &mut inside);
+            for each in ["items", "additionalProperties"] {
+                if let Some(each) = schema.get(each) {
+                    self.look(each, false);
+                }
             }
-        } else {
-            further_in(value, &mut inside);
+            let listed = schema.get("prefixItems").and_then(Value::as_array);
+            for item in listed.into_iter().flatten() {
+                self.look(item, false);
+            }
         }
     }
-    (own, inside)
+    let mut found = Found {
+        root: schema,
+        own: Vec::new(),
+        inside: Vec::new(),
+        seen: Vec::new(),
+    };
+    found.look(schema, true);
+    (found.own, found.inside)
 }
 
 type Call = for<'a> fn(&'a AppState, DispatchRequest, Value) -> BoxFuture<'a, Answer>;
