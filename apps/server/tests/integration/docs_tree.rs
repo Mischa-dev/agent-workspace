@@ -490,6 +490,25 @@ async fn a_restricted_folder_hides_what_it_holds_from_everyone_not_named() {
     for who in ["lena", "mara", "rook", "wren"] {
         check(&world, who, &work, &docs, true).await;
     }
+    // A record template on the collection, which anyone who builds
+    // collections can rename while the collection is open.
+    let template = id_at(
+        &op(
+            &world,
+            "owner",
+            "record_template_create",
+            json!({"collection": docs.collection, "name": "Weekly", "title": "Quasar check-in"}),
+        )
+        .await,
+        "/id",
+    );
+    ok(&op(
+        &world,
+        "mara",
+        "record_template_update",
+        json!({"template": template, "name": "Each week"}),
+    )
+    .await);
 
     // A link to the page, made while it was open, reads it without signing in.
     let link = op(
@@ -533,6 +552,26 @@ async fn a_restricted_folder_hides_what_it_holds_from_everyone_not_named() {
     assert_eq!(link_opens(&world, &link).await, StatusCode::NOT_FOUND);
     assert!(watches(&world, "lena", &docs).await);
     assert!(!watches(&world, "mara", &docs).await);
+    // The collection's templates go with it: a rename by id is refused and
+    // answers nothing of the template.
+    for who in ["mara", "wren"] {
+        let answer = op(
+            &world,
+            who,
+            "record_template_update",
+            json!({"template": template, "name": "Seen"}),
+        )
+        .await;
+        assert_ne!(answer["outcome"], "ok", "{who}: {answer}");
+        assert!(!answer.to_string().contains("Quasar"), "{who}: {answer}");
+    }
+    ok(&op(
+        &world,
+        "lena",
+        "record_template_update",
+        json!({"template": template, "name": "Weekly"}),
+    )
+    .await);
     // Everyone else in the space: nothing, anywhere, for a person and an
     // agent alike. What isn't restricted is as it was.
     for who in ["mara", "wren"] {

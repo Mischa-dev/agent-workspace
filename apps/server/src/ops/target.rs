@@ -296,7 +296,8 @@ const KINDS: &[(&str, &str)] = &[
     (
         "record_template",
         "SELECT template.workspace_id, template.space_id FROM record_templates template \
-         WHERE template.id = $1 AND $2::uuid IS NOT NULL",
+         WHERE template.id = $1 AND $2::uuid IS NOT NULL \
+           AND doc_open_to(template.collection_id, $2)",
     ),
     (
         "recurring_record",
