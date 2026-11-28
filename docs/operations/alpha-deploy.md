@@ -53,8 +53,8 @@ AGENT_WORKSPACE_PREBUILT=/var/tmp/agent-workspace-<commit>-linux-arm64 \
 ```
 
 The script builds, installs the release and runs the new build's `preflight`
-against the live configuration and database before switching. `preflight` only
-reads. It reports:
+against the live configuration and database before switching. `preflight`
+keeps nothing. It reports:
 
 - the keyring
 - the codex and claude CLIs
@@ -62,6 +62,22 @@ reads. It reports:
 - the number of trusted webhook origins
 - free disk
 - the migrations it will run
+- whether those migrations apply to the live data
+
+For the last one it rehearses them: it applies each migration still to run to
+the live database inside one transaction and rolls it back. A migration that
+the live rows refuse (a constraint they break, a trigger that stops an
+update) is named with the database's reason while the old release is still
+serving. While the rehearsal runs, requests that touch a table a migration
+changes wait, as they would during the migration itself; it gives up, with a
+warning, on a table that stays busy for five seconds. It holds every lock
+until the rollback, so with very many migrations to run it stops, with a
+warning that says how many it tried, before it holds half the locks
+PostgreSQL has (`max_locks_per_transaction` × `max_connections`). Its
+transaction can't be committed, so nothing it applies is kept. To deploy
+without it,
+set `AGENT_WORKSPACE_PREFLIGHT_NO_REHEARSAL=1` for the script (`preflight
+--no-rehearsal` by hand).
 
 It stops the deploy when:
 
@@ -69,6 +85,7 @@ It stops the deploy when:
 - the disk is too full
 - the database has migrations this build doesn't know
 - a migration changed after it ran
+- a migration stops on the live data
 
 Missing optional setup only gives a warning. After the switch, the script waits
 for `/health/ready`, checks `/health/version` names the new commit, and turns

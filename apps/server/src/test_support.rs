@@ -140,3 +140,26 @@ pub async fn abandon_bytes(state: &crate::AppState, staged: &StagedBytes) {
     )
     .await;
 }
+
+#[cfg(test)]
+mod tests {
+    /// One `DROP SCHEMA ... CASCADE` locks everything in the schema in one
+    /// transaction, and the tests running beside it fail with "out of shared
+    /// memory" (AWD-183). It was then written by hand again, by copying.
+    #[test]
+    fn no_test_drops_a_schema_by_hand() {
+        let tests = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+        let by_hand: Vec<String> = super::source::rust_files(&tests)
+            .into_iter()
+            .filter(|(_, source)| source.to_ascii_uppercase().contains("DROP SCHEMA "))
+            .map(|(file, _)| file)
+            .collect();
+        assert!(
+            by_hand.is_empty(),
+            "{by_hand:?}: drop a test's schema with \
+             agent_workspace_server::test_support::drop_schema. One DROP SCHEMA ... CASCADE \
+             locks every table, index and constraint in it at once, which runs the shared lock \
+             table out for the tests running beside it"
+        );
+    }
+}
